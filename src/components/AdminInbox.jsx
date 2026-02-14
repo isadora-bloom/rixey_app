@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 
+const API_URL = import.meta.env.VITE_API_URL || '${API_URL}'
+
 export default function AdminInbox({ weddings = [], onUnreadChange }) {
   const [conversations, setConversations] = useState([])
   const [selectedWedding, setSelectedWedding] = useState(null)
@@ -39,7 +41,7 @@ export default function AdminInbox({ weddings = [], onUnreadChange }) {
 
   const loadConversations = async () => {
     try {
-      const response = await fetch('http://localhost:3001/api/messages/admin/conversations')
+      const response = await fetch('${API_URL}/api/messages/admin/conversations')
       const data = await response.json()
       setConversations(data.conversations || [])
     } catch (err) {
@@ -50,7 +52,7 @@ export default function AdminInbox({ weddings = [], onUnreadChange }) {
 
   const loadUnreadCounts = async () => {
     try {
-      const response = await fetch('http://localhost:3001/api/messages/admin/unread')
+      const response = await fetch('${API_URL}/api/messages/admin/unread')
       const data = await response.json()
       setTotalUnread(data.total || 0)
       onUnreadChange?.(data.total || 0)
@@ -61,12 +63,12 @@ export default function AdminInbox({ weddings = [], onUnreadChange }) {
 
   const loadMessages = async (weddingId) => {
     try {
-      const response = await fetch(`http://localhost:3001/api/messages/${weddingId}`)
+      const response = await fetch(`${API_URL}/api/messages/${weddingId}`)
       const data = await response.json()
       setMessages(data.messages || [])
 
       // Mark client messages as read
-      await fetch(`http://localhost:3001/api/messages/read/${weddingId}`, {
+      await fetch(`${API_URL}/api/messages/read/${weddingId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ senderType: 'client' })
@@ -86,7 +88,7 @@ export default function AdminInbox({ weddings = [], onUnreadChange }) {
 
     setSending(true)
     try {
-      const response = await fetch('http://localhost:3001/api/messages', {
+      const response = await fetch('${API_URL}/api/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

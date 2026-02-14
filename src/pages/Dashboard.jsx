@@ -13,7 +13,7 @@ import TimelineBuilder from '../components/TimelineBuilder'
 import TableLayoutPlanner from '../components/TableLayoutPlanner'
 import StaffingCalculator from '../components/StaffingCalculator'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+const API_URL = import.meta.env.VITE_API_URL || '${API_URL}'
 
 // Countdown component
 function WeddingCountdown({ weddingDate }) {

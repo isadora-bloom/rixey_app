@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
 
+const API_URL = import.meta.env.VITE_API_URL || '${API_URL}'
+
 export default function KnowledgeBaseAdmin() {
   const [entries, setEntries] = useState([])
   const [loading, setLoading] = useState(true)
@@ -23,7 +25,7 @@ export default function KnowledgeBaseAdmin() {
 
   const loadEntries = async () => {
     try {
-      const response = await fetch('http://localhost:3001/api/knowledge-base')
+      const response = await fetch('${API_URL}/api/knowledge-base')
       const data = await response.json()
       setEntries(data.entries || [])
     } catch (err) {
@@ -38,8 +40,8 @@ export default function KnowledgeBaseAdmin() {
 
     try {
       const url = editingId
-        ? `http://localhost:3001/api/knowledge-base/${editingId}`
-        : 'http://localhost:3001/api/knowledge-base'
+        ? `${API_URL}/api/knowledge-base/${editingId}`
+        : '${API_URL}/api/knowledge-base'
 
       const response = await fetch(url, {
         method: editingId ? 'PUT' : 'POST',
@@ -72,7 +74,7 @@ export default function KnowledgeBaseAdmin() {
     if (!confirm('Delete this knowledge base entry?')) return
 
     try {
-      await fetch(`http://localhost:3001/api/knowledge-base/${id}`, {
+      await fetch(`${API_URL}/api/knowledge-base/${id}`, {
         method: 'DELETE'
       })
       setEntries(entries.filter(e => e.id !== id))
@@ -83,7 +85,7 @@ export default function KnowledgeBaseAdmin() {
 
   const toggleActive = async (entry) => {
     try {
-      await fetch(`http://localhost:3001/api/knowledge-base/${entry.id}`, {
+      await fetch(`${API_URL}/api/knowledge-base/${entry.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ active: !entry.active })

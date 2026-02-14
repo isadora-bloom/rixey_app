@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
 
+const API_URL = import.meta.env.VITE_API_URL || '${API_URL}'
+
 export default function UpcomingMeetings({ weddings = [], filterWedding = null, compact = false }) {
   const [events, setEvents] = useState([])
   const [loading, setLoading] = useState(true)
@@ -12,7 +14,7 @@ export default function UpcomingMeetings({ weddings = [], filterWedding = null, 
 
   const loadEvents = async () => {
     try {
-      const response = await fetch('http://localhost:3001/api/calendly/events')
+      const response = await fetch('${API_URL}/api/calendly/events')
       const data = await response.json()
 
       if (data.error) {

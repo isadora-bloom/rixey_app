@@ -24,7 +24,15 @@ const upload = multer({
 });
 
 const app = express();
-app.use(cors());
+
+// CORS configuration for production and development
+const corsOptions = {
+  origin: process.env.CORS_ORIGINS
+    ? process.env.CORS_ORIGINS.split(',')
+    : ['http://localhost:5173', 'http://localhost:3000'],
+  credentials: true
+};
+app.use(cors(corsOptions));
 app.use(express.json());
 
 const anthropic = new Anthropic({

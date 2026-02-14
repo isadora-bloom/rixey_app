@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
 
+const API_URL = import.meta.env.VITE_API_URL || '${API_URL}'
+
 const TABLE_SHAPES = [
   { id: 'round', name: 'Round Tables', icon: '⭕', description: '60" rounds, great for conversation', defaultSeats: 8 },
   { id: 'rectangular', name: 'Rectangular', icon: '▭', description: '6ft or 8ft banquet tables', defaultSeats: 8 },
@@ -100,7 +102,7 @@ export default function TableLayoutPlanner({ weddingId, isAdmin = false }) {
 
   const loadTableSetup = async () => {
     try {
-      const response = await fetch(`http://localhost:3001/api/tables/${weddingId}`)
+      const response = await fetch(`${API_URL}/api/tables/${weddingId}`)
       const data = await response.json()
 
       if (data.tables) {
@@ -128,7 +130,7 @@ export default function TableLayoutPlanner({ weddingId, isAdmin = false }) {
   const saveTableSetup = async () => {
     setSaving(true)
     try {
-      await fetch('http://localhost:3001/api/tables', {
+      await fetch('${API_URL}/api/tables', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

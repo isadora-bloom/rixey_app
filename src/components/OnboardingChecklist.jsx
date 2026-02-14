@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
 
+const API_URL = import.meta.env.VITE_API_URL || '${API_URL}'
+
 const ONBOARDING_STEPS = [
   {
     key: 'couple_photo_uploaded',
@@ -51,7 +53,7 @@ export default function OnboardingChecklist({ weddingId, onAction, onDismiss }) 
 
   const loadProgress = async () => {
     try {
-      const response = await fetch(`http://localhost:3001/api/onboarding/${weddingId}`)
+      const response = await fetch(`${API_URL}/api/onboarding/${weddingId}`)
       const data = await response.json()
       setProgress(data.progress)
       setDismissed(data.progress?.onboarding_dismissed || false)
@@ -63,7 +65,7 @@ export default function OnboardingChecklist({ weddingId, onAction, onDismiss }) 
 
   const handleDismiss = async () => {
     try {
-      await fetch(`http://localhost:3001/api/onboarding/${weddingId}`, {
+      await fetch(`${API_URL}/api/onboarding/${weddingId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ onboarding_dismissed: true })

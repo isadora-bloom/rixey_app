@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+
+const API_URL = import.meta.env.VITE_API_URL || '${API_URL}'
 import VendorChecklist from '../components/VendorChecklist'
 import InspoGallery from '../components/InspoGallery'
 import PlanningChecklist from '../components/PlanningChecklist'
@@ -104,12 +106,12 @@ function DirectMessagesPanel({ weddingId, weddingName }) {
 
   const loadMessages = async () => {
     try {
-      const response = await fetch(`http://localhost:3001/api/messages/${weddingId}`)
+      const response = await fetch(`${API_URL}/api/messages/${weddingId}`)
       const data = await response.json()
       setMessages(data.messages || [])
 
       // Mark client messages as read
-      await fetch(`http://localhost:3001/api/messages/read/${weddingId}`, {
+      await fetch(`${API_URL}/api/messages/read/${weddingId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ senderType: 'client' })
@@ -126,7 +128,7 @@ function DirectMessagesPanel({ weddingId, weddingName }) {
 
     setSending(true)
     try {
-      await fetch('http://localhost:3001/api/messages', {
+      await fetch('${API_URL}/api/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -274,7 +276,7 @@ export default function Admin() {
 
   const checkGmailStatus = async () => {
     try {
-      const response = await fetch('http://localhost:3001/api/gmail/status')
+      const response = await fetch('${API_URL}/api/gmail/status')
       const data = await response.json()
       setGmailConnected(data.connected)
     } catch (err) {
@@ -284,7 +286,7 @@ export default function Admin() {
 
   const connectGmail = async () => {
     try {
-      const response = await fetch('http://localhost:3001/api/gmail/auth')
+      const response = await fetch('${API_URL}/api/gmail/auth')
       const data = await response.json()
       if (data.authUrl) {
         window.location.href = data.authUrl
@@ -298,7 +300,7 @@ export default function Admin() {
     setGmailSyncing(true)
     setGmailStatus('')
     try {
-      const response = await fetch('http://localhost:3001/api/gmail/sync', {
+      const response = await fetch('${API_URL}/api/gmail/sync', {
         method: 'POST'
       })
       const data = await response.json()
@@ -313,7 +315,7 @@ export default function Admin() {
 
   const disconnectGmail = async () => {
     try {
-      await fetch('http://localhost:3001/api/gmail/disconnect', { method: 'POST' })
+      await fetch('${API_URL}/api/gmail/disconnect', { method: 'POST' })
       setGmailConnected(false)
       setGmailStatus('Gmail disconnected')
     } catch (err) {
@@ -323,7 +325,7 @@ export default function Admin() {
 
   const checkQuoStatus = async () => {
     try {
-      const response = await fetch('http://localhost:3001/api/quo/status')
+      const response = await fetch('${API_URL}/api/quo/status')
       const data = await response.json()
       setQuoConnected(data.connected)
     } catch (err) {
@@ -335,7 +337,7 @@ export default function Admin() {
     setQuoSyncing(true)
     setQuoStatus('')
     try {
-      const response = await fetch('http://localhost:3001/api/quo/sync', {
+      const response = await fetch('${API_URL}/api/quo/sync', {
         method: 'POST'
       })
       const data = await response.json()
@@ -349,7 +351,7 @@ export default function Admin() {
 
   const checkZoomStatus = async () => {
     try {
-      const response = await fetch('http://localhost:3001/api/zoom/status')
+      const response = await fetch('${API_URL}/api/zoom/status')
       const data = await response.json()
       setZoomConnected(data.connected)
     } catch (err) {
@@ -359,7 +361,7 @@ export default function Admin() {
 
   const connectZoom = async () => {
     try {
-      const response = await fetch('http://localhost:3001/api/zoom/auth')
+      const response = await fetch('${API_URL}/api/zoom/auth')
       const data = await response.json()
       if (data.authUrl) {
         window.location.href = data.authUrl
@@ -373,7 +375,7 @@ export default function Admin() {
     setZoomSyncing(true)
     setZoomStatus('')
     try {
-      const response = await fetch('http://localhost:3001/api/zoom/sync', {
+      const response = await fetch('${API_URL}/api/zoom/sync', {
         method: 'POST'
       })
       const data = await response.json()
@@ -387,7 +389,7 @@ export default function Admin() {
 
   const disconnectZoom = async () => {
     try {
-      await fetch('http://localhost:3001/api/zoom/disconnect', { method: 'POST' })
+      await fetch('${API_URL}/api/zoom/disconnect', { method: 'POST' })
       setZoomConnected(false)
       setZoomStatus('Zoom disconnected')
     } catch (err) {
@@ -401,7 +403,7 @@ export default function Admin() {
     setNotesHighlights('')
 
     try {
-      const response = await fetch('http://localhost:3001/api/notes-highlights', {
+      const response = await fetch('${API_URL}/api/notes-highlights', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ weddingId: viewingWedding.id })
@@ -416,7 +418,7 @@ export default function Admin() {
 
   const loadUncertainQuestions = async () => {
     try {
-      const response = await fetch('http://localhost:3001/api/uncertain-questions')
+      const response = await fetch('${API_URL}/api/uncertain-questions')
       const data = await response.json()
       setUncertainQuestions(data.questions || [])
     } catch (err) {
@@ -448,7 +450,7 @@ export default function Admin() {
 
     setSubmittingAnswer(true)
     try {
-      const response = await fetch(`http://localhost:3001/api/uncertain-questions/${questionId}/answer`, {
+      const response = await fetch(`${API_URL}/api/uncertain-questions/${questionId}/answer`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -477,7 +479,7 @@ export default function Admin() {
 
   const deleteUncertainQuestion = async (questionId) => {
     try {
-      await fetch(`http://localhost:3001/api/uncertain-questions/${questionId}`, {
+      await fetch(`${API_URL}/api/uncertain-questions/${questionId}`, {
         method: 'DELETE'
       })
       setUncertainQuestions(prev => prev.filter(q => q.id !== questionId))
@@ -614,7 +616,7 @@ export default function Admin() {
 
     // Refresh couple photo for this wedding
     try {
-      const response = await fetch(`http://localhost:3001/api/couple-photo/${wedding.id}`)
+      const response = await fetch(`${API_URL}/api/couple-photo/${wedding.id}`)
       const data = await response.json()
       if (data.photo) {
         setCouplePhotos(prev => ({ ...prev, [wedding.id]: data.photo.image_url }))
@@ -651,7 +653,7 @@ export default function Admin() {
 
     // Load timeline summary
     try {
-      const timelineRes = await fetch(`http://localhost:3001/api/timeline/${wedding.id}`)
+      const timelineRes = await fetch(`${API_URL}/api/timeline/${wedding.id}`)
       const timelineData = await timelineRes.json()
       if (timelineData.timeline) {
         const tl = timelineData.timeline
@@ -675,7 +677,7 @@ export default function Admin() {
 
     // Load table summary
     try {
-      const tablesRes = await fetch(`http://localhost:3001/api/tables/${wedding.id}`)
+      const tablesRes = await fetch(`${API_URL}/api/tables/${wedding.id}`)
       const tablesData = await tablesRes.json()
       if (tablesData.tables) {
         const tb = tablesData.tables
@@ -702,7 +704,7 @@ export default function Admin() {
 
     // Load staffing summary
     try {
-      const staffingRes = await fetch(`http://localhost:3001/api/staffing/${wedding.id}`)
+      const staffingRes = await fetch(`${API_URL}/api/staffing/${wedding.id}`)
       const staffingData = await staffingRes.json()
       if (staffingData.staffing) {
         setStaffingSummary(staffingData.staffing)
@@ -742,7 +744,7 @@ export default function Admin() {
     formData.append('weddingId', viewingWedding.id)
 
     try {
-      const response = await fetch('http://localhost:3001/api/extract-contract', {
+      const response = await fetch('${API_URL}/api/extract-contract', {
         method: 'POST',
         body: formData
       })
@@ -781,7 +783,7 @@ export default function Admin() {
     setContractAnswer('')
 
     try {
-      const response = await fetch('http://localhost:3001/api/ask-contracts', {
+      const response = await fetch('${API_URL}/api/ask-contracts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

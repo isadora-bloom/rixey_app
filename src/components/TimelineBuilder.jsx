@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
 
+const API_URL = import.meta.env.VITE_API_URL || '${API_URL}'
+
 // Events organized by section
 // 'chain' property groups events that should be calculated sequentially
 // 'parallel' means the event can happen alongside others at the same offset
@@ -598,7 +600,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
 
   const loadTimeline = async () => {
     try {
-      const response = await fetch(`http://localhost:3001/api/timeline/${weddingId}`)
+      const response = await fetch(`${API_URL}/api/timeline/${weddingId}`)
       const data = await response.json()
 
       let loadedCeremonyTime = '16:00'
@@ -680,7 +682,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
   const saveTimeline = async () => {
     setSaving(true)
     try {
-      await fetch('http://localhost:3001/api/timeline', {
+      await fetch('${API_URL}/api/timeline', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
 
+const API_URL = import.meta.env.VITE_API_URL || '${API_URL}'
+
 export default function UsageStats({ weddingId, weddings = [] }) {
   const [stats, setStats] = useState([])
   const [loading, setLoading] = useState(true)
@@ -16,7 +18,7 @@ export default function UsageStats({ weddingId, weddings = [] }) {
 
   const loadAllStats = async () => {
     try {
-      const response = await fetch('http://localhost:3001/api/usage/stats')
+      const response = await fetch('${API_URL}/api/usage/stats')
       const data = await response.json()
       setStats(data.stats || [])
     } catch (err) {
@@ -28,7 +30,7 @@ export default function UsageStats({ weddingId, weddings = [] }) {
   const loadWeddingUsage = async (id) => {
     setLoading(true)
     try {
-      const response = await fetch(`http://localhost:3001/api/usage/${id}`)
+      const response = await fetch(`${API_URL}/api/usage/${id}`)
       const data = await response.json()
       setWeddingDetails(data)
     } catch (err) {
