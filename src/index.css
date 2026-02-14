@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+@theme {
+  --color-sage-50: #f6f7f6;
+  --color-sage-100: #e3e7e3;
+  --color-sage-200: #c7d0c7;
+  --color-sage-300: #a3b2a3;
+  --color-sage-400: #7d917d;
+  --color-sage-500: #627562;
+  --color-sage-600: #4d5d4d;
+  --color-sage-700: #404c40;
+  --color-sage-800: #363f36;
+  --color-sage-900: #2f352f;
+  --color-cream-50: #fdfcfa;
+  --color-cream-100: #f9f7f2;
+  --color-cream-200: #f3efe5;
+  --color-cream-300: #e8e1d3;
+  --color-cream-400: #d4c9b5;
+  --font-serif: 'Cormorant Garamond', Georgia, serif;
+}
+
+@layer base {
+  body {
+    @apply bg-cream-50 text-sage-800 font-sans antialiased;
+  }
+}
