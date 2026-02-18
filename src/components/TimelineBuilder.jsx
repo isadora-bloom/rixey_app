@@ -7,14 +7,14 @@ const API_URL = import.meta.env.VITE_API_URL || '${API_URL}'
 // 'parallel' means the event can happen alongside others at the same offset
 
 const PREP_EVENTS = [
-  { id: 'hair-makeup-done', name: 'Hair & Makeup Complete', icon: '💄', defaultDuration: 0, description: 'Time all hair & makeup should be finished', isTimeMarker: true, isAnchor: true },
-  { id: 'buffer-break', name: 'Buffer / Bathroom Break', icon: '☕', defaultDuration: 15, description: 'Quick break before getting dressed', alwaysIncluded: true },
-  { id: 'details-photos', name: 'Details Photos', icon: '💍', defaultDuration: 30, description: 'Rings, shoes, invitations, dress details', tips: 'Can be done while final hair/makeup is finishing', canBeConcurrent: true },
-  { id: 'robe-photos', name: 'Robe / Getting Ready Photos', icon: '👘', defaultDuration: 30, description: 'Casual getting ready moments with bridesmaids' },
-  { id: 'lunch', name: 'Lunch / Snacks', icon: '🥗', defaultDuration: 30, description: 'Make sure everyone eats!', canBeConcurrent: true },
-  { id: 'bridesmaids-dressed', name: 'Bridesmaids Get Dressed', icon: '👗', defaultDuration: 15, description: 'Bridesmaids put on their dresses', tips: 'Groom prep happens at same time with 2 photographers' },
-  { id: 'bride-dress', name: 'Bride Gets Dressed', icon: '👰', defaultDuration: 20, description: 'Bride puts on her dress with help' },
-  { id: 'groom-getting-ready', name: 'Groom & Groomsmen Ready', icon: '🤵', defaultDuration: 45, description: 'Groom and groomsmen suit up', tips: 'Happens same time as bridesmaids with 2 photographers', canBeConcurrent: true, parallelWith: 'bridesmaids-dressed' },
+  { id: 'hair-makeup-done', name: 'Hair & Makeup Complete', icon: '💄', defaultDuration: 0, description: 'Time all hair & makeup should be finished', isTimeMarker: true, isAnchor: true, alwaysIncluded: true },
+  { id: 'buffer-break', name: 'Buffer / Lunch Break', icon: '☕', defaultDuration: 30, description: 'Break for lunch and bathroom before getting dressed', alwaysIncluded: true },
+  { id: 'bridesmaids-dressed', name: 'Bridesmaids & Groomsmen Get Dressed', icon: '👗', defaultDuration: 30, description: 'Wedding party puts on their attire', tips: 'Guys and gals happen at same time with 2 photographers', alwaysIncluded: true },
+  { id: 'bride-dress', name: 'Bride Gets Dressed', icon: '👰', defaultDuration: 30, description: 'Bride puts on dress - includes dressing photos', alwaysIncluded: true },
+  { id: 'groom-getting-ready', name: 'Groom Getting Ready Photos', icon: '🤵', defaultDuration: 30, description: 'Groomsmen photos while bride finishes', canBeConcurrent: true, parallelWith: 'bride-dress' },
+  { id: 'bride-getting-ready-photos', name: 'Bride Getting Ready Photos', icon: '📸', defaultDuration: 30, description: 'Final bride portraits before ceremony' },
+  { id: 'details-photos', name: 'Details Photos', icon: '💍', defaultDuration: 20, description: 'Rings, shoes, invitations, dress details', tips: 'Can be done during hair/makeup or after', canBeConcurrent: true },
+  { id: 'robe-photos', name: 'Robe / Casual Photos', icon: '👘', defaultDuration: 20, description: 'Casual getting ready moments with bridesmaids' },
 ]
 
 const FIRST_LOOK_EVENTS = [
@@ -24,10 +24,10 @@ const FIRST_LOOK_EVENTS = [
 ]
 
 const PHOTO_EVENTS = [
-  { id: 'couple-portraits', name: 'Couple Portraits', icon: '📸', defaultDuration: 30, description: 'Romantic photos of just the two of you', chain: 'photos' },
-  { id: 'wedding-party-photos', name: 'Wedding Party Photos', icon: '👯', defaultDuration: 30, description: 'Photos with bridesmaids and groomsmen', chain: 'photos' },
-  { id: 'family-formals', name: 'Immediate Family Photos', icon: '👨‍👩‍👧‍👦', defaultDuration: 30, description: 'Parents, siblings, grandparents', tips: 'Make a shot list to stay on schedule', chain: 'photos' },
-  { id: 'extended-family', name: 'Extended Family Photos', icon: '👪', defaultDuration: 20, description: 'Aunts, uncles, cousins - during cocktail hour', tips: 'Only if not doing first look, or for extra family', cocktailHourOnly: true },
+  { id: 'couple-portraits', name: 'Couple Portraits', icon: '📸', defaultDuration: 30, cocktailDuration: 15, description: 'Romantic photos of just the two of you', chain: 'photos' },
+  { id: 'wedding-party-photos', name: 'Wedding Party Photos', icon: '👯', defaultDuration: 30, cocktailDuration: 20, description: 'Photos with bridesmaids and groomsmen', chain: 'photos' },
+  { id: 'family-formals', name: 'Immediate Family Photos', icon: '👨‍👩‍👧‍👦', defaultDuration: 30, cocktailDuration: 15, description: 'Parents, siblings, grandparents', tips: 'Make a shot list to stay on schedule', chain: 'photos' },
+  { id: 'extended-family', name: 'Extended Family Photos', icon: '👪', defaultDuration: 20, cocktailDuration: 10, description: 'Aunts, uncles, cousins - during cocktail hour', tips: 'Only if not doing first look, or for extra family', cocktailHourOnly: true },
 ]
 
 const PRE_CEREMONY_EVENTS = [
@@ -44,7 +44,7 @@ const CEREMONY_EVENTS = [
 ]
 
 const COCKTAIL_EVENTS = [
-  { id: 'cocktail-hour', name: 'Cocktail Hour', icon: '🥂', defaultDuration: 60, description: 'Drinks and appetizers', chain: 'cocktail' },
+  { id: 'cocktail-hour', name: 'Cocktail Hour', icon: '🥂', defaultDuration: 50, description: 'Drinks and appetizers while photos happen', chain: 'cocktail' },
   { id: 'sunset-photos', name: 'Sunset / Golden Hour Photos', icon: '🌅', defaultDuration: 20, description: 'Sneak away for magic hour shots', autoTime: true },
 ]
 
@@ -214,13 +214,14 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
     if (isIncluded('groom-getting-ready') && !isEventConcurrent('groom-getting-ready')) {
       timeNeededBeforeCeremony += getDuration('groom-getting-ready')
     }
+    if (isIncluded('bride-getting-ready-photos')) timeNeededBeforeCeremony += getDuration('bride-getting-ready-photos')
     if (isIncluded('robe-photos')) timeNeededBeforeCeremony += getDuration('robe-photos')
     if (isIncluded('details-photos') && !isEventConcurrent('details-photos')) {
       timeNeededBeforeCeremony += getDuration('details-photos')
     }
 
-    // Add 15 min buffer after H&M
-    timeNeededBeforeCeremony += 15 // Buffer break
+    // Add buffer break time
+    timeNeededBeforeCeremony += getDuration('buffer-break') || 30
 
     // ========== WORK FORWARD FROM HAIR & MAKEUP ==========
     const hairMakeupDoneTime = ceremonyMinutes - timeNeededBeforeCeremony
@@ -234,7 +235,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
     if (shouldCalculate('buffer-break')) {
       calculated['buffer-break'].time = minutesToTime(currentTime)
     }
-    currentTime += 15 // Buffer is always 15 min
+    currentTime += getDuration('buffer-break') || 30
 
     // Concurrent events - happen during other prep
     if (isIncluded('details-photos') && isEventConcurrent('details-photos') && shouldCalculate('details-photos')) {
@@ -285,6 +286,14 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
         calculated['bride-dress'].time = minutesToTime(currentTime)
       }
       currentTime += getDuration('bride-dress')
+    }
+
+    // Bride getting ready photos (after she's dressed)
+    if (isIncluded('bride-getting-ready-photos')) {
+      if (shouldCalculate('bride-getting-ready-photos')) {
+        calculated['bride-getting-ready-photos'].time = minutesToTime(currentTime)
+      }
+      currentTime += getDuration('bride-getting-ready-photos')
     }
 
     // Non-concurrent details photos
@@ -365,13 +374,16 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
 
     // NO FIRST LOOK PATH: Photos during cocktail hour - interleave with sunset
     // Order: family first, then wedding party, then couple (sweethearts last)
+    // Use shorter cocktail durations for these photos
     if (!firstLook) {
       let cocktailPhotoTime = cocktailStart
       const photoChain = ['family-formals', 'wedding-party-photos', 'couple-portraits', 'extended-family']
 
       photoChain.forEach(id => {
         if (isIncluded(id)) {
-          const photoDuration = getDuration(id)
+          // Use cocktail duration if available, otherwise default duration
+          const photoDef = PHOTO_EVENTS.find(e => e.id === id)
+          const photoDuration = photoDef?.cocktailDuration || getDuration(id)
           const photoWouldEnd = cocktailPhotoTime + photoDuration
 
           // Check if this photo would overlap with sunset block
@@ -435,14 +447,15 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
       }
     }
 
-    // Reception starts after cocktail hour OR after photos finish (whichever is later)
-    const cocktailEnd = cocktailStart + (isIncluded('cocktail-hour') ? getDuration('cocktail-hour') : 60)
-    let receptionTime = Math.max(cocktailEnd, photoEndTime)
+    // Reception starts after cocktail hour
+    // In no-first-look mode, photos happen DURING cocktail hour (concurrent), not after
+    // So reception timing is based on cocktail duration, not photo duration
+    const cocktailDuration = isIncluded('cocktail-hour') ? getDuration('cocktail-hour') : 50
+    const cocktailEnd = cocktailStart + cocktailDuration
 
-    // If sunset is after cocktail photos but before reception would start, push reception
-    if (sunsetPhotoEnd && sunsetPhotoEnd > receptionTime) {
-      receptionTime = sunsetPhotoEnd
-    }
+    // For first look: reception after cocktail hour
+    // For traditional: reception after cocktail hour (photos are concurrent)
+    let receptionTime = cocktailEnd
 
     // ========== RECEPTION INTRO ==========
     if (isIncluded('doors-open')) {
@@ -601,6 +614,18 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
       if (updated['dinner']) {
         updated['dinner'].duration = DINNER_TYPES.find(d => d.id === dinnerType)?.duration || 60
       }
+      // Update photo durations based on first look vs traditional
+      const photoDefs = PHOTO_EVENTS
+      photoDefs.forEach(def => {
+        if (updated[def.id] && def.cocktailDuration) {
+          // Use shorter durations for cocktail hour photos (no first look)
+          const appropriateDuration = doingFirstLook ? def.defaultDuration : def.cocktailDuration
+          // Only update if not manually set
+          if (!updated[def.id].manualDuration) {
+            updated[def.id].duration = appropriateDuration
+          }
+        }
+      })
       return calculateTimesWithSettings(updated, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, concurrentEvents, doingFirstLook, sunsetTime, formalityTimings)
     })
   }
