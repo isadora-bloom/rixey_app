@@ -35,6 +35,11 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
+// Health check endpoint for Railway
+app.get('/', (req, res) => {
+  res.status(200).json({ status: 'ok', service: 'rixey-portal-api' });
+});
+
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
