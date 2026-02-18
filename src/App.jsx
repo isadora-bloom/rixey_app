@@ -1,7 +1,9 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import ProtectedRoute from './components/ProtectedRoute'
+import AdminRoute from './components/AdminRoute'
 import Login from './pages/Login'
+import AdminLogin from './pages/AdminLogin'
 import ResetPassword from './pages/ResetPassword'
 import Dashboard from './pages/Dashboard'
 import Vendors from './pages/Vendors'
@@ -15,8 +17,14 @@ function App() {
     <BrowserRouter>
       <AuthProvider>
         <Routes>
+          {/* Client login */}
           <Route path="/" element={<Login />} />
           <Route path="/reset-password" element={<ResetPassword />} />
+
+          {/* Staff/Admin login */}
+          <Route path="/staff" element={<AdminLogin />} />
+
+          {/* Client routes */}
           <Route
             path="/dashboard"
             element={
@@ -41,28 +49,30 @@ function App() {
               </ProtectedRoute>
             }
           />
+
+          {/* Admin routes - protected by AdminRoute */}
           <Route
             path="/admin"
             element={
-              <ProtectedRoute>
+              <AdminRoute>
                 <Admin />
-              </ProtectedRoute>
+              </AdminRoute>
             }
           />
           <Route
             path="/admin/gmail-callback"
             element={
-              <ProtectedRoute>
+              <AdminRoute>
                 <GmailCallback />
-              </ProtectedRoute>
+              </AdminRoute>
             }
           />
           <Route
             path="/admin/zoom-callback"
             element={
-              <ProtectedRoute>
+              <AdminRoute>
                 <ZoomCallback />
-              </ProtectedRoute>
+              </AdminRoute>
             }
           />
         </Routes>

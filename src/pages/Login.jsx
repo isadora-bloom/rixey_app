@@ -478,6 +478,13 @@ export default function Login() {
           </div>
         </div>
 
+        {/* Staff login link */}
+        <div className="mt-6 text-center">
+          <a href="/staff" className="text-sage-400 hover:text-sage-600 text-sm">
+            Staff login →
+          </a>
+        </div>
+
         {/* Forgot Password Modal */}
         {showForgotPassword && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
