@@ -20,7 +20,7 @@ const PREP_EVENTS = [
 const FIRST_LOOK_EVENTS = [
   { id: 'first-look-dad', name: 'First Look with Dad', icon: '👨‍👧', defaultDuration: 10, description: 'Private moment with father', tips: 'If doing both, this should be BEFORE groom first look', chain: 'first-look' },
   { id: 'first-look-groom', name: 'First Look with Groom', icon: '👀', defaultDuration: 15, description: 'Private reveal between couple', chain: 'first-look' },
-  { id: 'private-vows', name: 'Private Vows', icon: '💕', defaultDuration: 10, description: 'Exchange personal vows privately before ceremony', chain: 'first-look' },
+  { id: 'private-vows', name: 'Private Vows', icon: '💕', defaultDuration: 15, description: 'Exchange personal vows privately', tips: 'Can be before ceremony or during cocktail hour', chain: 'first-look' },
 ]
 
 const PHOTO_EVENTS = [
@@ -31,7 +31,8 @@ const PHOTO_EVENTS = [
 ]
 
 const PRE_CEREMONY_EVENTS = [
-  { id: 'hide-bride', name: 'Bride Hidden Away', icon: '🙈', defaultDuration: 5, description: 'Bride tucked away before guests arrive', isTimeMarker: true },
+  { id: 'hide-bride', name: 'Put Bride Away', icon: '🙈', defaultDuration: 30, description: 'Bride hidden away before guests start arriving' },
+  { id: 'last-shuttle', name: 'Last Shuttle Arrives', icon: '🚌', defaultDuration: 0, description: 'Final guest shuttle before ceremony', isTimeMarker: true },
   { id: 'travel-to-church', name: 'Travel to Ceremony Venue', icon: '🚗', defaultDuration: 30, description: 'If ceremony is off-site', conditional: 'offsite' },
 ]
 
@@ -45,13 +46,15 @@ const CEREMONY_EVENTS = [
 
 const COCKTAIL_EVENTS = [
   { id: 'cocktail-hour', name: 'Cocktail Hour', icon: '🥂', defaultDuration: 50, description: 'Drinks and appetizers while photos happen', chain: 'cocktail' },
+  { id: 'remaining-photos', name: 'Remaining Photos', icon: '📸', defaultDuration: 15, description: 'Quick additional photos during cocktail hour', tips: 'Even with first look, some photos may happen here' },
+  { id: 'couple-break', name: 'B&G Take A Break', icon: '😮‍💨', defaultDuration: 15, description: 'Couple gets a breather, snack, and moment together' },
   { id: 'sunset-photos', name: 'Sunset / Golden Hour Photos', icon: '🌅', defaultDuration: 20, description: 'Sneak away for magic hour shots', autoTime: true },
 ]
 
 const RECEPTION_INTRO_EVENTS = [
-  { id: 'doors-open', name: 'Reception Doors Open', icon: '🚪', defaultDuration: 10, description: 'Guests find their seats', tips: 'At the end of cocktail hour', chain: 'reception-start' },
-  { id: 'grand-entrance', name: 'Grand Entrance', icon: '✨', defaultDuration: 5, description: 'Wedding party and couple announced', chain: 'reception-start' },
-  { id: 'welcome-toast', name: 'Welcome & Blessing', icon: '🙏', defaultDuration: 5, description: 'Welcome speech and/or blessing', chain: 'reception-start' },
+  { id: 'doors-open', name: 'Ballroom/Patio Opens', icon: '🚪', defaultDuration: 10, description: 'Guests move from cocktail to reception space', chain: 'reception-start' },
+  { id: 'grand-entrance', name: 'Introductions', icon: '✨', defaultDuration: 5, description: 'Wedding party and couple announced', chain: 'reception-start' },
+  { id: 'welcome-toast', name: 'Welcome & Blessing', icon: '🙏', defaultDuration: 5, description: 'Welcome speech and/or blessing over the food', chain: 'reception-start' },
 ]
 
 const FORMALITIES_EVENTS = [
@@ -75,7 +78,7 @@ const DINNER_TYPES = [
 
 const END_EVENTS = [
   { id: 'open-dancing', name: 'Open Dancing Begins', icon: '🪩', defaultDuration: 0, description: 'Dance floor is open until last dance!', isTimeMarker: true, noDuration: true },
-  { id: 'grand-exit', name: 'Grand Exit', icon: '🎇', defaultDuration: 10, description: 'Sparklers, bubbles, or confetti send-off', tips: 'Can happen mid-reception (couple returns) or at the end', flexible: true },
+  { id: 'grand-exit', name: 'Sparkler / Grand Exit', icon: '🎇', defaultDuration: 10, description: 'Sparklers, bubbles, or confetti send-off', tips: 'Can happen mid-reception (couple returns to party!) or at the very end', flexible: true },
   { id: 'last-dance', name: 'Last Dance', icon: '💕', defaultDuration: 5, description: 'Final dance with all guests', fromEnd: true },
   { id: 'private-last-dance', name: 'Private Last Dance', icon: '💑', defaultDuration: 5, description: 'Just the two of you after guests leave', tips: 'Happens after the last dance, very end of the night', afterLastDance: true },
 ]
@@ -329,9 +332,16 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
       })
     }
 
-    // Bride hidden
-    if (shouldCalculate('hide-bride')) {
-      calculated['hide-bride'].time = minutesToTime(ceremonyMinutes - 40)
+    // Put Bride Away - after all pre-ceremony photos, ~30 min before ceremony
+    if (isIncluded('hide-bride')) {
+      if (shouldCalculate('hide-bride')) {
+        calculated['hide-bride'].time = minutesToTime(ceremonyMinutes - 30 - getDuration('hide-bride'))
+      }
+    }
+
+    // Last shuttle arrives - 15-20 min before ceremony
+    if (isIncluded('last-shuttle') && shouldCalculate('last-shuttle')) {
+      calculated['last-shuttle'].time = minutesToTime(ceremonyMinutes - 15)
     }
 
     // Travel to off-site ceremony
@@ -420,15 +430,32 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
       })
       photoEndTime = cocktailPhotoTime
 
+      // B&G break after photos (no first look path)
+      if (isIncluded('couple-break') && shouldCalculate('couple-break')) {
+        calculated['couple-break'].time = minutesToTime(photoEndTime)
+      }
+
       // Make sure photoEndTime accounts for sunset if it happens after last photo
       if (sunsetPhotoEnd && sunsetPhotoEnd > photoEndTime) {
         photoEndTime = Math.max(photoEndTime, sunsetPhotoEnd)
       }
     } else {
-      // FIRST LOOK: Extended family during cocktail hour (couple can mingle between photo sets)
-      // Sunset is fine - couple can sneak away
+      // FIRST LOOK: Extended family and remaining photos during cocktail hour
+      let firstLookCocktailTime = cocktailStart + 5 // Start 5 min into cocktail
+
+      if (isIncluded('remaining-photos') && shouldCalculate('remaining-photos')) {
+        calculated['remaining-photos'].time = minutesToTime(firstLookCocktailTime)
+        firstLookCocktailTime += getDuration('remaining-photos')
+      }
+
       if (isIncluded('extended-family') && shouldCalculate('extended-family')) {
-        calculated['extended-family'].time = minutesToTime(cocktailStart + 30)
+        calculated['extended-family'].time = minutesToTime(firstLookCocktailTime)
+        firstLookCocktailTime += getDuration('extended-family')
+      }
+
+      // B&G break after photos
+      if (isIncluded('couple-break') && shouldCalculate('couple-break')) {
+        calculated['couple-break'].time = minutesToTime(firstLookCocktailTime)
       }
     }
 
