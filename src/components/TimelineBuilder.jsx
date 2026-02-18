@@ -45,7 +45,7 @@ const CEREMONY_EVENTS = [
 
 const COCKTAIL_EVENTS = [
   { id: 'cocktail-hour', name: 'Cocktail Hour', icon: '🥂', defaultDuration: 60, description: 'Drinks and appetizers', chain: 'cocktail' },
-  { id: 'sunset-photos', name: 'Sunset / Golden Hour Photos', icon: '🌅', defaultDuration: 20, description: 'Sneak away for magic hour shots', alwaysIncluded: true, autoTime: true },
+  { id: 'sunset-photos', name: 'Sunset / Golden Hour Photos', icon: '🌅', defaultDuration: 20, description: 'Sneak away for magic hour shots', autoTime: true },
 ]
 
 const RECEPTION_INTRO_EVENTS = [
@@ -55,12 +55,12 @@ const RECEPTION_INTRO_EVENTS = [
 ]
 
 const FORMALITIES_EVENTS = [
-  { id: 'first-dance', name: 'First Dance', icon: '💃', defaultDuration: 5, description: 'Your first dance as a married couple', chain: 'formalities' },
-  { id: 'parent-dances', name: 'Parent Dances', icon: '👨‍👩‍👧', defaultDuration: 5, description: 'Father-daughter and mother-son dances', chain: 'formalities' },
-  { id: 'toasts', name: 'Toasts & Speeches', icon: '🎤', defaultDuration: 15, description: 'Best man, maid of honor, and family toasts', tips: 'Limit to 3-5 speeches, 3-5 min each', chain: 'formalities' },
-  { id: 'cake-cutting', name: 'Cake Cutting', icon: '🎂', defaultDuration: 10, description: 'Cut the cake together', chain: 'formalities' },
-  { id: 'anniversary-dance', name: 'Anniversary Dance', icon: '💑', defaultDuration: 5, description: 'Married couples dance, longest married wins', chain: 'formalities' },
-  { id: 'newlywed-game', name: 'Newlywed Game', icon: '🎮', defaultDuration: 5, description: 'Fun game to entertain guests', chain: 'formalities' },
+  { id: 'first-dance', name: 'First Dance', icon: '💃', defaultDuration: 5, description: 'Your first dance as a married couple', chain: 'formalities', canChooseTiming: true },
+  { id: 'parent-dances', name: 'Parent Dances', icon: '👨‍👩‍👧', defaultDuration: 5, description: 'Father-daughter and mother-son dances', chain: 'formalities', canChooseTiming: true },
+  { id: 'toasts', name: 'Toasts & Speeches', icon: '🎤', defaultDuration: 15, description: 'Best man, maid of honor, and family toasts', tips: 'Limit to 3-5 speeches, 3-5 min each', chain: 'formalities', canChooseTiming: true },
+  { id: 'cake-cutting', name: 'Cake Cutting', icon: '🎂', defaultDuration: 10, description: 'Cut the cake together', chain: 'formalities', canChooseTiming: true },
+  { id: 'anniversary-dance', name: 'Anniversary Dance', icon: '💑', defaultDuration: 5, description: 'Married couples dance, longest married wins', chain: 'formalities', canChooseTiming: true },
+  { id: 'newlywed-game', name: 'Newlywed Game', icon: '🎮', defaultDuration: 5, description: 'Fun game to entertain guests', chain: 'formalities', canChooseTiming: true },
   { id: 'bouquet-toss', name: 'Bouquet Toss', icon: '💐', defaultDuration: 5, description: 'Toss the bouquet', chain: 'late-formalities' },
   { id: 'garter-toss', name: 'Garter Toss', icon: '🎀', defaultDuration: 5, description: 'Traditional garter toss', chain: 'late-formalities' },
 ]
@@ -124,6 +124,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
   const [autoCalculate, setAutoCalculate] = useState(true)
   const [concurrentEvents, setConcurrentEvents] = useState({}) // Track which events are concurrent with others
   const [doingFirstLook, setDoingFirstLook] = useState(true) // First look vs traditional (no first look)
+  const [formalityTimings, setFormalityTimings] = useState({}) // Individual before/after dinner for each formality
 
   // Calculate sunset time for the wedding date
   const sunsetTime = calculateSunset(weddingDate)
@@ -151,7 +152,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
     if (autoCalculate && !loading) {
       recalculateAllTimes()
     }
-  }, [ceremonyTime, receptionEnd, formalitiesTiming, dinnerType, offSiteCeremony, doingFirstLook])
+  }, [ceremonyTime, receptionEnd, formalitiesTiming, dinnerType, offSiteCeremony, doingFirstLook, formalityTimings])
 
   const getAllEventDefs = () => [
     ...PREP_EVENTS, ...FIRST_LOOK_EVENTS, ...PHOTO_EVENTS,
@@ -160,7 +161,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
   ]
 
   // Calculate times with explicit settings (for loading and recalculation)
-  const calculateTimesWithSettings = (currentEvents, cerTime, recEnd, dinType, formTiming, offSite, concurrent = concurrentEvents, firstLook = doingFirstLook, sunset = sunsetTime) => {
+  const calculateTimesWithSettings = (currentEvents, cerTime, recEnd, dinType, formTiming, offSite, concurrent = concurrentEvents, firstLook = doingFirstLook, sunset = sunsetTime, formTimings = formalityTimings) => {
     const ceremonyMinutes = timeToMinutes(cerTime)
     const endMinutes = timeToMinutes(recEnd)
     const dinnerDuration = DINNER_TYPES.find(d => d.id === dinType)?.duration || 60
@@ -363,9 +364,10 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
     let photoEndTime = cocktailStart // Track when photos actually finish
 
     // NO FIRST LOOK PATH: Photos during cocktail hour - interleave with sunset
+    // Order: family first, then wedding party, then couple (sweethearts last)
     if (!firstLook) {
       let cocktailPhotoTime = cocktailStart
-      const photoChain = ['couple-portraits', 'wedding-party-photos', 'family-formals', 'extended-family']
+      const photoChain = ['family-formals', 'wedding-party-photos', 'couple-portraits', 'extended-family']
 
       photoChain.forEach(id => {
         if (isIncluded(id)) {
@@ -467,45 +469,50 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
     // ========== FORMALITIES & DINNER ==========
     const formalitiesChain = ['first-dance', 'parent-dances', 'toasts', 'cake-cutting', 'anniversary-dance', 'newlywed-game']
 
-    if (formTiming === 'before') {
-      let formalitiesTime = receptionTime
-      formalitiesChain.forEach(id => {
-        if (isIncluded(id)) {
-          if (shouldCalculate(id)) {
-            calculated[id].time = minutesToTime(formalitiesTime)
-          }
-          formalitiesTime += getDuration(id)
-        }
-      })
+    // Separate formalities into before and after dinner based on individual settings
+    // Default to the global formTiming if individual setting not specified
+    const beforeDinnerFormalities = formalitiesChain.filter(id => {
+      if (!isIncluded(id)) return false
+      const individualTiming = formTimings[id]
+      if (individualTiming !== undefined) return individualTiming === 'before'
+      return formTiming === 'before'
+    })
 
-      if (!calculated['dinner']?.manualTime) {
-        calculated['dinner'].time = minutesToTime(formalitiesTime)
+    const afterDinnerFormalities = formalitiesChain.filter(id => {
+      if (!isIncluded(id)) return false
+      const individualTiming = formTimings[id]
+      if (individualTiming !== undefined) return individualTiming === 'after'
+      return formTiming === 'after'
+    })
+
+    // Schedule before-dinner formalities
+    let beforeDinnerTime = receptionTime
+    beforeDinnerFormalities.forEach(id => {
+      if (shouldCalculate(id)) {
+        calculated[id].time = minutesToTime(beforeDinnerTime)
       }
+      beforeDinnerTime += getDuration(id)
+    })
 
-      const afterDinner = formalitiesTime + dinnerDuration
-      if (shouldCalculate('open-dancing')) {
-        calculated['open-dancing'].time = minutesToTime(afterDinner)
+    // Dinner starts after before-dinner formalities
+    if (!calculated['dinner']?.manualTime) {
+      calculated['dinner'].time = minutesToTime(beforeDinnerTime)
+    }
+
+    // After-dinner formalities
+    const afterDinnerStart = beforeDinnerTime + dinnerDuration
+    let afterDinnerTime = afterDinnerStart
+
+    afterDinnerFormalities.forEach(id => {
+      if (shouldCalculate(id)) {
+        calculated[id].time = minutesToTime(afterDinnerTime)
       }
-    } else {
-      if (!calculated['dinner']?.manualTime) {
-        calculated['dinner'].time = minutesToTime(receptionTime)
-      }
+      afterDinnerTime += getDuration(id)
+    })
 
-      const afterDinner = receptionTime + dinnerDuration
-      let formalitiesTime = afterDinner
-
-      formalitiesChain.forEach(id => {
-        if (isIncluded(id)) {
-          if (shouldCalculate(id)) {
-            calculated[id].time = minutesToTime(formalitiesTime)
-          }
-          formalitiesTime += getDuration(id)
-        }
-      })
-
-      if (shouldCalculate('open-dancing')) {
-        calculated['open-dancing'].time = minutesToTime(formalitiesTime)
-      }
+    // Open dancing starts after all formalities
+    if (shouldCalculate('open-dancing')) {
+      calculated['open-dancing'].time = minutesToTime(afterDinnerTime)
     }
 
     // Late formalities
@@ -559,7 +566,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
 
   // Calculate all times using current state values
   const calculateAllTimes = (currentEvents) => {
-    return calculateTimesWithSettings(currentEvents, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, concurrentEvents, doingFirstLook)
+    return calculateTimesWithSettings(currentEvents, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, concurrentEvents, doingFirstLook, sunsetTime, formalityTimings)
   }
 
   const initializeEvents = () => {
@@ -584,7 +591,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
       manualTime: false
     }
     // Calculate initial times
-    return calculateTimesWithSettings(initial, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, concurrentEvents, doingFirstLook)
+    return calculateTimesWithSettings(initial, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, concurrentEvents, doingFirstLook, sunsetTime, formalityTimings)
   }
 
   const recalculateAllTimes = () => {
@@ -594,7 +601,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
       if (updated['dinner']) {
         updated['dinner'].duration = DINNER_TYPES.find(d => d.id === dinnerType)?.duration || 60
       }
-      return calculateTimesWithSettings(updated, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, concurrentEvents, doingFirstLook)
+      return calculateTimesWithSettings(updated, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, concurrentEvents, doingFirstLook, sunsetTime, formalityTimings)
     })
   }
 
@@ -630,10 +637,12 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
           setCustomEvents(savedData.customEvents || [])
           const loadedConcurrent = savedData.concurrentEvents || {}
           const loadedFirstLook = savedData.doingFirstLook !== false // Default to true
+          const loadedFormalityTimings = savedData.formalityTimings || {}
 
           setAutoCalculate(savedData.autoCalculate !== false)
           setConcurrentEvents(loadedConcurrent)
           setDoingFirstLook(loadedFirstLook)
+          setFormalityTimings(loadedFormalityTimings)
 
           // Initialize events first
           const allEvents = getAllEventDefs()
@@ -664,7 +673,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
           })
 
           // Calculate times with loaded settings (pass loaded values directly since state updates are async)
-          const calculated = calculateTimesWithSettings(initial, loadedCeremonyTime, loadedReceptionEnd, loadedDinnerType, loadedFormalitiesTiming, loadedOffSite, loadedConcurrent, loadedFirstLook)
+          const calculated = calculateTimesWithSettings(initial, loadedCeremonyTime, loadedReceptionEnd, loadedDinnerType, loadedFormalitiesTiming, loadedOffSite, loadedConcurrent, loadedFirstLook, sunsetTime, loadedFormalityTimings)
           setEvents(calculated)
         } else {
           setEvents(initializeEvents())
@@ -697,7 +706,8 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
             formalitiesTiming,
             autoCalculate,
             concurrentEvents,
-            doingFirstLook
+            doingFirstLook,
+            formalityTimings
           },
           ceremonyStart: ceremonyTime,
           receptionEnd,
@@ -726,7 +736,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
 
       // Recalculate all times when duration changes (since other events depend on it)
       if (field === 'duration' && autoCalculate) {
-        return calculateTimesWithSettings(updated, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, concurrentEvents, doingFirstLook)
+        return calculateTimesWithSettings(updated, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, concurrentEvents, doingFirstLook, sunsetTime, formalityTimings)
       }
 
       return updated
@@ -745,7 +755,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
 
       // Recalculate all times when toggling (since times depend on what's included)
       if (autoCalculate) {
-        return calculateTimesWithSettings(updated, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, concurrentEvents, doingFirstLook)
+        return calculateTimesWithSettings(updated, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, concurrentEvents, doingFirstLook, sunsetTime, formalityTimings)
       }
 
       return updated
@@ -758,7 +768,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
       Object.keys(updated).forEach(key => {
         updated[key] = { ...updated[key], manualTime: false }
       })
-      return calculateTimesWithSettings(updated, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, concurrentEvents, doingFirstLook)
+      return calculateTimesWithSettings(updated, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, concurrentEvents, doingFirstLook, sunsetTime, formalityTimings)
     })
   }
 
@@ -868,13 +878,30 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
                   setConcurrentEvents(newConcurrent)
                   // Trigger recalculation with new concurrent value
                   if (autoCalculate) {
-                    setEvents(prev => calculateTimesWithSettings(prev, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, newConcurrent, doingFirstLook))
+                    setEvents(prev => calculateTimesWithSettings(prev, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, newConcurrent, doingFirstLook, sunsetTime, formalityTimings))
                   }
                 }}
                 className="w-3.5 h-3.5 rounded border-blue-300 text-blue-600"
               />
               <span className="text-xs text-blue-600">Happens during other prep</span>
             </label>
+          )}
+          {/* Before/After dinner toggle for formalities */}
+          {eventDef.canChooseTiming && event.included && (
+            <div className="flex items-center gap-2 mt-1">
+              <span className="text-xs text-sage-500">When:</span>
+              <select
+                value={formalityTimings[eventDef.id] || formalitiesTiming}
+                onChange={(e) => {
+                  const newTimings = { ...formalityTimings, [eventDef.id]: e.target.value }
+                  setFormalityTimings(newTimings)
+                }}
+                className="text-xs px-2 py-0.5 border border-sage-300 rounded bg-white"
+              >
+                <option value="before">Before dinner</option>
+                <option value="after">After dinner</option>
+              </select>
+            </div>
           )}
         </div>
 
@@ -1056,7 +1083,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
             </select>
           </div>
           <div>
-            <label className="block text-sage-600 text-xs font-medium mb-1">Formalities</label>
+            <label className="block text-sage-600 text-xs font-medium mb-1">Default Formalities</label>
             <select
               value={formalitiesTiming}
               onChange={(e) => setFormalitiesTiming(e.target.value)}
@@ -1065,6 +1092,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
               <option value="before">Before Dinner</option>
               <option value="after">After Dinner</option>
             </select>
+            <p className="text-sage-400 text-xs mt-1">Individual overrides below</p>
           </div>
         </div>
 
@@ -1207,26 +1235,50 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
         </div>
 
         {/* Sunset Photos - Special Section */}
-        <div className="mt-4 p-4 bg-gradient-to-r from-orange-50 to-pink-50 rounded-xl border border-orange-200">
-          <div className="flex items-center gap-3 mb-2">
+        <div className={`mt-4 p-4 rounded-xl border ${events['sunset-photos']?.included ? 'bg-gradient-to-r from-orange-50 to-pink-50 border-orange-200' : 'bg-cream-50/50 border-cream-200'}`}>
+          <div className="flex items-start gap-3">
+            {/* Toggle checkbox */}
+            <button
+              onClick={() => toggleEvent('sunset-photos')}
+              className={`mt-1 w-5 h-5 rounded border-2 flex items-center justify-center transition shrink-0 ${
+                events['sunset-photos']?.included
+                  ? 'bg-orange-500 border-orange-500 text-white'
+                  : 'border-sage-300 hover:border-sage-400'
+              }`}
+            >
+              {events['sunset-photos']?.included && (
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                </svg>
+              )}
+            </button>
             <span className="text-3xl">🌅</span>
             <div className="flex-1">
-              <h4 className="font-medium text-orange-800">Golden Hour Photos</h4>
+              <h4 className={`font-medium ${events['sunset-photos']?.included ? 'text-orange-800' : 'text-sage-400'}`}>Golden Hour Photos</h4>
               {sunsetTime ? (
-                <p className="text-orange-600 text-sm">
-                  Sunset: {formatTime(sunsetTime)} • Photos: {formatTime(events['sunset-photos']?.time)} - {formatTime(sunsetTime)}
+                <p className={`text-sm ${events['sunset-photos']?.included ? 'text-orange-600' : 'text-sage-400'}`}>
+                  Sunset: {formatTime(sunsetTime)}
+                  {events['sunset-photos']?.included && ` • Photos: ${formatTime(events['sunset-photos']?.time)} - ${formatTime(sunsetTime)}`}
                 </p>
               ) : (
-                <p className="text-orange-500 text-sm italic">
+                <p className="text-sage-400 text-sm italic">
                   Set a wedding date in your profile to see sunset time
                 </p>
               )}
             </div>
-            <div className="text-right">
-              <span className="text-lg font-medium text-orange-700">20 min</span>
-            </div>
+            {events['sunset-photos']?.included && (
+              <div className="text-right">
+                <input
+                  type="time"
+                  value={events['sunset-photos']?.time || ''}
+                  onChange={(e) => updateEvent('sunset-photos', 'time', e.target.value)}
+                  className={`px-2 py-1 border rounded text-sm w-24 ${events['sunset-photos']?.manualTime ? 'border-amber-300 bg-amber-50' : 'border-cream-300'}`}
+                />
+                <p className="text-orange-600 text-xs mt-1">{formatDuration(events['sunset-photos']?.duration || 20)}</p>
+              </div>
+            )}
           </div>
-          {events['sunset-photos']?.sunsetZoneNote && (
+          {events['sunset-photos']?.included && events['sunset-photos']?.sunsetZoneNote && (
             <div className={`mt-2 p-2 rounded-lg text-sm ${
               events['sunset-photos']?.sunsetZone === 'early'
                 ? 'bg-red-100 text-red-700'
@@ -1236,7 +1288,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
               {events['sunset-photos']?.sunsetZoneNote}
             </div>
           )}
-          {!doingFirstLook && sunsetTime && (
+          {events['sunset-photos']?.included && !doingFirstLook && sunsetTime && (
             <p className="mt-2 text-orange-600 text-xs">
               📸 Other photos will be scheduled around this 20-minute sunset block
             </p>
@@ -1253,7 +1305,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
           <span>🎉</span> Formalities
         </h3>
         <p className="text-sage-500 text-xs mb-3">
-          Set to happen <strong>{formalitiesTiming === 'before' ? 'BEFORE' : 'AFTER'}</strong> dinner (change above)
+          Each event can be set individually to happen before or after dinner
         </p>
         <div className="space-y-2">
           {FORMALITIES_EVENTS.map(e => renderEventRow(e))}
