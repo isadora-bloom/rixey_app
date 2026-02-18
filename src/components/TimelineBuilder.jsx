@@ -188,7 +188,13 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
     }
 
     // ========== CALCULATE TIME NEEDED BEFORE CEREMONY ==========
-    let timeNeededBeforeCeremony = 45 // Base: bride hidden + guests arriving
+    // Base time: just enough for guests to arrive (15 min)
+    // Add "Put Bride Away" time only if that event is included
+    let timeNeededBeforeCeremony = 15 // Minimal buffer for guest arrival
+
+    if (isIncluded('hide-bride')) {
+      timeNeededBeforeCeremony += getDuration('hide-bride') || 30
+    }
 
     // Add travel time if off-site
     if (offSite && isIncluded('travel-to-church')) {
