@@ -381,8 +381,10 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
       calculated['cocktail-hour'].time = minutesToTime(cocktailStart)
     }
 
-    // Calculate sunset time as a HARD BLOCK - other events must work around it
-    const sunsetMinutes = sunset ? timeToMinutes(sunset) : null
+    // Calculate sunset time as a HARD BLOCK - but ONLY if sunset photos are included
+    // If sunset photos aren't selected, don't let sunset affect the timeline
+    const includeSunsetBlock = isIncluded('sunset-photos')
+    const sunsetMinutes = (sunset && includeSunsetBlock) ? timeToMinutes(sunset) : null
     const sunsetPhotoStart = sunsetMinutes ? sunsetMinutes - 20 : null
     const sunsetPhotoEnd = sunsetMinutes // Photos end at sunset
 
