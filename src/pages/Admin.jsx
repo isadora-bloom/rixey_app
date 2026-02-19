@@ -1952,10 +1952,10 @@ export default function Admin() {
           <div className="flex items-center justify-between py-3">
             <h1 className="font-serif text-xl text-sage-700">Admin Dashboard</h1>
             <button
-              onClick={() => navigate('/dashboard')}
+              onClick={async () => { await supabase.auth.signOut(); navigate('/staff'); }}
               className="text-sage-500 hover:text-sage-700 text-sm font-medium"
             >
-              Back to Portal
+              Sign Out
             </button>
           </div>
           {/* Navigation Tabs in Header */}
