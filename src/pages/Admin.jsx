@@ -8,6 +8,7 @@ import InspoGallery from '../components/InspoGallery'
 import PlanningChecklist from '../components/PlanningChecklist'
 import CouplePhoto from '../components/CouplePhoto'
 import KnowledgeBaseAdmin from '../components/KnowledgeBaseAdmin'
+import RecommendedVendorsAdmin from '../components/RecommendedVendorsAdmin'
 import UsageStats from '../components/UsageStats'
 import UpcomingMeetings from '../components/UpcomingMeetings'
 import AdminInbox from '../components/AdminInbox'
@@ -260,7 +261,7 @@ export default function Admin() {
   const [submittingAnswer, setSubmittingAnswer] = useState(false)
   const [couplePhotos, setCouplePhotos] = useState({}) // weddingId -> photo URL
   const [enlargedPhoto, setEnlargedPhoto] = useState(null) // URL for enlarged photo modal
-  const [mainView, setMainView] = useState('weddings') // 'weddings', 'knowledge-base', 'usage', 'meetings', 'messages'
+  const [mainView, setMainView] = useState('weddings') // 'weddings', 'knowledge-base', 'usage', 'meetings', 'messages', 'vendors'
   const [showUncertainModal, setShowUncertainModal] = useState(false)
   const [unreadMessages, setUnreadMessages] = useState(0)
   const [timelineSummary, setTimelineSummary] = useState(null) // Quick view of timeline data
@@ -2044,6 +2045,7 @@ export default function Admin() {
               { id: 'weddings', label: 'Weddings', count: stats.active },
               { id: 'messages', label: 'Messages', count: unreadMessages, alert: unreadMessages > 0 },
               { id: 'meetings', label: 'Meetings' },
+              { id: 'vendors', label: 'Vendors' },
               { id: 'knowledge-base', label: 'KB' },
               { id: 'usage', label: 'Usage' },
             ].map(tab => (
@@ -2121,6 +2123,13 @@ export default function Admin() {
         {/* Messages View */}
         {mainView === 'messages' && (
           <AdminInbox weddings={weddings} onUnreadChange={setUnreadMessages} />
+        )}
+
+        {/* Recommended Vendors View */}
+        {mainView === 'vendors' && (
+          <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-6">
+            <RecommendedVendorsAdmin />
+          </div>
         )}
 
         {/* Weddings View */}

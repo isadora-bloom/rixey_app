@@ -3574,6 +3574,137 @@ app.delete('/api/knowledge-base/:id', async (req, res) => {
   }
 });
 
+// ============ RECOMMENDED VENDORS ============
+
+// Get all recommended vendors (with optional category filter)
+app.get('/api/recommended-vendors', async (req, res) => {
+  try {
+    const { category } = req.query;
+
+    let query = supabaseAdmin
+      .from('vendors')
+      .select('*')
+      .order('category', { ascending: true })
+      .order('name', { ascending: true });
+
+    if (category) {
+      query = query.eq('category', category);
+    }
+
+    const { data, error } = await query;
+
+    if (error) throw error;
+
+    // Get unique categories for filter dropdown
+    const categories = [...new Set((data || []).map(v => v.category))].sort();
+
+    res.json({ vendors: data || [], categories });
+  } catch (error) {
+    console.error('Get recommended vendors error:', error);
+    res.status(500).json({ error: 'Failed to get vendors' });
+  }
+});
+
+// Get single vendor by ID
+app.get('/api/recommended-vendors/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { data, error } = await supabaseAdmin
+      .from('vendors')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (error) throw error;
+    res.json({ vendor: data });
+  } catch (error) {
+    console.error('Get vendor error:', error);
+    res.status(500).json({ error: 'Failed to get vendor' });
+  }
+});
+
+// Create new recommended vendor
+app.post('/api/recommended-vendors', async (req, res) => {
+  try {
+    const {
+      category, name, notes, contact, website, pricing_info,
+      has_multiple_events, is_local, is_budget_friendly,
+      serves_indian, serves_chinese
+    } = req.body;
+
+    if (!category || !name) {
+      return res.status(400).json({ error: 'Category and name are required' });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('vendors')
+      .insert({
+        category,
+        name,
+        notes: notes || null,
+        contact: contact || null,
+        website: website || null,
+        pricing_info: pricing_info || null,
+        has_multiple_events: has_multiple_events || false,
+        is_local: is_local || false,
+        is_budget_friendly: is_budget_friendly || false,
+        serves_indian: serves_indian || false,
+        serves_chinese: serves_chinese || false
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ vendor: data });
+  } catch (error) {
+    console.error('Create vendor error:', error);
+    res.status(500).json({ error: 'Failed to create vendor' });
+  }
+});
+
+// Update recommended vendor
+app.put('/api/recommended-vendors/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = { ...req.body };
+
+    // Remove id from updates if present
+    delete updates.id;
+
+    const { data, error } = await supabaseAdmin
+      .from('vendors')
+      .update(updates)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ vendor: data });
+  } catch (error) {
+    console.error('Update vendor error:', error);
+    res.status(500).json({ error: 'Failed to update vendor' });
+  }
+});
+
+// Delete recommended vendor
+app.delete('/api/recommended-vendors/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { error } = await supabaseAdmin
+      .from('vendors')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Delete vendor error:', error);
+    res.status(500).json({ error: 'Failed to delete vendor' });
+  }
+});
+
 // ============ ONBOARDING PROGRESS ============
 
 // Get onboarding progress for a wedding
