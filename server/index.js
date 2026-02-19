@@ -549,7 +549,8 @@ async function extractPlanningNotes(message, userId, weddingId) {
           user_id: userId,
           category: config.category,
           content: content.trim(),
-          source_message: message.substring(0, 500)
+          source_message: message.substring(0, 500),
+          status: 'pending'
         });
 
         break; // Only capture first match per pattern type
@@ -1624,8 +1625,22 @@ app.post('/api/gmail/sync', async (req, res) => {
             body_text: bodyText.substring(0, 10000)
           });
 
-          // Extract planning notes
+          // Save full email as a planning note so Sage can search it
           if (weddingId && bodyText) {
+            const { error: noteError } = await supabaseAdmin.from('planning_notes').insert({
+              wedding_id: weddingId,
+              user_id: null,
+              category: 'email',
+              content: `[Email: ${subject}]\nFrom: ${fromEmail}\n\n${bodyText.substring(0, 5000)}`,
+              source_message: `From email on ${dateHeader}`,
+              status: 'confirmed'
+            });
+
+            if (noteError) {
+              console.error('Error saving email to planning_notes:', noteError);
+            }
+
+            // Also extract specific planning details
             const notes = await extractPlanningNotes(bodyText, null, weddingId);
             if (notes.length > 0) {
               notes.forEach(n => {
@@ -2305,8 +2320,22 @@ app.post('/api/zoom/sync', async (req, res) => {
         transcript_text: transcriptText.substring(0, 50000)
       });
 
-      // Extract planning notes if matched
+      // Save full transcript as a planning note so Sage can search it
       if (matchedWeddingId && transcriptText) {
+        const { error: noteError } = await supabaseAdmin.from('planning_notes').insert({
+          wedding_id: matchedWeddingId,
+          user_id: null,
+          category: 'zoom_transcript',
+          content: `[Zoom Meeting: ${meeting.topic || 'Untitled'}]\n${transcriptText.substring(0, 10000)}`,
+          source_message: `From Zoom meeting on ${meeting.start_time || 'unknown date'}`,
+          status: 'confirmed'
+        });
+
+        if (noteError) {
+          console.error('Error saving Zoom transcript to planning_notes:', noteError);
+        }
+
+        // Also extract specific planning details
         const notes = await extractPlanningNotes(transcriptText, null, matchedWeddingId);
         if (notes.length > 0) {
           notes.forEach(n => {
