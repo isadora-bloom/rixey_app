@@ -251,6 +251,7 @@ export default function Admin() {
   const [notesHighlights, setNotesHighlights] = useState('')
   const [loadingHighlights, setLoadingHighlights] = useState(false)
   const [notesSearchQuery, setNotesSearchQuery] = useState('')
+  const [collapsedNoteCategories, setCollapsedNoteCategories] = useState({})
   const [sortBy, setSortBy] = useState('lastActivity') // 'lastActivity' or 'weddingDate'
   const [uncertainQuestions, setUncertainQuestions] = useState([])
   const [answeringQuestion, setAnsweringQuestion] = useState(null)
@@ -1660,9 +1661,10 @@ export default function Admin() {
                         No planning notes detected yet. They'll appear here as clients share decisions with Sage.
                       </p>
                     ) : (
-                      <div className="space-y-3 max-h-[500px] overflow-y-auto">
-                        {planningNotes
-                          .filter(note => {
+                      <div className="space-y-2 max-h-[500px] overflow-y-auto">
+                        {/* Group notes by category */}
+                        {(() => {
+                          const filteredNotes = planningNotes.filter(note => {
                             if (!notesSearchQuery.trim()) return true
                             const query = notesSearchQuery.toLowerCase()
                             return (
@@ -1671,84 +1673,137 @@ export default function Admin() {
                               (note.source_message && note.source_message.toLowerCase().includes(query))
                             )
                           })
-                          .map(note => (
-                          <div
-                            key={note.id}
-                            className={`border rounded-lg p-4 ${
-                              note.status === 'pending'
-                                ? 'border-amber-200 bg-amber-50/50'
-                                : note.status === 'added'
-                                ? 'border-green-200 bg-green-50/50'
-                                : note.status === 'confirmed'
-                                ? 'border-blue-200 bg-blue-50/50'
-                                : 'border-cream-200 bg-cream-50/50'
-                            }`}
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="flex-1">
-                                <div className="flex items-center gap-2 mb-1">
-                                  <span className="text-lg">{getCategoryIcon(note.category)}</span>
-                                  <span className={`text-xs font-medium px-2 py-0.5 rounded ${
-                                    note.status === 'pending'
-                                      ? 'bg-amber-100 text-amber-700'
-                                      : note.status === 'added'
-                                      ? 'bg-green-100 text-green-700'
-                                      : note.status === 'confirmed'
-                                      ? 'bg-blue-100 text-blue-700'
-                                      : 'bg-gray-100 text-gray-600'
-                                  }`}>
-                                    {getCategoryLabel(note.category)}
-                                  </span>
-                                  <span className="text-sage-400 text-xs">
-                                    {new Date(note.created_at).toLocaleDateString('en-US', {
-                                      month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
-                                    })}
-                                  </span>
-                                </div>
-                                <p className="text-sage-800 font-medium">{note.content}</p>
-                                {note.source_message && (
-                                  <p className="text-sage-500 text-xs mt-2 italic line-clamp-2">
-                                    "{note.source_message}"
-                                  </p>
-                                )}
-                              </div>
-                              <div className="flex flex-col gap-1">
-                                {note.status === 'pending' && (
-                                  <>
-                                    <button
-                                      onClick={() => updateNoteStatus(note.id, 'added')}
-                                      className="text-xs px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700"
-                                    >
-                                      Mark Added
-                                    </button>
-                                    <button
-                                      onClick={() => updateNoteStatus(note.id, 'dismissed')}
-                                      className="text-xs px-3 py-1 text-sage-500 hover:text-sage-700"
-                                    >
-                                      Dismiss
-                                    </button>
-                                  </>
-                                )}
-                                {note.status === 'added' && (
-                                  <span className="text-xs text-green-600 flex items-center gap-1">
-                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                                    </svg>
-                                    Added
-                                  </span>
-                                )}
-                                {note.status === 'dismissed' && (
-                                  <button
-                                    onClick={() => updateNoteStatus(note.id, 'pending')}
-                                    className="text-xs text-sage-400 hover:text-sage-600"
+
+                          // Group by category
+                          const grouped = filteredNotes.reduce((acc, note) => {
+                            const cat = note.category || 'other'
+                            if (!acc[cat]) acc[cat] = []
+                            acc[cat].push(note)
+                            return acc
+                          }, {})
+
+                          // Sort categories - pending first, then by note count
+                          const sortedCategories = Object.keys(grouped).sort((a, b) => {
+                            const aPending = grouped[a].filter(n => n.status === 'pending').length
+                            const bPending = grouped[b].filter(n => n.status === 'pending').length
+                            if (aPending !== bPending) return bPending - aPending
+                            return grouped[b].length - grouped[a].length
+                          })
+
+                          return sortedCategories.map(category => {
+                            const notes = grouped[category]
+                            const pendingCount = notes.filter(n => n.status === 'pending').length
+                            const isCollapsed = collapsedNoteCategories[category]
+
+                            return (
+                              <div key={category} className="border border-cream-200 rounded-lg overflow-hidden">
+                                <button
+                                  onClick={() => setCollapsedNoteCategories(prev => ({
+                                    ...prev,
+                                    [category]: !prev[category]
+                                  }))}
+                                  className="w-full flex items-center justify-between p-3 bg-cream-50 hover:bg-cream-100 transition"
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-lg">{getCategoryIcon(category)}</span>
+                                    <span className="font-medium text-sage-700">{getCategoryLabel(category)}</span>
+                                    <span className="text-sage-400 text-sm">({notes.length})</span>
+                                    {pendingCount > 0 && (
+                                      <span className="bg-amber-100 text-amber-700 text-xs px-2 py-0.5 rounded-full">
+                                        {pendingCount} new
+                                      </span>
+                                    )}
+                                  </div>
+                                  <svg
+                                    className={`w-5 h-5 text-sage-400 transition-transform ${isCollapsed ? '' : 'rotate-180'}`}
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
                                   >
-                                    Restore
-                                  </button>
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                  </svg>
+                                </button>
+
+                                {!isCollapsed && (
+                                  <div className="p-2 space-y-2">
+                                    {notes.map(note => (
+                                      <div
+                                        key={note.id}
+                                        className={`border rounded-lg p-3 ${
+                                          note.status === 'pending'
+                                            ? 'border-amber-200 bg-amber-50/50'
+                                            : note.status === 'added'
+                                            ? 'border-green-200 bg-green-50/50'
+                                            : note.status === 'confirmed'
+                                            ? 'border-blue-200 bg-blue-50/50'
+                                            : 'border-cream-200 bg-white'
+                                        }`}
+                                      >
+                                        <div className="flex items-start justify-between gap-3">
+                                          <div className="flex-1 min-w-0">
+                                            <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                              <span className={`text-xs font-medium px-2 py-0.5 rounded ${
+                                                note.status === 'pending'
+                                                  ? 'bg-amber-100 text-amber-700'
+                                                  : note.status === 'added'
+                                                  ? 'bg-green-100 text-green-700'
+                                                  : note.status === 'confirmed'
+                                                  ? 'bg-blue-100 text-blue-700'
+                                                  : 'bg-gray-100 text-gray-600'
+                                              }`}>
+                                                {note.status === 'pending' ? 'New' : note.status === 'confirmed' ? 'Synced' : note.status}
+                                              </span>
+                                              <span className="text-sage-400 text-xs">
+                                                {new Date(note.created_at).toLocaleDateString('en-US', {
+                                                  month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+                                                })}
+                                              </span>
+                                            </div>
+                                            <p className="text-sage-800 text-sm">{note.content}</p>
+                                            {note.source_message && (
+                                              <p className="text-sage-500 text-xs mt-1 italic line-clamp-1">
+                                                "{note.source_message}"
+                                              </p>
+                                            )}
+                                          </div>
+                                          <div className="flex flex-col gap-1 shrink-0">
+                                            {note.status === 'pending' && (
+                                              <>
+                                                <button
+                                                  onClick={() => updateNoteStatus(note.id, 'added')}
+                                                  className="text-xs px-2 py-1 bg-green-600 text-white rounded hover:bg-green-700"
+                                                >
+                                                  ✓
+                                                </button>
+                                                <button
+                                                  onClick={() => updateNoteStatus(note.id, 'dismissed')}
+                                                  className="text-xs px-2 py-1 text-sage-400 hover:text-sage-600"
+                                                >
+                                                  ✕
+                                                </button>
+                                              </>
+                                            )}
+                                            {note.status === 'added' && (
+                                              <span className="text-xs text-green-600">✓</span>
+                                            )}
+                                            {note.status === 'dismissed' && (
+                                              <button
+                                                onClick={() => updateNoteStatus(note.id, 'pending')}
+                                                className="text-xs text-sage-400 hover:text-sage-600"
+                                              >
+                                                ↩
+                                              </button>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
                                 )}
                               </div>
-                            </div>
-                          </div>
-                        ))}
+                            )
+                          })
+                        })()}
                       </div>
                     )}
                   </div>

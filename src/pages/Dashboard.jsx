@@ -94,6 +94,8 @@ export default function Dashboard() {
   const [showTimelineModal, setShowTimelineModal] = useState(false)
   const [showTablesModal, setShowTablesModal] = useState(false)
   const [showStaffingModal, setShowStaffingModal] = useState(false)
+  const [showShareModal, setShowShareModal] = useState(false)
+  const [shareLinkCopied, setShareLinkCopied] = useState(false)
   const [timelineSummary, setTimelineSummary] = useState(null)
   const [tableSummary, setTableSummary] = useState(null)
   // Collapsible sections (collapsed by default)
@@ -701,9 +703,20 @@ export default function Dashboard() {
                 </p>
               )}
               {wedding?.event_code && (
-                <p className="text-sage-400 text-xs mt-2">
-                  Event Code: <span className="font-mono bg-cream-100 px-2 py-0.5 rounded">{wedding.event_code}</span>
-                </p>
+                <div className="flex items-center gap-2 mt-2">
+                  <p className="text-sage-400 text-xs">
+                    Event Code: <span className="font-mono bg-cream-100 px-2 py-0.5 rounded">{wedding.event_code}</span>
+                  </p>
+                  <button
+                    onClick={() => setShowShareModal(true)}
+                    className="text-xs text-sage-600 hover:text-sage-800 flex items-center gap-1 bg-sage-100 hover:bg-sage-200 px-2 py-1 rounded transition"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+                    </svg>
+                    Invite
+                  </button>
+                </div>
               )}
             </div>
 
@@ -1265,6 +1278,109 @@ export default function Dashboard() {
             </div>
             <div className="flex-1 overflow-y-auto">
               <StaffingCalculator guestCount={tableSummary?.guestCount} weddingId={profile?.wedding_id} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Share / Invite Modal */}
+      {showShareModal && wedding?.event_code && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-2xl shadow-xl p-6 max-w-md w-full">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-serif text-xl text-sage-700">Invite Family & Friends</h3>
+              <button
+                onClick={() => { setShowShareModal(false); setShareLinkCopied(false); }}
+                className="text-sage-400 hover:text-sage-600"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <p className="text-sage-600 text-sm mb-4">
+              Share this link with family members and wedding party so they can access your planning portal and chat with Sage.
+            </p>
+
+            {/* Event Code */}
+            <div className="bg-cream-50 rounded-lg p-4 mb-4">
+              <p className="text-sage-500 text-xs mb-1">Event Code</p>
+              <p className="font-mono text-2xl text-sage-700 font-bold tracking-wider">{wedding.event_code}</p>
+            </div>
+
+            {/* Signup Link */}
+            <div className="bg-sage-50 rounded-lg p-4 mb-4">
+              <p className="text-sage-500 text-xs mb-2">Invite Link</p>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  readOnly
+                  value={`${window.location.origin}/?code=${wedding.event_code}`}
+                  className="flex-1 px-3 py-2 bg-white border border-sage-200 rounded-lg text-sm text-sage-700 font-mono"
+                />
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(`${window.location.origin}/?code=${wedding.event_code}`)
+                    setShareLinkCopied(true)
+                    setTimeout(() => setShareLinkCopied(false), 2000)
+                  }}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
+                    shareLinkCopied
+                      ? 'bg-green-500 text-white'
+                      : 'bg-sage-600 text-white hover:bg-sage-700'
+                  }`}
+                >
+                  {shareLinkCopied ? '✓ Copied!' : 'Copy'}
+                </button>
+              </div>
+            </div>
+
+            {/* Instructions */}
+            <div className="text-sage-500 text-xs space-y-1">
+              <p>📱 They'll use this code when signing up to join your wedding portal.</p>
+              <p>👨‍👩‍👧 They can choose their role (Mother of Bride, Best Man, etc.)</p>
+              <p>💬 They'll be able to chat with Sage and view your planning info.</p>
+            </div>
+
+            {/* Share buttons */}
+            <div className="flex gap-2 mt-4 pt-4 border-t border-cream-200">
+              <button
+                onClick={() => {
+                  const text = `Join our wedding planning portal! Sign up at ${window.location.origin}/?code=${wedding.event_code} and use code: ${wedding.event_code}`
+                  if (navigator.share) {
+                    navigator.share({ title: 'Wedding Portal Invite', text })
+                  } else {
+                    navigator.clipboard.writeText(text)
+                    setShareLinkCopied(true)
+                    setTimeout(() => setShareLinkCopied(false), 2000)
+                  }
+                }}
+                className="flex-1 px-4 py-2 bg-cream-100 text-sage-700 rounded-lg text-sm font-medium hover:bg-cream-200 transition flex items-center justify-center gap-2"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+                </svg>
+                Share
+              </button>
+              <a
+                href={`sms:?body=Join our wedding planning portal! Sign up at ${encodeURIComponent(window.location.origin)}/?code=${wedding.event_code} and use code: ${wedding.event_code}`}
+                className="flex-1 px-4 py-2 bg-green-100 text-green-700 rounded-lg text-sm font-medium hover:bg-green-200 transition flex items-center justify-center gap-2"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                </svg>
+                Text
+              </a>
+              <a
+                href={`mailto:?subject=Join Our Wedding Portal&body=Join our wedding planning portal! Sign up at ${encodeURIComponent(window.location.origin)}/?code=${wedding.event_code} and use code: ${wedding.event_code}`}
+                className="flex-1 px-4 py-2 bg-blue-100 text-blue-700 rounded-lg text-sm font-medium hover:bg-blue-200 transition flex items-center justify-center gap-2"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+                Email
+              </a>
             </div>
           </div>
         </div>

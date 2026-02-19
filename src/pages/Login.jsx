@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { supabase } from '../lib/supabase'
 
@@ -47,6 +47,16 @@ export default function Login() {
   const [resetEmail, setResetEmail] = useState('')
   const { signIn, signUp } = useAuth()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+
+  // Auto-fill event code from URL parameter
+  useEffect(() => {
+    const codeFromUrl = searchParams.get('code')
+    if (codeFromUrl) {
+      setEventCode(codeFromUrl.toUpperCase())
+      setIsSignUp(true) // Switch to signup mode when code is provided
+    }
+  }, [searchParams])
 
   const selectedRole = ROLE_OPTIONS.find(r => r.value === role)
   const isCouple = selectedRole?.isCouple || false
