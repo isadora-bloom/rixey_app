@@ -395,7 +395,7 @@ Never:
 
 // Get relevant knowledge based on the user's question
 async function getRelevantKnowledge(question) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('knowledge_base')
     .select('title, category, subcategory, content');
 
@@ -582,7 +582,7 @@ async function savePlanningNotes(notes) {
 
 // Get wedding ID for a user
 async function getWeddingIdForUser(userId) {
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from('profiles')
     .select('wedding_id')
     .eq('id', userId)
@@ -1029,7 +1029,7 @@ Return ONLY a valid JSON array, no other text. Example:
         status: 'pending'
       }));
 
-      const { error: insertError } = await supabase
+      const { error: insertError } = await supabaseAdmin
         .from('planning_notes')
         .insert(notesToSave);
 
@@ -1139,7 +1139,7 @@ app.post('/api/chat-with-file', upload.single('file'), async (req, res) => {
         // Handle inspiration images
         if (fileType === 'inspo' && isImage) {
           // Check if they haven't exceeded max inspo images
-          const { count } = await supabase
+          const { count } = await supabaseAdmin
             .from('inspo_gallery')
             .select('*', { count: 'exact', head: true })
             .eq('wedding_id', weddingId);
@@ -1226,7 +1226,7 @@ app.post('/api/chat-with-file', upload.single('file'), async (req, res) => {
           const vendorType = vendorTypeResponse.content[0].text.toLowerCase().trim();
 
           // Check if this vendor type already exists
-          const { data: existingVendor } = await supabase
+          const { data: existingVendor } = await supabaseAdmin
             .from('vendor_checklist')
             .select('id')
             .eq('wedding_id', weddingId)
@@ -1328,13 +1328,13 @@ app.post('/api/ask-contracts', async (req, res) => {
     }
 
     // Get all contracts for this wedding
-    const { data: contracts } = await supabase
+    const { data: contracts } = await supabaseAdmin
       .from('contracts')
       .select('filename, extracted_text')
       .eq('wedding_id', weddingId);
 
     // Get all planning notes for this wedding
-    const { data: planningNotes } = await supabase
+    const { data: planningNotes } = await supabaseAdmin
       .from('planning_notes')
       .select('category, content, source_message, created_at')
       .eq('wedding_id', weddingId);
@@ -1425,14 +1425,14 @@ app.post('/api/gmail/callback', async (req, res) => {
     oauth2Client.setCredentials(tokens);
 
     // Save tokens to database - clear old first
-    const { error: deleteError } = await supabase
+    const { error: deleteError } = await supabaseAdmin
       .from('gmail_tokens')
       .delete()
       .neq('id', '00000000-0000-0000-0000-000000000000');
 
     if (deleteError) console.log('Delete old tokens:', deleteError.message);
 
-    const { error: insertError } = await supabase
+    const { error: insertError } = await supabaseAdmin
       .from('gmail_tokens')
       .insert({
         access_token: tokens.access_token,
@@ -1456,7 +1456,7 @@ app.post('/api/gmail/callback', async (req, res) => {
 // Check Gmail connection status
 app.get('/api/gmail/status', async (req, res) => {
   try {
-    const { data: tokens, error: fetchError } = await supabase
+    const { data: tokens, error: fetchError } = await supabaseAdmin
       .from('gmail_tokens')
       .select('*')
       .limit(1)
@@ -1493,7 +1493,7 @@ app.get('/api/gmail/status', async (req, res) => {
 app.post('/api/gmail/sync', async (req, res) => {
   try {
     // Load tokens
-    const { data: tokens } = await supabase
+    const { data: tokens } = await supabaseAdmin
       .from('gmail_tokens')
       .select('*')
       .limit(1)
@@ -1545,7 +1545,7 @@ app.post('/api/gmail/sync', async (req, res) => {
     console.log(`Searching for emails from/about ${clientEmails.length} registered client addresses`);
 
     // Get already processed message IDs
-    const { data: processed } = await supabase
+    const { data: processed } = await supabaseAdmin
       .from('processed_emails')
       .select('gmail_message_id');
     const processedIds = new Set((processed || []).map(p => p.gmail_message_id));
@@ -2011,14 +2011,14 @@ app.post('/api/notes-highlights', async (req, res) => {
     }
 
     // Get all planning notes
-    const { data: notes } = await supabase
+    const { data: notes } = await supabaseAdmin
       .from('planning_notes')
       .select('category, content, source_message, created_at, status')
       .eq('wedding_id', weddingId)
       .order('created_at', { ascending: false });
 
     // Get contracts
-    const { data: contracts } = await supabase
+    const { data: contracts } = await supabaseAdmin
       .from('contracts')
       .select('filename')
       .eq('wedding_id', weddingId);
@@ -2132,7 +2132,7 @@ app.post('/api/zoom/callback', async (req, res) => {
 // Check Zoom connection status
 app.get('/api/zoom/status', async (req, res) => {
   try {
-    const { data: tokens } = await supabase
+    const { data: tokens } = await supabaseAdmin
       .from('zoom_tokens')
       .select('*')
       .limit(1)
@@ -2146,7 +2146,7 @@ app.get('/api/zoom/status', async (req, res) => {
 
 // Helper to refresh Zoom token if needed
 async function getZoomAccessToken() {
-  const { data: tokens } = await supabase
+  const { data: tokens } = await supabaseAdmin
     .from('zoom_tokens')
     .select('*')
     .limit(1)
@@ -2197,7 +2197,7 @@ app.post('/api/zoom/sync', async (req, res) => {
     }
 
     // Get all weddings with profiles for name matching
-    const { data: weddings } = await supabase
+    const { data: weddings } = await supabaseAdmin
       .from('weddings')
       .select('id, couple_names, profiles(name, email)');
 
@@ -2225,7 +2225,7 @@ app.post('/api/zoom/sync', async (req, res) => {
     console.log(`Searching Zoom for meetings, matching against ${Object.keys(nameToWedding).length} known names`);
 
     // Get processed meeting IDs
-    const { data: processed } = await supabase
+    const { data: processed } = await supabaseAdmin
       .from('processed_zoom_meetings')
       .select('zoom_meeting_id');
     const processedIds = new Set((processed || []).map(p => p.zoom_meeting_id));
@@ -2382,7 +2382,7 @@ app.get('/api/uncertain-questions', async (req, res) => {
 // Get count of unanswered questions
 app.get('/api/uncertain-questions/count', async (req, res) => {
   try {
-    const { count, error } = await supabase
+    const { count, error } = await supabaseAdmin
       .from('uncertain_questions')
       .select('*', { count: 'exact', head: true })
       .is('admin_answer', null);
@@ -2406,7 +2406,7 @@ app.post('/api/uncertain-questions/:id/answer', async (req, res) => {
     }
 
     // Update the question with the answer
-    const { data: question, error: updateError } = await supabase
+    const { data: question, error: updateError } = await supabaseAdmin
       .from('uncertain_questions')
       .update({
         admin_answer: answer,
@@ -2424,7 +2424,7 @@ app.post('/api/uncertain-questions/:id/answer', async (req, res) => {
 
     // If requested, add to knowledge base
     if (addToKnowledgeBase && kbCategory) {
-      const { error: kbError } = await supabase
+      const { error: kbError } = await supabaseAdmin
         .from('knowledge_base')
         .insert({
           title: kbTitle || question.question.substring(0, 100),
@@ -2452,7 +2452,7 @@ app.delete('/api/uncertain-questions/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const { error } = await supabase
+    const { error } = await supabaseAdmin
       .from('uncertain_questions')
       .delete()
       .eq('id', id);
@@ -2478,7 +2478,7 @@ app.get('/api/vendors/:weddingId', async (req, res) => {
   try {
     const { weddingId } = req.params;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('vendor_checklist')
       .select('*')
       .eq('wedding_id', weddingId)
@@ -2503,7 +2503,7 @@ app.post('/api/vendors', async (req, res) => {
 
     if (id) {
       // Update existing
-      const { data, error } = await supabase
+      const { data, error } = await supabaseAdmin
         .from('vendor_checklist')
         .update({
           vendor_type: vendorType,
@@ -2520,7 +2520,7 @@ app.post('/api/vendors', async (req, res) => {
       res.json({ vendor: data });
     } else {
       // Create new
-      const { data, error } = await supabase
+      const { data, error } = await supabaseAdmin
         .from('vendor_checklist')
         .insert({
           wedding_id: weddingId,
@@ -2547,7 +2547,7 @@ app.delete('/api/vendors/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const { error } = await supabase
+    const { error } = await supabaseAdmin
       .from('vendor_checklist')
       .delete()
       .eq('id', id);
@@ -2571,7 +2571,7 @@ app.post('/api/vendors/:id/contract', upload.single('contract'), async (req, res
     }
 
     // Get the vendor to find wedding_id
-    const { data: vendor } = await supabase
+    const { data: vendor } = await supabaseAdmin
       .from('vendor_checklist')
       .select('wedding_id, vendor_type')
       .eq('id', id)
@@ -2606,7 +2606,7 @@ app.post('/api/vendors/:id/contract', upload.single('contract'), async (req, res
     }
 
     // Update vendor record
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('vendor_checklist')
       .update({
         contract_uploaded: true,
@@ -2705,7 +2705,7 @@ app.delete('/api/vendors/:id/contract', async (req, res) => {
     const { id } = req.params;
 
     // Get current contract URL to delete from storage
-    const { data: vendor } = await supabase
+    const { data: vendor } = await supabaseAdmin
       .from('vendor_checklist')
       .select('contract_url')
       .eq('id', id)
@@ -2720,7 +2720,7 @@ app.delete('/api/vendors/:id/contract', async (req, res) => {
     }
 
     // Update vendor record
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('vendor_checklist')
       .update({
         contract_uploaded: false,
@@ -2748,7 +2748,7 @@ app.get('/api/inspo/:weddingId', async (req, res) => {
   try {
     const { weddingId } = req.params;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('inspo_gallery')
       .select('*')
       .eq('wedding_id', weddingId)
@@ -2773,7 +2773,7 @@ app.post('/api/inspo', upload.single('image'), async (req, res) => {
     }
 
     // Check count limit
-    const { count } = await supabase
+    const { count } = await supabaseAdmin
       .from('inspo_gallery')
       .select('*', { count: 'exact', head: true })
       .eq('wedding_id', weddingId);
@@ -2823,7 +2823,7 @@ app.post('/api/inspo', upload.single('image'), async (req, res) => {
     }
 
     // Create record
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('inspo_gallery')
       .insert({
         wedding_id: weddingId,
@@ -2901,7 +2901,7 @@ app.put('/api/inspo/:id', async (req, res) => {
     if (caption !== undefined) updates.caption = caption;
     if (displayOrder !== undefined) updates.display_order = displayOrder;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('inspo_gallery')
       .update(updates)
       .eq('id', id)
@@ -2922,7 +2922,7 @@ app.delete('/api/inspo/:id', async (req, res) => {
     const { id } = req.params;
 
     // Get image URL to delete from storage
-    const { data: image } = await supabase
+    const { data: image } = await supabaseAdmin
       .from('inspo_gallery')
       .select('image_url')
       .eq('id', id)
@@ -2935,7 +2935,7 @@ app.delete('/api/inspo/:id', async (req, res) => {
       }
     }
 
-    const { error } = await supabase
+    const { error } = await supabaseAdmin
       .from('inspo_gallery')
       .delete()
       .eq('id', id);
@@ -2955,7 +2955,7 @@ app.get('/api/couple-photo/:weddingId', async (req, res) => {
   try {
     const { weddingId } = req.params;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('couple_photos')
       .select('*')
       .eq('wedding_id', weddingId)
@@ -2981,7 +2981,7 @@ app.post('/api/couple-photo', upload.single('photo'), async (req, res) => {
     }
 
     // Check if photo already exists
-    const { data: existing } = await supabase
+    const { data: existing } = await supabaseAdmin
       .from('couple_photos')
       .select('id, image_url')
       .eq('wedding_id', weddingId)
@@ -3015,7 +3015,7 @@ app.post('/api/couple-photo', upload.single('photo'), async (req, res) => {
     let data;
     if (existing) {
       // Update existing
-      const { data: updated, error } = await supabase
+      const { data: updated, error } = await supabaseAdmin
         .from('couple_photos')
         .update({
           image_url: signedUrlData.signedUrl,
@@ -3029,7 +3029,7 @@ app.post('/api/couple-photo', upload.single('photo'), async (req, res) => {
       data = updated;
     } else {
       // Create new
-      const { data: created, error } = await supabase
+      const { data: created, error } = await supabaseAdmin
         .from('couple_photos')
         .insert({
           wedding_id: weddingId,
@@ -3056,7 +3056,7 @@ app.delete('/api/couple-photo/:weddingId', async (req, res) => {
     const { weddingId } = req.params;
 
     // Get photo to delete from storage
-    const { data: photo } = await supabase
+    const { data: photo } = await supabaseAdmin
       .from('couple_photos')
       .select('image_url')
       .eq('wedding_id', weddingId)
@@ -3069,7 +3069,7 @@ app.delete('/api/couple-photo/:weddingId', async (req, res) => {
       }
     }
 
-    const { error } = await supabase
+    const { error } = await supabaseAdmin
       .from('couple_photos')
       .delete()
       .eq('wedding_id', weddingId);
@@ -3118,7 +3118,7 @@ app.get('/api/checklist/:weddingId', async (req, res) => {
   try {
     const { weddingId } = req.params;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('planning_checklist')
       .select('*')
       .eq('wedding_id', weddingId)
@@ -3138,7 +3138,7 @@ app.post('/api/checklist/initialize/:weddingId', async (req, res) => {
     const { weddingId } = req.params;
 
     // Check if already initialized
-    const { count } = await supabase
+    const { count } = await supabaseAdmin
       .from('planning_checklist')
       .select('*', { count: 'exact', head: true })
       .eq('wedding_id', weddingId);
@@ -3154,7 +3154,7 @@ app.post('/api/checklist/initialize/:weddingId', async (req, res) => {
       is_custom: false
     }));
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('planning_checklist')
       .insert(tasks)
       .select();
@@ -3177,7 +3177,7 @@ app.post('/api/checklist', async (req, res) => {
     }
 
     // Get max display order
-    const { data: maxOrder } = await supabase
+    const { data: maxOrder } = await supabaseAdmin
       .from('planning_checklist')
       .select('display_order')
       .eq('wedding_id', weddingId)
@@ -3185,7 +3185,7 @@ app.post('/api/checklist', async (req, res) => {
       .limit(1)
       .single();
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('planning_checklist')
       .insert({
         wedding_id: weddingId,
@@ -3231,7 +3231,7 @@ app.put('/api/checklist/:id', async (req, res) => {
     if (category !== undefined) updates.category = category;
     if (dueDate !== undefined) updates.due_date = dueDate;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('planning_checklist')
       .update(updates)
       .eq('id', id)
@@ -3252,7 +3252,7 @@ app.delete('/api/checklist/:id', async (req, res) => {
     const { id } = req.params;
 
     // Only allow deleting custom tasks
-    const { data: task } = await supabase
+    const { data: task } = await supabaseAdmin
       .from('planning_checklist')
       .select('is_custom')
       .eq('id', id)
@@ -3262,7 +3262,7 @@ app.delete('/api/checklist/:id', async (req, res) => {
       return res.status(400).json({ error: 'Cannot delete default tasks' });
     }
 
-    const { error } = await supabase
+    const { error } = await supabaseAdmin
       .from('planning_checklist')
       .delete()
       .eq('id', id);
@@ -3279,7 +3279,7 @@ app.delete('/api/checklist/:id', async (req, res) => {
 
 // Find matching checklist task for a completion phrase
 async function findMatchingChecklistTask(weddingId, completionPhrase) {
-  const { data: tasks } = await supabase
+  const { data: tasks } = await supabaseAdmin
     .from('planning_checklist')
     .select('id, task_text, is_completed')
     .eq('wedding_id', weddingId)
@@ -3339,7 +3339,7 @@ app.post('/api/checklist/sage-complete', async (req, res) => {
   try {
     const { weddingId, taskId, completedBy } = req.body;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('planning_checklist')
       .update({
         is_completed: true,
@@ -3379,7 +3379,7 @@ app.post('/api/checklist/find-match', async (req, res) => {
 app.get('/api/usage/stats', async (req, res) => {
   try {
     // Get usage grouped by wedding
-    const { data: usage, error } = await supabase
+    const { data: usage, error } = await supabaseAdmin
       .from('usage_logs')
       .select('wedding_id, input_tokens, output_tokens, endpoint, created_at');
 
@@ -3421,7 +3421,7 @@ app.get('/api/usage/:weddingId', async (req, res) => {
   try {
     const { weddingId } = req.params;
 
-    const { data: usage, error } = await supabase
+    const { data: usage, error } = await supabaseAdmin
       .from('usage_logs')
       .select('*')
       .eq('wedding_id', weddingId)
@@ -3456,7 +3456,7 @@ app.get('/api/usage/:weddingId', async (req, res) => {
 // Get all knowledge base entries
 app.get('/api/knowledge-base', async (req, res) => {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('knowledge_base')
       .select('*')
       .order('category')
@@ -3479,7 +3479,7 @@ app.post('/api/knowledge-base', async (req, res) => {
       return res.status(400).json({ error: 'Title and content required' });
     }
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('knowledge_base')
       .insert({
         title,
@@ -3512,7 +3512,7 @@ app.put('/api/knowledge-base/:id', async (req, res) => {
     if (content !== undefined) updates.content = content;
     if (active !== undefined) updates.active = active;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('knowledge_base')
       .update(updates)
       .eq('id', id)
@@ -3532,7 +3532,7 @@ app.delete('/api/knowledge-base/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const { error } = await supabase
+    const { error } = await supabaseAdmin
       .from('knowledge_base')
       .delete()
       .eq('id', id);
@@ -3553,7 +3553,7 @@ app.get('/api/onboarding/:weddingId', async (req, res) => {
     const { weddingId } = req.params;
 
     // Get or create onboarding record
-    let { data, error } = await supabase
+    let { data, error } = await supabaseAdmin
       .from('onboarding_progress')
       .select('*')
       .eq('wedding_id', weddingId)
@@ -3561,7 +3561,7 @@ app.get('/api/onboarding/:weddingId', async (req, res) => {
 
     if (error && error.code === 'PGRST116') {
       // Not found, create it
-      const { data: newData, error: insertError } = await supabase
+      const { data: newData, error: insertError } = await supabaseAdmin
         .from('onboarding_progress')
         .insert({ wedding_id: weddingId })
         .select()
@@ -3610,7 +3610,7 @@ app.put('/api/onboarding/:weddingId', async (req, res) => {
     const { weddingId } = req.params;
     const { onboarding_dismissed } = req.body;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('onboarding_progress')
       .upsert({
         wedding_id: weddingId,
@@ -3745,7 +3745,7 @@ app.get('/api/messages/:weddingId', async (req, res) => {
   try {
     const { weddingId } = req.params;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('direct_messages')
       .select('*')
       .eq('wedding_id', weddingId)
@@ -3768,7 +3768,7 @@ app.post('/api/messages', async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('direct_messages')
       .insert({
         wedding_id: weddingId,
@@ -3793,7 +3793,7 @@ app.put('/api/messages/read/:weddingId', async (req, res) => {
     const { weddingId } = req.params;
     const { senderType } = req.body; // Mark messages FROM this sender type as read
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('direct_messages')
       .update({ is_read: true, read_at: new Date().toISOString() })
       .eq('wedding_id', weddingId)
@@ -3814,7 +3814,7 @@ app.get('/api/messages/unread/:weddingId', async (req, res) => {
   try {
     const { weddingId } = req.params;
 
-    const { count, error } = await supabase
+    const { count, error } = await supabaseAdmin
       .from('direct_messages')
       .select('*', { count: 'exact', head: true })
       .eq('wedding_id', weddingId)
@@ -3832,7 +3832,7 @@ app.get('/api/messages/unread/:weddingId', async (req, res) => {
 // Get all unread counts for admin (counts client messages per wedding)
 app.get('/api/messages/admin/unread', async (req, res) => {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('direct_messages')
       .select('wedding_id')
       .eq('sender_type', 'client')
@@ -3858,7 +3858,7 @@ app.get('/api/messages/admin/unread', async (req, res) => {
 app.get('/api/messages/admin/conversations', async (req, res) => {
   try {
     // Get all messages grouped by wedding, with latest first
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('direct_messages')
       .select('*')
       .order('created_at', { ascending: false });
@@ -3930,6 +3930,32 @@ app.put('/api/admin/notifications/:id/read', async (req, res) => {
   } catch (error) {
     console.error('Mark notification read error:', error);
     res.status(500).json({ error: 'Failed to mark notification as read' });
+  }
+});
+
+// Create admin notification (bypasses RLS)
+app.post('/api/admin/notifications', async (req, res) => {
+  try {
+    const { type, message, wedding_id, user_id } = req.body;
+
+    const { data, error } = await supabaseAdmin
+      .from('admin_notifications')
+      .insert({
+        type,
+        message,
+        wedding_id,
+        user_id,
+        read: false
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json({ notification: data });
+  } catch (error) {
+    console.error('Create admin notification error:', error);
+    res.status(500).json({ error: 'Failed to create notification' });
   }
 });
 
@@ -4180,7 +4206,7 @@ app.get('/api/timeline/:weddingId', async (req, res) => {
   try {
     const { weddingId } = req.params;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('wedding_timeline')
       .select('*')
       .eq('wedding_id', weddingId)
@@ -4199,7 +4225,7 @@ app.post('/api/timeline', async (req, res) => {
   try {
     const { weddingId, timelineData, ceremonyStart, receptionStart, receptionEnd, notes } = req.body;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('wedding_timeline')
       .upsert({
         wedding_id: weddingId,
@@ -4226,7 +4252,7 @@ app.get('/api/tables/:weddingId', async (req, res) => {
   try {
     const { weddingId } = req.params;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('wedding_tables')
       .select('*')
       .eq('wedding_id', weddingId)
@@ -4251,7 +4277,7 @@ app.post('/api/tables', async (req, res) => {
       tableNumbersStyle, centerpieceNotes, extraTables
     } = req.body;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('wedding_tables')
       .upsert({
         wedding_id: weddingId,
@@ -4288,7 +4314,7 @@ app.get('/api/staffing/:weddingId', async (req, res) => {
   try {
     const { weddingId } = req.params;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('wedding_staffing')
       .select('*')
       .eq('wedding_id', weddingId)
@@ -4318,7 +4344,7 @@ app.post('/api/staffing', async (req, res) => {
       totalCost
     } = req.body;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('wedding_staffing')
       .upsert({
         wedding_id: weddingId,

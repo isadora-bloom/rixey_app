@@ -162,13 +162,17 @@ export default function Login() {
             console.error('Wedding creation error:', weddingCreateError)
           } else {
             weddingId = newWedding.id
-            // Create admin notification for new wedding
-            await supabase.from('admin_notifications').insert([{
-              type: 'new_wedding',
-              message: `New wedding created: ${coupleNames || 'Unknown'} on ${weddingDate}. Event code: ${newEventCode}. Please add HoneyBook and Google Sheets links.`,
-              wedding_id: newWedding.id,
-              user_id: data.user.id
-            }])
+            // Create admin notification for new wedding (via server to bypass RLS)
+            await fetch(`${API_URL}/api/admin/notifications`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                type: 'new_wedding',
+                message: `New wedding created: ${coupleNames || 'Unknown'} on ${weddingDate}. Event code: ${newEventCode}. Please add HoneyBook and Google Sheets links.`,
+                wedding_id: newWedding.id,
+                user_id: data.user.id
+              })
+            })
 
             // Initialize default planning checklist for the new wedding
             try {
