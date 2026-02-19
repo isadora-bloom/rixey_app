@@ -1849,7 +1849,7 @@ app.post('/api/quo/sync', async (req, res) => {
               category: 'sms_message',
               content: `[SMS ${direction}] ${messageBody}`,
               source_message: `From ${direction === 'inbound' ? 'client' : 'Rixey'} text: ${clientPhoneE164}`,
-              created_at: msg.createdAt || new Date().toISOString()
+              status: 'confirmed'
             });
 
             if (noteError) {
@@ -1942,7 +1942,7 @@ app.post('/api/quo/sync', async (req, res) => {
               category: 'call_transcript',
               content: `[Call Transcript] ${transcript}`,
               source_message: `From ${direction} call with: ${clientPhoneE164}`,
-              created_at: call.createdAt || new Date().toISOString()
+              status: 'confirmed'
             });
 
             if (noteError) {
