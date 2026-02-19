@@ -156,7 +156,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
     if (autoCalculate && !loading) {
       recalculateAllTimes()
     }
-  }, [ceremonyTime, receptionEnd, formalitiesTiming, dinnerType, offSiteCeremony, doingFirstLook, formalityTimings])
+  }, [ceremonyTime, receptionEnd, formalitiesTiming, dinnerType, offSiteCeremony, doingFirstLook, formalityTimings, customEvents])
 
   const getAllEventDefs = () => [
     ...PREP_EVENTS, ...FIRST_LOOK_EVENTS, ...PHOTO_EVENTS,
@@ -165,7 +165,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
   ]
 
   // Calculate times with explicit settings (for loading and recalculation)
-  const calculateTimesWithSettings = (currentEvents, cerTime, recEnd, dinType, formTiming, offSite, concurrent = concurrentEvents, firstLook = doingFirstLook, sunset = sunsetTime, formTimings = formalityTimings) => {
+  const calculateTimesWithSettings = (currentEvents, cerTime, recEnd, dinType, formTiming, offSite, concurrent = concurrentEvents, firstLook = doingFirstLook, sunset = sunsetTime, formTimings = formalityTimings, customEvts = customEvents) => {
     const ceremonyMinutes = timeToMinutes(cerTime)
     const endMinutes = timeToMinutes(recEnd)
     const dinnerDuration = DINNER_TYPES.find(d => d.id === dinType)?.duration || 60
@@ -176,6 +176,62 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
     const isIncluded = (id) => calculated[id]?.included
     const getDuration = (id) => calculated[id]?.duration || 0
     const isEventConcurrent = (id) => concurrent[id]?.isConcurrent
+
+    // Build list of custom event time blocks by section
+    const customBlocks = {
+      prep: [],
+      ceremony: [],
+      cocktail: [],
+      reception: [],
+      end: []
+    }
+    customEvts.forEach(ce => {
+      if (ce.time && ce.duration) {
+        const start = timeToMinutes(ce.time)
+        const end = start + ce.duration
+        const section = ce.section || 'reception'
+        if (customBlocks[section]) {
+          customBlocks[section].push({ start, end, name: ce.name })
+        }
+      }
+    })
+
+    // Helper: Check if a time slot conflicts with custom blocks and return next available time
+    const getNextAvailableTime = (proposedStart, duration, section) => {
+      const blocks = customBlocks[section] || []
+      if (blocks.length === 0) return proposedStart
+
+      let currentStart = proposedStart
+      let iterations = 0
+      while (iterations < 10) { // Prevent infinite loops
+        const proposedEnd = currentStart + duration
+        let conflict = false
+        for (const block of blocks) {
+          // Check if proposed event overlaps with this block
+          if (currentStart < block.end && proposedEnd > block.start) {
+            // Conflict! Move to after this block
+            currentStart = block.end
+            conflict = true
+            break
+          }
+        }
+        if (!conflict) break
+        iterations++
+      }
+      return currentStart
+    }
+
+    // Helper: Get total duration of custom blocks in a section that fall within a time range
+    const getCustomBlocksDuration = (section, rangeStart, rangeEnd) => {
+      const blocks = customBlocks[section] || []
+      let total = 0
+      blocks.forEach(block => {
+        if (block.start >= rangeStart && block.end <= rangeEnd) {
+          total += (block.end - block.start)
+        }
+      })
+      return total
+    }
 
     // ========== CEREMONY TIMING ==========
     if (shouldCalculate('ceremony')) {
@@ -233,6 +289,11 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
     // Add buffer break time
     timeNeededBeforeCeremony += getDuration('buffer-break') || 30
 
+    // Add duration of custom events in prep section
+    customBlocks.prep.forEach(block => {
+      timeNeededBeforeCeremony += (block.end - block.start)
+    })
+
     // ========== WORK FORWARD FROM HAIR & MAKEUP ==========
     const hairMakeupDoneTime = ceremonyMinutes - timeNeededBeforeCeremony
 
@@ -255,15 +316,17 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
       calculated['lunch'].time = minutesToTime(hairMakeupDoneTime - 60)
     }
 
-    // Robe photos (after buffer)
+    // Robe photos (after buffer) - check for custom event conflicts
     if (isIncluded('robe-photos')) {
+      currentTime = getNextAvailableTime(currentTime, getDuration('robe-photos'), 'prep')
       if (shouldCalculate('robe-photos')) {
         calculated['robe-photos'].time = minutesToTime(currentTime)
       }
       currentTime += getDuration('robe-photos')
     }
 
-    // Bridesmaids get dressed
+    // Bridesmaids get dressed - check for custom event conflicts
+    currentTime = getNextAvailableTime(currentTime, getDuration('bridesmaids-dressed'), 'prep')
     const bridesmaidsTime = currentTime
     if (isIncluded('bridesmaids-dressed')) {
       if (shouldCalculate('bridesmaids-dressed')) {
@@ -282,7 +345,8 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
           calculated['groom-getting-ready'].time = minutesToTime(bridesmaidsTime)
         }
       } else {
-        // Sequential - happens in the timeline
+        // Sequential - happens in the timeline, check for conflicts
+        currentTime = getNextAvailableTime(currentTime, getDuration('groom-getting-ready'), 'prep')
         if (shouldCalculate('groom-getting-ready')) {
           calculated['groom-getting-ready'].time = minutesToTime(currentTime)
         }
@@ -290,7 +354,8 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
       }
     }
 
-    // Bride gets dressed
+    // Bride gets dressed - check for conflicts
+    currentTime = getNextAvailableTime(currentTime, getDuration('bride-dress'), 'prep')
     if (isIncluded('bride-dress')) {
       if (shouldCalculate('bride-dress')) {
         calculated['bride-dress'].time = minutesToTime(currentTime)
@@ -298,7 +363,8 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
       currentTime += getDuration('bride-dress')
     }
 
-    // Bride getting ready photos (after she's dressed)
+    // Bride getting ready photos (after she's dressed) - check for conflicts
+    currentTime = getNextAvailableTime(currentTime, getDuration('bride-getting-ready-photos'), 'prep')
     if (isIncluded('bride-getting-ready-photos')) {
       if (shouldCalculate('bride-getting-ready-photos')) {
         calculated['bride-getting-ready-photos'].time = minutesToTime(currentTime)
@@ -306,8 +372,9 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
       currentTime += getDuration('bride-getting-ready-photos')
     }
 
-    // Non-concurrent details photos
+    // Non-concurrent details photos - check for conflicts
     if (isIncluded('details-photos') && !isEventConcurrent('details-photos')) {
+      currentTime = getNextAvailableTime(currentTime, getDuration('details-photos'), 'prep')
       if (shouldCalculate('details-photos')) {
         calculated['details-photos'].time = minutesToTime(currentTime)
       }
@@ -615,7 +682,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
 
   // Calculate all times using current state values
   const calculateAllTimes = (currentEvents) => {
-    return calculateTimesWithSettings(currentEvents, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, concurrentEvents, doingFirstLook, sunsetTime, formalityTimings)
+    return calculateTimesWithSettings(currentEvents, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, concurrentEvents, doingFirstLook, sunsetTime, formalityTimings, customEvents)
   }
 
   const initializeEvents = () => {
@@ -640,7 +707,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
       manualTime: false
     }
     // Calculate initial times
-    return calculateTimesWithSettings(initial, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, concurrentEvents, doingFirstLook, sunsetTime, formalityTimings)
+    return calculateTimesWithSettings(initial, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, concurrentEvents, doingFirstLook, sunsetTime, formalityTimings, customEvents)
   }
 
   const recalculateAllTimes = () => {
@@ -662,7 +729,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
           }
         }
       })
-      return calculateTimesWithSettings(updated, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, concurrentEvents, doingFirstLook, sunsetTime, formalityTimings)
+      return calculateTimesWithSettings(updated, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, concurrentEvents, doingFirstLook, sunsetTime, formalityTimings, customEvents)
     })
   }
 
@@ -695,7 +762,8 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
           setOffSiteCeremony(loadedOffSite)
           setShuttleArrivals(savedData.shuttleArrivals || [])
           setShuttleDepartures(savedData.shuttleDepartures || [])
-          setCustomEvents(savedData.customEvents || [])
+          const loadedCustomEvents = savedData.customEvents || []
+          setCustomEvents(loadedCustomEvents)
           const loadedConcurrent = savedData.concurrentEvents || {}
           const loadedFirstLook = savedData.doingFirstLook !== false // Default to true
           const loadedFormalityTimings = savedData.formalityTimings || {}
@@ -734,7 +802,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
           })
 
           // Calculate times with loaded settings (pass loaded values directly since state updates are async)
-          const calculated = calculateTimesWithSettings(initial, loadedCeremonyTime, loadedReceptionEnd, loadedDinnerType, loadedFormalitiesTiming, loadedOffSite, loadedConcurrent, loadedFirstLook, sunsetTime, loadedFormalityTimings)
+          const calculated = calculateTimesWithSettings(initial, loadedCeremonyTime, loadedReceptionEnd, loadedDinnerType, loadedFormalitiesTiming, loadedOffSite, loadedConcurrent, loadedFirstLook, sunsetTime, loadedFormalityTimings, loadedCustomEvents)
           setEvents(calculated)
         } else {
           setEvents(initializeEvents())
@@ -797,7 +865,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
 
       // Recalculate all times when duration changes (since other events depend on it)
       if (field === 'duration' && autoCalculate) {
-        return calculateTimesWithSettings(updated, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, concurrentEvents, doingFirstLook, sunsetTime, formalityTimings)
+        return calculateTimesWithSettings(updated, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, concurrentEvents, doingFirstLook, sunsetTime, formalityTimings, customEvents)
       }
 
       return updated
@@ -816,7 +884,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
 
       // Recalculate all times when toggling (since times depend on what's included)
       if (autoCalculate) {
-        return calculateTimesWithSettings(updated, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, concurrentEvents, doingFirstLook, sunsetTime, formalityTimings)
+        return calculateTimesWithSettings(updated, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, concurrentEvents, doingFirstLook, sunsetTime, formalityTimings, customEvents)
       }
 
       return updated
@@ -829,7 +897,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
       Object.keys(updated).forEach(key => {
         updated[key] = { ...updated[key], manualTime: false }
       })
-      return calculateTimesWithSettings(updated, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, concurrentEvents, doingFirstLook, sunsetTime, formalityTimings)
+      return calculateTimesWithSettings(updated, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, concurrentEvents, doingFirstLook, sunsetTime, formalityTimings, customEvents)
     })
   }
 
@@ -952,7 +1020,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
                   setConcurrentEvents(newConcurrent)
                   // Trigger recalculation with new concurrent value
                   if (autoCalculate) {
-                    setEvents(prev => calculateTimesWithSettings(prev, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, newConcurrent, doingFirstLook, sunsetTime, formalityTimings))
+                    setEvents(prev => calculateTimesWithSettings(prev, ceremonyTime, receptionEnd, dinnerType, formalitiesTiming, offSiteCeremony, newConcurrent, doingFirstLook, sunsetTime, formalityTimings, customEvents))
                   }
                 }}
                 className="w-3.5 h-3.5 rounded border-blue-300 text-blue-600"
