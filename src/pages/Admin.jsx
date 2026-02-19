@@ -955,9 +955,9 @@ export default function Admin() {
     const escalation = escalations[viewingWedding.id]
 
     return (
-      <div className="min-h-screen bg-cream-50">
+      <div className="min-h-screen bg-cream-50 overflow-x-hidden">
         <header className="bg-white border-b border-cream-200 sticky top-0 z-40">
-          <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+          <div className="max-w-6xl mx-auto px-4 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-4">
               {/* Couple Photo in Header */}
               {couplePhotos[viewingWedding.id] ? (
@@ -1945,7 +1945,7 @@ export default function Admin() {
 
   // Main Admin View
   return (
-    <div className="min-h-screen bg-cream-50">
+    <div className="min-h-screen bg-cream-50 overflow-x-hidden">
       {/* Header with integrated navigation */}
       <header className="bg-white border-b border-cream-200 sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4">
@@ -1959,18 +1959,18 @@ export default function Admin() {
             </button>
           </div>
           {/* Navigation Tabs in Header */}
-          <div className="flex gap-1 -mb-px">
+          <div className="flex gap-1 -mb-px overflow-x-auto scrollbar-hide">
             {[
               { id: 'weddings', label: 'Weddings', count: stats.active },
               { id: 'messages', label: 'Messages', count: unreadMessages, alert: unreadMessages > 0 },
               { id: 'meetings', label: 'Meetings' },
-              { id: 'knowledge-base', label: 'Knowledge Base' },
-              { id: 'usage', label: 'Usage & Costs' },
+              { id: 'knowledge-base', label: 'KB' },
+              { id: 'usage', label: 'Usage' },
             ].map(tab => (
               <button
                 key={tab.id}
                 onClick={() => setMainView(tab.id)}
-                className={`px-4 py-2.5 text-sm font-medium border-b-2 transition relative ${
+                className={`px-3 sm:px-4 py-2.5 text-sm font-medium border-b-2 transition relative whitespace-nowrap ${
                   mainView === tab.id
                     ? 'border-sage-600 text-sage-700'
                     : 'border-transparent text-sage-500 hover:text-sage-700 hover:border-sage-300'
