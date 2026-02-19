@@ -1674,9 +1674,21 @@ const QUO_API_KEY = process.env.QUO_API_KEY;
 const QUO_API_BASE = 'https://api.openphone.com/v1';
 
 // Helper to normalize phone numbers for matching
+// Handles formats like: (540) 388-8912, +1 540-388-8912, 5403888912, +15403888912
 function normalizePhone(phone) {
   if (!phone) return null;
-  return phone.replace(/\D/g, '').slice(-10); // Last 10 digits
+  // Remove all non-digits
+  const digits = phone.replace(/\D/g, '');
+  // If starts with 1 and has 11 digits, remove the leading 1 (US country code)
+  if (digits.length === 11 && digits.startsWith('1')) {
+    return digits.slice(1);
+  }
+  // If 10 digits, return as-is
+  if (digits.length === 10) {
+    return digits;
+  }
+  // Otherwise return last 10 digits
+  return digits.slice(-10);
 }
 
 // Check Quo connection status
@@ -1796,10 +1808,12 @@ app.post('/api/quo/sync', async (req, res) => {
           continue;
         }
 
-        // Get the external phone number (the client's number)
-        const externalPhone = msg.from?.phoneNumber || msg.to?.[0]?.phoneNumber;
-        const normalizedExternal = normalizePhone(externalPhone);
-        console.log(`DEBUG: Message from "${externalPhone}" normalized to "${normalizedExternal}", looking up in:`, Object.keys(phoneToWedding));
+        // Get the external phone number (the client's number) - try multiple field formats
+        const externalPhone = msg.from?.phoneNumber || msg.from?.phone || msg.from ||
+                              msg.to?.[0]?.phoneNumber || msg.to?.[0]?.phone || msg.to?.[0] ||
+                              msg.participants?.find(p => p.phoneNumber !== quoPhone.phoneNumber)?.phoneNumber;
+        const normalizedExternal = normalizePhone(typeof externalPhone === 'string' ? externalPhone : externalPhone?.phoneNumber || externalPhone?.phone);
+        console.log(`DEBUG: Message external phone raw: ${JSON.stringify(externalPhone)}, normalized: "${normalizedExternal}"`);
 
         // Check if this phone matches a registered client
         const weddingId = phoneToWedding[normalizedExternal];
@@ -1840,14 +1854,89 @@ app.post('/api/quo/sync', async (req, res) => {
       }
     }
 
-    console.log(`Quo sync: processed ${newlyProcessed} messages, extracted ${notesExtracted} notes`);
+    // Also fetch calls with transcripts
+    let totalCallsFound = 0;
+    let callsProcessed = 0;
+    for (const quoPhone of quoPhoneNumbers) {
+      const phoneNumberId = quoPhone.id;
+
+      try {
+        // Fetch calls for this phone number
+        const callsUrl = `${QUO_API_BASE}/calls?phoneNumberId=${phoneNumberId}&maxResults=50`;
+        const callsResponse = await fetch(callsUrl, {
+          headers: { 'Authorization': QUO_API_KEY }
+        });
+
+        if (!callsResponse.ok) {
+          console.log(`DEBUG: Calls fetch failed for ${phoneNumberId}: ${callsResponse.status}`);
+          continue;
+        }
+
+        const callsData = await callsResponse.json();
+        const calls = callsData.data || callsData.calls || callsData || [];
+        totalCallsFound += calls.length;
+        console.log(`DEBUG: Found ${calls.length} calls for phone ${phoneNumberId}`);
+
+        for (const call of calls) {
+          const callId = `call_${call.id}`;
+          if (processedIds.has(callId)) continue;
+
+          // Get external phone from call
+          const externalPhone = call.from?.phoneNumber || call.from?.phone || call.from ||
+                                call.to?.[0]?.phoneNumber || call.to?.[0]?.phone || call.to?.[0] ||
+                                call.participants?.find(p => p.phoneNumber !== quoPhone.phoneNumber)?.phoneNumber;
+          const normalizedExternal = normalizePhone(typeof externalPhone === 'string' ? externalPhone : externalPhone?.phoneNumber);
+
+          const weddingId = phoneToWedding[normalizedExternal];
+          if (!weddingId) {
+            if (normalizedExternal) unmatchedPhones.add(normalizedExternal);
+            continue;
+          }
+
+          // Get transcript if available
+          const transcript = call.transcript || call.transcription || call.voicemail?.transcript || '';
+          if (!transcript) continue; // Skip calls without transcripts
+
+          console.log(`DEBUG: Processing call with transcript for wedding ${weddingId}`);
+
+          // Save to processed
+          await supabaseAdmin.from('processed_quo_messages').insert({
+            quo_message_id: callId,
+            wedding_id: weddingId,
+            phone_number: typeof externalPhone === 'string' ? externalPhone : JSON.stringify(externalPhone),
+            direction: call.direction || 'inbound',
+            body_text: `[CALL TRANSCRIPT] ${transcript.substring(0, 5000)}`
+          });
+
+          // Extract planning notes from transcript
+          if (transcript) {
+            const notes = await extractPlanningNotes(transcript, phoneToUser[normalizedExternal], weddingId);
+            if (notes.length > 0) {
+              notes.forEach(n => {
+                n.source_message = `From call transcript: ${transcript.substring(0, 100)}...`;
+              });
+              await savePlanningNotes(notes);
+              notesExtracted += notes.length;
+            }
+          }
+
+          callsProcessed++;
+          processedIds.add(callId);
+        }
+      } catch (callErr) {
+        console.error(`Error fetching calls for ${phoneNumberId}:`, callErr);
+      }
+    }
+
+    console.log(`Quo sync: processed ${newlyProcessed} messages + ${callsProcessed} calls, extracted ${notesExtracted} notes`);
 
     // Include detailed debug info in response
     const registeredPhones = Object.keys(phoneToWedding);
     res.json({
       processed: newlyProcessed,
+      callsProcessed: callsProcessed,
       notesExtracted,
-      message: `Synced ${newlyProcessed} text messages. Extracted ${notesExtracted} planning notes.`,
+      message: `Synced ${newlyProcessed} messages + ${callsProcessed} call transcripts. Extracted ${notesExtracted} planning notes.`,
       debug: {
         profileCount: profiles.length,
         profilesWithWeddingId: profiles.filter(p => p.wedding_id).length,
@@ -1856,6 +1945,7 @@ app.post('/api/quo/sync', async (req, res) => {
         quoPhoneCount: quoPhoneNumbers.length,
         quoPhoneIds: quoPhoneNumbers.map(p => p.id),
         totalMessagesFound: totalMessagesFound,
+        totalCallsFound: totalCallsFound,
         alreadyProcessedCount: processedIds.size,
         unmatchedPhones: Array.from(unmatchedPhones).slice(0, 10),
         sampleMessages: sampleMessages

@@ -349,14 +349,14 @@ export default function Admin() {
         const d = data.debug
         statusMsg += `\n📊 ${d.profileCount} profiles, ${d.profilesWithWeddingId} with wedding`
         statusMsg += `\n📱 Registered: ${d.registeredPhones?.join(', ') || 'none'}`
-        statusMsg += `\n📞 OpenPhone numbers: ${d.quoPhoneCount} (IDs: ${d.quoPhoneIds?.join(', ') || 'none'})`
-        statusMsg += `\n📨 Found ${d.totalMessagesFound || 0} messages`
+        statusMsg += `\n📞 Quo phones: ${d.quoPhoneCount} (${d.quoPhoneNumbers?.join(', ') || 'none'})`
+        statusMsg += `\n📨 Found ${d.totalMessagesFound || 0} msgs, ${d.totalCallsFound || 0} calls`
         if (d.unmatchedPhones?.length > 0) {
           statusMsg += `\n❌ Unmatched: ${d.unmatchedPhones.join(', ')}`
         }
         if (d.sampleMessages?.length > 0) {
           const sample = d.sampleMessages[0]
-          statusMsg += `\n🔍 Sample: ${JSON.stringify(sample.from)}`
+          statusMsg += `\n🔍 Sample from: ${JSON.stringify(sample.from)?.substring(0, 80)}`
         }
       }
       setQuoStatus(statusMsg)
