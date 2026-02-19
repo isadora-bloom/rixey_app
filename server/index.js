@@ -1707,9 +1707,12 @@ app.post('/api/quo/sync', async (req, res) => {
     // Build phone-to-wedding lookup
     const phoneToWedding = {};
     const phoneToUser = {};
+    console.log('DEBUG: Found profiles with phones:', profiles.map(p => ({ phone: p.phone, wedding_id: p.wedding_id })));
+
     for (const profile of profiles) {
       if (profile.phone && profile.wedding_id) {
         const normalized = normalizePhone(profile.phone);
+        console.log(`DEBUG: Profile phone "${profile.phone}" normalized to "${normalized}"`);
         if (normalized) {
           phoneToWedding[normalized] = profile.wedding_id;
           phoneToUser[normalized] = profile.id;
@@ -1718,6 +1721,7 @@ app.post('/api/quo/sync', async (req, res) => {
     }
 
     console.log(`Searching Quo for messages from ${Object.keys(phoneToWedding).length} registered phone numbers`);
+    console.log('DEBUG: Registered phone lookup:', phoneToWedding);
 
     // Get already processed message IDs (use admin to bypass RLS)
     const { data: processed } = await supabaseAdmin
@@ -1741,10 +1745,12 @@ app.post('/api/quo/sync', async (req, res) => {
 
     const phoneNumbersData = await phoneNumbersResponse.json();
     const quoPhoneNumbers = phoneNumbersData.data || [];
+    console.log('DEBUG: Quo phone numbers:', quoPhoneNumbers.map(p => ({ id: p.id, phoneNumber: p.phoneNumber })));
 
     // For each Quo phone number, fetch messages
     for (const quoPhone of quoPhoneNumbers) {
       const phoneNumberId = quoPhone.id;
+      console.log(`DEBUG: Fetching messages for Quo phone ${phoneNumberId}`);
 
       // Fetch messages for this phone number
       const messagesResponse = await fetch(
@@ -1752,22 +1758,34 @@ app.post('/api/quo/sync', async (req, res) => {
         { headers: { 'Authorization': QUO_API_KEY } }
       );
 
-      if (!messagesResponse.ok) continue;
+      if (!messagesResponse.ok) {
+        console.log(`DEBUG: Messages fetch failed for ${phoneNumberId}`);
+        continue;
+      }
 
       const messagesData = await messagesResponse.json();
       const messages = messagesData.data || [];
+      console.log(`DEBUG: Found ${messages.length} messages for phone ${phoneNumberId}`);
 
       for (const msg of messages) {
-        if (processedIds.has(msg.id)) continue;
+        if (processedIds.has(msg.id)) {
+          console.log(`DEBUG: Skipping already processed message ${msg.id}`);
+          continue;
+        }
 
         // Get the external phone number (the client's number)
         const externalPhone = msg.from?.phoneNumber || msg.to?.[0]?.phoneNumber;
         const normalizedExternal = normalizePhone(externalPhone);
+        console.log(`DEBUG: Message from "${externalPhone}" normalized to "${normalizedExternal}", looking up in:`, Object.keys(phoneToWedding));
 
         // Check if this phone matches a registered client
         const weddingId = phoneToWedding[normalizedExternal];
 
-        if (!weddingId) continue; // Skip if not a registered client
+        if (!weddingId) {
+          console.log(`DEBUG: No wedding match for phone ${normalizedExternal}`);
+          continue; // Skip if not a registered client
+        }
+        console.log(`DEBUG: MATCHED! Wedding ID: ${weddingId}`);
 
         const messageBody = msg.body || msg.text || '';
         const direction = msg.direction || (msg.from?.phoneNumber === externalPhone ? 'inbound' : 'outbound');
@@ -1799,10 +1817,17 @@ app.post('/api/quo/sync', async (req, res) => {
     }
 
     console.log(`Quo sync: processed ${newlyProcessed} messages, extracted ${notesExtracted} notes`);
+
+    // Include debug info in response
+    const registeredPhones = Object.keys(phoneToWedding);
     res.json({
       processed: newlyProcessed,
       notesExtracted,
-      message: `Synced ${newlyProcessed} text messages. Extracted ${notesExtracted} planning notes.`
+      message: `Synced ${newlyProcessed} text messages. Extracted ${notesExtracted} planning notes.`,
+      debug: {
+        registeredPhones: registeredPhones,
+        quoPhoneCount: quoPhoneNumbers.length
+      }
     });
 
   } catch (error) {
