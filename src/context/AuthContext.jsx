@@ -25,13 +25,18 @@ export function AuthProvider({ children }) {
   }
 
   useEffect(() => {
+    console.log('AuthContext: Getting session...')
     supabase.auth.getSession().then(({ data: { session } }) => {
+      console.log('AuthContext: Session result:', session ? 'exists' : 'none')
       setUser(session?.user ?? null)
       if (session?.user) {
         loadProfile(session.user.id).then(() => setLoading(false))
       } else {
         setLoading(false)
       }
+    }).catch(err => {
+      console.error('AuthContext: getSession error:', err)
+      setLoading(false)
     })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {

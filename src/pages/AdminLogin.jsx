@@ -16,6 +16,12 @@ export default function AdminLogin() {
     setError('')
     setLoading(true)
 
+    console.log('=== LOGIN DEBUG ===')
+    console.log('Email:', email)
+    console.log('Email type:', typeof email)
+    console.log('Password length:', password?.length)
+    console.log('===================')
+
     try {
       const { data, error: signInError } = await signIn(email, password)
 
@@ -55,7 +61,7 @@ export default function AdminLogin() {
           {/* Header */}
           <div className="text-center mb-8">
             <h1 className="font-serif text-3xl text-sage-800 mb-2">Rixey Manor</h1>
-            <p className="text-sage-500">Staff Login v3</p>
+            <p className="text-sage-500">Staff Login v4</p>
           </div>
 
           {error && (
