@@ -565,7 +565,8 @@ async function savePlanningNotes(notes) {
   if (notes.length === 0) return;
 
   try {
-    const { error } = await supabase
+    // Use supabaseAdmin to bypass RLS
+    const { error } = await supabaseAdmin
       .from('planning_notes')
       .insert(notes);
 
@@ -1819,11 +1820,16 @@ app.post('/api/quo/sync', async (req, res) => {
             continue;
           }
 
+          // Log raw message structure for debugging
+          console.log(`DEBUG: Raw message structure:`, JSON.stringify(msg).substring(0, 300));
+
           const messageBody = msg.body || msg.text || msg.content || '';
           const direction = msg.direction || 'inbound';
 
+          console.log(`DEBUG: Message body="${messageBody.substring(0, 50)}", direction=${direction}`);
+
           // Save to processed messages
-          await supabaseAdmin.from('processed_quo_messages').insert({
+          const { error: insertError } = await supabaseAdmin.from('processed_quo_messages').insert({
             quo_message_id: msg.id,
             wedding_id: weddingId,
             phone_number: clientPhoneE164,
@@ -1831,7 +1837,29 @@ app.post('/api/quo/sync', async (req, res) => {
             body_text: messageBody.substring(0, 5000)
           });
 
-          // Extract planning notes from inbound messages
+          if (insertError) {
+            console.error(`DEBUG: Error saving to processed_quo_messages:`, insertError);
+          }
+
+          // Also save message as a planning note so Sage can search it
+          if (messageBody) {
+            const { error: noteError } = await supabaseAdmin.from('planning_notes').insert({
+              wedding_id: weddingId,
+              user_id: userId,
+              category: 'sms_message',
+              content: `[SMS ${direction}] ${messageBody}`,
+              source_message: `From ${direction === 'inbound' ? 'client' : 'Rixey'} text: ${clientPhoneE164}`,
+              created_at: msg.createdAt || new Date().toISOString()
+            });
+
+            if (noteError) {
+              console.error(`DEBUG: Error saving SMS to planning_notes:`, noteError);
+            } else {
+              console.log(`DEBUG: Saved SMS as planning note for wedding ${weddingId}`);
+            }
+          }
+
+          // Extract specific planning details from inbound messages
           if (direction === 'inbound' && messageBody) {
             const notes = await extractPlanningNotes(messageBody, userId, weddingId);
             if (notes.length > 0) {
@@ -1892,17 +1920,38 @@ app.post('/api/quo/sync', async (req, res) => {
             if (!transcript) continue; // Skip calls without transcripts
 
             console.log(`DEBUG: Processing call with transcript for wedding ${weddingId}`);
+            const direction = call.direction || 'inbound';
 
             // Save to processed
-            await supabaseAdmin.from('processed_quo_messages').insert({
+            const { error: insertError } = await supabaseAdmin.from('processed_quo_messages').insert({
               quo_message_id: callId,
               wedding_id: weddingId,
               phone_number: clientPhoneE164,
-              direction: call.direction || 'inbound',
+              direction: direction,
               body_text: `[CALL TRANSCRIPT] ${transcript.substring(0, 5000)}`
             });
 
-            // Extract planning notes from transcript
+            if (insertError) {
+              console.error(`DEBUG: Error saving call to processed_quo_messages:`, insertError);
+            }
+
+            // Also save transcript as a planning note so Sage can search it
+            const { error: noteError } = await supabaseAdmin.from('planning_notes').insert({
+              wedding_id: weddingId,
+              user_id: userId,
+              category: 'call_transcript',
+              content: `[Call Transcript] ${transcript}`,
+              source_message: `From ${direction} call with: ${clientPhoneE164}`,
+              created_at: call.createdAt || new Date().toISOString()
+            });
+
+            if (noteError) {
+              console.error(`DEBUG: Error saving call transcript to planning_notes:`, noteError);
+            } else {
+              console.log(`DEBUG: Saved call transcript as planning note for wedding ${weddingId}`);
+            }
+
+            // Extract specific planning details from transcript
             if (transcript) {
               const notes = await extractPlanningNotes(transcript, userId, weddingId);
               if (notes.length > 0) {
