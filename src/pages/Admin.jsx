@@ -232,6 +232,7 @@ export default function Admin() {
   const [escalations, setEscalations] = useState({})
   const [planningNotes, setPlanningNotes] = useState([])
   const [activeTab, setActiveTab] = useState('notes') // 'notes' or 'messages'
+  const [showUsageStats, setShowUsageStats] = useState(false) // Collapsed by default on mobile
   const [uploadingContract, setUploadingContract] = useState(false)
   const [uploadResult, setUploadResult] = useState(null)
   const [contractQuestion, setContractQuestion] = useState('')
@@ -1069,31 +1070,53 @@ export default function Admin() {
             <div className="lg:col-span-1 space-y-4 sm:space-y-6">
               {/* Quick Stats */}
               <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-3 sm:p-6">
-                <h2 className="font-serif text-lg text-sage-700 mb-4">Activity Overview</h2>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-sage-50 rounded-lg p-3 text-center">
-                    <p className="text-2xl font-semibold text-sage-700">{msgStats.userMsgs}</p>
-                    <p className="text-sage-500 text-xs">Questions Asked</p>
+                <h2 className="font-serif text-lg text-sage-700 mb-3 sm:mb-4">Activity Overview</h2>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-4">
+                  <div className="bg-sage-50 rounded-lg p-2 sm:p-3 flex sm:block items-center justify-between sm:text-center">
+                    <p className="text-sage-500 text-xs sm:hidden">Questions Asked</p>
+                    <p className="text-xl sm:text-2xl font-semibold text-sage-700">{msgStats.userMsgs}</p>
+                    <p className="text-sage-500 text-xs hidden sm:block">Questions Asked</p>
                   </div>
-                  <div className="bg-cream-100 rounded-lg p-3 text-center">
-                    <p className="text-2xl font-semibold text-sage-700">{msgStats.total}</p>
-                    <p className="text-sage-500 text-xs">Total Messages</p>
+                  <div className="bg-cream-100 rounded-lg p-2 sm:p-3 flex sm:block items-center justify-between sm:text-center">
+                    <p className="text-sage-500 text-xs sm:hidden">Total Messages</p>
+                    <p className="text-xl sm:text-2xl font-semibold text-sage-700">{msgStats.total}</p>
+                    <p className="text-sage-500 text-xs hidden sm:block">Total Messages</p>
                   </div>
-                  <div className="bg-amber-50 rounded-lg p-3 text-center">
-                    <p className="text-2xl font-semibold text-sage-700">{msgStats.uniqueDays}</p>
-                    <p className="text-sage-500 text-xs">Active Days</p>
+                  <div className="bg-amber-50 rounded-lg p-2 sm:p-3 flex sm:block items-center justify-between sm:text-center">
+                    <p className="text-sage-500 text-xs sm:hidden">Active Days</p>
+                    <p className="text-xl sm:text-2xl font-semibold text-sage-700">{msgStats.uniqueDays}</p>
+                    <p className="text-sage-500 text-xs hidden sm:block">Active Days</p>
                   </div>
-                  <div className="bg-green-50 rounded-lg p-3 text-center">
-                    <p className="text-2xl font-semibold text-sage-700">
-                      {viewingWedding.profiles?.length || 0}
-                    </p>
-                    <p className="text-sage-500 text-xs">Members</p>
+                  <div className="bg-green-50 rounded-lg p-2 sm:p-3 flex sm:block items-center justify-between sm:text-center">
+                    <p className="text-sage-500 text-xs sm:hidden">Members</p>
+                    <p className="text-xl sm:text-2xl font-semibold text-sage-700">{viewingWedding.profiles?.length || 0}</p>
+                    <p className="text-sage-500 text-xs hidden sm:block">Members</p>
                   </div>
                 </div>
               </div>
 
-              {/* API Usage & Costs */}
-              <UsageStats weddingId={viewingWedding.id} />
+              {/* API Usage & Costs - Collapsible */}
+              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 overflow-hidden">
+                <button
+                  onClick={() => setShowUsageStats(!showUsageStats)}
+                  className="w-full p-3 sm:p-4 flex items-center justify-between text-left hover:bg-cream-50 transition"
+                >
+                  <h2 className="font-serif text-lg text-sage-700">API Usage</h2>
+                  <svg
+                    className={`w-5 h-5 text-sage-400 transition-transform ${showUsageStats ? 'rotate-180' : ''}`}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+                {showUsageStats && (
+                  <div className="px-3 pb-3 sm:px-4 sm:pb-4">
+                    <UsageStats weddingId={viewingWedding.id} />
+                  </div>
+                )}
+              </div>
 
               {/* Members */}
               <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-6">
@@ -1391,8 +1414,31 @@ export default function Admin() {
             {/* Planning Notes & Messages */}
             <div className="lg:col-span-2">
               <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-3 sm:p-6">
-                {/* Tabs */}
-                <div className="flex gap-2 sm:gap-4 mb-4 border-b border-cream-200 overflow-x-auto scrollbar-hide -mx-3 sm:-mx-6 px-3 sm:px-6">
+                {/* Mobile: Dropdown selector */}
+                <div className="sm:hidden mb-4">
+                  <select
+                    value={activeTab}
+                    onChange={(e) => setActiveTab(e.target.value)}
+                    className="w-full p-3 border border-cream-200 rounded-lg bg-cream-50 text-sage-700 font-medium focus:outline-none focus:ring-2 focus:ring-sage-300"
+                  >
+                    <option value="notes">
+                      Planning Notes {planningNotes.filter(n => n.status === 'pending').length > 0 ? `(${planningNotes.filter(n => n.status === 'pending').length})` : ''}
+                    </option>
+                    <option value="vendors">Vendors & Contracts</option>
+                    <option value="inspo">Inspiration</option>
+                    <option value="checklist">Checklist</option>
+                    <option value="messages">All Conversations</option>
+                    <option value="uncertain">
+                      Uncertain Q's {uncertainQuestions.filter(q => q.wedding_id === viewingWedding.id).length > 0 ? `(${uncertainQuestions.filter(q => q.wedding_id === viewingWedding.id).length})` : ''}
+                    </option>
+                    <option value="meetings">Meetings</option>
+                    <option value="timeline">Timeline</option>
+                    <option value="tables">Tables</option>
+                  </select>
+                </div>
+
+                {/* Desktop: Tab buttons */}
+                <div className="hidden sm:flex gap-4 mb-4 border-b border-cream-200 overflow-x-auto scrollbar-hide -mx-6 px-6">
                   <button
                     onClick={() => setActiveTab('notes')}
                     className={`pb-3 px-1 text-sm font-medium border-b-2 transition whitespace-nowrap ${
