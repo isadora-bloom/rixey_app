@@ -429,14 +429,13 @@ export default function Admin() {
 
   const loadAllCouplePhotos = async () => {
     try {
-      // Load couple photos for all weddings
-      const { data: photos } = await supabase
-        .from('couple_photos')
-        .select('wedding_id, image_url')
+      // Load couple photos via server endpoint (bypasses RLS)
+      const response = await fetch(`${API_URL}/api/couple-photos/all`)
+      const data = await response.json()
 
-      if (photos) {
+      if (data.photos) {
         const photoMap = {}
-        photos.forEach(p => {
+        data.photos.forEach(p => {
           photoMap[p.wedding_id] = p.image_url
         })
         setCouplePhotos(photoMap)
@@ -490,33 +489,34 @@ export default function Admin() {
   }
 
   const loadData = async () => {
-    // Load notifications
-    const { data: notifs } = await supabase
-      .from('admin_notifications')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(50)
+    // Load notifications via server endpoint (bypasses RLS)
+    try {
+      const notifsRes = await fetch(`${API_URL}/api/admin/notifications`)
+      const notifsData = await notifsRes.json()
+      setNotifications(notifsData.notifications || [])
+    } catch (err) {
+      console.error('Failed to load notifications:', err)
+      setNotifications([])
+    }
 
-    setNotifications(notifs || [])
+    // Load weddings with profiles via server endpoint (bypasses RLS)
+    let weddingsData = []
+    try {
+      const weddingsRes = await fetch(`${API_URL}/api/admin/weddings`)
+      const weddingsJson = await weddingsRes.json()
+      weddingsData = weddingsJson.weddings || []
+      setWeddings(weddingsData)
+    } catch (err) {
+      console.error('Failed to load weddings:', err)
+      setWeddings([])
+    }
 
-    // Load weddings with profiles
-    const { data: weddingsData } = await supabase
-      .from('weddings')
-      .select('*, profiles(*)')
-      .order('wedding_date', { ascending: true })
-
-    setWeddings(weddingsData || [])
-
-    // Load all messages for escalation detection
+    // Load all Sage messages for escalation detection via server (bypasses RLS)
     if (weddingsData && weddingsData.length > 0) {
-      const allUserIds = weddingsData.flatMap(w => w.profiles?.map(p => p.id) || [])
-
-      if (allUserIds.length > 0) {
-        const { data: messages } = await supabase
-          .from('messages')
-          .select('*')
-          .in('user_id', allUserIds)
-          .order('created_at', { ascending: false })
+      try {
+        const messagesRes = await fetch(`${API_URL}/api/sage-messages/all`)
+        const messagesData = await messagesRes.json()
+        const messages = messagesData.messages || []
 
         // Group messages by wedding
         const msgByWedding = {}
@@ -524,13 +524,15 @@ export default function Admin() {
 
         weddingsData.forEach(wedding => {
           const userIds = wedding.profiles?.map(p => p.id) || []
-          const weddingMsgs = (messages || []).filter(m => userIds.includes(m.user_id))
+          const weddingMsgs = messages.filter(m => userIds.includes(m.user_id))
           msgByWedding[wedding.id] = weddingMsgs
           escalationByWedding[wedding.id] = detectEscalation(weddingMsgs, wedding.escalation_handled_at)
         })
 
         setAllMessages(msgByWedding)
         setEscalations(escalationByWedding)
+      } catch (err) {
+        console.error('Failed to load messages for escalation detection:', err)
       }
     }
 
@@ -538,14 +540,16 @@ export default function Admin() {
   }
 
   const markAsRead = async (id) => {
-    await supabase
-      .from('admin_notifications')
-      .update({ read: true })
-      .eq('id', id)
-
-    setNotifications(notifications.map(n =>
-      n.id === id ? { ...n, read: true } : n
-    ))
+    try {
+      await fetch(`${API_URL}/api/admin/notifications/${id}/read`, {
+        method: 'PUT'
+      })
+      setNotifications(notifications.map(n =>
+        n.id === id ? { ...n, read: true } : n
+      ))
+    } catch (err) {
+      console.error('Failed to mark notification as read:', err)
+    }
   }
 
   const startEditing = (wedding) => {
@@ -556,54 +560,69 @@ export default function Admin() {
 
   const saveLinks = async () => {
     setSaving(true)
-    const { error } = await supabase
-      .from('weddings')
-      .update({
-        honeybook_link: honeybook || null,
-        google_sheets_link: googleSheets || null
+    try {
+      const response = await fetch(`${API_URL}/api/weddings/${editingWedding}/links`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          honeybook_link: honeybook || null,
+          google_sheets_link: googleSheets || null
+        })
       })
-      .eq('id', editingWedding)
 
-    if (!error) {
-      setWeddings(weddings.map(w =>
-        w.id === editingWedding
-          ? { ...w, honeybook_link: honeybook || null, google_sheets_link: googleSheets || null }
-          : w
-      ))
-      setEditingWedding(null)
+      if (response.ok) {
+        setWeddings(weddings.map(w =>
+          w.id === editingWedding
+            ? { ...w, honeybook_link: honeybook || null, google_sheets_link: googleSheets || null }
+            : w
+        ))
+        setEditingWedding(null)
+      }
+    } catch (err) {
+      console.error('Failed to save links:', err)
     }
     setSaving(false)
   }
 
   const toggleArchive = async (weddingId, currentArchived) => {
-    const { error } = await supabase
-      .from('weddings')
-      .update({ archived: !currentArchived })
-      .eq('id', weddingId)
+    try {
+      const response = await fetch(`${API_URL}/api/weddings/${weddingId}/archive`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ archived: !currentArchived })
+      })
 
-    if (!error) {
-      setWeddings(weddings.map(w =>
-        w.id === weddingId ? { ...w, archived: !currentArchived } : w
-      ))
+      if (response.ok) {
+        setWeddings(weddings.map(w =>
+          w.id === weddingId ? { ...w, archived: !currentArchived } : w
+        ))
+      }
+    } catch (err) {
+      console.error('Failed to toggle archive:', err)
     }
   }
 
   const markEscalationHandled = async (weddingId) => {
     const now = new Date().toISOString()
-    const { error } = await supabase
-      .from('weddings')
-      .update({ escalation_handled_at: now })
-      .eq('id', weddingId)
+    try {
+      const response = await fetch(`${API_URL}/api/weddings/${weddingId}/escalation`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ escalation_handled_at: now })
+      })
 
-    if (!error) {
-      setWeddings(weddings.map(w =>
-        w.id === weddingId ? { ...w, escalation_handled_at: now } : w
-      ))
-      // Clear the escalation status
-      setEscalations(prev => ({
-        ...prev,
-        [weddingId]: { hasEscalation: false, count: 0, messages: [] }
-      }))
+      if (response.ok) {
+        setWeddings(weddings.map(w =>
+          w.id === weddingId ? { ...w, escalation_handled_at: now } : w
+        ))
+        // Clear the escalation status
+        setEscalations(prev => ({
+          ...prev,
+          [weddingId]: { hasEscalation: false, count: 0, messages: [] }
+        }))
+      }
+    } catch (err) {
+      console.error('Failed to mark escalation handled:', err)
     }
   }
 
@@ -626,31 +645,25 @@ export default function Admin() {
       console.error('Failed to load couple photo:', err)
     }
 
-    // Get all user IDs for this wedding
-    const userIds = wedding.profiles?.map(p => p.id) || []
-
-    if (userIds.length > 0) {
-      // Load all messages from users in this wedding
-      const { data: messages } = await supabase
-        .from('messages')
-        .select('*')
-        .in('user_id', userIds)
-        .order('created_at', { ascending: false })
-        .limit(200)
-
-      setWeddingMessages(messages || [])
-    } else {
+    // Load Sage chat messages via server endpoint (bypasses RLS)
+    try {
+      const messagesRes = await fetch(`${API_URL}/api/sage-messages/${wedding.id}`)
+      const messagesData = await messagesRes.json()
+      setWeddingMessages(messagesData.messages || [])
+    } catch (err) {
+      console.error('Failed to load Sage messages:', err)
       setWeddingMessages([])
     }
 
-    // Load planning notes for this wedding
-    const { data: notes } = await supabase
-      .from('planning_notes')
-      .select('*')
-      .eq('wedding_id', wedding.id)
-      .order('created_at', { ascending: false })
-
-    setPlanningNotes(notes || [])
+    // Load planning notes via server endpoint (bypasses RLS)
+    try {
+      const notesRes = await fetch(`${API_URL}/api/planning-notes/${wedding.id}`)
+      const notesData = await notesRes.json()
+      setPlanningNotes(notesData.notes || [])
+    } catch (err) {
+      console.error('Failed to load planning notes:', err)
+      setPlanningNotes([])
+    }
 
     // Load timeline summary
     try {
@@ -721,15 +734,20 @@ export default function Admin() {
   }
 
   const updateNoteStatus = async (noteId, newStatus) => {
-    const { error } = await supabase
-      .from('planning_notes')
-      .update({ status: newStatus })
-      .eq('id', noteId)
+    try {
+      const response = await fetch(`${API_URL}/api/planning-notes/${noteId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus })
+      })
 
-    if (!error) {
-      setPlanningNotes(planningNotes.map(n =>
-        n.id === noteId ? { ...n, status: newStatus } : n
-      ))
+      if (response.ok) {
+        setPlanningNotes(planningNotes.map(n =>
+          n.id === noteId ? { ...n, status: newStatus } : n
+        ))
+      }
+    } catch (err) {
+      console.error('Failed to update note status:', err)
     }
   }
 
@@ -757,13 +775,10 @@ export default function Admin() {
           success: true,
           message: `Extracted ${data.notesExtracted} notes from contract`
         })
-        // Reload planning notes
-        const { data: notes } = await supabase
-          .from('planning_notes')
-          .select('*')
-          .eq('wedding_id', viewingWedding.id)
-          .order('created_at', { ascending: false })
-        setPlanningNotes(notes || [])
+        // Reload planning notes via server endpoint
+        const notesRes = await fetch(`${API_URL}/api/planning-notes/${viewingWedding.id}`)
+        const notesData = await notesRes.json()
+        setPlanningNotes(notesData.notes || [])
       } else {
         setUploadResult({ success: false, message: data.error })
       }

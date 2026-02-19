@@ -3697,6 +3697,243 @@ app.get('/api/messages/admin/conversations', async (req, res) => {
   }
 });
 
+// ============ SAGE CHAT MESSAGES (for admin view) ============
+
+// Get admin notifications (bypasses RLS)
+app.get('/api/admin/notifications', async (req, res) => {
+  try {
+    const { data: notifications, error } = await supabaseAdmin
+      .from('admin_notifications')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    if (error) throw error;
+
+    res.json({ notifications: notifications || [] });
+  } catch (error) {
+    console.error('Get admin notifications error:', error);
+    res.status(500).json({ error: 'Failed to fetch notifications' });
+  }
+});
+
+// Mark admin notification as read (bypasses RLS)
+app.put('/api/admin/notifications/:id/read', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { data, error } = await supabaseAdmin
+      .from('admin_notifications')
+      .update({ read: true })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json({ notification: data });
+  } catch (error) {
+    console.error('Mark notification read error:', error);
+    res.status(500).json({ error: 'Failed to mark notification as read' });
+  }
+});
+
+// Get all weddings with profiles for admin dashboard (bypasses RLS)
+app.get('/api/admin/weddings', async (req, res) => {
+  try {
+    const { data: weddings, error } = await supabaseAdmin
+      .from('weddings')
+      .select('*, profiles(*)')
+      .order('wedding_date', { ascending: true });
+
+    if (error) throw error;
+
+    res.json({ weddings: weddings || [] });
+  } catch (error) {
+    console.error('Get admin weddings error:', error);
+    res.status(500).json({ error: 'Failed to fetch weddings' });
+  }
+});
+
+// Get all couple photos for admin dashboard (bypasses RLS)
+app.get('/api/couple-photos/all', async (req, res) => {
+  try {
+    const { data: photos, error } = await supabaseAdmin
+      .from('couple_photos')
+      .select('wedding_id, image_url');
+
+    if (error) throw error;
+
+    res.json({ photos: photos || [] });
+  } catch (error) {
+    console.error('Get all couple photos error:', error);
+    res.status(500).json({ error: 'Failed to fetch couple photos' });
+  }
+});
+
+// Update wedding links (bypasses RLS)
+app.put('/api/weddings/:weddingId/links', async (req, res) => {
+  try {
+    const { weddingId } = req.params;
+    const { honeybook_link, google_sheets_link } = req.body;
+
+    const { data, error } = await supabaseAdmin
+      .from('weddings')
+      .update({ honeybook_link, google_sheets_link })
+      .eq('id', weddingId)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json({ wedding: data });
+  } catch (error) {
+    console.error('Update wedding links error:', error);
+    res.status(500).json({ error: 'Failed to update wedding links' });
+  }
+});
+
+// Toggle wedding archived status (bypasses RLS)
+app.put('/api/weddings/:weddingId/archive', async (req, res) => {
+  try {
+    const { weddingId } = req.params;
+    const { archived } = req.body;
+
+    const { data, error } = await supabaseAdmin
+      .from('weddings')
+      .update({ archived })
+      .eq('id', weddingId)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json({ wedding: data });
+  } catch (error) {
+    console.error('Toggle archive error:', error);
+    res.status(500).json({ error: 'Failed to toggle archive status' });
+  }
+});
+
+// Mark escalation as handled (bypasses RLS)
+app.put('/api/weddings/:weddingId/escalation', async (req, res) => {
+  try {
+    const { weddingId } = req.params;
+    const { escalation_handled_at } = req.body;
+
+    const { data, error } = await supabaseAdmin
+      .from('weddings')
+      .update({ escalation_handled_at })
+      .eq('id', weddingId)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json({ wedding: data });
+  } catch (error) {
+    console.error('Mark escalation handled error:', error);
+    res.status(500).json({ error: 'Failed to mark escalation as handled' });
+  }
+});
+
+// Get all Sage chat messages for all weddings (admin view - for escalation detection)
+app.get('/api/sage-messages/all', async (req, res) => {
+  try {
+    // Get all messages using admin client
+    const { data: messages, error } = await supabaseAdmin
+      .from('messages')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    res.json({ messages: messages || [] });
+  } catch (error) {
+    console.error('Get all sage messages error:', error);
+    res.status(500).json({ error: 'Failed to fetch Sage messages' });
+  }
+});
+
+// Get Sage chat messages for a wedding (uses supabaseAdmin to bypass RLS)
+app.get('/api/sage-messages/:weddingId', async (req, res) => {
+  try {
+    const { weddingId } = req.params;
+
+    // First get all profile IDs for this wedding
+    const { data: wedding, error: weddingError } = await supabaseAdmin
+      .from('weddings')
+      .select('profiles(id)')
+      .eq('id', weddingId)
+      .single();
+
+    if (weddingError) throw weddingError;
+
+    const userIds = wedding?.profiles?.map(p => p.id) || [];
+
+    if (userIds.length === 0) {
+      return res.json({ messages: [] });
+    }
+
+    // Fetch messages for these users using admin client
+    const { data: messages, error: messagesError } = await supabaseAdmin
+      .from('messages')
+      .select('*')
+      .in('user_id', userIds)
+      .order('created_at', { ascending: false })
+      .limit(200);
+
+    if (messagesError) throw messagesError;
+
+    res.json({ messages: messages || [] });
+  } catch (error) {
+    console.error('Get sage messages error:', error);
+    res.status(500).json({ error: 'Failed to fetch Sage messages' });
+  }
+});
+
+// Get planning notes for a wedding (uses supabaseAdmin to bypass RLS)
+app.get('/api/planning-notes/:weddingId', async (req, res) => {
+  try {
+    const { weddingId } = req.params;
+
+    const { data: notes, error } = await supabaseAdmin
+      .from('planning_notes')
+      .select('*')
+      .eq('wedding_id', weddingId)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    res.json({ notes: notes || [] });
+  } catch (error) {
+    console.error('Get planning notes error:', error);
+    res.status(500).json({ error: 'Failed to fetch planning notes' });
+  }
+});
+
+// Update planning note status (uses supabaseAdmin to bypass RLS)
+app.put('/api/planning-notes/:noteId', async (req, res) => {
+  try {
+    const { noteId } = req.params;
+    const { status } = req.body;
+
+    const { data, error } = await supabaseAdmin
+      .from('planning_notes')
+      .update({ status })
+      .eq('id', noteId)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json({ note: data });
+  } catch (error) {
+    console.error('Update planning note error:', error);
+    res.status(500).json({ error: 'Failed to update planning note' });
+  }
+});
+
 // ============ PLANNING TOOLS ============
 
 // Get wedding timeline
