@@ -32,11 +32,15 @@ export default function AdminLogin() {
       }
 
       // Check if user is admin
-      const { data: profile } = await supabase
+      console.log('Checking admin for user:', data.user.id)
+      const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('is_admin')
         .eq('id', data.user.id)
         .single()
+
+      console.log('Profile result:', profile)
+      console.log('Profile error:', profileError)
 
       if (!profile?.is_admin) {
         // Sign them out - they're not admin
@@ -61,7 +65,7 @@ export default function AdminLogin() {
           {/* Header */}
           <div className="text-center mb-8">
             <h1 className="font-serif text-3xl text-sage-800 mb-2">Rixey Manor</h1>
-            <p className="text-sage-500">Staff Login v5</p>
+            <p className="text-sage-500">Staff Login v6</p>
           </div>
 
           {error && (
