@@ -123,7 +123,8 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [showAddCustom, setShowAddCustom] = useState(false)
-  const [newCustomEvent, setNewCustomEvent] = useState({ name: '', time: '', duration: 15, notes: '' })
+  const [newCustomEvent, setNewCustomEvent] = useState({ name: '', time: '', duration: 15, notes: '', section: 'reception' })
+  const [editingCustomEvent, setEditingCustomEvent] = useState(null)
   const [autoCalculate, setAutoCalculate] = useState(true)
   const [concurrentEvents, setConcurrentEvents] = useState({}) // Track which events are concurrent with others
   const [doingFirstLook, setDoingFirstLook] = useState(true) // First look vs traditional (no first look)
@@ -854,13 +855,26 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
   const addCustomEvent = () => {
     if (!newCustomEvent.name.trim()) return
     setCustomEvents(prev => [...prev, { ...newCustomEvent, id: `custom-${Date.now()}` }])
-    setNewCustomEvent({ name: '', time: '', duration: 15, notes: '' })
+    setNewCustomEvent({ name: '', time: '', duration: 15, notes: '', section: 'reception' })
     setShowAddCustom(false)
+  }
+
+  const updateCustomEvent = (id, field, value) => {
+    setCustomEvents(prev => prev.map(e => e.id === id ? { ...e, [field]: value } : e))
   }
 
   const removeCustomEvent = (id) => {
     setCustomEvents(prev => prev.filter(e => e.id !== id))
+    setEditingCustomEvent(null)
   }
+
+  const CUSTOM_SECTIONS = [
+    { id: 'prep', name: 'Getting Ready', icon: '💄' },
+    { id: 'ceremony', name: 'Pre-Ceremony', icon: '⏰' },
+    { id: 'cocktail', name: 'Cocktail Hour', icon: '🥂' },
+    { id: 'reception', name: 'Reception', icon: '🎉' },
+    { id: 'end', name: 'End of Night', icon: '🌙' },
+  ]
 
   const formatTime = (time24) => {
     if (!time24) return '—'
@@ -888,7 +902,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
     return (
       <div
         key={eventDef.id}
-        className={`flex items-start gap-3 p-3 rounded-lg border transition ${
+        className={`flex flex-wrap sm:flex-nowrap items-start gap-2 sm:gap-3 p-3 rounded-lg border transition ${
           event.included
             ? 'bg-white border-sage-200 shadow-sm'
             : 'bg-cream-50/50 border-cream-200'
@@ -918,7 +932,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
               <span className="ml-2 text-xs bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded">concurrent</span>
             )}
           </p>
-          <p className="text-sage-500 text-xs">{eventDef.description}</p>
+          <p className="text-sage-500 text-xs hidden sm:block">{eventDef.description}</p>
           {eventDef.tips && event.included && (
             <p className="text-amber-600 text-xs mt-1 flex items-center gap-1">
               <span>💡</span> {eventDef.tips}
@@ -966,22 +980,22 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
         </div>
 
         {event.included && (
-          <div className="flex items-center gap-2 shrink-0">
-            <div>
+          <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto mt-2 sm:mt-0">
+            <div className="flex-1 sm:flex-initial">
               <input
                 type="time"
                 value={event.time || ''}
                 onChange={(e) => updateEvent(eventDef.id, 'time', e.target.value)}
-                className={`px-2 py-1 border rounded text-sm w-24 ${event.manualTime ? 'border-amber-300 bg-amber-50' : 'border-cream-300'}`}
+                className={`px-2 py-1 border rounded text-sm w-full sm:w-24 ${event.manualTime ? 'border-amber-300 bg-amber-50' : 'border-cream-300'}`}
               />
               <p className="text-sage-400 text-xs text-right">{formatTime(event.time)}</p>
             </div>
             {!eventDef.isTimeMarker && (
-              <div>
+              <div className="flex-1 sm:flex-initial">
                 <select
                   value={event.duration}
                   onChange={(e) => updateEvent(eventDef.id, 'duration', Number(e.target.value))}
-                  className="px-2 py-1 border border-cream-300 rounded text-sm"
+                  className="px-2 py-1 border border-cream-300 rounded text-sm w-full sm:w-auto"
                 >
                   <option value={5}>5 min</option>
                   <option value={10}>10 min</option>
@@ -1449,18 +1463,85 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
           <button onClick={() => setShowAddCustom(true)} className="text-sm text-purple-600 hover:text-purple-800 font-medium">+ Add Custom</button>
         </div>
 
+        <p className="text-purple-600 text-xs mb-3">
+          💡 Add special moments like "Surprise Performance" or "Sparkler Send-Off" - set a time and they'll appear in your timeline
+        </p>
+
         {customEvents.length > 0 && (
           <div className="space-y-2 mb-3">
             {customEvents.map(event => (
-              <div key={event.id} className="flex items-center gap-3 p-3 bg-white rounded-lg border border-purple-200">
-                <span>⭐</span>
-                <div className="flex-1">
-                  <p className="font-medium text-sage-800 text-sm">{event.name}</p>
-                  {event.notes && <p className="text-sage-500 text-xs">{event.notes}</p>}
-                </div>
-                <span className="text-sage-600 text-sm">{formatTime(event.time)}</span>
-                <span className="text-sage-400 text-sm">{formatDuration(event.duration)}</span>
-                <button onClick={() => removeCustomEvent(event.id)} className="text-red-400 hover:text-red-600">×</button>
+              <div key={event.id} className="bg-white rounded-lg border border-purple-200 overflow-hidden">
+                {editingCustomEvent === event.id ? (
+                  <div className="p-3 space-y-3">
+                    <input
+                      type="text"
+                      value={event.name}
+                      onChange={(e) => updateCustomEvent(event.id, 'name', e.target.value)}
+                      placeholder="Event name"
+                      className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm"
+                    />
+                    <div className="flex flex-wrap gap-2">
+                      <input
+                        type="time"
+                        value={event.time}
+                        onChange={(e) => updateCustomEvent(event.id, 'time', e.target.value)}
+                        className="px-2 py-1 border border-cream-300 rounded text-sm flex-1 min-w-[100px]"
+                      />
+                      <select
+                        value={event.duration}
+                        onChange={(e) => updateCustomEvent(event.id, 'duration', Number(e.target.value))}
+                        className="px-2 py-1 border border-cream-300 rounded text-sm"
+                      >
+                        <option value={5}>5 min</option>
+                        <option value={10}>10 min</option>
+                        <option value={15}>15 min</option>
+                        <option value={20}>20 min</option>
+                        <option value={30}>30 min</option>
+                        <option value={45}>45 min</option>
+                        <option value={60}>1 hour</option>
+                      </select>
+                      <select
+                        value={event.section || 'reception'}
+                        onChange={(e) => updateCustomEvent(event.id, 'section', e.target.value)}
+                        className="px-2 py-1 border border-cream-300 rounded text-sm"
+                      >
+                        {CUSTOM_SECTIONS.map(s => (
+                          <option key={s.id} value={s.id}>{s.icon} {s.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <input
+                      type="text"
+                      value={event.notes || ''}
+                      onChange={(e) => updateCustomEvent(event.id, 'notes', e.target.value)}
+                      placeholder="Notes (optional)"
+                      className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm"
+                    />
+                    <div className="flex gap-2">
+                      <button onClick={() => setEditingCustomEvent(null)} className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700">Done</button>
+                      <button onClick={() => removeCustomEvent(event.id)} className="px-4 py-2 text-red-500 text-sm hover:text-red-700">Delete</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    className="flex items-center gap-3 p-3 cursor-pointer hover:bg-purple-50/50"
+                    onClick={() => setEditingCustomEvent(event.id)}
+                  >
+                    <span>⭐</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-sage-800 text-sm">{event.name}</p>
+                      <div className="flex items-center gap-2 text-xs text-sage-500">
+                        {event.section && (
+                          <span>{CUSTOM_SECTIONS.find(s => s.id === event.section)?.icon} {CUSTOM_SECTIONS.find(s => s.id === event.section)?.name}</span>
+                        )}
+                        {event.notes && <span>• {event.notes}</span>}
+                      </div>
+                    </div>
+                    <span className="text-sage-600 text-sm font-medium">{formatTime(event.time)}</span>
+                    <span className="text-sage-400 text-xs">{formatDuration(event.duration)}</span>
+                    <span className="text-purple-400 text-xs">tap to edit</span>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -1472,27 +1553,47 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
               type="text"
               value={newCustomEvent.name}
               onChange={(e) => setNewCustomEvent(prev => ({ ...prev, name: e.target.value }))}
-              placeholder="Event name"
+              placeholder="Event name (e.g., Surprise Dance, Sparkler Exit)"
               className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm"
             />
-            <div className="flex gap-3">
-              <input
-                type="time"
-                value={newCustomEvent.time}
-                onChange={(e) => setNewCustomEvent(prev => ({ ...prev, time: e.target.value }))}
-                className="px-2 py-1 border border-cream-300 rounded text-sm"
-              />
-              <select
-                value={newCustomEvent.duration}
-                onChange={(e) => setNewCustomEvent(prev => ({ ...prev, duration: Number(e.target.value) }))}
-                className="px-2 py-1 border border-cream-300 rounded text-sm"
-              >
-                <option value={5}>5 min</option>
-                <option value={10}>10 min</option>
-                <option value={15}>15 min</option>
-                <option value={30}>30 min</option>
-                <option value={60}>1 hour</option>
-              </select>
+            <div className="flex flex-wrap gap-2">
+              <div className="flex-1 min-w-[140px]">
+                <label className="text-xs text-sage-500 block mb-1">Time</label>
+                <input
+                  type="time"
+                  value={newCustomEvent.time}
+                  onChange={(e) => setNewCustomEvent(prev => ({ ...prev, time: e.target.value }))}
+                  className="w-full px-2 py-1 border border-cream-300 rounded text-sm"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-sage-500 block mb-1">Duration</label>
+                <select
+                  value={newCustomEvent.duration}
+                  onChange={(e) => setNewCustomEvent(prev => ({ ...prev, duration: Number(e.target.value) }))}
+                  className="px-2 py-1 border border-cream-300 rounded text-sm"
+                >
+                  <option value={5}>5 min</option>
+                  <option value={10}>10 min</option>
+                  <option value={15}>15 min</option>
+                  <option value={20}>20 min</option>
+                  <option value={30}>30 min</option>
+                  <option value={45}>45 min</option>
+                  <option value={60}>1 hour</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-sage-500 block mb-1">When</label>
+                <select
+                  value={newCustomEvent.section}
+                  onChange={(e) => setNewCustomEvent(prev => ({ ...prev, section: e.target.value }))}
+                  className="px-2 py-1 border border-cream-300 rounded text-sm"
+                >
+                  {CUSTOM_SECTIONS.map(s => (
+                    <option key={s.id} value={s.id}>{s.icon} {s.name}</option>
+                  ))}
+                </select>
+              </div>
             </div>
             <input
               type="text"
@@ -1502,7 +1603,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
               className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm"
             />
             <div className="flex gap-2">
-              <button onClick={addCustomEvent} className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700">Add</button>
+              <button onClick={addCustomEvent} className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700">Add Event</button>
               <button onClick={() => setShowAddCustom(false)} className="px-4 py-2 text-sage-500 text-sm">Cancel</button>
             </div>
           </div>
@@ -1521,27 +1622,27 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
       </div>
 
       {/* Summary */}
-      <div className="bg-sage-600 text-white rounded-xl p-6">
+      <div className="bg-sage-600 text-white rounded-xl p-4 sm:p-6">
         <h3 className="font-serif text-lg mb-4">Your Day at a Glance</h3>
         <div className="space-y-1 max-h-80 overflow-y-auto">
           {buildSummary().map((item, i) => (
-            <div key={i} className={`flex items-center gap-3 text-sm py-1 ${item.id === 'sunset-photos' ? 'bg-orange-500/20 -mx-2 px-2 rounded' : ''}`}>
-              <span className="font-medium w-20 text-sage-200">{formatTime(item.time)}</span>
-              <span>{item.icon}</span>
-              <span className="flex-1">
+            <div key={i} className={`flex items-center gap-2 sm:gap-3 text-xs sm:text-sm py-1 ${item.id === 'sunset-photos' ? 'bg-orange-500/20 -mx-2 px-2 rounded' : ''}`}>
+              <span className="font-medium w-16 sm:w-20 text-sage-200 shrink-0">{formatTime(item.time)}</span>
+              <span className="shrink-0">{item.icon}</span>
+              <span className="flex-1 min-w-0 truncate sm:whitespace-normal">
                 {item.name}
                 {item.id === 'sunset-photos' && item.sunsetZone === 'early' && (
-                  <span className="ml-2 text-xs text-red-300">⚠️ before ceremony</span>
+                  <span className="ml-2 text-xs text-red-300">⚠️</span>
                 )}
               </span>
-              {item.duration > 0 && <span className="text-sage-300 text-xs">{formatDuration(item.duration)}</span>}
+              {item.duration > 0 && <span className="text-sage-300 text-xs shrink-0 hidden sm:inline">{formatDuration(item.duration)}</span>}
             </div>
           ))}
           {buildSummary().length === 0 && (
             <p className="text-sage-300 text-center py-4">Select events above to build your timeline</p>
           )}
         </div>
-        <div className="mt-4 pt-4 border-t border-sage-500 text-center text-sage-200">
+        <div className="mt-4 pt-4 border-t border-sage-500 text-center text-sage-200 text-sm">
           Ceremony: {formatTime(ceremonyTime)} • Ends: {formatTime(receptionEnd)}
         </div>
       </div>

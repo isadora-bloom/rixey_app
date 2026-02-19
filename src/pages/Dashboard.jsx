@@ -1199,9 +1199,9 @@ export default function Dashboard() {
 
       {/* Timeline Builder Modal */}
       {showTimelineModal && profile?.wedding_id && (
-        <div className="fixed inset-0 bg-black/50 flex items-start sm:items-center justify-center z-50 p-2 sm:px-4 overflow-y-auto">
-          <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-6 md:p-8 w-full max-w-3xl my-4 sm:my-0 overflow-x-hidden">
-            <div className="flex items-center justify-between mb-4">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 sm:p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[95vh] flex flex-col">
+            <div className="flex items-center justify-between p-4 sm:p-6 border-b border-cream-200 shrink-0">
               <div className="flex items-center gap-2">
                 <span className="text-2xl">📅</span>
                 <h3 className="font-serif text-xl text-sage-700">Timeline Builder</h3>
@@ -1215,7 +1215,9 @@ export default function Dashboard() {
                 </svg>
               </button>
             </div>
-            <TimelineBuilder weddingId={profile.wedding_id} weddingDate={wedding?.wedding_date} />
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+              <TimelineBuilder weddingId={profile.wedding_id} weddingDate={wedding?.wedding_date} />
+            </div>
           </div>
         </div>
       )}
