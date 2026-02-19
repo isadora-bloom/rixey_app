@@ -1509,7 +1509,8 @@ app.post('/api/gmail/sync', async (req, res) => {
     });
 
     // Get all weddings with profiles (registered client emails)
-    const { data: weddings } = await supabase
+    // Use supabaseAdmin to bypass RLS
+    const { data: weddings } = await supabaseAdmin
       .from('weddings')
       .select('id, couple_names, profiles(email)');
 
