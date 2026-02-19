@@ -70,7 +70,7 @@ async function logUsage(weddingId, userId, endpoint, response, model = 'claude-s
     const inputTokens = response?.usage?.input_tokens || 0;
     const outputTokens = response?.usage?.output_tokens || 0;
 
-    await supabase.from('usage_logs').insert({
+    await supabaseAdmin.from('usage_logs').insert({
       wedding_id: weddingId,
       user_id: userId,
       endpoint,
@@ -606,8 +606,8 @@ app.post('/api/chat', async (req, res) => {
     const weddingId = profile?.wedding_id || await getWeddingIdForUser(userId);
     if (weddingId) {
       try {
-        // Get vendors
-        const { data: vendors } = await supabase
+        // Get vendors (use admin to bypass RLS)
+        const { data: vendors } = await supabaseAdmin
           .from('vendor_checklist')
           .select('vendor_type, vendor_name, vendor_contact, is_booked, contract_uploaded, notes')
           .eq('wedding_id', weddingId);
@@ -625,7 +625,7 @@ app.post('/api/chat', async (req, res) => {
         }
 
         // Get inspo gallery captions (style/color references)
-        const { data: inspo } = await supabase
+        const { data: inspo } = await supabaseAdmin
           .from('inspo_gallery')
           .select('caption')
           .eq('wedding_id', weddingId)
@@ -639,7 +639,7 @@ app.post('/api/chat', async (req, res) => {
         }
 
         // Get recent planning notes (confirmed details)
-        const { data: notes } = await supabase
+        const { data: notes } = await supabaseAdmin
           .from('planning_notes')
           .select('category, content')
           .eq('wedding_id', weddingId)
@@ -668,7 +668,7 @@ app.post('/api/chat', async (req, res) => {
         const isContractRelated = contractKeywords.some(kw => lowerMessage.includes(kw));
 
         // Get contracts - full text if question is contract-related, summaries otherwise
-        const { data: contracts } = await supabase
+        const { data: contracts } = await supabaseAdmin
           .from('contracts')
           .select('filename, extracted_text')
           .eq('wedding_id', weddingId);
@@ -734,7 +734,7 @@ app.post('/api/chat', async (req, res) => {
     // and add a note to the response letting the client know
     if (confidence < 75 && weddingId) {
       try {
-        await supabase.from('uncertain_questions').insert({
+        await supabaseAdmin.from('uncertain_questions').insert({
           wedding_id: weddingId,
           user_id: userId,
           question: message,
@@ -907,8 +907,8 @@ app.post('/api/extract-contract', upload.single('contract'), async (req, res) =>
       console.error('Text extraction error:', textErr);
     }
 
-    // Save the contract to database
-    const { data: savedContract, error: contractError } = await supabase
+    // Save the contract to database (use admin to bypass RLS)
+    const { data: savedContract, error: contractError } = await supabaseAdmin
       .from('contracts')
       .insert({
         wedding_id: weddingId,
@@ -1169,7 +1169,7 @@ app.post('/api/chat-with-file', upload.single('file'), async (req, res) => {
                   }]
                 });
 
-                await supabase.from('inspo_gallery').insert({
+                await supabaseAdmin.from('inspo_gallery').insert({
                   wedding_id: weddingId,
                   image_url: signedUrlData.signedUrl,
                   caption: captionResponse.content[0].text,
@@ -1199,7 +1199,7 @@ app.post('/api/chat-with-file', upload.single('file'), async (req, res) => {
             }]
           });
 
-          await supabase.from('contracts').insert({
+          await supabaseAdmin.from('contracts').insert({
             wedding_id: weddingId,
             filename: file.originalname,
             file_type: file.mimetype,
@@ -1246,7 +1246,7 @@ app.post('/api/chat-with-file', upload.single('file'), async (req, res) => {
 
               if (signedUrlData) {
                 // Create new vendor entry with contract
-                await supabase.from('vendor_checklist').insert({
+                await supabaseAdmin.from('vendor_checklist').insert({
                   wedding_id: weddingId,
                   vendor_type: vendorType,
                   contract_uploaded: true,
@@ -1296,7 +1296,7 @@ Return ONLY a valid JSON array like: [{"category": "vendor", "content": "Caterer
                   source_message: `Extracted from: ${file.originalname}`,
                   status: 'pending'
                 }));
-                await supabase.from('planning_notes').insert(notesToSave);
+                await supabaseAdmin.from('planning_notes').insert(notesToSave);
                 console.log(`Extracted ${notesToSave.length} planning notes from chat upload`);
               }
             }
@@ -1615,7 +1615,7 @@ app.post('/api/gmail/sync', async (req, res) => {
           const weddingId = emailToWedding[fromEmail] || emailToWedding[clientEmail];
 
           // Save to processed_emails
-          await supabase.from('processed_emails').insert({
+          await supabaseAdmin.from('processed_emails').insert({
             gmail_message_id: msg.id,
             wedding_id: weddingId,
             from_email: fromEmail,
@@ -1661,7 +1661,7 @@ app.post('/api/gmail/sync', async (req, res) => {
 // Disconnect Gmail
 app.post('/api/gmail/disconnect', async (req, res) => {
   try {
-    await supabase.from('gmail_tokens').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    await supabaseAdmin.from('gmail_tokens').delete().neq('id', '00000000-0000-0000-0000-000000000000');
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: 'Failed to disconnect' });
@@ -1773,7 +1773,7 @@ app.post('/api/quo/sync', async (req, res) => {
         const direction = msg.direction || (msg.from?.phoneNumber === externalPhone ? 'inbound' : 'outbound');
 
         // Save to processed messages
-        await supabase.from('processed_quo_messages').insert({
+        await supabaseAdmin.from('processed_quo_messages').insert({
           quo_message_id: msg.id,
           wedding_id: weddingId,
           phone_number: externalPhone,
@@ -1919,8 +1919,8 @@ app.post('/api/zoom/callback', async (req, res) => {
     console.log('Got Zoom tokens:', { hasAccessToken: !!tokens.access_token, hasRefreshToken: !!tokens.refresh_token });
 
     // Save tokens
-    await supabase.from('zoom_tokens').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-    const { error: insertError } = await supabase.from('zoom_tokens').insert({
+    await supabaseAdmin.from('zoom_tokens').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    const { error: insertError } = await supabaseAdmin.from('zoom_tokens').insert({
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token,
       expiry_date: Date.now() + (tokens.expires_in * 1000)
@@ -1982,7 +1982,7 @@ async function getZoomAccessToken() {
     const newTokens = await refreshResponse.json();
 
     if (newTokens.access_token) {
-      await supabase.from('zoom_tokens')
+      await supabaseAdmin.from('zoom_tokens')
         .update({
           access_token: newTokens.access_token,
           refresh_token: newTokens.refresh_token || tokens.refresh_token,
@@ -2107,7 +2107,7 @@ app.post('/api/zoom/sync', async (req, res) => {
       }
 
       // Save processed meeting
-      await supabase.from('processed_zoom_meetings').insert({
+      await supabaseAdmin.from('processed_zoom_meetings').insert({
         zoom_meeting_id: meetingId,
         wedding_id: matchedWeddingId,
         meeting_topic: meeting.topic,
@@ -2148,7 +2148,7 @@ app.post('/api/zoom/sync', async (req, res) => {
 // Disconnect Zoom
 app.post('/api/zoom/disconnect', async (req, res) => {
   try {
-    await supabase.from('zoom_tokens').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    await supabaseAdmin.from('zoom_tokens').delete().neq('id', '00000000-0000-0000-0000-000000000000');
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: 'Failed to disconnect' });
@@ -2451,7 +2451,7 @@ app.post('/api/vendors/:id/contract', upload.single('contract'), async (req, res
           }]
         });
 
-        await supabase.from('contracts').insert({
+        await supabaseAdmin.from('contracts').insert({
           wedding_id: vendor.wedding_id,
           filename: file.originalname,
           file_type: file.mimetype,
@@ -2493,7 +2493,7 @@ Return ONLY a valid JSON array like: [{"category": "vendor", "content": "Photogr
               source_message: `Extracted from ${vendor.vendor_type} contract: ${file.originalname}`,
               status: 'pending'
             }));
-            await supabase.from('planning_notes').insert(notesToSave);
+            await supabaseAdmin.from('planning_notes').insert(notesToSave);
             console.log(`Extracted ${notesToSave.length} planning notes from vendor contract upload`);
           }
         }
@@ -2685,7 +2685,7 @@ Example: [{"category": "colors", "content": "Color palette: dusty rose, sage gre
               source_message: `From inspiration image: ${finalCaption || file.originalname}`,
               status: 'pending'
             }));
-            await supabase.from('planning_notes').insert(notesToSave);
+            await supabaseAdmin.from('planning_notes').insert(notesToSave);
             console.log(`Extracted ${notesToSave.length} planning notes from inspo image`);
           }
         }
@@ -3383,13 +3383,13 @@ app.get('/api/onboarding/:weddingId', async (req, res) => {
       throw error;
     }
 
-    // Also check actual progress from related tables
+    // Also check actual progress from related tables (use admin to bypass RLS)
     const [couplePhoto, messages, vendors, inspo, checklist] = await Promise.all([
-      supabase.from('couple_photos').select('id').eq('wedding_id', weddingId).single(),
-      supabase.from('messages').select('id').eq('wedding_id', weddingId).limit(1),
-      supabase.from('vendor_checklist').select('id').eq('wedding_id', weddingId).limit(1),
-      supabase.from('inspo_gallery').select('id').eq('wedding_id', weddingId).limit(1),
-      supabase.from('planning_checklist').select('id').eq('wedding_id', weddingId).eq('is_completed', true).limit(1)
+      supabaseAdmin.from('couple_photos').select('id').eq('wedding_id', weddingId).single(),
+      supabaseAdmin.from('messages').select('id').eq('wedding_id', weddingId).limit(1),
+      supabaseAdmin.from('vendor_checklist').select('id').eq('wedding_id', weddingId).limit(1),
+      supabaseAdmin.from('inspo_gallery').select('id').eq('wedding_id', weddingId).limit(1),
+      supabaseAdmin.from('planning_checklist').select('id').eq('wedding_id', weddingId).eq('is_completed', true).limit(1)
     ]);
 
     // Update progress based on actual data
