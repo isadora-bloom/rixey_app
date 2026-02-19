@@ -55,7 +55,7 @@ export default function AdminLogin() {
           {/* Header */}
           <div className="text-center mb-8">
             <h1 className="font-serif text-3xl text-sage-800 mb-2">Rixey Manor</h1>
-            <p className="text-sage-500">Staff Login</p>
+            <p className="text-sage-500">Staff Login v2</p>
           </div>
 
           {error && (
