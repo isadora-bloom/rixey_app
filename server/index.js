@@ -1747,6 +1747,11 @@ app.post('/api/quo/sync', async (req, res) => {
     const quoPhoneNumbers = phoneNumbersData.data || [];
     console.log('DEBUG: Quo phone numbers:', quoPhoneNumbers.map(p => ({ id: p.id, phoneNumber: p.phoneNumber })));
 
+    // Track debug info
+    let totalMessagesFound = 0;
+    const sampleMessages = [];
+    const unmatchedPhones = new Set();
+
     // For each Quo phone number, fetch messages
     for (const quoPhone of quoPhoneNumbers) {
       const phoneNumberId = quoPhone.id;
@@ -1765,7 +1770,20 @@ app.post('/api/quo/sync', async (req, res) => {
 
       const messagesData = await messagesResponse.json();
       const messages = messagesData.data || [];
+      totalMessagesFound += messages.length;
       console.log(`DEBUG: Found ${messages.length} messages for phone ${phoneNumberId}`);
+
+      // Capture sample of first few messages for debugging
+      if (sampleMessages.length < 3 && messages.length > 0) {
+        const sample = messages[0];
+        sampleMessages.push({
+          id: sample.id,
+          from: sample.from,
+          to: sample.to,
+          direction: sample.direction,
+          body: (sample.body || sample.text || '').substring(0, 50)
+        });
+      }
 
       for (const msg of messages) {
         if (processedIds.has(msg.id)) {
@@ -1783,6 +1801,7 @@ app.post('/api/quo/sync', async (req, res) => {
 
         if (!weddingId) {
           console.log(`DEBUG: No wedding match for phone ${normalizedExternal}`);
+          if (normalizedExternal) unmatchedPhones.add(normalizedExternal);
           continue; // Skip if not a registered client
         }
         console.log(`DEBUG: MATCHED! Wedding ID: ${weddingId}`);
@@ -1818,15 +1837,22 @@ app.post('/api/quo/sync', async (req, res) => {
 
     console.log(`Quo sync: processed ${newlyProcessed} messages, extracted ${notesExtracted} notes`);
 
-    // Include debug info in response
+    // Include detailed debug info in response
     const registeredPhones = Object.keys(phoneToWedding);
     res.json({
       processed: newlyProcessed,
       notesExtracted,
       message: `Synced ${newlyProcessed} text messages. Extracted ${notesExtracted} planning notes.`,
       debug: {
+        profileCount: profiles.length,
+        profilesWithWeddingId: profiles.filter(p => p.wedding_id).length,
         registeredPhones: registeredPhones,
-        quoPhoneCount: quoPhoneNumbers.length
+        quoPhoneNumbers: quoPhoneNumbers.map(p => p.phoneNumber || p.phone || p.number || 'unknown'),
+        quoPhoneCount: quoPhoneNumbers.length,
+        totalMessagesFound: totalMessagesFound,
+        alreadyProcessedCount: processedIds.size,
+        unmatchedPhones: Array.from(unmatchedPhones).slice(0, 10),
+        sampleMessages: sampleMessages
       }
     });
 

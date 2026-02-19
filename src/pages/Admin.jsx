@@ -346,7 +346,17 @@ export default function Admin() {
       let statusMsg = data.message || data.error
       // Show debug info if available
       if (data.debug) {
-        statusMsg += ` | Registered: ${data.debug.registeredPhones?.join(', ') || 'none'}`
+        const d = data.debug
+        statusMsg += `\n📊 ${d.profileCount} profiles, ${d.profilesWithWeddingId} with wedding`
+        statusMsg += `\n📱 Registered: ${d.registeredPhones?.join(', ') || 'none'}`
+        statusMsg += `\n📨 Found ${d.totalMessagesFound || 0} messages in Quo`
+        if (d.unmatchedPhones?.length > 0) {
+          statusMsg += `\n❌ Unmatched phones: ${d.unmatchedPhones.join(', ')}`
+        }
+        if (d.sampleMessages?.length > 0) {
+          const sample = d.sampleMessages[0]
+          statusMsg += `\n🔍 Sample msg from: ${JSON.stringify(sample.from)}`
+        }
       }
       setQuoStatus(statusMsg)
       loadData()
@@ -2450,7 +2460,7 @@ export default function Admin() {
                     {quoSyncing ? 'Syncing...' : 'Sync Messages'}
                   </button>
                   {quoStatus && (
-                    <p className="text-sage-600 text-sm bg-cream-50 p-2 rounded">{quoStatus}</p>
+                    <pre className="text-sage-600 text-xs bg-cream-50 p-2 rounded whitespace-pre-wrap font-sans">{quoStatus}</pre>
                   )}
                 </div>
               ) : (
