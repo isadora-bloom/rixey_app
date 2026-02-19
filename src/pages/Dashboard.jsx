@@ -253,16 +253,13 @@ export default function Dashboard() {
   }
 
   const loadMessages = async () => {
-    const { data, error } = await supabase
-      .from('messages')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: true })
-
-    if (error) {
+    try {
+      const response = await fetch(`${API_URL}/api/sage-messages/user/${user.id}`)
+      const data = await response.json()
+      setMessages(data.messages || [])
+    } catch (error) {
       console.error('Error loading messages:', error)
-    } else {
-      setMessages(data || [])
+      setMessages([])
     }
     setLoadingMessages(false)
   }
@@ -285,18 +282,20 @@ export default function Dashboard() {
       const data = await response.json()
 
       if (data.message) {
-        // Save welcome message to Supabase
-        const { data: sageData } = await supabase
-          .from('messages')
-          .insert([{
+        // Save welcome message via server endpoint
+        const saveRes = await fetch(`${API_URL}/api/sage-messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
             user_id: user.id,
             content: data.message,
             sender: 'sage'
-          }])
-          .select()
+          })
+        })
+        const saveData = await saveRes.json()
 
-        if (sageData) {
-          setMessages(prev => [...prev, sageData[0]])
+        if (saveData.message) {
+          setMessages(prev => [...prev, saveData.message])
         }
       }
     } catch (error) {
@@ -314,23 +313,32 @@ export default function Dashboard() {
     setSending(true)
     setNewMessage('')
 
-    // Save user message to Supabase
-    const { data: userData, error: userError } = await supabase
-      .from('messages')
-      .insert([{
-        user_id: user.id,
-        content: userMessageContent,
-        sender: 'user'
-      }])
-      .select()
-
-    if (userError) {
-      console.error('Error sending message:', userError)
+    // Save user message via server endpoint
+    let userData
+    try {
+      const saveRes = await fetch(`${API_URL}/api/sage-messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: user.id,
+          content: userMessageContent,
+          sender: 'user'
+        })
+      })
+      const saveData = await saveRes.json()
+      if (!saveData.message) {
+        console.error('Error sending message:', saveData.error)
+        setSending(false)
+        return
+      }
+      userData = saveData.message
+    } catch (err) {
+      console.error('Error sending message:', err)
       setSending(false)
       return
     }
 
-    const updatedMessages = [...messages, userData[0]]
+    const updatedMessages = [...messages, userData]
     setMessages(updatedMessages)
 
     // Get Sage's response
@@ -349,34 +357,38 @@ export default function Dashboard() {
       const data = await response.json()
 
       if (data.message) {
-        // Save Sage's response from frontend (has auth context)
-        const { data: sageData, error: sageError } = await supabase
-          .from('messages')
-          .insert([{
+        // Save Sage's response via server endpoint
+        const saveRes = await fetch(`${API_URL}/api/sage-messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
             user_id: user.id,
             content: data.message,
             sender: 'sage'
-          }])
-          .select()
+          })
+        })
+        const saveData = await saveRes.json()
 
-        if (sageData) {
-          setMessages([...updatedMessages, sageData[0]])
+        if (saveData.message) {
+          setMessages([...updatedMessages, saveData.message])
         }
       }
     } catch (error) {
       console.error('Error getting Sage response:', error)
-      // Add error message
-      const { data: errorData } = await supabase
-        .from('messages')
-        .insert([{
+      // Add error message via server endpoint
+      const saveRes = await fetch(`${API_URL}/api/sage-messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           user_id: user.id,
           content: "I'm having trouble connecting right now. Please try again in a moment.",
           sender: 'sage'
-        }])
-        .select()
+        })
+      })
+      const saveData = await saveRes.json()
 
-      if (errorData) {
-        setMessages([...updatedMessages, errorData[0]])
+      if (saveData.message) {
+        setMessages([...updatedMessages, saveData.message])
       }
     }
 
@@ -416,18 +428,32 @@ export default function Dashboard() {
     const userMessageContent = newMessage.trim() || `[Uploaded: ${selectedFile.name}]`
     setNewMessage('')
 
-    const { data: userData, error: userError } = await supabase
-      .from('messages')
-      .insert([{ user_id: user.id, content: userMessageContent, sender: 'user' }])
-      .select()
-
-    if (userError) {
+    // Save user message via server endpoint
+    let userData
+    try {
+      const saveRes = await fetch(`${API_URL}/api/sage-messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: user.id,
+          content: userMessageContent,
+          sender: 'user'
+        })
+      })
+      const saveData = await saveRes.json()
+      if (!saveData.message) {
+        setSending(false)
+        setUploadingFile(false)
+        return
+      }
+      userData = saveData.message
+    } catch (err) {
       setSending(false)
       setUploadingFile(false)
       return
     }
 
-    const updatedMessages = [...messages, userData[0]]
+    const updatedMessages = [...messages, userData]
     setMessages(updatedMessages)
 
     try {
@@ -445,24 +471,38 @@ export default function Dashboard() {
       const data = await response.json()
 
       if (data.message) {
-        const { data: sageData } = await supabase
-          .from('messages')
-          .insert([{ user_id: user.id, content: data.message, sender: 'sage' }])
-          .select()
+        // Save Sage's response via server endpoint
+        const saveRes = await fetch(`${API_URL}/api/sage-messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_id: user.id,
+            content: data.message,
+            sender: 'sage'
+          })
+        })
+        const saveData = await saveRes.json()
 
-        if (sageData) {
-          setMessages([...updatedMessages, sageData[0]])
+        if (saveData.message) {
+          setMessages([...updatedMessages, saveData.message])
         }
       }
     } catch (error) {
       console.error('Error uploading file:', error)
-      const { data: errorData } = await supabase
-        .from('messages')
-        .insert([{ user_id: user.id, content: "I had trouble processing that file. Please try again.", sender: 'sage' }])
-        .select()
+      // Save error message via server endpoint
+      const saveRes = await fetch(`${API_URL}/api/sage-messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: user.id,
+          content: "I had trouble processing that file. Please try again.",
+          sender: 'sage'
+        })
+      })
+      const saveData = await saveRes.json()
 
-      if (errorData) {
-        setMessages([...updatedMessages, errorData[0]])
+      if (saveData.message) {
+        setMessages([...updatedMessages, saveData.message])
       }
     }
 

@@ -3837,6 +3837,50 @@ app.put('/api/weddings/:weddingId/escalation', async (req, res) => {
   }
 });
 
+// Get messages for a specific user (for Dashboard)
+app.get('/api/sage-messages/user/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const { data: messages, error } = await supabaseAdmin
+      .from('messages')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: true });
+
+    if (error) throw error;
+
+    res.json({ messages: messages || [] });
+  } catch (error) {
+    console.error('Get user messages error:', error);
+    res.status(500).json({ error: 'Failed to fetch messages' });
+  }
+});
+
+// Save a Sage chat message (bypasses RLS)
+app.post('/api/sage-messages', async (req, res) => {
+  try {
+    const { user_id, content, sender } = req.body;
+
+    if (!user_id || !content || !sender) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('messages')
+      .insert([{ user_id, content, sender }])
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json({ message: data });
+  } catch (error) {
+    console.error('Save sage message error:', error);
+    res.status(500).json({ error: 'Failed to save message' });
+  }
+});
+
 // Get all Sage chat messages for all weddings (admin view - for escalation detection)
 app.get('/api/sage-messages/all', async (req, res) => {
   try {
