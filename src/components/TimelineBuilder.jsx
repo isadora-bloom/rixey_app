@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 
-const API_URL = import.meta.env.VITE_API_URL || '${API_URL}'
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 // Events organized by section
 // 'chain' property groups events that should be calculated sequentially
@@ -1109,7 +1109,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
       {/* Key Settings */}
       <div className="bg-sage-50 rounded-xl p-4 border border-sage-100">
         <h3 className="font-medium text-sage-700 mb-3">Key Details</h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div>
             <label className="block text-sage-600 text-xs font-medium mb-1">Ceremony Time ⏰</label>
             <input

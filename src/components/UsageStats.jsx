@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 
-const API_URL = import.meta.env.VITE_API_URL || '${API_URL}'
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 export default function UsageStats({ weddingId, weddings = [] }) {
   const [stats, setStats] = useState([])

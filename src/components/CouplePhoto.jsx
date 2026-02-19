@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 
-const API_URL = import.meta.env.VITE_API_URL || '${API_URL}'
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 export default function CouplePhoto({ weddingId, userId, compact = false }) {
   const [photo, setPhoto] = useState(null)

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 
-const API_URL = import.meta.env.VITE_API_URL || '${API_URL}'
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 export default function InspoGallery({ weddingId, userId, isAdmin = false }) {
   const [images, setImages] = useState([])

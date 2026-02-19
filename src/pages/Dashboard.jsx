@@ -13,7 +13,7 @@ import TimelineBuilder from '../components/TimelineBuilder'
 import TableLayoutPlanner from '../components/TableLayoutPlanner'
 import StaffingCalculator from '../components/StaffingCalculator'
 
-const API_URL = import.meta.env.VITE_API_URL || '${API_URL}'
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 // Countdown component
 function WeddingCountdown({ weddingDate }) {
@@ -1159,8 +1159,8 @@ export default function Dashboard() {
 
       {/* Timeline Builder Modal */}
       {showTimelineModal && profile?.wedding_id && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
-          <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black/50 flex items-start sm:items-center justify-center z-50 p-2 sm:px-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-6 md:p-8 w-full max-w-3xl my-4 sm:my-0 overflow-x-hidden">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
                 <span className="text-2xl">📅</span>
