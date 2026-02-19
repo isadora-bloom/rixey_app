@@ -640,14 +640,14 @@ app.post('/api/chat', async (req, res) => {
           });
         }
 
-        // Get recent planning notes (confirmed details)
+        // Get recent planning notes (confirmed details from all sources)
         const { data: notes } = await supabaseAdmin
           .from('planning_notes')
           .select('category, content')
           .eq('wedding_id', weddingId)
-          .eq('status', 'added')
+          .in('status', ['added', 'confirmed', 'pending'])
           .order('created_at', { ascending: false })
-          .limit(20);
+          .limit(30);
 
         if (notes && notes.length > 0) {
           weddingContext += '\nCONFIRMED PLANNING DETAILS:\n';
