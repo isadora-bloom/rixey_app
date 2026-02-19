@@ -847,6 +847,10 @@ export default function Admin() {
       case 'timeline': return '⏰'
       case 'colors': return '🎨'
       case 'note': return '📝'
+      case 'sms_message': return '💬'
+      case 'call_transcript': return '📱'
+      case 'zoom_transcript': return '🎥'
+      case 'email': return '📧'
       default: return '📌'
     }
   }
@@ -862,6 +866,10 @@ export default function Admin() {
       case 'timeline': return 'Timeline'
       case 'colors': return 'Colors'
       case 'note': return 'Note'
+      case 'sms_message': return 'SMS'
+      case 'call_transcript': return 'Call'
+      case 'zoom_transcript': return 'Zoom'
+      case 'email': return 'Email'
       default: return 'Info'
     }
   }
@@ -1654,6 +1662,8 @@ export default function Admin() {
                                 ? 'border-amber-200 bg-amber-50/50'
                                 : note.status === 'added'
                                 ? 'border-green-200 bg-green-50/50'
+                                : note.status === 'confirmed'
+                                ? 'border-blue-200 bg-blue-50/50'
                                 : 'border-cream-200 bg-cream-50/50'
                             }`}
                           >
@@ -1666,6 +1676,8 @@ export default function Admin() {
                                       ? 'bg-amber-100 text-amber-700'
                                       : note.status === 'added'
                                       ? 'bg-green-100 text-green-700'
+                                      : note.status === 'confirmed'
+                                      ? 'bg-blue-100 text-blue-700'
                                       : 'bg-gray-100 text-gray-600'
                                   }`}>
                                     {getCategoryLabel(note.category)}
