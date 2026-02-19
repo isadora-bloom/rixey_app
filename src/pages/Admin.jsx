@@ -258,6 +258,7 @@ export default function Admin() {
   const [kbSubcategory, setKbSubcategory] = useState('')
   const [submittingAnswer, setSubmittingAnswer] = useState(false)
   const [couplePhotos, setCouplePhotos] = useState({}) // weddingId -> photo URL
+  const [enlargedPhoto, setEnlargedPhoto] = useState(null) // URL for enlarged photo modal
   const [mainView, setMainView] = useState('weddings') // 'weddings', 'knowledge-base', 'usage', 'meetings', 'messages'
   const [showUncertainModal, setShowUncertainModal] = useState(false)
   const [unreadMessages, setUnreadMessages] = useState(0)
@@ -964,7 +965,9 @@ export default function Admin() {
                 <img
                   src={couplePhotos[viewingWedding.id]}
                   alt={viewingWedding.couple_names}
-                  className="w-14 h-14 rounded-full object-cover border-2 border-sage-300 shadow-sm"
+                  className="w-14 h-14 rounded-full object-cover border-2 border-sage-300 shadow-sm cursor-pointer hover:opacity-80 transition"
+                  onClick={() => setEnlargedPhoto(couplePhotos[viewingWedding.id])}
+                  title="Click to enlarge"
                 />
               ) : (
                 <div className="w-14 h-14 rounded-full bg-cream-100 flex items-center justify-center border-2 border-cream-200">
@@ -2183,7 +2186,13 @@ export default function Admin() {
                         <div className="flex items-start gap-4">
                           {/* Photo */}
                           {couplePhoto ? (
-                            <img src={couplePhoto} alt={wedding.couple_names} className="w-14 h-14 rounded-full object-cover border-2 border-sage-200 flex-shrink-0" />
+                            <img
+                              src={couplePhoto}
+                              alt={wedding.couple_names}
+                              className="w-14 h-14 rounded-full object-cover border-2 border-sage-200 flex-shrink-0 cursor-pointer hover:opacity-80 transition"
+                              onClick={(e) => { e.stopPropagation(); setEnlargedPhoto(couplePhoto); }}
+                              title="Click to enlarge"
+                            />
                           ) : (
                             <div className="w-14 h-14 rounded-full bg-cream-100 flex items-center justify-center border-2 border-cream-200 flex-shrink-0">
                               <span className="text-sage-400 text-xl">{wedding.couple_names?.charAt(0) || '?'}</span>
@@ -2628,6 +2637,28 @@ export default function Admin() {
           </div>
         )}
       </main>
+
+      {/* Enlarged Photo Modal */}
+      {enlargedPhoto && (
+        <div
+          className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
+          onClick={() => setEnlargedPhoto(null)}
+        >
+          <div className="relative max-w-2xl max-h-[80vh]">
+            <img
+              src={enlargedPhoto}
+              alt="Couple"
+              className="max-w-full max-h-[80vh] rounded-lg shadow-2xl object-contain"
+            />
+            <button
+              onClick={() => setEnlargedPhoto(null)}
+              className="absolute -top-3 -right-3 w-8 h-8 bg-white rounded-full flex items-center justify-center shadow-lg text-sage-600 hover:text-sage-800"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
