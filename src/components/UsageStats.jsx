@@ -18,7 +18,7 @@ export default function UsageStats({ weddingId, weddings = [] }) {
 
   const loadAllStats = async () => {
     try {
-      const response = await fetch('${API_URL}/api/usage/stats')
+      const response = await fetch(`${API_URL}/api/usage/stats`)
       const data = await response.json()
       setStats(data.stats || [])
     } catch (err) {

@@ -14,7 +14,7 @@ export default function UpcomingMeetings({ weddings = [], filterWedding = null, 
 
   const loadEvents = async () => {
     try {
-      const response = await fetch('${API_URL}/api/calendly/events')
+      const response = await fetch(`${API_URL}/api/calendly/events`)
       const data = await response.json()
 
       if (data.error) {

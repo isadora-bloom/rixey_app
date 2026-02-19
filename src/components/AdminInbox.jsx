@@ -41,7 +41,7 @@ export default function AdminInbox({ weddings = [], onUnreadChange }) {
 
   const loadConversations = async () => {
     try {
-      const response = await fetch('${API_URL}/api/messages/admin/conversations')
+      const response = await fetch(`${API_URL}/api/messages/admin/conversations`)
       const data = await response.json()
       setConversations(data.conversations || [])
     } catch (err) {
@@ -52,7 +52,7 @@ export default function AdminInbox({ weddings = [], onUnreadChange }) {
 
   const loadUnreadCounts = async () => {
     try {
-      const response = await fetch('${API_URL}/api/messages/admin/unread')
+      const response = await fetch(`${API_URL}/api/messages/admin/unread`)
       const data = await response.json()
       setTotalUnread(data.total || 0)
       onUnreadChange?.(data.total || 0)
@@ -88,7 +88,7 @@ export default function AdminInbox({ weddings = [], onUnreadChange }) {
 
     setSending(true)
     try {
-      const response = await fetch('${API_URL}/api/messages', {
+      const response = await fetch(`${API_URL}/api/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

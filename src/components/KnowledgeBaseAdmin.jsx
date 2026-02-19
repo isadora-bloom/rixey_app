@@ -25,7 +25,7 @@ export default function KnowledgeBaseAdmin() {
 
   const loadEntries = async () => {
     try {
-      const response = await fetch('${API_URL}/api/knowledge-base')
+      const response = await fetch(`${API_URL}/api/knowledge-base`)
       const data = await response.json()
       setEntries(data.entries || [])
     } catch (err) {
@@ -41,7 +41,7 @@ export default function KnowledgeBaseAdmin() {
     try {
       const url = editingId
         ? `${API_URL}/api/knowledge-base/${editingId}`
-        : '${API_URL}/api/knowledge-base'
+        : `${API_URL}/api/knowledge-base`
 
       const response = await fetch(url, {
         method: editingId ? 'PUT' : 'POST',

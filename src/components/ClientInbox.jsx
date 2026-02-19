@@ -78,7 +78,7 @@ export default function ClientInbox({ weddingId, userId, onUnreadChange }) {
 
     setSending(true)
     try {
-      const response = await fetch('${API_URL}/api/messages', {
+      const response = await fetch(`${API_URL}/api/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -751,7 +751,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
   const saveTimeline = async () => {
     setSaving(true)
     try {
-      await fetch('${API_URL}/api/timeline', {
+      await fetch(`${API_URL}/api/timeline`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

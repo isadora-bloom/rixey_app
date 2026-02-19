@@ -130,7 +130,7 @@ export default function TableLayoutPlanner({ weddingId, isAdmin = false }) {
   const saveTableSetup = async () => {
     setSaving(true)
     try {
-      await fetch('${API_URL}/api/tables', {
+      await fetch(`${API_URL}/api/tables`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
