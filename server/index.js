@@ -1763,168 +1763,163 @@ app.post('/api/quo/sync', async (req, res) => {
     // Track debug info
     let totalMessagesFound = 0;
     const sampleMessages = [];
-    const unmatchedPhones = new Set();
 
-    // For each Quo phone number, fetch messages
+    // Convert registered phones to E.164 format for API queries
+    const registeredPhonesE164 = Object.keys(phoneToWedding).map(phone => `+1${phone}`);
+    console.log('DEBUG: Registered phones in E.164:', registeredPhonesE164);
+
+    // For each Quo phone number AND each registered client, fetch their conversation
     for (const quoPhone of quoPhoneNumbers) {
       const phoneNumberId = quoPhone.id;
-      console.log(`DEBUG: Fetching messages for Quo phone ${phoneNumberId}`);
+      console.log(`DEBUG: Processing Quo phone ${phoneNumberId} (${quoPhone.phoneNumber})`);
 
-      // Fetch messages for this phone number
-      const messagesUrl = `${QUO_API_BASE}/messages?phoneNumberId=${phoneNumberId}&maxResults=100`;
-      console.log(`DEBUG: Fetching messages from: ${messagesUrl}`);
+      // Query messages for each registered client phone
+      for (const clientPhoneE164 of registeredPhonesE164) {
+        const normalizedClient = normalizePhone(clientPhoneE164);
+        const weddingId = phoneToWedding[normalizedClient];
+        const userId = phoneToUser[normalizedClient];
 
-      const messagesResponse = await fetch(messagesUrl, {
-        headers: { 'Authorization': QUO_API_KEY }
-      });
+        if (!weddingId) continue;
 
-      if (!messagesResponse.ok) {
-        const errText = await messagesResponse.text();
-        console.log(`DEBUG: Messages fetch failed for ${phoneNumberId}: ${messagesResponse.status} ${errText}`);
-        continue;
-      }
+        // Fetch messages for this specific conversation (Quo API requires participants param)
+        const messagesUrl = `${QUO_API_BASE}/messages?phoneNumberId=${phoneNumberId}&participants=${encodeURIComponent(clientPhoneE164)}&maxResults=100`;
+        console.log(`DEBUG: Fetching messages from: ${messagesUrl}`);
 
-      const messagesData = await messagesResponse.json();
-      console.log(`DEBUG: Messages response structure:`, JSON.stringify(messagesData).substring(0, 500));
-      const messages = messagesData.data || messagesData.messages || messagesData || [];
-      totalMessagesFound += messages.length;
-      console.log(`DEBUG: Found ${messages.length} messages for phone ${phoneNumberId}`);
-
-      // Capture sample of first few messages for debugging
-      if (sampleMessages.length < 3 && messages.length > 0) {
-        const sample = messages[0];
-        sampleMessages.push({
-          id: sample.id,
-          from: sample.from,
-          to: sample.to,
-          direction: sample.direction,
-          body: (sample.body || sample.text || '').substring(0, 50)
-        });
-      }
-
-      for (const msg of messages) {
-        if (processedIds.has(msg.id)) {
-          console.log(`DEBUG: Skipping already processed message ${msg.id}`);
-          continue;
-        }
-
-        // Get the external phone number (the client's number) - try multiple field formats
-        const externalPhone = msg.from?.phoneNumber || msg.from?.phone || msg.from ||
-                              msg.to?.[0]?.phoneNumber || msg.to?.[0]?.phone || msg.to?.[0] ||
-                              msg.participants?.find(p => p.phoneNumber !== quoPhone.phoneNumber)?.phoneNumber;
-        const normalizedExternal = normalizePhone(typeof externalPhone === 'string' ? externalPhone : externalPhone?.phoneNumber || externalPhone?.phone);
-        console.log(`DEBUG: Message external phone raw: ${JSON.stringify(externalPhone)}, normalized: "${normalizedExternal}"`);
-
-        // Check if this phone matches a registered client
-        const weddingId = phoneToWedding[normalizedExternal];
-
-        if (!weddingId) {
-          console.log(`DEBUG: No wedding match for phone ${normalizedExternal}`);
-          if (normalizedExternal) unmatchedPhones.add(normalizedExternal);
-          continue; // Skip if not a registered client
-        }
-        console.log(`DEBUG: MATCHED! Wedding ID: ${weddingId}`);
-
-        const messageBody = msg.body || msg.text || '';
-        const direction = msg.direction || (msg.from?.phoneNumber === externalPhone ? 'inbound' : 'outbound');
-
-        // Save to processed messages
-        await supabaseAdmin.from('processed_quo_messages').insert({
-          quo_message_id: msg.id,
-          wedding_id: weddingId,
-          phone_number: externalPhone,
-          direction: direction,
-          body_text: messageBody.substring(0, 5000)
-        });
-
-        // Extract planning notes from inbound messages
-        if (direction === 'inbound' && messageBody) {
-          const notes = await extractPlanningNotes(messageBody, phoneToUser[normalizedExternal], weddingId);
-          if (notes.length > 0) {
-            notes.forEach(n => {
-              n.source_message = `From text message: ${messageBody.substring(0, 100)}...`;
-            });
-            await savePlanningNotes(notes);
-            notesExtracted += notes.length;
-          }
-        }
-
-        newlyProcessed++;
-        processedIds.add(msg.id);
-      }
-    }
-
-    // Also fetch calls with transcripts
-    let totalCallsFound = 0;
-    let callsProcessed = 0;
-    for (const quoPhone of quoPhoneNumbers) {
-      const phoneNumberId = quoPhone.id;
-
-      try {
-        // Fetch calls for this phone number
-        const callsUrl = `${QUO_API_BASE}/calls?phoneNumberId=${phoneNumberId}&maxResults=50`;
-        const callsResponse = await fetch(callsUrl, {
+        const messagesResponse = await fetch(messagesUrl, {
           headers: { 'Authorization': QUO_API_KEY }
         });
 
-        if (!callsResponse.ok) {
-          console.log(`DEBUG: Calls fetch failed for ${phoneNumberId}: ${callsResponse.status}`);
+        if (!messagesResponse.ok) {
+          const errText = await messagesResponse.text();
+          console.log(`DEBUG: Messages fetch failed: ${messagesResponse.status} ${errText}`);
           continue;
         }
 
-        const callsData = await callsResponse.json();
-        const calls = callsData.data || callsData.calls || callsData || [];
-        totalCallsFound += calls.length;
-        console.log(`DEBUG: Found ${calls.length} calls for phone ${phoneNumberId}`);
+        const messagesData = await messagesResponse.json();
+        console.log(`DEBUG: Messages response for ${clientPhoneE164}:`, JSON.stringify(messagesData).substring(0, 500));
+        const messages = messagesData.data || messagesData.messages || messagesData || [];
+        totalMessagesFound += messages.length;
+        console.log(`DEBUG: Found ${messages.length} messages with ${clientPhoneE164}`);
 
-        for (const call of calls) {
-          const callId = `call_${call.id}`;
-          if (processedIds.has(callId)) continue;
+        // Capture sample for debugging
+        if (sampleMessages.length < 3 && messages.length > 0) {
+          const sample = messages[0];
+          sampleMessages.push({
+            id: sample.id,
+            from: sample.from,
+            to: sample.to,
+            direction: sample.direction,
+            body: (sample.body || sample.text || sample.content || '').substring(0, 50)
+          });
+        }
 
-          // Get external phone from call
-          const externalPhone = call.from?.phoneNumber || call.from?.phone || call.from ||
-                                call.to?.[0]?.phoneNumber || call.to?.[0]?.phone || call.to?.[0] ||
-                                call.participants?.find(p => p.phoneNumber !== quoPhone.phoneNumber)?.phoneNumber;
-          const normalizedExternal = normalizePhone(typeof externalPhone === 'string' ? externalPhone : externalPhone?.phoneNumber);
-
-          const weddingId = phoneToWedding[normalizedExternal];
-          if (!weddingId) {
-            if (normalizedExternal) unmatchedPhones.add(normalizedExternal);
+        for (const msg of messages) {
+          if (processedIds.has(msg.id)) {
+            console.log(`DEBUG: Skipping already processed message ${msg.id}`);
             continue;
           }
 
-          // Get transcript if available
-          const transcript = call.transcript || call.transcription || call.voicemail?.transcript || '';
-          if (!transcript) continue; // Skip calls without transcripts
+          const messageBody = msg.body || msg.text || msg.content || '';
+          const direction = msg.direction || 'inbound';
 
-          console.log(`DEBUG: Processing call with transcript for wedding ${weddingId}`);
-
-          // Save to processed
+          // Save to processed messages
           await supabaseAdmin.from('processed_quo_messages').insert({
-            quo_message_id: callId,
+            quo_message_id: msg.id,
             wedding_id: weddingId,
-            phone_number: typeof externalPhone === 'string' ? externalPhone : JSON.stringify(externalPhone),
-            direction: call.direction || 'inbound',
-            body_text: `[CALL TRANSCRIPT] ${transcript.substring(0, 5000)}`
+            phone_number: clientPhoneE164,
+            direction: direction,
+            body_text: messageBody.substring(0, 5000)
           });
 
-          // Extract planning notes from transcript
-          if (transcript) {
-            const notes = await extractPlanningNotes(transcript, phoneToUser[normalizedExternal], weddingId);
+          // Extract planning notes from inbound messages
+          if (direction === 'inbound' && messageBody) {
+            const notes = await extractPlanningNotes(messageBody, userId, weddingId);
             if (notes.length > 0) {
               notes.forEach(n => {
-                n.source_message = `From call transcript: ${transcript.substring(0, 100)}...`;
+                n.source_message = `From text message: ${messageBody.substring(0, 100)}...`;
               });
               await savePlanningNotes(notes);
               notesExtracted += notes.length;
             }
           }
 
-          callsProcessed++;
-          processedIds.add(callId);
+          newlyProcessed++;
+          processedIds.add(msg.id);
         }
-      } catch (callErr) {
-        console.error(`Error fetching calls for ${phoneNumberId}:`, callErr);
+      }
+    }
+
+    // Also fetch calls with transcripts - query for each registered client
+    let totalCallsFound = 0;
+    let callsProcessed = 0;
+    for (const quoPhone of quoPhoneNumbers) {
+      const phoneNumberId = quoPhone.id;
+
+      // Query calls for each registered client phone
+      for (const clientPhoneE164 of registeredPhonesE164) {
+        const normalizedClient = normalizePhone(clientPhoneE164);
+        const weddingId = phoneToWedding[normalizedClient];
+        const userId = phoneToUser[normalizedClient];
+
+        if (!weddingId) continue;
+
+        try {
+          // Fetch calls for this specific conversation
+          const callsUrl = `${QUO_API_BASE}/calls?phoneNumberId=${phoneNumberId}&participants=${encodeURIComponent(clientPhoneE164)}&maxResults=50`;
+          console.log(`DEBUG: Fetching calls from: ${callsUrl}`);
+
+          const callsResponse = await fetch(callsUrl, {
+            headers: { 'Authorization': QUO_API_KEY }
+          });
+
+          if (!callsResponse.ok) {
+            const errText = await callsResponse.text();
+            console.log(`DEBUG: Calls fetch failed: ${callsResponse.status} ${errText}`);
+            continue;
+          }
+
+          const callsData = await callsResponse.json();
+          const calls = callsData.data || callsData.calls || callsData || [];
+          totalCallsFound += calls.length;
+          console.log(`DEBUG: Found ${calls.length} calls with ${clientPhoneE164}`);
+
+          for (const call of calls) {
+            const callId = `call_${call.id}`;
+            if (processedIds.has(callId)) continue;
+
+            // Get transcript if available
+            const transcript = call.transcript || call.transcription || call.voicemail?.transcript || '';
+            if (!transcript) continue; // Skip calls without transcripts
+
+            console.log(`DEBUG: Processing call with transcript for wedding ${weddingId}`);
+
+            // Save to processed
+            await supabaseAdmin.from('processed_quo_messages').insert({
+              quo_message_id: callId,
+              wedding_id: weddingId,
+              phone_number: clientPhoneE164,
+              direction: call.direction || 'inbound',
+              body_text: `[CALL TRANSCRIPT] ${transcript.substring(0, 5000)}`
+            });
+
+            // Extract planning notes from transcript
+            if (transcript) {
+              const notes = await extractPlanningNotes(transcript, userId, weddingId);
+              if (notes.length > 0) {
+                notes.forEach(n => {
+                  n.source_message = `From call transcript: ${transcript.substring(0, 100)}...`;
+                });
+                await savePlanningNotes(notes);
+                notesExtracted += notes.length;
+              }
+            }
+
+            callsProcessed++;
+            processedIds.add(callId);
+          }
+        } catch (callErr) {
+          console.error(`Error fetching calls for ${clientPhoneE164}:`, callErr);
+        }
       }
     }
 
@@ -1941,13 +1936,12 @@ app.post('/api/quo/sync', async (req, res) => {
         profileCount: profiles.length,
         profilesWithWeddingId: profiles.filter(p => p.wedding_id).length,
         registeredPhones: registeredPhones,
+        registeredPhonesE164: registeredPhonesE164,
         quoPhoneNumbers: quoPhoneNumbers.map(p => p.phoneNumber || p.phone || p.number || JSON.stringify(p).substring(0, 100)),
         quoPhoneCount: quoPhoneNumbers.length,
-        quoPhoneIds: quoPhoneNumbers.map(p => p.id),
         totalMessagesFound: totalMessagesFound,
         totalCallsFound: totalCallsFound,
         alreadyProcessedCount: processedIds.size,
-        unmatchedPhones: Array.from(unmatchedPhones).slice(0, 10),
         sampleMessages: sampleMessages
       }
     });
