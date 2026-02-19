@@ -336,15 +336,28 @@ export default function Admin() {
     }
   }
 
-  const syncQuo = async () => {
+  const syncQuo = async (forceReprocess = false) => {
     setQuoSyncing(true)
-    setQuoStatus('')
+    setQuoStatus(forceReprocess ? 'Force resyncing all messages...' : 'Syncing new messages...')
     try {
+      console.log('Calling Quo sync with forceReprocess:', forceReprocess)
       const response = await fetch(`${API_URL}/api/quo/sync`, {
-        method: 'POST'
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ forceReprocess })
       })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        setQuoStatus(`Server error ${response.status}: ${errorText}`)
+        setQuoSyncing(false)
+        return
+      }
+
       const data = await response.json()
-      let statusMsg = data.message || data.error
+      console.log('Quo sync response:', data)
+
+      let statusMsg = data.message || data.error || 'Sync completed'
       // Show debug info if available
       if (data.debug) {
         const d = data.debug
@@ -352,18 +365,22 @@ export default function Admin() {
         statusMsg += `\n📱 Registered: ${d.registeredPhones?.join(', ') || 'none'}`
         statusMsg += `\n📞 Quo phones: ${d.quoPhoneCount} (${d.quoPhoneNumbers?.join(', ') || 'none'})`
         statusMsg += `\n📨 Found ${d.totalMessagesFound || 0} msgs, ${d.totalCallsFound || 0} calls`
-        if (d.unmatchedPhones?.length > 0) {
-          statusMsg += `\n❌ Unmatched: ${d.unmatchedPhones.join(', ')}`
+        statusMsg += `\n📝 Planning notes saved: ${data.planningNotesSaved || 0}`
+        if (d.planningNotesErrors?.length > 0) {
+          statusMsg += `\n⚠️ Errors: ${d.planningNotesErrors.map(e => e.error).join(', ')}`
         }
         if (d.sampleMessages?.length > 0) {
           const sample = d.sampleMessages[0]
-          statusMsg += `\n🔍 Sample from: ${JSON.stringify(sample.from)?.substring(0, 80)}`
+          statusMsg += `\n🔍 Sample: ${sample.body || 'no body'}`
         }
+      } else {
+        statusMsg += '\n(No debug info returned)'
       }
       setQuoStatus(statusMsg)
       loadData()
     } catch (err) {
-      setQuoStatus('Failed to sync Quo messages: ' + err.message)
+      console.error('Quo sync error:', err)
+      setQuoStatus('Failed to sync: ' + err.message + '\nCheck console for details')
     }
     setQuoSyncing(false)
   }
@@ -2474,13 +2491,23 @@ export default function Admin() {
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
                     Connected
                   </p>
-                  <button
-                    onClick={syncQuo}
-                    disabled={quoSyncing}
-                    className="w-full px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
-                  >
-                    {quoSyncing ? 'Syncing...' : 'Sync Messages'}
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => syncQuo(false)}
+                      disabled={quoSyncing}
+                      className="flex-1 px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
+                    >
+                      {quoSyncing ? 'Syncing...' : 'Sync New'}
+                    </button>
+                    <button
+                      onClick={() => syncQuo(true)}
+                      disabled={quoSyncing}
+                      className="flex-1 px-4 py-2 bg-amber-600 text-white rounded-lg text-sm hover:bg-amber-700 disabled:opacity-50"
+                      title="Clears processed message cache and re-syncs all messages with planning note extraction"
+                    >
+                      {quoSyncing ? 'Syncing...' : 'Force Resync'}
+                    </button>
+                  </div>
                   {quoStatus && (
                     <pre className="text-sage-600 text-xs bg-cream-50 p-2 rounded whitespace-pre-wrap font-sans">{quoStatus}</pre>
                   )}

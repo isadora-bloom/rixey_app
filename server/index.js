@@ -1712,11 +1712,38 @@ app.get('/api/quo/status', (req, res) => {
   res.json({ connected: !!QUO_API_KEY });
 });
 
+// Clear processed Quo messages (to allow reprocessing)
+app.post('/api/quo/clear-processed', async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin
+      .from('processed_quo_messages')
+      .delete()
+      .neq('id', '00000000-0000-0000-0000-000000000000');
+
+    if (error) throw error;
+    res.json({ success: true, message: 'Cleared all processed messages. Run sync again to reprocess.' });
+  } catch (error) {
+    console.error('Clear processed error:', error);
+    res.status(500).json({ error: 'Failed to clear: ' + error.message });
+  }
+});
+
 // Sync messages from Quo
 app.post('/api/quo/sync', async (req, res) => {
   try {
     if (!QUO_API_KEY) {
       return res.status(400).json({ error: 'Quo API key not configured' });
+    }
+
+    const { forceReprocess } = req.body || {};
+
+    // If force reprocess, clear the processed table first
+    if (forceReprocess) {
+      await supabaseAdmin
+        .from('processed_quo_messages')
+        .delete()
+        .neq('id', '00000000-0000-0000-0000-000000000000');
+      console.log('Force reprocess: cleared processed_quo_messages');
     }
 
     // Get all profiles with phone numbers (use admin to bypass RLS)
@@ -1778,6 +1805,8 @@ app.post('/api/quo/sync', async (req, res) => {
 
     // Track debug info
     let totalMessagesFound = 0;
+    let planningNotesSaved = 0;
+    let planningNotesErrors = [];
     const sampleMessages = [];
 
     // Convert registered phones to E.164 format for API queries
@@ -1858,19 +1887,21 @@ app.post('/api/quo/sync', async (req, res) => {
 
           // Also save message as a planning note so Sage can search it
           if (messageBody) {
-            const { error: noteError } = await supabaseAdmin.from('planning_notes').insert({
+            const { data: savedNote, error: noteError } = await supabaseAdmin.from('planning_notes').insert({
               wedding_id: weddingId,
               user_id: userId,
               category: 'sms_message',
               content: `[SMS ${direction}] ${messageBody}`,
               source_message: `From ${direction === 'inbound' ? 'client' : 'Rixey'} text: ${clientPhoneE164}`,
               status: 'confirmed'
-            });
+            }).select();
 
             if (noteError) {
               console.error(`DEBUG: Error saving SMS to planning_notes:`, noteError);
+              planningNotesErrors.push({ type: 'sms', error: noteError.message || JSON.stringify(noteError) });
             } else {
-              console.log(`DEBUG: Saved SMS as planning note for wedding ${weddingId}`);
+              planningNotesSaved++;
+              console.log(`DEBUG: Saved SMS as planning note for wedding ${weddingId}, id: ${savedNote?.[0]?.id}`);
             }
           }
 
@@ -1951,18 +1982,20 @@ app.post('/api/quo/sync', async (req, res) => {
             }
 
             // Also save transcript as a planning note so Sage can search it
-            const { error: noteError } = await supabaseAdmin.from('planning_notes').insert({
+            const { data: savedCallNote, error: noteError } = await supabaseAdmin.from('planning_notes').insert({
               wedding_id: weddingId,
               user_id: userId,
               category: 'call_transcript',
               content: `[Call Transcript] ${transcript}`,
               source_message: `From ${direction} call with: ${clientPhoneE164}`,
               status: 'confirmed'
-            });
+            }).select();
 
             if (noteError) {
               console.error(`DEBUG: Error saving call transcript to planning_notes:`, noteError);
+              planningNotesErrors.push({ type: 'call', error: noteError.message || JSON.stringify(noteError) });
             } else {
+              planningNotesSaved++;
               console.log(`DEBUG: Saved call transcript as planning note for wedding ${weddingId}`);
             }
 
@@ -1987,15 +2020,16 @@ app.post('/api/quo/sync', async (req, res) => {
       }
     }
 
-    console.log(`Quo sync: processed ${newlyProcessed} messages + ${callsProcessed} calls, extracted ${notesExtracted} notes`);
+    console.log(`Quo sync: processed ${newlyProcessed} messages + ${callsProcessed} calls, saved ${planningNotesSaved} planning notes, extracted ${notesExtracted} additional notes`);
 
     // Include detailed debug info in response
     const registeredPhones = Object.keys(phoneToWedding);
     res.json({
       processed: newlyProcessed,
       callsProcessed: callsProcessed,
+      planningNotesSaved,
       notesExtracted,
-      message: `Synced ${newlyProcessed} messages + ${callsProcessed} call transcripts. Extracted ${notesExtracted} planning notes.`,
+      message: `Synced ${newlyProcessed} messages + ${callsProcessed} call transcripts. Saved ${planningNotesSaved} to planning notes.`,
       debug: {
         profileCount: profiles.length,
         profilesWithWeddingId: profiles.filter(p => p.wedding_id).length,
@@ -2006,6 +2040,7 @@ app.post('/api/quo/sync', async (req, res) => {
         totalMessagesFound: totalMessagesFound,
         totalCallsFound: totalCallsFound,
         alreadyProcessedCount: processedIds.size,
+        planningNotesErrors: planningNotesErrors.slice(0, 5),
         sampleMessages: sampleMessages
       }
     });
