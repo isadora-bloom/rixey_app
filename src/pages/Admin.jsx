@@ -343,7 +343,12 @@ export default function Admin() {
         method: 'POST'
       })
       const data = await response.json()
-      setQuoStatus(data.message || data.error)
+      let statusMsg = data.message || data.error
+      // Show debug info if available
+      if (data.debug) {
+        statusMsg += ` | Registered: ${data.debug.registeredPhones?.join(', ') || 'none'}`
+      }
+      setQuoStatus(statusMsg)
       loadData()
     } catch (err) {
       setQuoStatus('Failed to sync Quo messages')
