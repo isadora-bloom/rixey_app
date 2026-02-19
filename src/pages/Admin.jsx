@@ -971,9 +971,9 @@ export default function Admin() {
     const escalation = escalations[viewingWedding.id]
 
     return (
-      <div className="min-h-screen bg-cream-50 overflow-x-hidden">
+      <div className="min-h-screen min-h-[100dvh] bg-cream-50">
         <header className="bg-white border-b border-cream-200 sticky top-0 z-40">
-          <div className="max-w-6xl mx-auto px-4 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="max-w-6xl mx-auto px-3 sm:px-4 py-3 sm:py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-4">
               {/* Couple Photo in Header */}
               {couplePhotos[viewingWedding.id] ? (
@@ -1040,7 +1040,7 @@ export default function Admin() {
           </div>
         </header>
 
-        <main className="max-w-6xl mx-auto px-4 py-8">
+        <main className="max-w-6xl mx-auto px-3 sm:px-4 py-4 sm:py-8">
           {/* Escalation Alert */}
           {escalation?.hasEscalation && (
             <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-6">
@@ -1064,11 +1064,11 @@ export default function Admin() {
             </div>
           )}
 
-          <div className="grid lg:grid-cols-3 gap-8">
+          <div className="grid lg:grid-cols-3 gap-4 sm:gap-8">
             {/* Stats & Info */}
-            <div className="lg:col-span-1 space-y-6">
+            <div className="lg:col-span-1 space-y-4 sm:space-y-6">
               {/* Quick Stats */}
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-6">
+              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-3 sm:p-6">
                 <h2 className="font-serif text-lg text-sage-700 mb-4">Activity Overview</h2>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="bg-sage-50 rounded-lg p-3 text-center">
@@ -1390,9 +1390,9 @@ export default function Admin() {
 
             {/* Planning Notes & Messages */}
             <div className="lg:col-span-2">
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-6">
+              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-3 sm:p-6">
                 {/* Tabs */}
-                <div className="flex gap-4 mb-4 border-b border-cream-200 overflow-x-auto">
+                <div className="flex gap-2 sm:gap-4 mb-4 border-b border-cream-200 overflow-x-auto scrollbar-hide -mx-3 sm:-mx-6 px-3 sm:px-6">
                   <button
                     onClick={() => setActiveTab('notes')}
                     className={`pb-3 px-1 text-sm font-medium border-b-2 transition whitespace-nowrap ${
@@ -1963,10 +1963,10 @@ export default function Admin() {
 
   // Main Admin View
   return (
-    <div className="min-h-screen bg-cream-50 overflow-x-hidden">
+    <div className="min-h-screen min-h-[100dvh] bg-cream-50">
       {/* Header with integrated navigation */}
       <header className="bg-white border-b border-cream-200 sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4">
+        <div className="max-w-7xl mx-auto px-3 sm:px-4">
           <div className="flex items-center justify-between py-3">
             <h1 className="font-serif text-xl text-sage-700">Admin Dashboard</h1>
             <button
@@ -2008,7 +2008,7 @@ export default function Admin() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 py-6">
+      <main className="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
         {/* Quick Stats - Compact Row */}
         <div className="flex flex-wrap gap-3 mb-6">
           <div className="flex items-center gap-2 bg-white rounded-lg px-4 py-2 border border-cream-200">
@@ -2142,10 +2142,10 @@ export default function Admin() {
         )}
 
         {/* Main Grid: Weddings List + Sidebar */}
-        <div className="grid lg:grid-cols-4 gap-6">
+        <div className="grid lg:grid-cols-4 gap-4 sm:gap-6">
           {/* Weddings List - Takes 3/4 */}
           <div className="lg:col-span-3">
-            <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-6">
+            <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-3 sm:p-6">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
                 <h2 className="font-serif text-xl text-sage-700">
                   {showArchived ? 'Archived Weddings' : 'Active Weddings'}
@@ -2194,30 +2194,37 @@ export default function Admin() {
                     return (
                       <div
                         key={wedding.id}
-                        className={`border rounded-xl p-4 hover:shadow-md transition ${
+                        className={`border rounded-xl p-3 sm:p-4 hover:shadow-md transition ${
                           escalation?.hasEscalation ? 'border-red-200 bg-red-50/30' : 'border-cream-200 hover:border-sage-300'
                         }`}
                       >
-                        <div className="flex items-start gap-4">
-                          {/* Photo */}
-                          {couplePhoto ? (
-                            <img
-                              src={couplePhoto}
-                              alt={wedding.couple_names}
-                              className="w-14 h-14 rounded-full object-cover border-2 border-sage-200 flex-shrink-0 cursor-pointer hover:opacity-80 transition"
-                              onClick={(e) => { e.stopPropagation(); setEnlargedPhoto(couplePhoto); }}
-                              title="Click to enlarge"
-                            />
-                          ) : (
-                            <div className="w-14 h-14 rounded-full bg-cream-100 flex items-center justify-center border-2 border-cream-200 flex-shrink-0">
-                              <span className="text-sage-400 text-xl">{wedding.couple_names?.charAt(0) || '?'}</span>
-                            </div>
-                          )}
+                        <div className="flex flex-col sm:flex-row sm:items-start gap-3 sm:gap-4">
+                          {/* Top row on mobile: Photo + Actions */}
+                          <div className="flex items-center justify-between sm:contents">
+                            {/* Photo */}
+                            {couplePhoto ? (
+                              <img
+                                src={couplePhoto}
+                                alt={wedding.couple_names}
+                                className="w-12 h-12 sm:w-14 sm:h-14 rounded-full object-cover border-2 border-sage-200 flex-shrink-0 cursor-pointer hover:opacity-80 transition"
+                                onClick={(e) => { e.stopPropagation(); setEnlargedPhoto(couplePhoto); }}
+                                title="Click to enlarge"
+                              />
+                            ) : (
+                              <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-cream-100 flex items-center justify-center border-2 border-cream-200 flex-shrink-0">
+                                <span className="text-sage-400 text-lg sm:text-xl">{wedding.couple_names?.charAt(0) || '?'}</span>
+                              </div>
+                            )}
+                            {/* Mobile-only view button */}
+                            <button onClick={() => viewWeddingProfile(wedding)} className="sm:hidden px-3 py-1.5 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700">
+                              View
+                            </button>
+                          </div>
 
                           {/* Info */}
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <h3 className="font-medium text-sage-800">{wedding.couple_names || 'Unnamed'}</h3>
+                              <h3 className="font-medium text-sage-800 text-sm sm:text-base">{wedding.couple_names || 'Unnamed'}</h3>
                               {lastActivity ? (
                                 <span className={`text-xs px-2 py-0.5 rounded ${
                                   lastActivity.status === 'recent' ? 'bg-green-100 text-green-700' :
@@ -2236,27 +2243,27 @@ export default function Admin() {
                                 </span>
                               )}
                             </div>
-                            <p className="text-sage-500 text-sm">
-                              {wedding.wedding_date ? new Date(wedding.wedding_date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : 'No date set'}
-                              <span className="mx-2 text-sage-300">·</span>
+                            <p className="text-sage-500 text-xs sm:text-sm">
+                              {wedding.wedding_date ? new Date(wedding.wedding_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'No date set'}
+                              <span className="mx-1 sm:mx-2 text-sage-300">·</span>
                               <span className="font-mono text-xs">{wedding.event_code}</span>
                             </p>
                             {wedding.profiles?.length > 0 && (
-                              <div className="flex flex-wrap gap-1 mt-2">
-                                {wedding.profiles.slice(0, 3).map(p => (
-                                  <span key={p.id} className="bg-cream-100 text-sage-600 text-xs px-2 py-0.5 rounded">
+                              <div className="flex flex-wrap gap-1 mt-1.5 sm:mt-2">
+                                {wedding.profiles.slice(0, 2).map(p => (
+                                  <span key={p.id} className="bg-cream-100 text-sage-600 text-xs px-2 py-0.5 rounded truncate max-w-[100px]">
                                     {p.name}
                                   </span>
                                 ))}
-                                {wedding.profiles.length > 3 && (
-                                  <span className="text-sage-400 text-xs">+{wedding.profiles.length - 3}</span>
+                                {wedding.profiles.length > 2 && (
+                                  <span className="text-sage-400 text-xs">+{wedding.profiles.length - 2}</span>
                                 )}
                               </div>
                             )}
                           </div>
 
-                          {/* Actions */}
-                          <div className="flex flex-col gap-2 flex-shrink-0">
+                          {/* Actions - Hidden on mobile, visible on sm+ */}
+                          <div className="hidden sm:flex flex-col gap-2 flex-shrink-0">
                             <button onClick={() => viewWeddingProfile(wedding)} className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700">
                               View Profile
                             </button>

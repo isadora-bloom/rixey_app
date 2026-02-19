@@ -20,10 +20,14 @@
 }
 
 @layer base {
-  html, body {
+  html {
+    @apply bg-cream-50;
+  }
+  body {
     @apply bg-cream-50 text-sage-800 font-sans antialiased;
     overflow-x: hidden;
-    max-width: 100vw;
+    min-height: 100vh;
+    min-height: 100dvh; /* Dynamic viewport height for mobile */
   }
 }
 
