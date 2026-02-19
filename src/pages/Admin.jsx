@@ -349,19 +349,20 @@ export default function Admin() {
         const d = data.debug
         statusMsg += `\n📊 ${d.profileCount} profiles, ${d.profilesWithWeddingId} with wedding`
         statusMsg += `\n📱 Registered: ${d.registeredPhones?.join(', ') || 'none'}`
-        statusMsg += `\n📨 Found ${d.totalMessagesFound || 0} messages in Quo`
+        statusMsg += `\n📞 OpenPhone numbers: ${d.quoPhoneCount} (IDs: ${d.quoPhoneIds?.join(', ') || 'none'})`
+        statusMsg += `\n📨 Found ${d.totalMessagesFound || 0} messages`
         if (d.unmatchedPhones?.length > 0) {
-          statusMsg += `\n❌ Unmatched phones: ${d.unmatchedPhones.join(', ')}`
+          statusMsg += `\n❌ Unmatched: ${d.unmatchedPhones.join(', ')}`
         }
         if (d.sampleMessages?.length > 0) {
           const sample = d.sampleMessages[0]
-          statusMsg += `\n🔍 Sample msg from: ${JSON.stringify(sample.from)}`
+          statusMsg += `\n🔍 Sample: ${JSON.stringify(sample.from)}`
         }
       }
       setQuoStatus(statusMsg)
       loadData()
     } catch (err) {
-      setQuoStatus('Failed to sync Quo messages')
+      setQuoStatus('Failed to sync Quo messages: ' + err.message)
     }
     setQuoSyncing(false)
   }

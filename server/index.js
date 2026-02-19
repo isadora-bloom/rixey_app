@@ -1744,7 +1744,8 @@ app.post('/api/quo/sync', async (req, res) => {
     }
 
     const phoneNumbersData = await phoneNumbersResponse.json();
-    const quoPhoneNumbers = phoneNumbersData.data || [];
+    console.log('DEBUG: Phone numbers raw response:', JSON.stringify(phoneNumbersData).substring(0, 1000));
+    const quoPhoneNumbers = phoneNumbersData.data || phoneNumbersData.phoneNumbers || phoneNumbersData || [];
     console.log('DEBUG: Quo phone numbers:', quoPhoneNumbers.map(p => ({ id: p.id, phoneNumber: p.phoneNumber })));
 
     // Track debug info
@@ -1758,18 +1759,22 @@ app.post('/api/quo/sync', async (req, res) => {
       console.log(`DEBUG: Fetching messages for Quo phone ${phoneNumberId}`);
 
       // Fetch messages for this phone number
-      const messagesResponse = await fetch(
-        `${QUO_API_BASE}/messages?phoneNumberId=${phoneNumberId}&maxResults=100`,
-        { headers: { 'Authorization': QUO_API_KEY } }
-      );
+      const messagesUrl = `${QUO_API_BASE}/messages?phoneNumberId=${phoneNumberId}&maxResults=100`;
+      console.log(`DEBUG: Fetching messages from: ${messagesUrl}`);
+
+      const messagesResponse = await fetch(messagesUrl, {
+        headers: { 'Authorization': QUO_API_KEY }
+      });
 
       if (!messagesResponse.ok) {
-        console.log(`DEBUG: Messages fetch failed for ${phoneNumberId}`);
+        const errText = await messagesResponse.text();
+        console.log(`DEBUG: Messages fetch failed for ${phoneNumberId}: ${messagesResponse.status} ${errText}`);
         continue;
       }
 
       const messagesData = await messagesResponse.json();
-      const messages = messagesData.data || [];
+      console.log(`DEBUG: Messages response structure:`, JSON.stringify(messagesData).substring(0, 500));
+      const messages = messagesData.data || messagesData.messages || messagesData || [];
       totalMessagesFound += messages.length;
       console.log(`DEBUG: Found ${messages.length} messages for phone ${phoneNumberId}`);
 
@@ -1847,8 +1852,9 @@ app.post('/api/quo/sync', async (req, res) => {
         profileCount: profiles.length,
         profilesWithWeddingId: profiles.filter(p => p.wedding_id).length,
         registeredPhones: registeredPhones,
-        quoPhoneNumbers: quoPhoneNumbers.map(p => p.phoneNumber || p.phone || p.number || 'unknown'),
+        quoPhoneNumbers: quoPhoneNumbers.map(p => p.phoneNumber || p.phone || p.number || JSON.stringify(p).substring(0, 100)),
         quoPhoneCount: quoPhoneNumbers.length,
+        quoPhoneIds: quoPhoneNumbers.map(p => p.id),
         totalMessagesFound: totalMessagesFound,
         alreadyProcessedCount: processedIds.size,
         unmatchedPhones: Array.from(unmatchedPhones).slice(0, 10),
@@ -3759,12 +3765,17 @@ app.get('/api/admin/notifications', async (req, res) => {
       .order('created_at', { ascending: false })
       .limit(50);
 
+    // If table doesn't exist, just return empty array
+    if (error && error.code === '42P01') {
+      return res.json({ notifications: [] });
+    }
     if (error) throw error;
 
     res.json({ notifications: notifications || [] });
   } catch (error) {
     console.error('Get admin notifications error:', error);
-    res.status(500).json({ error: 'Failed to fetch notifications' });
+    // Return empty array instead of 500 if table doesn't exist
+    res.json({ notifications: [] });
   }
 });
 
