@@ -94,10 +94,14 @@ function calculateCost(inputTokens, outputTokens, model = 'default') {
 }
 
 // Gmail OAuth setup
+const GMAIL_REDIRECT_URI = process.env.FRONTEND_URL
+  ? `${process.env.FRONTEND_URL}/admin/gmail-callback`
+  : 'http://localhost:5173/admin/gmail-callback';
+
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
-  'http://localhost:5173/admin/gmail-callback'
+  GMAIL_REDIRECT_URI
 );
 
 const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
@@ -1875,7 +1879,9 @@ Provide the summary:`
 
 const ZOOM_CLIENT_ID = process.env.ZOOM_CLIENT_ID;
 const ZOOM_CLIENT_SECRET = process.env.ZOOM_CLIENT_SECRET;
-const ZOOM_REDIRECT_URI = 'http://localhost:5173/admin/zoom-callback';
+const ZOOM_REDIRECT_URI = process.env.FRONTEND_URL
+  ? `${process.env.FRONTEND_URL}/admin/zoom-callback`
+  : 'http://localhost:5173/admin/zoom-callback';
 
 // Start Zoom OAuth flow
 app.get('/api/zoom/auth', (req, res) => {
