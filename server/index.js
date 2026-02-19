@@ -1691,8 +1691,8 @@ app.post('/api/quo/sync', async (req, res) => {
       return res.status(400).json({ error: 'Quo API key not configured' });
     }
 
-    // Get all profiles with phone numbers
-    const { data: profiles } = await supabase
+    // Get all profiles with phone numbers (use admin to bypass RLS)
+    const { data: profiles } = await supabaseAdmin
       .from('profiles')
       .select('id, phone, wedding_id')
       .not('phone', 'is', null);
@@ -1719,8 +1719,8 @@ app.post('/api/quo/sync', async (req, res) => {
 
     console.log(`Searching Quo for messages from ${Object.keys(phoneToWedding).length} registered phone numbers`);
 
-    // Get already processed message IDs
-    const { data: processed } = await supabase
+    // Get already processed message IDs (use admin to bypass RLS)
+    const { data: processed } = await supabaseAdmin
       .from('processed_quo_messages')
       .select('quo_message_id');
     const processedIds = new Set((processed || []).map(p => p.quo_message_id));
