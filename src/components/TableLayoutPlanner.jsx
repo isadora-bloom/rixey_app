@@ -77,7 +77,7 @@ const EXTRA_TABLES = [
   },
 ]
 
-export default function TableLayoutPlanner({ weddingId, isAdmin = false }) {
+export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false }) {
   const [guestCount, setGuestCount] = useState(100)
   const [tableShape, setTableShape] = useState('round')
   const [guestsPerTable, setGuestsPerTable] = useState(8)
@@ -135,6 +135,7 @@ export default function TableLayoutPlanner({ weddingId, isAdmin = false }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           weddingId,
+          userId,
           guestCount,
           tableShape,
           guestsPerTable,
@@ -607,6 +608,19 @@ export default function TableLayoutPlanner({ weddingId, isAdmin = false }) {
             </div>
           </div>
         )}
+      </div>
+
+      {/* Bottom Save Button */}
+      <div className="sticky bottom-0 bg-gradient-to-t from-white via-white to-transparent pt-4 pb-2">
+        <button
+          onClick={saveTableSetup}
+          disabled={saving}
+          className={`w-full px-5 py-3 rounded-lg font-medium transition text-lg ${
+            saved ? 'bg-green-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'
+          } disabled:opacity-50 shadow-lg`}
+        >
+          {saved ? '✓ Table Setup Saved!' : saving ? 'Saving...' : 'Save Table Setup'}
+        </button>
       </div>
     </div>
   )

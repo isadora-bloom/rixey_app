@@ -1229,7 +1229,7 @@ export default function Dashboard() {
               </button>
             </div>
             <div className="flex-1 overflow-y-auto p-4 sm:p-6">
-              <TimelineBuilder weddingId={profile.wedding_id} weddingDate={wedding?.wedding_date} />
+              <TimelineBuilder weddingId={profile.wedding_id} weddingDate={wedding?.wedding_date} userId={user?.id} />
             </div>
           </div>
         </div>
@@ -1253,7 +1253,7 @@ export default function Dashboard() {
                 </svg>
               </button>
             </div>
-            <TableLayoutPlanner weddingId={profile.wedding_id} />
+            <TableLayoutPlanner weddingId={profile.wedding_id} userId={user?.id} />
           </div>
         </div>
       )}
@@ -1277,7 +1277,7 @@ export default function Dashboard() {
               </button>
             </div>
             <div className="flex-1 overflow-y-auto">
-              <StaffingCalculator guestCount={tableSummary?.guestCount} weddingId={profile?.wedding_id} />
+              <StaffingCalculator guestCount={tableSummary?.guestCount} weddingId={profile?.wedding_id} userId={user?.id} />
             </div>
           </div>
         </div>

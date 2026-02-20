@@ -268,6 +268,8 @@ export default function Admin() {
   const [timelineSummary, setTimelineSummary] = useState(null) // Quick view of timeline data
   const [tableSummary, setTableSummary] = useState(null) // Quick view of table data
   const [staffingSummary, setStaffingSummary] = useState(null) // Quick view of staffing estimate
+  const [activities, setActivities] = useState([]) // Recent client activities
+  const [loadingActivities, setLoadingActivities] = useState(false)
 
   useEffect(() => {
     loadData()
@@ -765,6 +767,18 @@ export default function Admin() {
       console.error('Failed to load staffing:', err)
       setStaffingSummary(null)
     }
+
+    // Load recent activities
+    try {
+      setLoadingActivities(true)
+      const activitiesRes = await fetch(`${API_URL}/api/activities/${wedding.id}?limit=20`)
+      const activitiesData = await activitiesRes.json()
+      setActivities(activitiesData.activities || [])
+    } catch (err) {
+      console.error('Failed to load activities:', err)
+      setActivities([])
+    }
+    setLoadingActivities(false)
 
     setLoadingMessages(false)
   }
@@ -1477,6 +1491,9 @@ export default function Admin() {
                     <option value="meetings">Meetings</option>
                     <option value="timeline">Timeline</option>
                     <option value="tables">Tables</option>
+                    <option value="activity">
+                      Recent Activity {activities.length > 0 ? `(${activities.length})` : ''}
+                    </option>
                   </select>
                 </div>
 
@@ -1591,6 +1608,21 @@ export default function Admin() {
                     }`}
                   >
                     Tables
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('activity')}
+                    className={`pb-3 px-1 text-sm font-medium border-b-2 transition whitespace-nowrap ${
+                      activeTab === 'activity'
+                        ? 'border-sage-600 text-sage-700'
+                        : 'border-transparent text-sage-400 hover:text-sage-600'
+                    }`}
+                  >
+                    Recent Activity
+                    {activities.length > 0 && (
+                      <span className="ml-2 bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full">
+                        {activities.length}
+                      </span>
+                    )}
                   </button>
                 </div>
 
@@ -2099,6 +2131,80 @@ export default function Admin() {
                 {/* Tables Tab */}
                 {activeTab === 'tables' && (
                   <TableLayoutPlanner weddingId={viewingWedding.id} isAdmin />
+                )}
+
+                {/* Activity Tab */}
+                {activeTab === 'activity' && (
+                  <div>
+                    <p className="text-sage-500 text-sm mb-4">
+                      Recent client actions and updates. Shows when they interact with the portal.
+                    </p>
+                    {loadingActivities ? (
+                      <p className="text-sage-400 text-center py-8">Loading activities...</p>
+                    ) : activities.length === 0 ? (
+                      <div className="text-center py-8 bg-cream-50 rounded-xl">
+                        <p className="text-sage-500">No recent activity</p>
+                        <p className="text-sage-400 text-sm mt-1">Activity will appear when clients make updates</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {activities.map(activity => {
+                          const activityIcons = {
+                            'timeline_updated': '📅',
+                            'tables_updated': '🪑',
+                            'staffing_updated': '🙋',
+                            'vendor_added': '👥',
+                            'vendor_updated': '✏️',
+                            'contract_uploaded': '📄',
+                            'message_sent': '💬',
+                            'inspo_uploaded': '💡',
+                            'checklist_completed': '✅',
+                          }
+                          const activityLabels = {
+                            'timeline_updated': 'Updated timeline',
+                            'tables_updated': 'Updated table setup',
+                            'staffing_updated': 'Updated staffing guide',
+                            'vendor_added': 'Added vendor',
+                            'vendor_updated': 'Updated vendor',
+                            'contract_uploaded': 'Uploaded contract',
+                            'message_sent': 'Sent message',
+                            'inspo_uploaded': 'Added inspiration',
+                            'checklist_completed': 'Completed task',
+                          }
+                          const icon = activityIcons[activity.activity_type] || '📌'
+                          const label = activityLabels[activity.activity_type] || activity.activity_type
+
+                          return (
+                            <div
+                              key={activity.id}
+                              className="flex items-start gap-3 p-3 bg-white rounded-lg border border-cream-200"
+                            >
+                              <span className="text-xl">{icon}</span>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sage-800 text-sm font-medium">{label}</p>
+                                {activity.details && (
+                                  <p className="text-sage-500 text-xs mt-0.5">{activity.details}</p>
+                                )}
+                                <div className="flex items-center gap-2 mt-1">
+                                  {activity.profiles?.name && (
+                                    <span className="text-sage-400 text-xs">by {activity.profiles.name}</span>
+                                  )}
+                                  <span className="text-sage-300 text-xs">
+                                    {new Date(activity.created_at).toLocaleDateString('en-US', {
+                                      month: 'short',
+                                      day: 'numeric',
+                                      hour: 'numeric',
+                                      minute: '2-digit'
+                                    })}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             </div>

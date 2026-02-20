@@ -93,6 +93,37 @@ function calculateCost(inputTokens, outputTokens, model = 'default') {
   return inputCost + outputCost;
 }
 
+// ============ ACTIVITY TRACKING ============
+
+// Log client activity and update wedding last_activity
+async function logActivity(weddingId, userId, activityType, details = '') {
+  try {
+    const now = new Date().toISOString();
+
+    // Insert activity log
+    await supabaseAdmin.from('activity_log').insert({
+      wedding_id: weddingId,
+      user_id: userId,
+      activity_type: activityType,
+      details: details,
+      created_at: now
+    });
+
+    // Update wedding's last_activity timestamp
+    await supabaseAdmin
+      .from('weddings')
+      .update({
+        last_activity: now,
+        last_activity_type: activityType
+      })
+      .eq('id', weddingId);
+
+    console.log(`Activity logged: ${activityType} for wedding ${weddingId}`);
+  } catch (err) {
+    console.error('Failed to log activity:', err);
+  }
+}
+
 // Gmail OAuth setup
 const GMAIL_REDIRECT_URI = process.env.FRONTEND_URL
   ? `${process.env.FRONTEND_URL}/admin/gmail-callback`
@@ -2559,7 +2590,7 @@ app.get('/api/vendors/:weddingId', async (req, res) => {
 // Create or update vendor
 app.post('/api/vendors', async (req, res) => {
   try {
-    const { id, weddingId, vendorType, vendorName, vendorContact, notes, isBooked } = req.body;
+    const { id, weddingId, userId, vendorType, vendorName, vendorContact, notes, isBooked } = req.body;
 
     if (!weddingId || !vendorType) {
       return res.status(400).json({ error: 'Wedding ID and vendor type required' });
@@ -2581,6 +2612,10 @@ app.post('/api/vendors', async (req, res) => {
         .single();
 
       if (error) throw error;
+
+      // Log activity
+      await logActivity(weddingId, userId, 'vendor_updated', `${vendorType}: ${vendorName || 'TBD'}${isBooked ? ' (booked)' : ''}`);
+
       res.json({ vendor: data });
     } else {
       // Create new
@@ -2598,6 +2633,10 @@ app.post('/api/vendors', async (req, res) => {
         .single();
 
       if (error) throw error;
+
+      // Log activity
+      await logActivity(weddingId, userId, 'vendor_added', `${vendorType}: ${vendorName || 'TBD'}`);
+
       res.json({ vendor: data });
     }
   } catch (error) {
@@ -2755,6 +2794,9 @@ Return ONLY a valid JSON array like: [{"category": "vendor", "content": "Photogr
         console.error('Error extracting notes from vendor contract:', extractErr);
       }
     })();
+
+    // Log activity
+    await logActivity(vendor.wedding_id, null, 'contract_uploaded', `${vendor.vendor_type} contract: ${file.originalname}`);
 
     res.json({ vendor: data });
   } catch (error) {
@@ -2947,6 +2989,9 @@ Example: [{"category": "colors", "content": "Color palette: dusty rose, sage gre
         console.error('Error extracting notes from inspo image:', notesErr);
       }
     })();
+
+    // Log activity for inspo upload
+    await logActivity(weddingId, uploadedBy, 'inspo_uploaded', finalCaption || 'Inspiration image uploaded');
 
     res.json({ image: data });
   } catch (error) {
@@ -3303,6 +3348,12 @@ app.put('/api/checklist/:id', async (req, res) => {
       .single();
 
     if (error) throw error;
+
+    // Log activity when task is completed
+    if (isCompleted && data.wedding_id) {
+      await logActivity(data.wedding_id, completedBy, 'checklist_completed', data.task_text);
+    }
+
     res.json({ task: data });
   } catch (error) {
     console.error('Update task error:', error);
@@ -3975,6 +4026,12 @@ app.post('/api/messages', async (req, res) => {
       .single();
 
     if (error) throw error;
+
+    // Log activity for client messages
+    if (senderType === 'client') {
+      await logActivity(weddingId, senderId, 'message_sent', content.substring(0, 100));
+    }
+
     res.json({ message: data });
   } catch (error) {
     console.error('Send message error:', error);
@@ -4372,6 +4429,28 @@ app.get('/api/planning-notes/:weddingId', async (req, res) => {
   }
 });
 
+// Get activity log for a wedding
+app.get('/api/activities/:weddingId', async (req, res) => {
+  try {
+    const { weddingId } = req.params;
+    const limit = parseInt(req.query.limit) || 20;
+
+    const { data: activities, error } = await supabaseAdmin
+      .from('activity_log')
+      .select('*, profiles(name)')
+      .eq('wedding_id', weddingId)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) throw error;
+
+    res.json({ activities: activities || [] });
+  } catch (error) {
+    console.error('Get activities error:', error);
+    res.status(500).json({ error: 'Failed to fetch activities' });
+  }
+});
+
 // Update planning note status (uses supabaseAdmin to bypass RLS)
 app.put('/api/planning-notes/:noteId', async (req, res) => {
   try {
@@ -4418,7 +4497,7 @@ app.get('/api/timeline/:weddingId', async (req, res) => {
 // Save wedding timeline
 app.post('/api/timeline', async (req, res) => {
   try {
-    const { weddingId, timelineData, ceremonyStart, receptionStart, receptionEnd, notes } = req.body;
+    const { weddingId, timelineData, ceremonyStart, receptionStart, receptionEnd, notes, userId } = req.body;
 
     const { data, error } = await supabaseAdmin
       .from('wedding_timeline')
@@ -4435,6 +4514,10 @@ app.post('/api/timeline', async (req, res) => {
       .single();
 
     if (error) throw error;
+
+    // Log activity
+    await logActivity(weddingId, userId, 'timeline_updated', `Ceremony: ${ceremonyStart}`);
+
     res.json({ timeline: data });
   } catch (error) {
     console.error('Save timeline error:', error);
@@ -4465,7 +4548,7 @@ app.get('/api/tables/:weddingId', async (req, res) => {
 app.post('/api/tables', async (req, res) => {
   try {
     const {
-      weddingId, guestCount, tableShape, guestsPerTable,
+      weddingId, userId, guestCount, tableShape, guestsPerTable,
       headTable, headTableSize, sweetheartTable,
       cocktailTables, kidsTable, kidsCount,
       layoutNotes, linenColor, napkinColor,
@@ -4497,6 +4580,10 @@ app.post('/api/tables', async (req, res) => {
       .single();
 
     if (error) throw error;
+
+    // Log activity
+    await logActivity(weddingId, userId, 'tables_updated', `${guestCount} guests, ${tableShape} tables`);
+
     res.json({ tables: data });
   } catch (error) {
     console.error('Save tables error:', error);
@@ -4528,6 +4615,7 @@ app.post('/api/staffing', async (req, res) => {
   try {
     const {
       weddingId,
+      userId,
       answers,
       fridayBartenders,
       fridayExtraHands,
@@ -4558,6 +4646,10 @@ app.post('/api/staffing', async (req, res) => {
       .single();
 
     if (error) throw error;
+
+    // Log activity
+    await logActivity(weddingId, userId, 'staffing_updated', `${totalStaff} total staff, $${totalCost} estimated`);
+
     res.json({ staffing: data });
   } catch (error) {
     console.error('Save staffing error:', error);

@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react'
 const STAFF_RATE = 350 // 2026 rate
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
-export default function StaffingCalculator({ guestCount: initialGuestCount, weddingId }) {
+export default function StaffingCalculator({ guestCount: initialGuestCount, weddingId, userId }) {
   const [step, setStep] = useState(0)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -189,6 +189,7 @@ export default function StaffingCalculator({ guestCount: initialGuestCount, wedd
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           weddingId,
+          userId,
           answers,
           fridayBartenders: fridayData.bartenders,
           fridayExtraHands: fridayData.extraHands,
@@ -714,31 +715,39 @@ export default function StaffingCalculator({ guestCount: initialGuestCount, wedd
             Continue →
           </button>
         ) : (
-          <div className="flex items-center gap-3">
-            {saved && (
-              <span className="text-green-600 text-sm flex items-center gap-1">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-                Saved!
-              </span>
-            )}
-            {weddingId && (
+          <>
+            <div className="flex items-center gap-3">
+              {saved && (
+                <span className="text-green-600 text-sm flex items-center gap-1">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                  Saved!
+                </span>
+              )}
               <button
-                onClick={saveStaffing}
-                disabled={saving}
-                className="px-4 py-2 text-sage-600 hover:text-sage-800 disabled:opacity-50"
+                onClick={() => setStep(0)}
+                className="px-6 py-2 bg-sage-600 text-white rounded-lg hover:bg-sage-700"
               >
-                {saving ? 'Saving...' : 'Save'}
+                Start Over
               </button>
+            </div>
+
+            {/* Bottom Save Button on Summary */}
+            {weddingId && (
+              <div className="sticky bottom-0 bg-gradient-to-t from-white via-white to-transparent pt-4 pb-2 mt-6">
+                <button
+                  onClick={saveStaffing}
+                  disabled={saving}
+                  className={`w-full px-5 py-3 rounded-lg font-medium transition text-lg ${
+                    saved ? 'bg-green-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'
+                  } disabled:opacity-50 shadow-lg`}
+                >
+                  {saved ? '✓ Staffing Guide Saved!' : saving ? 'Saving...' : 'Save Staffing Guide'}
+                </button>
+              </div>
             )}
-            <button
-              onClick={() => setStep(0)}
-              className="px-6 py-2 bg-sage-600 text-white rounded-lg hover:bg-sage-700"
-            >
-              Start Over
-            </button>
-          </div>
+          </>
         )}
       </div>
     </div>

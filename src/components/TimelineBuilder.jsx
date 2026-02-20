@@ -90,17 +90,54 @@ function calculateSunset(dateStr) {
   const date = new Date(dateStr)
   const dayOfYear = Math.floor((date - new Date(date.getFullYear(), 0, 0)) / (1000 * 60 * 60 * 24))
 
-  // Simplified sunset calculation for latitude 38.4°N
-  // Summer solstice (~June 21) sunset is around 8:45 PM, winter solstice (~Dec 21) around 5:00 PM
+  // Sunset calculation for latitude 38.4°N
   const lat = 38.4
-  const declinationAngle = 23.45 * Math.sin((2 * Math.PI / 365) * (dayOfYear - 81))
-  const hourAngle = Math.acos(-Math.tan(lat * Math.PI / 180) * Math.tan(declinationAngle * Math.PI / 180))
-  const sunsetHour = 12 + (hourAngle * 180 / Math.PI) / 15
+  const lng = -78.0 // Rixey Manor longitude
+  const tzMeridian = -75 // Eastern Time zone reference meridian
 
-  // Adjust for timezone and DST (Virginia is UTC-5, DST adds 1 hour March-Nov)
+  // Solar declination angle
+  const declinationAngle = 23.45 * Math.sin((2 * Math.PI / 365) * (dayOfYear - 81))
+
+  // Hour angle at sunset
+  const latRad = lat * Math.PI / 180
+  const declRad = declinationAngle * Math.PI / 180
+  const hourAngle = Math.acos(-Math.tan(latRad) * Math.tan(declRad))
+
+  // Solar sunset time (hours after solar noon)
+  const solarSunsetHour = 12 + (hourAngle * 180 / Math.PI) / 15
+
+  // Equation of Time correction (in hours) - accounts for Earth's elliptical orbit
+  // This can shift solar noon by up to ±16 minutes from clock noon
+  const B = (2 * Math.PI / 365) * (dayOfYear - 81)
+  const equationOfTime = (9.87 * Math.sin(2 * B) - 7.53 * Math.cos(B) - 1.5 * Math.sin(B)) / 60
+
+  // Longitude correction: 4 minutes per degree difference from timezone meridian
+  // 78°W is 3° west of 75°W, so sunset appears 12 minutes later on the clock
+  const lngCorrection = (tzMeridian - lng) * 4 / 60 // in hours
+
+  // DST check - US DST runs from 2nd Sunday of March to 1st Sunday of November
   const month = date.getMonth()
-  const isDST = month >= 2 && month <= 10 // Rough DST check (March-November)
-  const adjustedHour = sunsetHour + (isDST ? 1 : 0)
+  const day = date.getDate()
+
+  // Calculate if we're in DST
+  let isDST = false
+  if (month > 2 && month < 10) {
+    // April through October - definitely DST
+    isDST = true
+  } else if (month === 2) {
+    // March - DST starts 2nd Sunday (day 8-14)
+    const marchFirst = new Date(date.getFullYear(), 2, 1)
+    const firstSunday = 1 + (7 - marchFirst.getDay()) % 7
+    const secondSunday = firstSunday + 7
+    isDST = day >= secondSunday
+  } else if (month === 10) {
+    // November - DST ends 1st Sunday (day 1-7)
+    const novFirst = new Date(date.getFullYear(), 10, 1)
+    const firstSunday = 1 + (7 - novFirst.getDay()) % 7
+    isDST = day < firstSunday
+  }
+
+  const adjustedHour = solarSunsetHour + lngCorrection - equationOfTime + (isDST ? 1 : 0)
 
   const hours = Math.floor(adjustedHour)
   const minutes = Math.round((adjustedHour - hours) * 60)
@@ -108,7 +145,7 @@ function calculateSunset(dateStr) {
   return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`
 }
 
-export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = false }) {
+export default function TimelineBuilder({ weddingId, weddingDate, userId, isAdmin = false }) {
   const [events, setEvents] = useState({})
   const [shuttleArrivals, setShuttleArrivals] = useState([])
   const [shuttleDepartures, setShuttleDepartures] = useState([])
@@ -825,6 +862,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           weddingId,
+          userId,
           timelineData: {
             events,
             shuttleArrivals,
@@ -1713,6 +1751,19 @@ export default function TimelineBuilder({ weddingId, weddingDate, isAdmin = fals
         <div className="mt-4 pt-4 border-t border-sage-500 text-center text-sage-200 text-sm">
           Ceremony: {formatTime(ceremonyTime)} • Ends: {formatTime(receptionEnd)}
         </div>
+      </div>
+
+      {/* Bottom Save Button */}
+      <div className="sticky bottom-0 bg-gradient-to-t from-white via-white to-transparent pt-4 pb-2 -mx-4 px-4 sm:-mx-6 sm:px-6">
+        <button
+          onClick={saveTimeline}
+          disabled={saving}
+          className={`w-full px-5 py-3 rounded-lg font-medium transition text-lg ${
+            saved ? 'bg-green-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'
+          } disabled:opacity-50 shadow-lg`}
+        >
+          {saved ? '✓ Timeline Saved!' : saving ? 'Saving...' : 'Save Timeline'}
+        </button>
       </div>
     </div>
   )
