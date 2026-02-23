@@ -1625,24 +1625,19 @@ app.post('/api/gmail/sync', async (req, res) => {
           // Skip emails from Sage
           if (fromEmail === 'sage@rixeymanor.com') continue;
 
-          // Skip automated/no-reply senders — these are system notifications and confirmations,
-          // not real client or Rixey team messages, so they waste Sage's context window
-          const automatedPatterns = [
+          // Skip no-reply/automated system senders — not real human communication
+          const automatedSenderPatterns = [
             /noreply/i, /no-reply/i, /donotreply/i, /do-not-reply/i,
-            /notifications?@/i, /automated@/i, /mailer@/i, /bounce@/i,
-            /@honeybook\.com/i, /@squarespace\.com/i, /@mailchimp\.com/i,
-            /@constantcontact\.com/i, /@sendgrid\.net/i, /info@stripe\.com/i,
-            /support@stripe\.com/i, /receipts@/i, /billing@/i
+            /notifications?@/i, /automated@/i, /mailer-daemon/i, /bounce@/i
           ];
-          if (automatedPatterns.some(p => p.test(fromEmail))) {
-            // Mark as processed so we don't keep hitting it, but don't store as a planning note
+          if (automatedSenderPatterns.some(p => p.test(fromEmail))) {
             processedIds.add(msg.id);
             await supabaseAdmin.from('processed_emails').insert({
               gmail_message_id: msg.id,
               wedding_id: emailToWedding[clientEmail],
               from_email: fromEmail,
               subject: subject,
-              body_text: '[Automated email — skipped]'
+              body_text: '[Automated sender — skipped]'
             }).then(() => {});
             continue;
           }
@@ -1938,15 +1933,28 @@ app.post('/api/quo/sync', async (req, res) => {
             console.error(`DEBUG: Error saving to processed_quo_messages:`, insertError);
           }
 
-          // Only save inbound messages as planning notes — outbound are Rixey's own responses
-          // and bloat Sage's context without adding client information
-          if (direction === 'inbound' && messageBody) {
+          // Skip outbound auto-reply templates — real personal responses should still be recorded
+          const autoReplyPatterns = [
+            /^thank you for (reaching out|contacting|calling|your (message|inquiry|interest))/i,
+            /^thanks for (reaching out|calling|your (message|inquiry|interest))/i,
+            /^we('ve| have) received your/i,
+            /^we('ll| will) (get back|be in touch|respond)/i,
+            /^this is an automated/i,
+            /^you('ve| have) reached rixey manor/i,
+            /^hi,? (we('re| are) currently|our team is)/i,
+          ];
+          const isAutoReply = direction === 'outbound' &&
+            autoReplyPatterns.some(p => p.test(messageBody.trim()));
+
+          // Also save message as a planning note so Sage can search it
+          if (messageBody && !isAutoReply) {
+            const label = direction === 'inbound' ? 'SMS from client' : 'SMS from Rixey';
             const { data: savedNote, error: noteError } = await supabaseAdmin.from('planning_notes').insert({
               wedding_id: weddingId,
               user_id: userId,
               category: 'sms_message',
-              content: `[SMS from client] ${messageBody}`,
-              source_message: `From client text: ${clientPhoneE164}`,
+              content: `[${label}] ${messageBody}`,
+              source_message: `From ${direction === 'inbound' ? 'client' : 'Rixey'} text: ${clientPhoneE164}`,
               status: 'confirmed'
             }).select();
 
@@ -1955,7 +1963,7 @@ app.post('/api/quo/sync', async (req, res) => {
               planningNotesErrors.push({ type: 'sms', error: noteError.message || JSON.stringify(noteError) });
             } else {
               planningNotesSaved++;
-              console.log(`DEBUG: Saved inbound SMS as planning note for wedding ${weddingId}, id: ${savedNote?.[0]?.id}`);
+              console.log(`DEBUG: Saved ${direction} SMS as planning note for wedding ${weddingId}, id: ${savedNote?.[0]?.id}`);
             }
           }
 
