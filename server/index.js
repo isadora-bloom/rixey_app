@@ -728,12 +728,33 @@ app.post('/api/chat', async (req, res) => {
       }
     }
 
-    // Build messages array with conversation history
+    // Build messages array with conversation history.
+    // Claude API requires: (1) first message must be from user, (2) roles must alternate.
+    // The auto-generated opening greeting is an assistant message — if it's still in the
+    // history window it causes the API to reject with a validation error (silent 500).
+    const rawHistory = conversationHistory.map(msg => ({
+      role: msg.sender === 'user' ? 'user' : 'assistant',
+      content: msg.content
+    }));
+
+    // Drop messages from the front until we hit the first user message
+    let trimmedHistory = rawHistory;
+    while (trimmedHistory.length > 0 && trimmedHistory[0].role !== 'user') {
+      trimmedHistory = trimmedHistory.slice(1);
+    }
+
+    // Collapse consecutive same-role messages (keep the later one) so roles strictly alternate
+    const dedupedHistory = [];
+    for (const msg of trimmedHistory) {
+      if (dedupedHistory.length > 0 && dedupedHistory[dedupedHistory.length - 1].role === msg.role) {
+        dedupedHistory[dedupedHistory.length - 1] = msg;
+      } else {
+        dedupedHistory.push(msg);
+      }
+    }
+
     const messages = [
-      ...conversationHistory.map(msg => ({
-        role: msg.sender === 'user' ? 'user' : 'assistant',
-        content: msg.content
-      })),
+      ...dedupedHistory,
       {
         role: 'user',
         content: message
