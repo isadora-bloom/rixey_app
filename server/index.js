@@ -4770,6 +4770,55 @@ app.post('/api/staffing', async (req, res) => {
   }
 });
 
+// ============ BUDGET ============
+
+app.get('/api/budget/:weddingId', async (req, res) => {
+  try {
+    const { weddingId } = req.params;
+    const { data, error } = await supabaseAdmin
+      .from('wedding_budget')
+      .select('*')
+      .eq('wedding_id', weddingId)
+      .single();
+
+    if (error && error.code === 'PGRST116') {
+      return res.status(404).json({ error: 'No budget found' });
+    }
+    if (error) throw error;
+
+    res.json({ budget: data });
+  } catch (error) {
+    console.error('Get budget error:', error);
+    res.status(500).json({ error: 'Failed to load budget' });
+  }
+});
+
+app.post('/api/budget', async (req, res) => {
+  try {
+    const { weddingId, totalBudget, isShared, categories } = req.body;
+    if (!weddingId) return res.status(400).json({ error: 'weddingId required' });
+
+    const { data, error } = await supabaseAdmin
+      .from('wedding_budget')
+      .upsert({
+        wedding_id: weddingId,
+        total_budget: totalBudget || 0,
+        is_shared: isShared || false,
+        categories: categories || {},
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'wedding_id' })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json({ budget: data });
+  } catch (error) {
+    console.error('Save budget error:', error);
+    res.status(500).json({ error: 'Failed to save budget' });
+  }
+});
+
 const PORT = process.env.PORT || 3001;
 const server = app.listen(PORT, () => {
   console.log(`Sage backend running on port ${PORT}`);

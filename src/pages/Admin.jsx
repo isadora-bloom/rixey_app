@@ -269,6 +269,7 @@ export default function Admin() {
   const [timelineSummary, setTimelineSummary] = useState(null) // Quick view of timeline data
   const [tableSummary, setTableSummary] = useState(null) // Quick view of table data
   const [staffingSummary, setStaffingSummary] = useState(null) // Quick view of staffing estimate
+  const [sharedBudget, setSharedBudget] = useState(null) // Shared budget (only if is_shared=true)
   const [activities, setActivities] = useState([]) // Recent client activities
   const [loadingActivities, setLoadingActivities] = useState(false)
 
@@ -769,6 +770,24 @@ export default function Admin() {
       setStaffingSummary(null)
     }
 
+    // Load budget (only show if couple shared it)
+    try {
+      const budgetRes = await fetch(`${API_URL}/api/budget/${wedding.id}`)
+      if (budgetRes.ok) {
+        const budgetData = await budgetRes.json()
+        if (budgetData.budget?.is_shared) {
+          setSharedBudget(budgetData.budget)
+        } else {
+          setSharedBudget(null)
+        }
+      } else {
+        setSharedBudget(null)
+      }
+    } catch (err) {
+      console.error('Failed to load budget:', err)
+      setSharedBudget(null)
+    }
+
     // Load recent activities
     try {
       setLoadingActivities(true)
@@ -915,6 +934,7 @@ export default function Admin() {
     setTimelineSummary(null)
     setTableSummary(null)
     setStaffingSummary(null)
+    setSharedBudget(null)
   }
 
   // Filter messages by search query
@@ -1231,6 +1251,49 @@ export default function Admin() {
                   )}
                 </div>
               </div>
+
+              {/* Shared Budget Card — only shows if couple opted to share */}
+              {sharedBudget && (() => {
+                const cats = sharedBudget.categories || {}
+                const totalBudgeted = Object.values(cats).reduce((s, c) => s + (c.budgeted || 0), 0)
+                const totalCommitted = Object.values(cats).reduce((s, c) => s + (c.committed || 0), 0)
+                const effectiveBudget = sharedBudget.total_budget || totalBudgeted
+                const pct = effectiveBudget > 0 ? Math.min(100, Math.round((totalCommitted / effectiveBudget) * 100)) : 0
+                const isOver = totalCommitted > effectiveBudget && effectiveBudget > 0
+                return (
+                  <div className="bg-white rounded-2xl shadow-sm border border-emerald-200 p-6">
+                    <h2 className="font-serif text-lg text-sage-700 flex items-center gap-2 mb-3">
+                      <span>💰</span> Budget <span className="text-xs font-normal text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">Shared by couple</span>
+                    </h2>
+                    <div className="space-y-2 text-sm mb-3">
+                      <div className="flex justify-between">
+                        <span className="text-sage-500">Total Budget</span>
+                        <span className="font-medium text-sage-700">${effectiveBudget.toLocaleString('en-US')}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-sage-500">Committed</span>
+                        <span className={`font-medium ${isOver ? 'text-red-600' : 'text-sage-700'}`}>
+                          ${totalCommitted.toLocaleString('en-US')} ({pct}%)
+                        </span>
+                      </div>
+                    </div>
+                    <div className="h-2 bg-cream-100 rounded-full overflow-hidden mb-3">
+                      <div
+                        className={`h-full rounded-full ${isOver ? 'bg-red-500' : 'bg-emerald-500'}`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      {Object.entries(cats).filter(([, c]) => c.budgeted > 0 || c.committed > 0).map(([key, cat]) => (
+                        <div key={key} className="flex justify-between text-xs text-sage-600">
+                          <span>{cat.label}</span>
+                          <span>${(cat.committed || 0).toLocaleString()} / ${(cat.budgeted || 0).toLocaleString()}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })()}
 
               {/* Timeline Summary Card */}
               <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-6">

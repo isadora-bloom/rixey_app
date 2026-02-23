@@ -40,7 +40,68 @@ const ONBOARDING_STEPS = [
   }
 ]
 
-export default function OnboardingChecklist({ weddingId, onAction, onDismiss }) {
+const TIME_BUCKETS = [
+  {
+    minWeeks: 52,
+    label: 'Dream & Book Essentials',
+    emoji: '✨',
+    nudges: [
+      { text: 'Book your photographer and caterer first — they book up a year or more in advance.', action: 'vendor_added' },
+      { text: 'Lock in your music (DJ or band) — great ones fill their calendars fast.', action: 'vendor_added' },
+      { text: 'Not sure where to start? Ask Sage — she can walk you through the first 90 days.', action: 'first_message_sent' },
+    ]
+  },
+  {
+    minWeeks: 26,
+    label: 'Lock In Your Vendors',
+    emoji: '📋',
+    nudges: [
+      { text: 'Book remaining vendors (florist, hair & makeup, officiant) before your date fills up.', action: 'vendor_added' },
+      { text: 'Start uploading vendor contracts so Sage can answer questions about them.', action: 'first_message_sent' },
+      { text: 'Check off your planning checklist to see where you stand.', action: 'checklist_item_completed' },
+    ]
+  },
+  {
+    minWeeks: 13,
+    label: 'Get Into the Details',
+    emoji: '🗓',
+    nudges: [
+      { text: 'Build your day-of timeline — now is the right time to nail down the schedule.', action: 'checklist_item_completed' },
+      { text: 'Start thinking about table layout and guest count for your seating plan.', action: 'checklist_item_completed' },
+      { text: 'Confirm all vendors have your date locked in their calendars.', action: 'vendor_added' },
+    ]
+  },
+  {
+    minWeeks: 4,
+    label: 'Final Prep',
+    emoji: '🏁',
+    nudges: [
+      { text: 'Schedule your final venue walkthrough with the Rixey Manor team.', action: 'first_message_sent' },
+      { text: 'Send final guest count and dietary needs to your caterer this week.', action: 'vendor_added' },
+      { text: 'Confirm every vendor: arrival times, contacts, and day-of logistics.', action: 'checklist_item_completed' },
+    ]
+  },
+  {
+    minWeeks: 0,
+    label: 'Home Stretch',
+    emoji: '🎉',
+    nudges: [
+      { text: "You're almost there! Confirm every vendor one final time this week.", action: 'vendor_added' },
+      { text: 'Pack your personal items and vendor tips the night before.', action: 'checklist_item_completed' },
+      { text: 'Ask Sage if you have any last-minute questions — she\'s here for you!', action: 'first_message_sent' },
+    ]
+  },
+]
+
+function getTimeBucket(weddingDate) {
+  if (!weddingDate) return null
+  const msPerWeek = 1000 * 60 * 60 * 24 * 7
+  const weeksOut = Math.floor((new Date(weddingDate) - new Date()) / msPerWeek)
+  if (weeksOut < 0) return null
+  return TIME_BUCKETS.find(b => weeksOut >= b.minWeeks) || TIME_BUCKETS[TIME_BUCKETS.length - 1]
+}
+
+export default function OnboardingChecklist({ weddingId, weddingDate, onAction, onDismiss }) {
   const [progress, setProgress] = useState(null)
   const [loading, setLoading] = useState(true)
   const [dismissed, setDismissed] = useState(false)
@@ -87,6 +148,8 @@ export default function OnboardingChecklist({ weddingId, onAction, onDismiss }) 
   // If all complete, don't show
   if (completedSteps === totalSteps) return null
 
+  const timeBucket = getTimeBucket(weddingDate)
+
   return (
     <div className="bg-gradient-to-br from-sage-50 to-cream-50 rounded-2xl border border-sage-200 p-6 mb-6">
       <div className="flex items-start justify-between mb-4">
@@ -106,6 +169,28 @@ export default function OnboardingChecklist({ weddingId, onAction, onDismiss }) 
           Dismiss
         </button>
       </div>
+
+      {/* Time-bucket nudges */}
+      {timeBucket && (
+        <div className="mb-5 p-4 bg-white rounded-xl border border-sage-200">
+          <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-2">
+            {timeBucket.emoji} {timeBucket.label} — Focus on this now
+          </p>
+          <ul className="space-y-2">
+            {timeBucket.nudges.map((nudge, i) => (
+              <li key={i} className="flex items-start gap-2">
+                <span className="text-sage-400 mt-0.5">→</span>
+                <button
+                  onClick={() => onAction && onAction(nudge.action)}
+                  className="text-sm text-sage-700 hover:text-sage-900 text-left hover:underline"
+                >
+                  {nudge.text}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Progress bar */}
       <div className="mb-4">

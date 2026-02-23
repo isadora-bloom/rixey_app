@@ -12,6 +12,8 @@ import ClientInbox from '../components/ClientInbox'
 import TimelineBuilder from '../components/TimelineBuilder'
 import TableLayoutPlanner from '../components/TableLayoutPlanner'
 import StaffingCalculator from '../components/StaffingCalculator'
+import BudgetTracker from '../components/BudgetTracker'
+import BorrowCatalog from '../components/BorrowCatalog'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -50,6 +52,23 @@ function WeddingCountdown({ weddingDate }) {
     )
   }
 
+  const days = timeLeft.days
+  const countdownLabel = days >= 400
+    ? "You've got time — enjoy every moment of the journey"
+    : days >= 200
+    ? "The adventure is just beginning!"
+    : days >= 100
+    ? "Getting closer — the fun details are coming!"
+    : days >= 30
+    ? "The big day is on the horizon"
+    : days >= 8
+    ? "Almost there — you're in the home stretch!"
+    : days >= 2
+    ? "This is your week. Soak it all in."
+    : days === 1
+    ? "Tomorrow is your day!"
+    : "Today is YOUR day! 🎉"
+
   return (
     <div className="bg-gradient-to-r from-sage-500 to-sage-600 rounded-2xl p-4 sm:p-6 text-white">
       <p className="text-sage-100 text-xs uppercase tracking-wide mb-2 text-center">Countdown to Your Day</p>
@@ -67,6 +86,7 @@ function WeddingCountdown({ weddingDate }) {
           <p className="text-sage-200 text-xs sm:text-sm">Minutes</p>
         </div>
       </div>
+      <p className="text-sage-100 text-xs text-center mt-3 italic">{countdownLabel}</p>
     </div>
   )
 }
@@ -96,6 +116,9 @@ export default function Dashboard() {
   const [showStaffingModal, setShowStaffingModal] = useState(false)
   const [showShareModal, setShowShareModal] = useState(false)
   const [shareLinkCopied, setShareLinkCopied] = useState(false)
+  const [showBudgetModal, setShowBudgetModal] = useState(false)
+  const [showBorrowModal, setShowBorrowModal] = useState(false)
+  const [budgetSummary, setBudgetSummary] = useState(null)
   const [timelineSummary, setTimelineSummary] = useState(null)
   const [tableSummary, setTableSummary] = useState(null)
   // Collapsible sections (collapsed by default)
@@ -138,6 +161,24 @@ export default function Dashboard() {
 
         if (weddingData) {
           setWedding(weddingData)
+        }
+
+        // Load budget summary
+        try {
+          const budgetRes = await fetch(`${API_URL}/api/budget/${data.wedding_id}`)
+          if (budgetRes.ok) {
+            const budgetData = await budgetRes.json()
+            if (budgetData.budget) {
+              const cats = budgetData.budget.categories || {}
+              const totalCommitted = Object.values(cats).reduce((s, c) => s + (c.committed || 0), 0)
+              setBudgetSummary({
+                totalBudget: budgetData.budget.total_budget,
+                totalCommitted
+              })
+            }
+          }
+        } catch (err) {
+          console.error('Failed to load budget summary:', err)
         }
 
         // Load timeline summary
@@ -664,6 +705,7 @@ export default function Dashboard() {
         {wedding?.id && (
           <OnboardingChecklist
             weddingId={wedding.id}
+            weddingDate={wedding.wedding_date}
             onAction={(action) => {
               if (action === 'couple_photo_uploaded') {
                 document.getElementById('couple-photo-section')?.scrollIntoView({ behavior: 'smooth' })
@@ -926,6 +968,32 @@ export default function Dashboard() {
                     <span className="text-2xl">💡</span>
                     <p className="font-medium text-sage-800 text-sm mt-2">Inspiration</p>
                     <p className="text-sage-400 text-xs mt-1">Gallery →</p>
+                  </button>
+
+                  {/* Budget Card */}
+                  <button
+                    onClick={() => setShowBudgetModal(true)}
+                    className="bg-gradient-to-br from-emerald-50 to-cream-50 rounded-xl p-4 border border-emerald-200 hover:border-emerald-300 hover:shadow-md transition text-left"
+                  >
+                    <span className="text-2xl">💰</span>
+                    <p className="font-medium text-sage-800 text-sm mt-2">Budget</p>
+                    {budgetSummary ? (
+                      <p className="text-sage-500 text-xs mt-1">
+                        ${budgetSummary.totalCommitted.toLocaleString()} committed
+                      </p>
+                    ) : (
+                      <p className="text-sage-400 text-xs mt-1">Set up →</p>
+                    )}
+                  </button>
+
+                  {/* Borrow Shed Card */}
+                  <button
+                    onClick={() => setShowBorrowModal(true)}
+                    className="bg-gradient-to-br from-orange-50 to-cream-50 rounded-xl p-4 border border-orange-200 hover:border-orange-300 hover:shadow-md transition text-left"
+                  >
+                    <span className="text-2xl">🛖</span>
+                    <p className="font-medium text-sage-800 text-sm mt-2">Borrow Shed</p>
+                    <p className="text-sage-500 text-xs mt-1">90 items available</p>
                   </button>
                 </div>
               </div>
@@ -1282,6 +1350,71 @@ export default function Dashboard() {
             <div className="flex-1 overflow-y-auto">
               <StaffingCalculator guestCount={tableSummary?.guestCount} weddingId={profile?.wedding_id} userId={user?.id} />
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Budget Tracker Modal */}
+      {showBudgetModal && profile?.wedding_id && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">💰</span>
+                <h3 className="font-serif text-xl text-sage-700">Budget Tracker</h3>
+              </div>
+              <button
+                onClick={() => {
+                  setShowBudgetModal(false)
+                  // Refresh budget summary
+                  fetch(`${API_URL}/api/budget/${profile.wedding_id}`)
+                    .then(r => r.ok ? r.json() : null)
+                    .then(data => {
+                      if (data?.budget) {
+                        const cats = data.budget.categories || {}
+                        const totalCommitted = Object.values(cats).reduce((s, c) => s + (c.committed || 0), 0)
+                        setBudgetSummary({ totalBudget: data.budget.total_budget, totalCommitted })
+                      }
+                    })
+                    .catch(() => {})
+                }}
+                className="text-sage-400 hover:text-sage-600"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <BudgetTracker weddingId={profile.wedding_id} />
+          </div>
+        </div>
+      )}
+
+      {/* Borrow Catalog Modal */}
+      {showBorrowModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">🛖</span>
+                <h3 className="font-serif text-xl text-sage-700">Borrow Shed</h3>
+              </div>
+              <button
+                onClick={() => setShowBorrowModal(false)}
+                className="text-sage-400 hover:text-sage-600"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <BorrowCatalog
+              onAskSage={(itemName) => {
+                setShowBorrowModal(false)
+                setNewMessage(`Tell me about the ${itemName} from the borrow catalog`)
+                setTimeout(() => document.getElementById('sage-input')?.focus(), 100)
+              }}
+            />
           </div>
         </div>
       )}
