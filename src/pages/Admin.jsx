@@ -225,6 +225,7 @@ export default function Admin() {
   const [viewingWedding, setViewingWedding] = useState(null)
   const [weddingMessages, setWeddingMessages] = useState([])
   const [loadingMessages, setLoadingMessages] = useState(false)
+  const [selectedChatUser, setSelectedChatUser] = useState(null)
   const [honeybook, setHoneybook] = useState('')
   const [googleSheets, setGoogleSheets] = useState('')
   const [saving, setSaving] = useState(false)
@@ -910,6 +911,7 @@ export default function Admin() {
     setViewingWedding(null)
     setWeddingMessages([])
     setSearchQuery('')
+    setSelectedChatUser(null)
     setTimelineSummary(null)
     setTableSummary(null)
     setStaffingSummary(null)
@@ -1545,7 +1547,7 @@ export default function Admin() {
                     Checklist
                   </button>
                   <button
-                    onClick={() => setActiveTab('messages')}
+                    onClick={() => { setActiveTab('messages'); setSelectedChatUser(null); setSearchQuery('') }}
                     className={`pb-3 px-1 text-sm font-medium border-b-2 transition whitespace-nowrap ${
                       activeTab === 'messages'
                         ? 'border-sage-600 text-sage-700'
@@ -1844,114 +1846,191 @@ export default function Admin() {
                 {/* Messages Tab */}
                 {activeTab === 'messages' && (
                   <div>
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
-                      <h3 className="font-medium text-sage-700">
-                        Questions & Conversations
-                      </h3>
-                      {/* Search */}
-                      <div className="relative">
-                        <input
-                          type="text"
-                          value={searchQuery}
-                          onChange={(e) => setSearchQuery(e.target.value)}
-                          placeholder="Search messages..."
-                          className="pl-9 pr-4 py-2 border border-cream-300 rounded-lg text-sm w-full sm:w-64 focus:outline-none focus:ring-2 focus:ring-sage-300"
-                        />
-                        <svg className="w-4 h-4 text-sage-400 absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                        </svg>
-                      </div>
-                    </div>
-
-                    {searchQuery && (
-                      <p className="text-sage-500 text-sm mb-4">
-                        Found {userQuestions.length} message(s) matching "{searchQuery}"
-                      </p>
-                    )}
-
-                    {loadingMessages ? (
-                      <p className="text-sage-400 text-center py-8">Loading messages...</p>
-                    ) : userQuestions.length === 0 ? (
-                      <p className="text-sage-400 text-center py-8">
-                        {searchQuery ? 'No messages match your search' : 'No questions asked yet'}
-                      </p>
-                    ) : (
-                  <div className="space-y-4 max-h-[600px] overflow-y-auto">
-                    {userQuestions.map(msg => {
-                      const profile = profileMap[msg.user_id]
-                      const isEscalation = ESCALATION_KEYWORDS.some(kw =>
-                        msg.content.toLowerCase().includes(kw)
-                      )
-                      // Find the Sage response that came right after this message
-                      const msgIndex = filteredMessages.findIndex(m => m.id === msg.id)
-                      const sageResponse = filteredMessages
-                        .slice(0, msgIndex)
-                        .find(m => m.sender === 'sage' && m.user_id === msg.user_id)
-
-                      return (
-                        <div
-                          key={msg.id}
-                          className={`border rounded-xl p-4 ${
-                            isEscalation
-                              ? 'border-red-200 bg-red-50/50'
-                              : 'border-cream-200'
-                          }`}
-                        >
-                          <div className="flex items-start justify-between mb-2">
-                            <div className="flex items-center gap-2">
-                              <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                                isEscalation ? 'bg-red-100' : 'bg-sage-100'
-                              }`}>
-                                <span className={`text-sm font-medium ${
-                                  isEscalation ? 'text-red-600' : 'text-sage-600'
-                                }`}>
-                                  {profile?.name?.charAt(0) || '?'}
-                                </span>
+                    {selectedChatUser ? (
+                      /* ── Chat Thread View ── */
+                      (() => {
+                        const chronological = [...weddingMessages]
+                          .filter(m => m.user_id === selectedChatUser)
+                          .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+                        const chatProfile = profileMap[selectedChatUser]
+                        return (
+                          <div>
+                            {/* Header */}
+                            <div className="flex items-center gap-3 mb-4">
+                              <button
+                                onClick={() => { setSelectedChatUser(null); setSearchQuery('') }}
+                                className="flex items-center gap-1 text-sage-500 hover:text-sage-700 text-sm"
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                                </svg>
+                                All conversations
+                              </button>
+                              <span className="text-sage-300">|</span>
+                              <div className="flex items-center gap-2">
+                                <div className="w-7 h-7 rounded-full bg-sage-100 flex items-center justify-center">
+                                  <span className="text-xs font-medium text-sage-600">
+                                    {chatProfile?.name?.charAt(0) || '?'}
+                                  </span>
+                                </div>
+                                <div>
+                                  <span className="font-medium text-sage-800 text-sm">{chatProfile?.name || 'Unknown'}</span>
+                                  <span className="text-sage-400 text-xs ml-2">{chatProfile?.role?.replace('couple-', '').replace('-', ' ') || 'Member'}</span>
+                                </div>
                               </div>
-                              <div>
-                                <p className="font-medium text-sage-800 text-sm">
-                                  {profile?.name || 'Unknown User'}
-                                  {isEscalation && (
-                                    <span className="ml-2 text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded">
-                                      Needs attention
-                                    </span>
-                                  )}
-                                </p>
-                                <p className="text-sage-400 text-xs">
-                                  {profile?.role?.replace('couple-', '').replace('-', ' ') || 'Member'}
-                                </p>
-                              </div>
+                              <span className="ml-auto text-sage-400 text-xs">{chronological.length} messages</span>
                             </div>
-                            <span className="text-sage-400 text-xs">
-                              {new Date(msg.created_at).toLocaleDateString('en-US', {
-                                month: 'short',
-                                day: 'numeric',
-                                hour: 'numeric',
-                                minute: '2-digit'
+
+                            {/* Chat bubbles */}
+                            <div className="space-y-3 max-h-[600px] overflow-y-auto pr-1">
+                              {chronological.map((msg, idx) => {
+                                const isUser = msg.sender === 'user'
+                                const isEscalation = isUser && ESCALATION_KEYWORDS.some(kw =>
+                                  msg.content.toLowerCase().includes(kw)
+                                )
+                                const showTime = idx === 0 ||
+                                  new Date(msg.created_at) - new Date(chronological[idx - 1].created_at) > 5 * 60 * 1000
+                                return (
+                                  <div key={msg.id}>
+                                    {showTime && (
+                                      <p className="text-center text-sage-400 text-xs my-2">
+                                        {new Date(msg.created_at).toLocaleDateString('en-US', {
+                                          month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+                                        })}
+                                      </p>
+                                    )}
+                                    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+                                      {!isUser && (
+                                        <div className="w-6 h-6 rounded-full bg-sage-200 flex items-center justify-center mr-2 mt-1 flex-shrink-0">
+                                          <span className="text-xs text-sage-600 font-medium">S</span>
+                                        </div>
+                                      )}
+                                      <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 text-sm ${
+                                        isUser
+                                          ? isEscalation
+                                            ? 'bg-red-100 text-red-800 rounded-br-sm'
+                                            : 'bg-sage-600 text-white rounded-br-sm'
+                                          : 'bg-cream-100 text-sage-800 rounded-bl-sm border border-cream-200'
+                                      }`}>
+                                        {isEscalation && (
+                                          <span className="block text-xs text-red-500 font-medium mb-1">Needs attention</span>
+                                        )}
+                                        <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )
                               })}
-                            </span>
-                          </div>
-
-                          {/* User's Question */}
-                          <div className={`rounded-lg p-3 mb-2 ${
-                            isEscalation ? 'bg-red-100' : 'bg-sage-50'
-                          }`}>
-                            <p className="text-sage-800 text-sm">{msg.content}</p>
-                          </div>
-
-                          {/* Sage's Response Preview */}
-                          {sageResponse && (
-                            <div className="bg-cream-50 rounded-lg p-3 ml-4 border-l-2 border-sage-200">
-                              <p className="text-sage-600 text-xs mb-1 font-medium">Sage's response:</p>
-                              <p className="text-sage-700 text-sm line-clamp-3">
-                                {sageResponse.content}
-                              </p>
                             </div>
-                          )}
+                          </div>
+                        )
+                      })()
+                    ) : (
+                      /* ── User List View ── */
+                      <div>
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+                          <h3 className="font-medium text-sage-700">Questions & Conversations</h3>
+                          <div className="relative">
+                            <input
+                              type="text"
+                              value={searchQuery}
+                              onChange={(e) => setSearchQuery(e.target.value)}
+                              placeholder="Search messages..."
+                              className="pl-9 pr-4 py-2 border border-cream-300 rounded-lg text-sm w-full sm:w-64 focus:outline-none focus:ring-2 focus:ring-sage-300"
+                            />
+                            <svg className="w-4 h-4 text-sage-400 absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                            </svg>
+                          </div>
                         </div>
-                      )
-                    })}
-                    </div>
+
+                        {loadingMessages ? (
+                          <p className="text-sage-400 text-center py-8">Loading messages...</p>
+                        ) : weddingMessages.length === 0 ? (
+                          <p className="text-sage-400 text-center py-8">No conversations yet</p>
+                        ) : (() => {
+                          // Group messages by user, filter by search
+                          const byUser = {}
+                          weddingMessages.forEach(m => {
+                            if (!byUser[m.user_id]) byUser[m.user_id] = []
+                            byUser[m.user_id].push(m)
+                          })
+                          const userIds = Object.keys(byUser).filter(uid => {
+                            if (!searchQuery.trim()) return true
+                            return byUser[uid].some(m =>
+                              m.content.toLowerCase().includes(searchQuery.toLowerCase())
+                            )
+                          })
+                          if (userIds.length === 0) {
+                            return <p className="text-sage-400 text-center py-8">No messages match your search</p>
+                          }
+                          return (
+                            <div className="space-y-3">
+                              {userIds.map(uid => {
+                                const msgs = byUser[uid]
+                                const profile = profileMap[uid]
+                                const userMsgs = msgs.filter(m => m.sender === 'user')
+                                const hasEscalation = userMsgs.some(m =>
+                                  ESCALATION_KEYWORDS.some(kw => m.content.toLowerCase().includes(kw))
+                                )
+                                // Latest message chronologically
+                                const latest = [...msgs].sort((a, b) =>
+                                  new Date(b.created_at) - new Date(a.created_at)
+                                )[0]
+                                return (
+                                  <button
+                                    key={uid}
+                                    onClick={() => setSelectedChatUser(uid)}
+                                    className={`w-full text-left border rounded-xl p-4 hover:shadow-sm transition-shadow ${
+                                      hasEscalation ? 'border-red-200 bg-red-50/40' : 'border-cream-200 hover:border-sage-200'
+                                    }`}
+                                  >
+                                    <div className="flex items-center justify-between mb-2">
+                                      <div className="flex items-center gap-2">
+                                        <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                                          hasEscalation ? 'bg-red-100' : 'bg-sage-100'
+                                        }`}>
+                                          <span className={`text-sm font-medium ${
+                                            hasEscalation ? 'text-red-600' : 'text-sage-600'
+                                          }`}>
+                                            {profile?.name?.charAt(0) || '?'}
+                                          </span>
+                                        </div>
+                                        <div>
+                                          <p className="font-medium text-sage-800 text-sm">
+                                            {profile?.name || 'Unknown User'}
+                                            {hasEscalation && (
+                                              <span className="ml-2 text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded">
+                                                Needs attention
+                                              </span>
+                                            )}
+                                          </p>
+                                          <p className="text-sage-400 text-xs">
+                                            {profile?.role?.replace('couple-', '').replace('-', ' ') || 'Member'} · {userMsgs.length} question{userMsgs.length !== 1 ? 's' : ''}
+                                          </p>
+                                        </div>
+                                      </div>
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-sage-400 text-xs">
+                                          {new Date(latest.created_at).toLocaleDateString('en-US', {
+                                            month: 'short', day: 'numeric'
+                                          })}
+                                        </span>
+                                        <svg className="w-4 h-4 text-sage-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                        </svg>
+                                      </div>
+                                    </div>
+                                    <p className="text-sage-500 text-sm truncate pl-10">
+                                      {latest.sender === 'user' ? latest.content : `Sage: ${latest.content}`}
+                                    </p>
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          )
+                        })()}
+                      </div>
                     )}
                   </div>
                 )}
