@@ -773,6 +773,31 @@ app.post('/api/chat', async (req, res) => {
       }
     }
 
+    // Inject budget context for Sage
+    if (weddingId) {
+      try {
+        const { data: budgetRow } = await supabaseAdmin
+          .from('wedding_budget')
+          .select('*')
+          .eq('wedding_id', weddingId)
+          .single();
+        if (budgetRow) {
+          const cats = budgetRow.categories || {};
+          const totalBudget = budgetRow.total_budget || 0;
+          const totalCommitted = Object.values(cats).reduce((s, c) => s + (c.committed || 0), 0);
+          const nonZero = Object.entries(cats).filter(([, c]) => (c.budgeted || 0) > 0 || (c.committed || 0) > 0);
+          if (totalBudget > 0 || totalCommitted > 0 || nonZero.length > 0) {
+            weddingContext += `\n\nCOUPLE'S WEDDING BUDGET: Total budget: $${totalBudget.toLocaleString('en-US')} | Total committed: $${totalCommitted.toLocaleString('en-US')}`;
+            if (nonZero.length > 0) {
+              weddingContext += '\n' + nonZero.map(([, c]) => `${c.label}: $${(c.committed||0).toLocaleString('en-US')} committed / $${(c.budgeted||0).toLocaleString('en-US')} budgeted`).join('\n');
+            }
+          }
+        }
+      } catch (budgetErr) {
+        // Budget context is non-critical, silently ignore
+      }
+    }
+
     // Build messages array with conversation history.
     // Claude API requires: (1) first message must be from user, (2) roles must alternate.
     // The auto-generated opening greeting is an assistant message — if it's still in the
@@ -4404,6 +4429,127 @@ app.put('/api/weddings/:weddingId/escalation', async (req, res) => {
   } catch (error) {
     console.error('Mark escalation handled error:', error);
     res.status(500).json({ error: 'Failed to mark escalation as handled' });
+  }
+});
+
+// ============ BORROW SELECTIONS ============
+
+// GET /api/borrow-selections/:weddingId
+app.get('/api/borrow-selections/:weddingId', async (req, res) => {
+  try {
+    const { weddingId } = req.params;
+    const { data, error } = await supabaseAdmin
+      .from('wedding_borrow_selections')
+      .select('item_id, borrow_catalog(item_name, category, image_url)')
+      .eq('wedding_id', weddingId);
+    if (error) throw error;
+    const selections = (data || []).map(row => ({
+      item_id: row.item_id,
+      item_name: row.borrow_catalog?.item_name,
+      category: row.borrow_catalog?.category,
+      image_url: row.borrow_catalog?.image_url,
+    }));
+    res.json({ selections });
+  } catch (error) {
+    console.error('Get borrow selections error:', error);
+    res.status(500).json({ error: 'Failed to fetch borrow selections' });
+  }
+});
+
+// POST /api/borrow-selections — toggle selection on/off and update planning note
+app.post('/api/borrow-selections', async (req, res) => {
+  try {
+    const { weddingId, itemId, selected } = req.body;
+    if (!weddingId || !itemId) return res.status(400).json({ error: 'weddingId and itemId required' });
+
+    if (selected) {
+      const { error } = await supabaseAdmin
+        .from('wedding_borrow_selections')
+        .upsert({ wedding_id: weddingId, item_id: itemId }, { onConflict: 'wedding_id,item_id' });
+      if (error) throw error;
+    } else {
+      const { error } = await supabaseAdmin
+        .from('wedding_borrow_selections')
+        .delete()
+        .eq('wedding_id', weddingId)
+        .eq('item_id', itemId);
+      if (error) throw error;
+    }
+
+    // Fetch all currently selected item names for this wedding
+    const { data: allSelections } = await supabaseAdmin
+      .from('wedding_borrow_selections')
+      .select('borrow_catalog(item_name)')
+      .eq('wedding_id', weddingId);
+
+    const itemNames = (allSelections || [])
+      .map(s => s.borrow_catalog?.item_name)
+      .filter(Boolean);
+
+    // Replace existing borrow_selection note with updated list (delete + insert)
+    await supabaseAdmin
+      .from('planning_notes')
+      .delete()
+      .eq('wedding_id', weddingId)
+      .eq('category', 'borrow_selection');
+
+    if (itemNames.length > 0) {
+      await supabaseAdmin
+        .from('planning_notes')
+        .insert({
+          wedding_id: weddingId,
+          category: 'borrow_selection',
+          content: `Couple wants to borrow: ${itemNames.join(', ')}`,
+          status: 'confirmed',
+        });
+    }
+
+    res.json({ success: true, selectedCount: itemNames.length });
+  } catch (error) {
+    console.error('Toggle borrow selection error:', error);
+    res.status(500).json({ error: 'Failed to update borrow selection' });
+  }
+});
+
+// POST /api/admin/borrow-catalog — admin adds a new catalog item (with optional image upload)
+app.post('/api/admin/borrow-catalog', upload.single('image'), async (req, res) => {
+  try {
+    const { item_name, category, description } = req.body;
+    if (!item_name || !category) return res.status(400).json({ error: 'item_name and category required' });
+
+    let image_url = null;
+
+    // Upload image to Supabase storage if provided
+    if (req.file) {
+      const ext = req.file.mimetype.split('/')[1] || 'jpg';
+      const fileName = `${Date.now()}-${item_name.replace(/\s+/g, '-').toLowerCase()}.${ext}`;
+      const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
+        .from('borrow-catalog')
+        .upload(fileName, req.file.buffer, {
+          contentType: req.file.mimetype,
+          upsert: false,
+        });
+      if (uploadError) {
+        console.error('Image upload error:', uploadError);
+      } else {
+        const { data: urlData } = supabaseAdmin.storage
+          .from('borrow-catalog')
+          .getPublicUrl(fileName);
+        image_url = urlData?.publicUrl || null;
+      }
+    }
+
+    const { data: newItem, error } = await supabaseAdmin
+      .from('borrow_catalog')
+      .insert({ item_name, category, description: description || null, image_url })
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ item: newItem });
+  } catch (error) {
+    console.error('Admin add borrow catalog error:', error);
+    res.status(500).json({ error: 'Failed to add catalog item' });
   }
 });
 

@@ -986,14 +986,14 @@ export default function Dashboard() {
                     )}
                   </button>
 
-                  {/* Borrow Shed Card */}
+                  {/* Borrow Brochure Card */}
                   <button
                     onClick={() => setShowBorrowModal(true)}
                     className="bg-gradient-to-br from-orange-50 to-cream-50 rounded-xl p-4 border border-orange-200 hover:border-orange-300 hover:shadow-md transition text-left"
                   >
-                    <span className="text-2xl">🛖</span>
-                    <p className="font-medium text-sage-800 text-sm mt-2">Borrow Shed</p>
-                    <p className="text-sage-500 text-xs mt-1">90 items available</p>
+                    <span className="text-2xl">📋</span>
+                    <p className="font-medium text-sage-800 text-sm mt-2">Borrow Brochure</p>
+                    <p className="text-sage-500 text-xs mt-1">Browse & select items</p>
                   </button>
                 </div>
               </div>
@@ -1390,14 +1390,14 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Borrow Catalog Modal */}
+      {/* Borrow Brochure Modal */}
       {showBorrowModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
           <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 max-w-4xl w-full max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-2">
-                <span className="text-2xl">🛖</span>
-                <h3 className="font-serif text-xl text-sage-700">Borrow Shed</h3>
+                <span className="text-2xl">📋</span>
+                <h3 className="font-serif text-xl text-sage-700">Borrow Brochure</h3>
               </div>
               <button
                 onClick={() => setShowBorrowModal(false)}
@@ -1408,7 +1408,9 @@ export default function Dashboard() {
                 </svg>
               </button>
             </div>
+            <p className="text-sage-500 text-sm mb-4">Check the items you'd like to use — Sage will remember your selections.</p>
             <BorrowCatalog
+              weddingId={profile?.wedding_id}
               onAskSage={(itemName) => {
                 setShowBorrowModal(false)
                 setNewMessage(`Tell me about the ${itemName} from the borrow catalog`)

@@ -14,6 +14,7 @@ import UpcomingMeetings from '../components/UpcomingMeetings'
 import AdminInbox from '../components/AdminInbox'
 import TimelineBuilder from '../components/TimelineBuilder'
 import TableLayoutPlanner from '../components/TableLayoutPlanner'
+import BorrowCatalog from '../components/BorrowCatalog'
 
 // Stress/escalation keywords to detect
 const ESCALATION_KEYWORDS = [
@@ -272,6 +273,16 @@ export default function Admin() {
   const [sharedBudget, setSharedBudget] = useState(null) // Shared budget (only if is_shared=true)
   const [activities, setActivities] = useState([]) // Recent client activities
   const [loadingActivities, setLoadingActivities] = useState(false)
+  const [borrowSelections, setBorrowSelections] = useState([]) // Borrow items couple selected
+  // Admin add catalog item form
+  const [showAddItemForm, setShowAddItemForm] = useState(false)
+  const [newItemName, setNewItemName] = useState('')
+  const [newItemCategory, setNewItemCategory] = useState('')
+  const [newItemDescription, setNewItemDescription] = useState('')
+  const [newItemImage, setNewItemImage] = useState(null)
+  const [savingNewItem, setSavingNewItem] = useState(false)
+  const [addItemResult, setAddItemResult] = useState(null)
+  const [borrowCatalogRefreshKey, setBorrowCatalogRefreshKey] = useState(0)
 
   useEffect(() => {
     loadData()
@@ -788,6 +799,16 @@ export default function Admin() {
       setSharedBudget(null)
     }
 
+    // Load borrow selections
+    try {
+      const borrowRes = await fetch(`${API_URL}/api/borrow-selections/${wedding.id}`)
+      const borrowData = await borrowRes.json()
+      setBorrowSelections(borrowData.selections || [])
+    } catch (err) {
+      console.error('Failed to load borrow selections:', err)
+      setBorrowSelections([])
+    }
+
     // Load recent activities
     try {
       setLoadingActivities(true)
@@ -903,6 +924,7 @@ export default function Admin() {
       case 'call_transcript': return '📱'
       case 'zoom_transcript': return '🎥'
       case 'email': return '📧'
+      case 'borrow_selection': return '📋'
       default: return '📌'
     }
   }
@@ -922,6 +944,7 @@ export default function Admin() {
       case 'call_transcript': return 'Call'
       case 'zoom_transcript': return 'Zoom'
       case 'email': return 'Email'
+      case 'borrow_selection': return 'Borrow Selection'
       default: return 'Info'
     }
   }
@@ -935,6 +958,13 @@ export default function Admin() {
     setTableSummary(null)
     setStaffingSummary(null)
     setSharedBudget(null)
+    setBorrowSelections([])
+    setShowAddItemForm(false)
+    setAddItemResult(null)
+    setNewItemName('')
+    setNewItemCategory('')
+    setNewItemDescription('')
+    setNewItemImage(null)
   }
 
   // Filter messages by search query
@@ -1455,6 +1485,53 @@ export default function Admin() {
                 )}
               </div>
 
+              {/* Allergy / Dietary Notes Card */}
+              {(() => {
+                const allergyNotes = planningNotes.filter(n => n.category === 'allergy')
+                if (allergyNotes.length === 0) return null
+                return (
+                  <div className="bg-amber-50 rounded-2xl shadow-sm border border-amber-300 p-5">
+                    <h2 className="font-serif text-lg text-amber-800 flex items-center gap-2 mb-3">
+                      <span>⚠</span> Dietary &amp; Allergy Notes
+                    </h2>
+                    <ul className="space-y-2">
+                      {allergyNotes.map(n => (
+                        <li key={n.id} className="text-amber-900 text-sm bg-amber-100 rounded-lg px-3 py-2">
+                          {n.content}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )
+              })()}
+
+              {/* Borrow Selections Card */}
+              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-6">
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="font-serif text-lg text-sage-700 flex items-center gap-2">
+                    <span>📋</span> Borrow Selections
+                  </h2>
+                  <button
+                    onClick={() => setActiveTab('borrow')}
+                    className="text-sage-500 hover:text-sage-700 text-sm"
+                  >
+                    View All →
+                  </button>
+                </div>
+                {borrowSelections.length > 0 ? (
+                  <ul className="space-y-1">
+                    {borrowSelections.map(s => (
+                      <li key={s.item_id} className="text-sm text-sage-700 flex items-center gap-2">
+                        <span className="text-sage-400">•</span> {s.item_name}
+                        {s.category && <span className="text-sage-400 text-xs">({s.category})</span>}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-sage-400 text-sm">No items selected yet</p>
+                )}
+              </div>
+
               {/* Contract Upload */}
               <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-6">
                 <h2 className="font-serif text-lg text-sage-700 mb-4">Upload Contract</h2>
@@ -1556,6 +1633,7 @@ export default function Admin() {
                     <option value="meetings">Meetings</option>
                     <option value="timeline">Timeline</option>
                     <option value="tables">Tables</option>
+                    <option value="borrow">Borrow Brochure</option>
                     <option value="activity">
                       Recent Activity {activities.length > 0 ? `(${activities.length})` : ''}
                     </option>
@@ -1673,6 +1751,21 @@ export default function Admin() {
                     }`}
                   >
                     Tables
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('borrow')}
+                    className={`pb-3 px-1 text-sm font-medium border-b-2 transition whitespace-nowrap ${
+                      activeTab === 'borrow'
+                        ? 'border-sage-600 text-sage-700'
+                        : 'border-transparent text-sage-400 hover:text-sage-600'
+                    }`}
+                  >
+                    Borrow Brochure
+                    {borrowSelections.length > 0 && (
+                      <span className="ml-2 bg-orange-100 text-orange-700 text-xs px-2 py-0.5 rounded-full">
+                        {borrowSelections.length}
+                      </span>
+                    )}
                   </button>
                   <button
                     onClick={() => setActiveTab('activity')}
@@ -2273,6 +2366,116 @@ export default function Admin() {
                 {/* Tables Tab */}
                 {activeTab === 'tables' && (
                   <TableLayoutPlanner weddingId={viewingWedding.id} isAdmin />
+                )}
+
+                {/* Borrow Brochure Tab */}
+                {activeTab === 'borrow' && (
+                  <div>
+                    {/* Add Item Form Toggle */}
+                    <div className="flex items-center justify-between mb-4">
+                      <p className="text-sage-500 text-sm">
+                        Catalog with couple's selections checked. Add new items below.
+                      </p>
+                      <button
+                        onClick={() => { setShowAddItemForm(v => !v); setAddItemResult(null) }}
+                        className="px-4 py-2 bg-sage-600 text-white rounded-xl text-sm font-medium hover:bg-sage-700 transition"
+                      >
+                        {showAddItemForm ? '× Cancel' : '+ Add Item'}
+                      </button>
+                    </div>
+
+                    {/* Inline Add Item Form */}
+                    {showAddItemForm && (
+                      <div className="bg-cream-50 rounded-xl border border-cream-200 p-5 mb-6 space-y-4">
+                        <h3 className="font-medium text-sage-700">New Catalog Item</h3>
+                        <div className="grid sm:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-xs font-medium text-sage-600 mb-1">Item Name *</label>
+                            <input
+                              type="text"
+                              value={newItemName}
+                              onChange={e => setNewItemName(e.target.value)}
+                              placeholder="e.g. Lantern Trio"
+                              className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-sage-600 mb-1">Category *</label>
+                            <select
+                              value={newItemCategory}
+                              onChange={e => setNewItemCategory(e.target.value)}
+                              className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 bg-white"
+                            >
+                              <option value="">Select category…</option>
+                              {['Arbors','Candles & Lighting','Card Boxes','Ceremony','Dessert & Cake','Extras','Signs','Silk Florals','Stands & Displays','Table Numbers','Vases'].map(c => (
+                                <option key={c} value={c}>{c}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-sage-600 mb-1">Description</label>
+                          <textarea
+                            value={newItemDescription}
+                            onChange={e => setNewItemDescription(e.target.value)}
+                            placeholder="Short description of the item…"
+                            rows={2}
+                            className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 resize-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-sage-600 mb-1">Image (optional)</label>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={e => setNewItemImage(e.target.files?.[0] || null)}
+                            className="text-sm text-sage-600"
+                          />
+                        </div>
+                        {addItemResult && (
+                          <div className={`text-sm px-3 py-2 rounded-lg ${addItemResult.success ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                            {addItemResult.message}
+                          </div>
+                        )}
+                        <button
+                          onClick={async () => {
+                            if (!newItemName.trim() || !newItemCategory) return
+                            setSavingNewItem(true)
+                            setAddItemResult(null)
+                            try {
+                              const fd = new FormData()
+                              fd.append('item_name', newItemName.trim())
+                              fd.append('category', newItemCategory)
+                              fd.append('description', newItemDescription.trim())
+                              if (newItemImage) fd.append('image', newItemImage)
+                              const res = await fetch(`${API_URL}/api/admin/borrow-catalog`, { method: 'POST', body: fd })
+                              const data = await res.json()
+                              if (data.item) {
+                                setAddItemResult({ success: true, message: `"${data.item.item_name}" added to catalog.` })
+                                setNewItemName(''); setNewItemCategory(''); setNewItemDescription(''); setNewItemImage(null)
+                                setBorrowCatalogRefreshKey(k => k + 1)
+                              } else {
+                                setAddItemResult({ success: false, message: data.error || 'Failed to add item' })
+                              }
+                            } catch (err) {
+                              setAddItemResult({ success: false, message: 'Network error' })
+                            }
+                            setSavingNewItem(false)
+                          }}
+                          disabled={savingNewItem || !newItemName.trim() || !newItemCategory}
+                          className="px-6 py-2 bg-sage-600 text-white rounded-xl text-sm font-medium hover:bg-sage-700 transition disabled:opacity-50"
+                        >
+                          {savingNewItem ? 'Saving…' : 'Save Item'}
+                        </button>
+                      </div>
+                    )}
+
+                    <BorrowCatalog
+                      weddingId={viewingWedding.id}
+                      isAdmin={true}
+                      refreshKey={borrowCatalogRefreshKey}
+                    />
+                  </div>
                 )}
 
                 {/* Activity Tab */}

@@ -42,11 +42,14 @@ export default function BudgetTracker({ weddingId }) {
       if (data.budget) {
         setTotalBudget(data.budget.total_budget || 0)
         setIsShared(data.budget.is_shared || false)
-        // Merge saved categories with defaults (in case new categories were added)
+        // Merge saved categories: start with defaults, overlay saved data, then add any custom keys
         const merged = { ...DEFAULT_CATEGORIES }
         Object.entries(data.budget.categories || {}).forEach(([key, val]) => {
           if (merged[key]) {
             merged[key] = { ...merged[key], ...val }
+          } else {
+            // Custom key saved previously
+            merged[key] = { label: val.label || key, budgeted: val.budgeted || 0, committed: val.committed || 0, isCustom: true }
           }
         })
         setCategories(merged)
@@ -62,6 +65,29 @@ export default function BudgetTracker({ weddingId }) {
     setCategories(prev => ({
       ...prev,
       [key]: { ...prev[key], [field]: num }
+    }))
+  }
+
+  const updateCategoryLabel = (key, label) => {
+    setCategories(prev => ({
+      ...prev,
+      [key]: { ...prev[key], label }
+    }))
+  }
+
+  const deleteCategory = (key) => {
+    setCategories(prev => {
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
+  }
+
+  const addCustomCategory = () => {
+    const key = `custom_${Date.now()}`
+    setCategories(prev => ({
+      ...prev,
+      [key]: { label: '', budgeted: 0, committed: 0, isCustom: true }
     }))
   }
 
@@ -134,11 +160,12 @@ export default function BudgetTracker({ weddingId }) {
 
       {/* Category rows */}
       <div>
-        <div className="grid grid-cols-[1fr_100px_100px_60px] gap-2 text-xs font-medium text-sage-500 uppercase tracking-wide mb-2 px-1">
+        <div className="grid grid-cols-[1fr_100px_100px_60px_28px] gap-2 text-xs font-medium text-sage-500 uppercase tracking-wide mb-2 px-1">
           <span>Category</span>
           <span className="text-right">Budgeted</span>
           <span className="text-right">Committed</span>
           <span className="text-right">%</span>
+          <span></span>
         </div>
         <div className="space-y-2">
           {Object.entries(categories).map(([key, cat]) => {
@@ -147,8 +174,19 @@ export default function BudgetTracker({ weddingId }) {
 
             return (
               <div key={key} className={`rounded-xl border p-3 ${isOver ? 'border-amber-300 bg-amber-50' : 'border-cream-200 bg-white'}`}>
-                <div className="grid grid-cols-[1fr_100px_100px_60px] gap-2 items-center">
-                  <span className="text-sm font-medium text-sage-800 truncate">{cat.label}</span>
+                <div className="grid grid-cols-[1fr_100px_100px_60px_28px] gap-2 items-center">
+                  {/* Label — editable for custom rows */}
+                  {cat.isCustom ? (
+                    <input
+                      type="text"
+                      value={cat.label}
+                      onChange={(e) => updateCategoryLabel(key, e.target.value)}
+                      placeholder="Category name"
+                      className="text-sm font-medium text-sage-800 border-b border-dashed border-sage-300 bg-transparent focus:outline-none focus:border-sage-500 truncate"
+                    />
+                  ) : (
+                    <span className="text-sm font-medium text-sage-800 truncate">{cat.label}</span>
+                  )}
                   <div className="relative">
                     <span className="absolute left-2 top-1/2 -translate-y-1/2 text-sage-400 text-xs">$</span>
                     <input
@@ -174,6 +212,16 @@ export default function BudgetTracker({ weddingId }) {
                   <span className={`text-right text-sm font-medium ${isOver ? 'text-red-600' : 'text-sage-500'}`}>
                     {cat.budgeted > 0 ? `${catPercent}%` : '—'}
                   </span>
+                  {/* Delete button */}
+                  <button
+                    onClick={() => deleteCategory(key)}
+                    title="Remove row"
+                    className="flex items-center justify-center w-6 h-6 rounded-full text-sage-300 hover:text-red-500 hover:bg-red-50 transition"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
                 </div>
                 {cat.budgeted > 0 && (
                   <div className="mt-1.5 h-1 bg-cream-200 rounded-full overflow-hidden">
@@ -187,6 +235,14 @@ export default function BudgetTracker({ weddingId }) {
             )
           })}
         </div>
+
+        {/* Add custom category */}
+        <button
+          onClick={addCustomCategory}
+          className="mt-3 w-full py-2.5 rounded-xl border-2 border-dashed border-cream-300 text-sage-500 hover:border-sage-400 hover:text-sage-600 transition text-sm font-medium"
+        >
+          + Add category
+        </button>
       </div>
 
       {/* Privacy toggle */}
