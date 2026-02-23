@@ -732,7 +732,7 @@ app.post('/api/chat', async (req, res) => {
     // Inject borrow catalog when the question is about borrowing/decor items
     const borrowKeywords = [
       'borrow', 'borrowing', 'borrow list', 'what do you have', 'what does rixey have',
-      'decor list', 'what can i use', 'what can we use', 'what's available', 'whats available',
+      'decor list', 'what can i use', 'what can we use', "what's available", 'whats available',
       'votive', 'candelabra', 'arbor', 'arbour', 'card box', 'cake stand', 'table number',
       'bud vase', 'vase', 'sign', 'cheesecloth', 'runner', 'flower girl', 'ring pillow',
       'seating chart', 'hot chocolate machine', 'candle holder', 'hurricane', 'basket',
