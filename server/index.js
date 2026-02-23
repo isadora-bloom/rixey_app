@@ -220,14 +220,14 @@ VENDOR BUDGET RANGES:
 THINGS RIXEY PROVIDES:
 - Snacks (fully stocked snack boxes)
 - Steamers and irons
-- Votive candle holders
 - Bed linens and towels
-- Scissors, lighters, extra vases
-- Emergency kit (pain relievers, sewing kit, etc.)
-- Table numbers, cake stands, chalkboard signs (borrow shed)
-- White birch arbor, metal round arbor, hexagon wood arbor
-- Hot chocolate machine (winter)
-- Fire pit for s'mores (outdoor, dark tablecloth required)
+- Scissors, lighters, emergency kit (pain relievers, sewing kit, etc.)
+- Full borrow catalog of décor items at no charge — arbors, candelabras, votive holders,
+  hurricane vases, cake stands, card boxes, table numbers, signs, bud vases, cheesecloth
+  runners, silk florals, basket displays, vintage doors, champagne buckets, and much more.
+  When someone asks about borrowing items or what decor is available, the full catalog with
+  photos will be injected into your context automatically — use it to give specific answers
+  and show images of the actual items.
 
 SEASONAL TOUCHES:
 - Spring/Summer: welcome drinks (lemonade, iced tea)
@@ -726,6 +726,50 @@ app.post('/api/chat', async (req, res) => {
         }
       } catch (contextErr) {
         console.error('Error fetching wedding context:', contextErr);
+      }
+    }
+
+    // Inject borrow catalog when the question is about borrowing/decor items
+    const borrowKeywords = [
+      'borrow', 'borrowing', 'borrow list', 'what do you have', 'what does rixey have',
+      'decor list', 'what can i use', 'what can we use', 'what's available', 'whats available',
+      'votive', 'candelabra', 'arbor', 'arbour', 'card box', 'cake stand', 'table number',
+      'bud vase', 'vase', 'sign', 'cheesecloth', 'runner', 'flower girl', 'ring pillow',
+      'seating chart', 'hot chocolate machine', 'candle holder', 'hurricane', 'basket',
+      'vintage door', 'champagne bucket', 'silk floral', 'fake flower', 'artificial flower',
+      'what signs', 'what vases', 'what candles', 'what stands', 'included decor'
+    ];
+    const lowerMsg = message.toLowerCase();
+    const isBorrowQuestion = borrowKeywords.some(kw => lowerMsg.includes(kw));
+
+    if (isBorrowQuestion) {
+      try {
+        const { data: catalogItems } = await supabaseAdmin
+          .from('borrow_catalog')
+          .select('item_name, category, description, image_url')
+          .order('category')
+          .order('item_name');
+
+        if (catalogItems && catalogItems.length > 0) {
+          const byCategory = {};
+          catalogItems.forEach(item => {
+            if (!byCategory[item.category]) byCategory[item.category] = [];
+            byCategory[item.category].push(item);
+          });
+
+          weddingContext += '\n\nRIXEY MANOR BORROW CATALOG (items available to use at no charge):\n';
+          for (const [cat, items] of Object.entries(byCategory)) {
+            weddingContext += `\n${cat}:\n`;
+            items.forEach(item => {
+              weddingContext += `- ${item.item_name}: ${item.description}`;
+              if (item.image_url) weddingContext += ` [photo: ${item.image_url}]`;
+              weddingContext += '\n';
+            });
+          }
+          weddingContext += '\nWhen listing borrow items, include the image URL as a markdown image or link so the couple can see what the item looks like.\n';
+        }
+      } catch (borrowErr) {
+        console.error('Error fetching borrow catalog:', borrowErr);
       }
     }
 
@@ -4360,6 +4404,22 @@ app.put('/api/weddings/:weddingId/escalation', async (req, res) => {
   } catch (error) {
     console.error('Mark escalation handled error:', error);
     res.status(500).json({ error: 'Failed to mark escalation as handled' });
+  }
+});
+
+// Borrow catalog
+app.get('/api/borrow-catalog', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('borrow_catalog')
+      .select('*')
+      .order('category')
+      .order('item_name');
+    if (error) throw error;
+    res.json({ items: data || [] });
+  } catch (error) {
+    console.error('Borrow catalog error:', error);
+    res.status(500).json({ error: 'Failed to fetch borrow catalog' });
   }
 });
 
