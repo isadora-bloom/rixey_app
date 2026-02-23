@@ -374,10 +374,13 @@ export default function Dashboard() {
         if (saveData.message) {
           setMessages([...updatedMessages, saveData.message])
         }
+      } else {
+        // Server returned an error body (e.g. 500) — not a network failure so catch won't fire
+        throw new Error(data.error || 'No response from Sage')
       }
     } catch (error) {
       console.error('Error getting Sage response:', error)
-      // Add error message via server endpoint
+      // Save error message so it's visible in both the chat and the admin view
       const saveRes = await fetch(`${API_URL}/api/sage-messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
