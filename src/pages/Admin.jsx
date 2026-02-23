@@ -2371,105 +2371,9 @@ export default function Admin() {
                 {/* Borrow Brochure Tab */}
                 {activeTab === 'borrow' && (
                   <div>
-                    {/* Add Item Form Toggle */}
-                    <div className="flex items-center justify-between mb-4">
-                      <p className="text-sage-500 text-sm">
-                        Catalog with couple's selections checked. Add new items below.
-                      </p>
-                      <button
-                        onClick={() => { setShowAddItemForm(v => !v); setAddItemResult(null) }}
-                        className="px-4 py-2 bg-sage-600 text-white rounded-xl text-sm font-medium hover:bg-sage-700 transition"
-                      >
-                        {showAddItemForm ? '× Cancel' : '+ Add Item'}
-                      </button>
-                    </div>
-
-                    {/* Inline Add Item Form */}
-                    {showAddItemForm && (
-                      <div className="bg-cream-50 rounded-xl border border-cream-200 p-5 mb-6 space-y-4">
-                        <h3 className="font-medium text-sage-700">New Catalog Item</h3>
-                        <div className="grid sm:grid-cols-2 gap-4">
-                          <div>
-                            <label className="block text-xs font-medium text-sage-600 mb-1">Item Name *</label>
-                            <input
-                              type="text"
-                              value={newItemName}
-                              onChange={e => setNewItemName(e.target.value)}
-                              placeholder="e.g. Lantern Trio"
-                              className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-xs font-medium text-sage-600 mb-1">Category *</label>
-                            <select
-                              value={newItemCategory}
-                              onChange={e => setNewItemCategory(e.target.value)}
-                              className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 bg-white"
-                            >
-                              <option value="">Select category…</option>
-                              {['Arbors','Candles & Lighting','Card Boxes','Ceremony','Dessert & Cake','Extras','Signs','Silk Florals','Stands & Displays','Table Numbers','Vases'].map(c => (
-                                <option key={c} value={c}>{c}</option>
-                              ))}
-                            </select>
-                          </div>
-                        </div>
-                        <div>
-                          <label className="block text-xs font-medium text-sage-600 mb-1">Description</label>
-                          <textarea
-                            value={newItemDescription}
-                            onChange={e => setNewItemDescription(e.target.value)}
-                            placeholder="Short description of the item…"
-                            rows={2}
-                            className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 resize-none"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-medium text-sage-600 mb-1">Image (optional)</label>
-                          <input
-                            type="file"
-                            accept="image/*"
-                            onChange={e => setNewItemImage(e.target.files?.[0] || null)}
-                            className="text-sm text-sage-600"
-                          />
-                        </div>
-                        {addItemResult && (
-                          <div className={`text-sm px-3 py-2 rounded-lg ${addItemResult.success ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
-                            {addItemResult.message}
-                          </div>
-                        )}
-                        <button
-                          onClick={async () => {
-                            if (!newItemName.trim() || !newItemCategory) return
-                            setSavingNewItem(true)
-                            setAddItemResult(null)
-                            try {
-                              const fd = new FormData()
-                              fd.append('item_name', newItemName.trim())
-                              fd.append('category', newItemCategory)
-                              fd.append('description', newItemDescription.trim())
-                              if (newItemImage) fd.append('image', newItemImage)
-                              const res = await fetch(`${API_URL}/api/admin/borrow-catalog`, { method: 'POST', body: fd })
-                              const data = await res.json()
-                              if (data.item) {
-                                setAddItemResult({ success: true, message: `"${data.item.item_name}" added to catalog.` })
-                                setNewItemName(''); setNewItemCategory(''); setNewItemDescription(''); setNewItemImage(null)
-                                setBorrowCatalogRefreshKey(k => k + 1)
-                              } else {
-                                setAddItemResult({ success: false, message: data.error || 'Failed to add item' })
-                              }
-                            } catch (err) {
-                              setAddItemResult({ success: false, message: 'Network error' })
-                            }
-                            setSavingNewItem(false)
-                          }}
-                          disabled={savingNewItem || !newItemName.trim() || !newItemCategory}
-                          className="px-6 py-2 bg-sage-600 text-white rounded-xl text-sm font-medium hover:bg-sage-700 transition disabled:opacity-50"
-                        >
-                          {savingNewItem ? 'Saving…' : 'Save Item'}
-                        </button>
-                      </div>
-                    )}
-
+                    <p className="text-sage-500 text-sm mb-4">
+                      Items this couple has selected. To add new catalog items, go to the <button onClick={() => { closeProfile(); setMainView('borrow-catalog') }} className="text-sage-600 underline hover:text-sage-800">Borrow Catalog</button> tab.
+                    </p>
                     <BorrowCatalog
                       weddingId={viewingWedding.id}
                       isAdmin={true}
@@ -2581,6 +2485,7 @@ export default function Admin() {
               { id: 'messages', label: 'Messages', count: unreadMessages, alert: unreadMessages > 0 },
               { id: 'meetings', label: 'Meetings' },
               { id: 'vendors', label: 'Vendors' },
+              { id: 'borrow-catalog', label: 'Borrow Catalog' },
               { id: 'knowledge-base', label: 'KB' },
               { id: 'usage', label: 'Usage' },
             ].map(tab => (
@@ -2635,6 +2540,111 @@ export default function Admin() {
             </div>
           )}
         </div>
+
+        {/* Borrow Catalog View */}
+        {mainView === 'borrow-catalog' && (
+          <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-6">
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <h2 className="font-serif text-xl text-sage-700">Borrow Catalog</h2>
+                <p className="text-sage-400 text-sm mt-1">Add items here to make them available to all couples in their Borrow Brochure.</p>
+              </div>
+              <button
+                onClick={() => { setShowAddItemForm(v => !v); setAddItemResult(null) }}
+                className="px-4 py-2 bg-sage-600 text-white rounded-xl text-sm font-medium hover:bg-sage-700 transition"
+              >
+                {showAddItemForm ? '× Cancel' : '+ Add Item'}
+              </button>
+            </div>
+
+            {showAddItemForm && (
+              <div className="bg-cream-50 rounded-xl border border-cream-200 p-5 mb-6 space-y-4">
+                <h3 className="font-medium text-sage-700">New Catalog Item</h3>
+                <div className="grid sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-sage-600 mb-1">Item Name *</label>
+                    <input
+                      type="text"
+                      value={newItemName}
+                      onChange={e => setNewItemName(e.target.value)}
+                      placeholder="e.g. Lantern Trio"
+                      className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-sage-600 mb-1">Category *</label>
+                    <select
+                      value={newItemCategory}
+                      onChange={e => setNewItemCategory(e.target.value)}
+                      className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 bg-white"
+                    >
+                      <option value="">Select category…</option>
+                      {['Arbors','Candles & Lighting','Card Boxes','Ceremony','Dessert & Cake','Extras','Signs','Silk Florals','Stands & Displays','Table Numbers','Vases'].map(c => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-sage-600 mb-1">Description</label>
+                  <textarea
+                    value={newItemDescription}
+                    onChange={e => setNewItemDescription(e.target.value)}
+                    placeholder="Short description of the item…"
+                    rows={2}
+                    className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 resize-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-sage-600 mb-1">Image (optional)</label>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={e => setNewItemImage(e.target.files?.[0] || null)}
+                    className="text-sm text-sage-600"
+                  />
+                </div>
+                {addItemResult && (
+                  <div className={`text-sm px-3 py-2 rounded-lg ${addItemResult.success ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                    {addItemResult.message}
+                  </div>
+                )}
+                <button
+                  onClick={async () => {
+                    if (!newItemName.trim() || !newItemCategory) return
+                    setSavingNewItem(true)
+                    setAddItemResult(null)
+                    try {
+                      const fd = new FormData()
+                      fd.append('item_name', newItemName.trim())
+                      fd.append('category', newItemCategory)
+                      fd.append('description', newItemDescription.trim())
+                      if (newItemImage) fd.append('image', newItemImage)
+                      const res = await fetch(`${API_URL}/api/admin/borrow-catalog`, { method: 'POST', body: fd })
+                      const data = await res.json()
+                      if (data.item) {
+                        setAddItemResult({ success: true, message: `"${data.item.item_name}" added to catalog.` })
+                        setNewItemName(''); setNewItemCategory(''); setNewItemDescription(''); setNewItemImage(null)
+                        setBorrowCatalogRefreshKey(k => k + 1)
+                      } else {
+                        setAddItemResult({ success: false, message: data.error || 'Failed to add item' })
+                      }
+                    } catch (err) {
+                      setAddItemResult({ success: false, message: 'Network error' })
+                    }
+                    setSavingNewItem(false)
+                  }}
+                  disabled={savingNewItem || !newItemName.trim() || !newItemCategory}
+                  className="px-6 py-2 bg-sage-600 text-white rounded-xl text-sm font-medium hover:bg-sage-700 transition disabled:opacity-50"
+                >
+                  {savingNewItem ? 'Saving…' : 'Save Item'}
+                </button>
+              </div>
+            )}
+
+            <BorrowCatalog refreshKey={borrowCatalogRefreshKey} />
+          </div>
+        )}
 
         {/* Knowledge Base View */}
         {mainView === 'knowledge-base' && (
