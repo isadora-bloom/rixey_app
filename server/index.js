@@ -1625,6 +1625,28 @@ app.post('/api/gmail/sync', async (req, res) => {
           // Skip emails from Sage
           if (fromEmail === 'sage@rixeymanor.com') continue;
 
+          // Skip automated/no-reply senders — these are system notifications and confirmations,
+          // not real client or Rixey team messages, so they waste Sage's context window
+          const automatedPatterns = [
+            /noreply/i, /no-reply/i, /donotreply/i, /do-not-reply/i,
+            /notifications?@/i, /automated@/i, /mailer@/i, /bounce@/i,
+            /@honeybook\.com/i, /@squarespace\.com/i, /@mailchimp\.com/i,
+            /@constantcontact\.com/i, /@sendgrid\.net/i, /info@stripe\.com/i,
+            /support@stripe\.com/i, /receipts@/i, /billing@/i
+          ];
+          if (automatedPatterns.some(p => p.test(fromEmail))) {
+            // Mark as processed so we don't keep hitting it, but don't store as a planning note
+            processedIds.add(msg.id);
+            await supabaseAdmin.from('processed_emails').insert({
+              gmail_message_id: msg.id,
+              wedding_id: emailToWedding[clientEmail],
+              from_email: fromEmail,
+              subject: subject,
+              body_text: '[Automated email — skipped]'
+            }).then(() => {});
+            continue;
+          }
+
           // Get message body
           let bodyText = '';
           const payload = fullMessage.data.payload;
@@ -1916,14 +1938,15 @@ app.post('/api/quo/sync', async (req, res) => {
             console.error(`DEBUG: Error saving to processed_quo_messages:`, insertError);
           }
 
-          // Also save message as a planning note so Sage can search it
-          if (messageBody) {
+          // Only save inbound messages as planning notes — outbound are Rixey's own responses
+          // and bloat Sage's context without adding client information
+          if (direction === 'inbound' && messageBody) {
             const { data: savedNote, error: noteError } = await supabaseAdmin.from('planning_notes').insert({
               wedding_id: weddingId,
               user_id: userId,
               category: 'sms_message',
-              content: `[SMS ${direction}] ${messageBody}`,
-              source_message: `From ${direction === 'inbound' ? 'client' : 'Rixey'} text: ${clientPhoneE164}`,
+              content: `[SMS from client] ${messageBody}`,
+              source_message: `From client text: ${clientPhoneE164}`,
               status: 'confirmed'
             }).select();
 
@@ -1932,7 +1955,7 @@ app.post('/api/quo/sync', async (req, res) => {
               planningNotesErrors.push({ type: 'sms', error: noteError.message || JSON.stringify(noteError) });
             } else {
               planningNotesSaved++;
-              console.log(`DEBUG: Saved SMS as planning note for wedding ${weddingId}, id: ${savedNote?.[0]?.id}`);
+              console.log(`DEBUG: Saved inbound SMS as planning note for wedding ${weddingId}, id: ${savedNote?.[0]?.id}`);
             }
           }
 
