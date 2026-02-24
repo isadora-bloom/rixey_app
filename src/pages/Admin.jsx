@@ -159,7 +159,7 @@ function DirectMessagesPanel({ weddingId, weddingName }) {
       <p className="text-sage-500 text-sm mb-4">Direct messages with {weddingName}</p>
 
       <div className="bg-cream-50 rounded-xl border border-cream-200 overflow-hidden">
-        <div className="h-80 overflow-y-auto p-4 space-y-3">
+        <div className="h-64 sm:h-80 overflow-y-auto p-3 sm:p-4 space-y-3">
           {loading ? (
             <p className="text-sage-400 text-center py-8">Loading messages...</p>
           ) : messages.length === 0 ? (
@@ -1084,26 +1084,26 @@ export default function Admin() {
       <div className="min-h-screen min-h-[100dvh] bg-cream-50">
         <header className="bg-white border-b border-cream-200 sticky top-0 z-40">
           <div className="max-w-6xl mx-auto px-3 sm:px-4 py-3 sm:py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-3">
               {/* Couple Photo in Header */}
               {couplePhotos[viewingWedding.id] ? (
                 <img
                   src={couplePhotos[viewingWedding.id]}
                   alt={viewingWedding.couple_names}
-                  className="w-14 h-14 rounded-full object-cover border-2 border-sage-300 shadow-sm cursor-pointer hover:opacity-80 transition"
+                  className="w-12 h-12 sm:w-14 sm:h-14 rounded-full object-cover border-2 border-sage-300 shadow-sm cursor-pointer hover:opacity-80 transition flex-shrink-0"
                   onClick={() => setEnlargedPhoto(couplePhotos[viewingWedding.id])}
                   title="Click to enlarge"
                 />
               ) : (
-                <div className="w-14 h-14 rounded-full bg-cream-100 flex items-center justify-center border-2 border-cream-200">
-                  <span className="text-sage-400 text-xl">
+                <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-cream-100 flex items-center justify-center border-2 border-cream-200 flex-shrink-0">
+                  <span className="text-sage-400 text-lg sm:text-xl">
                     {viewingWedding.couple_names?.charAt(0) || '?'}
                   </span>
                 </div>
               )}
-              <div>
-              <div className="flex items-center gap-3">
-                <h1 className="font-serif text-xl sm:text-2xl text-sage-700">
+              <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h1 className="font-serif text-lg sm:text-2xl text-sage-700 leading-tight">
                   {viewingWedding.couple_names || 'Wedding'} Profile
                 </h1>
                 {/* Last Activity in header */}
@@ -1228,7 +1228,7 @@ export default function Admin() {
               </div>
 
               {/* Members */}
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-6">
+              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
                 <h2 className="font-serif text-lg text-sage-700 mb-4">Wedding Party</h2>
                 <div className="space-y-3">
                   {viewingWedding.profiles?.length > 0 ? (
@@ -1250,7 +1250,7 @@ export default function Admin() {
               </div>
 
               {/* Links Status */}
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-6">
+              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
                 <h2 className="font-serif text-lg text-sage-700 mb-4">Planning Tools</h2>
                 <div className="space-y-2 text-sm">
                   {viewingWedding.honeybook_link ? (
@@ -1326,7 +1326,7 @@ export default function Admin() {
               })()}
 
               {/* Timeline Summary Card */}
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-6">
+              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
                 <div className="flex items-center justify-between mb-3">
                   <h2 className="font-serif text-lg text-sage-700 flex items-center gap-2">
                     <span>📅</span> Timeline
@@ -1382,7 +1382,7 @@ export default function Admin() {
               </div>
 
               {/* Table Layout Summary Card */}
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-6">
+              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
                 <div className="flex items-center justify-between mb-3">
                   <h2 className="font-serif text-lg text-sage-700 flex items-center gap-2">
                     <span>🪑</span> Table Layout
@@ -1446,7 +1446,7 @@ export default function Admin() {
               </div>
 
               {/* Staffing Summary Card */}
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-6">
+              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
                 <h2 className="font-serif text-lg text-sage-700 flex items-center gap-2 mb-3">
                   <span>🙋</span> Staffing Estimate
                 </h2>
@@ -1506,7 +1506,7 @@ export default function Admin() {
               })()}
 
               {/* Borrow Selections Card */}
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-6">
+              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
                 <div className="flex items-center justify-between mb-3">
                   <h2 className="font-serif text-lg text-sage-700 flex items-center gap-2">
                     <span>📋</span> Borrow Selections
@@ -1533,7 +1533,7 @@ export default function Admin() {
               </div>
 
               {/* Contract Upload */}
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-6">
+              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
                 <h2 className="font-serif text-lg text-sage-700 mb-4">Upload Contract</h2>
                 <p className="text-sage-500 text-sm mb-4">
                   Upload vendor contracts (PDF or image) and Claude will extract key details as planning notes.
@@ -1579,7 +1579,7 @@ export default function Admin() {
               </div>
 
               {/* Ask About Wedding */}
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-6">
+              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
                 <h2 className="font-serif text-lg text-sage-700 mb-4">Ask About This Wedding</h2>
                 <p className="text-sage-500 text-sm mb-3">
                   Search contracts & planning notes (e.g., "Is the caterer doing a welcome drink?" or "How many guests?")
@@ -1612,7 +1612,7 @@ export default function Admin() {
 
             {/* Planning Notes & Messages */}
             <div className="lg:col-span-2">
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-3 sm:p-6">
+              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-3 sm:p-4 lg:p-6">
                 {/* Mobile: Dropdown selector */}
                 <div className="sm:hidden mb-4">
                   <select
@@ -1641,7 +1641,7 @@ export default function Admin() {
                 </div>
 
                 {/* Desktop: Tab buttons */}
-                <div className="hidden sm:flex gap-4 mb-4 border-b border-cream-200 overflow-x-auto scrollbar-hide -mx-6 px-6">
+                <div className="hidden sm:flex gap-4 mb-4 border-b border-cream-200 overflow-x-auto scrollbar-hide -mx-3 px-3 sm:-mx-6 sm:px-6">
                   <button
                     onClick={() => setActiveTab('notes')}
                     className={`pb-3 px-1 text-sm font-medium border-b-2 transition whitespace-nowrap ${
@@ -2292,7 +2292,7 @@ export default function Admin() {
                                     </div>
 
                                     {addToKb && (
-                                      <div className="grid grid-cols-2 gap-2">
+                                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                         <input
                                           type="text"
                                           value={kbCategory}
@@ -2543,7 +2543,7 @@ export default function Admin() {
 
         {/* Borrow Catalog View */}
         {mainView === 'borrow-catalog' && (
-          <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-6">
+          <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
             <div className="flex items-center justify-between mb-6">
               <div>
                 <h2 className="font-serif text-xl text-sage-700">Borrow Catalog</h2>
@@ -2648,14 +2648,14 @@ export default function Admin() {
 
         {/* Knowledge Base View */}
         {mainView === 'knowledge-base' && (
-          <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-6">
+          <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
             <KnowledgeBaseAdmin />
           </div>
         )}
 
         {/* Usage Stats View */}
         {mainView === 'usage' && (
-          <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-6">
+          <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
             <UsageStats weddings={weddings} />
           </div>
         )}
@@ -2672,7 +2672,7 @@ export default function Admin() {
 
         {/* Recommended Vendors View */}
         {mainView === 'vendors' && (
-          <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-6">
+          <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
             <RecommendedVendorsAdmin />
           </div>
         )}
@@ -2762,11 +2762,11 @@ export default function Admin() {
           {/* Weddings List - Takes 3/4 */}
           <div className="lg:col-span-3">
             <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-3 sm:p-6">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
                 <h2 className="font-serif text-xl text-sage-700">
                   {showArchived ? 'Archived Weddings' : 'Active Weddings'}
                 </h2>
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-3 flex-wrap">
                   {!showArchived && (
                     <div className="flex items-center gap-1 bg-cream-50 rounded-lg p-1">
                       <button

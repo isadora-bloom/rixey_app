@@ -236,7 +236,7 @@ export default function PlanningChecklist({ weddingId, userId, compact = false, 
               autoFocus
             />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <select
               value={newTask.category}
               onChange={(e) => setNewTask({ ...newTask, category: e.target.value })}

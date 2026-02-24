@@ -151,7 +151,7 @@ export default function OnboardingChecklist({ weddingId, weddingDate, onAction, 
   const timeBucket = getTimeBucket(weddingDate)
 
   return (
-    <div className="bg-gradient-to-br from-sage-50 to-cream-50 rounded-2xl border border-sage-200 p-6 mb-6">
+    <div className="bg-gradient-to-br from-sage-50 to-cream-50 rounded-2xl border border-sage-200 p-4 sm:p-6 mb-6">
       <div className="flex items-start justify-between mb-4">
         <div>
           <h2 className="font-serif text-lg text-sage-700 flex items-center gap-2">

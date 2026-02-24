@@ -249,7 +249,7 @@ export default function AdminInbox({ weddings = [], onUnreadChange }) {
         </div>
       ) : (
         // Message thread
-        <div className="flex flex-col h-[500px]">
+        <div className="flex flex-col h-[420px] sm:h-[500px]">
           {/* Thread header */}
           <div className="p-3 bg-sage-50 border-b border-cream-200">
             <p className="font-medium text-sage-700">{selectedWedding.couple_names}</p>

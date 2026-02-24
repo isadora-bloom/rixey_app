@@ -167,7 +167,7 @@ export default function ClientInbox({ weddingId, userId, onUnreadChange }) {
       </div>
 
       {/* Messages */}
-      <div className="h-80 overflow-y-auto p-4 space-y-3 bg-cream-50">
+      <div className="h-64 sm:h-80 overflow-y-auto p-3 sm:p-4 space-y-3 bg-cream-50">
         {loading ? (
           <p className="text-sage-400 text-center py-8">Loading messages...</p>
         ) : messages.length === 0 ? (

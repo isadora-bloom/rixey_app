@@ -166,7 +166,7 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
       {/* Add/Edit Form */}
       {showAddForm && (
         <form onSubmit={handleSubmit} className="bg-cream-50 rounded-lg p-4 space-y-3 border border-cream-200">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-medium text-sage-600 mb-1">Vendor Type</label>
               <select

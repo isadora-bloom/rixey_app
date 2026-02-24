@@ -105,13 +105,13 @@ export default function BorrowCatalog({ onAskSage, weddingId, isAdmin, refreshKe
     return (
       <div className="space-y-4">
         {/* Filter skeleton */}
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible">
           {[...Array(6)].map((_, i) => (
             <div key={i} className="h-8 w-20 bg-cream-200 rounded-full animate-pulse" />
           ))}
         </div>
         {/* Grid skeleton */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
           {[...Array(9)].map((_, i) => (
             <div key={i} className="animate-pulse">
               <div className="aspect-square bg-cream-200 rounded-xl mb-2" />
@@ -127,7 +127,7 @@ export default function BorrowCatalog({ onAskSage, weddingId, isAdmin, refreshKe
   return (
     <div className="space-y-4">
       {/* Category filter pills */}
-      <div className="flex gap-2 flex-wrap">
+      <div className="flex gap-2 overflow-x-auto pb-1 -mx-4 px-4 sm:mx-0 sm:px-0 sm:flex-wrap sm:overflow-visible">
         {CATEGORIES.map(cat => (
           <button
             key={cat}
@@ -169,7 +169,7 @@ export default function BorrowCatalog({ onAskSage, weddingId, isAdmin, refreshKe
           <p>No items in this category yet.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
           {filtered.map(item => {
             const isSelected = selectedIds.has(item.id)
             const isToggling = toggling.has(item.id)

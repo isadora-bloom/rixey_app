@@ -168,7 +168,7 @@ export default function InspoGallery({ weddingId, userId, isAdmin = false }) {
           onClick={() => setSelectedImage(null)}
         >
           <div
-            className="max-w-3xl max-h-[90vh] bg-white rounded-lg overflow-hidden"
+            className="w-full max-w-3xl max-h-[90vh] bg-white rounded-lg overflow-hidden mx-2"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="relative">

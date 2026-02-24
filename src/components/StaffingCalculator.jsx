@@ -269,7 +269,7 @@ export default function StaffingCalculator({ guestCount: initialGuestCount, wedd
           </div>
 
           {answers.hasFridayEvent && (
-            <div className="ml-8 space-y-4 bg-cream-50 rounded-lg p-4">
+            <div className="ml-4 sm:ml-8 space-y-4 bg-cream-50 rounded-lg p-4">
               <label className="flex items-start gap-3 cursor-pointer">
                 <input
                   type="checkbox"
@@ -284,7 +284,7 @@ export default function StaffingCalculator({ guestCount: initialGuestCount, wedd
               </label>
 
               {answers.fridayDinnerOnsite && (
-                <div className="ml-6 space-y-3 mt-2">
+                <div className="ml-3 sm:ml-6 space-y-3 mt-2">
                   <p className="text-sage-600 text-sm">Is Friday dinner fully catered with service staff?</p>
                   <div className="flex gap-3">
                     <label className={`flex-1 p-3 rounded-lg border-2 cursor-pointer transition text-center ${

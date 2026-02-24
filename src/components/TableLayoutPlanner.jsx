@@ -238,7 +238,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
       {/* Table Shape Selection */}
       <div>
         <label className="block text-sage-700 font-medium mb-3">Table Style</label>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {TABLE_SHAPES.map(shape => (
             <button
               key={shape.id}
@@ -516,7 +516,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
       </div>
 
       {/* Visual Layout */}
-      <div className="bg-gradient-to-br from-sage-50 to-cream-50 rounded-xl p-6 border border-sage-100">
+      <div className="bg-gradient-to-br from-sage-50 to-cream-50 rounded-xl p-4 sm:p-6 border border-sage-100">
         <h3 className="font-medium text-sage-700 mb-4 text-center">Your Layout Preview</h3>
         <div className="flex flex-wrap justify-center gap-3">
           {sweetheartTable && (
@@ -564,9 +564,9 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
       </div>
 
       {/* Summary */}
-      <div className="bg-sage-600 text-white rounded-xl p-6">
+      <div className="bg-sage-600 text-white rounded-xl p-4 sm:p-6">
         <h3 className="font-serif text-lg mb-4">What You'll Need</h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
           <div>
             <p className="text-3xl font-bold">{totalTables}</p>
             <p className="text-sage-200 text-sm">Guest Tables</p>

@@ -778,7 +778,7 @@ export default function Dashboard() {
         <div className="grid lg:grid-cols-2 gap-6">
           {/* Left Column: Sage Chat */}
           <div className="order-2 lg:order-1">
-            <div className="bg-white rounded-2xl shadow-sm border border-cream-200 flex flex-col h-[500px] lg:h-[650px]">
+            <div className="bg-white rounded-2xl shadow-sm border border-cream-200 flex flex-col h-[420px] sm:h-[500px] lg:h-[650px]">
               {/* Chat Header */}
               <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-cream-200">
                 <div className="flex items-center gap-3">
@@ -897,14 +897,14 @@ export default function Dashboard() {
                 <p className="text-sage-400 text-xs mb-4">
                   These tools give you a rough idea to help with planning. Final details are always finalized personally with your coordinator.
                 </p>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
                   {/* Timeline Card */}
                   <button
                     onClick={() => setShowTimelineModal(true)}
-                    className="bg-gradient-to-br from-amber-50 to-cream-50 rounded-xl p-4 border border-amber-200 hover:border-amber-300 hover:shadow-md transition text-left"
+                    className="bg-gradient-to-br from-amber-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-amber-200 hover:border-amber-300 hover:shadow-md transition text-left"
                   >
-                    <span className="text-2xl">📅</span>
-                    <p className="font-medium text-sage-800 text-sm mt-2">Timeline</p>
+                    <span className="text-xl sm:text-2xl">📅</span>
+                    <p className="font-medium text-sage-800 text-sm mt-1 sm:mt-2">Timeline</p>
                     {timelineSummary ? (
                       <p className="text-sage-500 text-xs mt-1">
                         {timelineSummary.ceremonyTime ?
@@ -919,10 +919,10 @@ export default function Dashboard() {
                   {/* Tables Card */}
                   <button
                     onClick={() => setShowTablesModal(true)}
-                    className="bg-gradient-to-br from-sage-50 to-cream-50 rounded-xl p-4 border border-sage-200 hover:border-sage-300 hover:shadow-md transition text-left"
+                    className="bg-gradient-to-br from-sage-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-sage-200 hover:border-sage-300 hover:shadow-md transition text-left"
                   >
-                    <span className="text-2xl">🪑</span>
-                    <p className="font-medium text-sage-800 text-sm mt-2">Tables</p>
+                    <span className="text-xl sm:text-2xl">🪑</span>
+                    <p className="font-medium text-sage-800 text-sm mt-1 sm:mt-2">Tables</p>
                     {tableSummary ? (
                       <p className="text-sage-500 text-xs mt-1">{tableSummary.guestCount} guests</p>
                     ) : (
@@ -933,50 +933,50 @@ export default function Dashboard() {
                   {/* Vendors Card */}
                   <button
                     onClick={() => setShowVendorModal(true)}
-                    className="bg-gradient-to-br from-rose-50 to-cream-50 rounded-xl p-4 border border-rose-200 hover:border-rose-300 hover:shadow-md transition text-left"
+                    className="bg-gradient-to-br from-rose-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-rose-200 hover:border-rose-300 hover:shadow-md transition text-left"
                   >
-                    <span className="text-2xl">👥</span>
-                    <p className="font-medium text-sage-800 text-sm mt-2">Vendors</p>
+                    <span className="text-xl sm:text-2xl">👥</span>
+                    <p className="font-medium text-sage-800 text-sm mt-1 sm:mt-2">Vendors</p>
                     <p className="text-sage-400 text-xs mt-1">Manage →</p>
                   </button>
 
                   {/* Checklist Card */}
                   <button
                     onClick={() => setShowChecklistModal(true)}
-                    className="bg-gradient-to-br from-blue-50 to-cream-50 rounded-xl p-4 border border-blue-200 hover:border-blue-300 hover:shadow-md transition text-left"
+                    className="bg-gradient-to-br from-blue-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-blue-200 hover:border-blue-300 hover:shadow-md transition text-left"
                   >
-                    <span className="text-2xl">✅</span>
-                    <p className="font-medium text-sage-800 text-sm mt-2">Checklist</p>
+                    <span className="text-xl sm:text-2xl">✅</span>
+                    <p className="font-medium text-sage-800 text-sm mt-1 sm:mt-2">Checklist</p>
                     <p className="text-sage-400 text-xs mt-1">View tasks →</p>
                   </button>
 
                   {/* Staffing Card */}
                   <button
                     onClick={() => setShowStaffingModal(true)}
-                    className="bg-gradient-to-br from-purple-50 to-cream-50 rounded-xl p-4 border border-purple-200 hover:border-purple-300 hover:shadow-md transition text-left"
+                    className="bg-gradient-to-br from-purple-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-purple-200 hover:border-purple-300 hover:shadow-md transition text-left"
                   >
-                    <span className="text-2xl">🙋</span>
-                    <p className="font-medium text-sage-800 text-sm mt-2">Staffing</p>
+                    <span className="text-xl sm:text-2xl">🙋</span>
+                    <p className="font-medium text-sage-800 text-sm mt-1 sm:mt-2">Staffing</p>
                     <p className="text-sage-400 text-xs mt-1">Estimate →</p>
                   </button>
 
                   {/* Inspo Gallery Card */}
                   <button
                     onClick={() => setShowInspoModal(true)}
-                    className="bg-gradient-to-br from-pink-50 to-cream-50 rounded-xl p-4 border border-pink-200 hover:border-pink-300 hover:shadow-md transition text-left"
+                    className="bg-gradient-to-br from-pink-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-pink-200 hover:border-pink-300 hover:shadow-md transition text-left"
                   >
-                    <span className="text-2xl">💡</span>
-                    <p className="font-medium text-sage-800 text-sm mt-2">Inspiration</p>
+                    <span className="text-xl sm:text-2xl">💡</span>
+                    <p className="font-medium text-sage-800 text-sm mt-1 sm:mt-2">Inspiration</p>
                     <p className="text-sage-400 text-xs mt-1">Gallery →</p>
                   </button>
 
                   {/* Budget Card */}
                   <button
                     onClick={() => setShowBudgetModal(true)}
-                    className="bg-gradient-to-br from-emerald-50 to-cream-50 rounded-xl p-4 border border-emerald-200 hover:border-emerald-300 hover:shadow-md transition text-left"
+                    className="bg-gradient-to-br from-emerald-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-emerald-200 hover:border-emerald-300 hover:shadow-md transition text-left"
                   >
-                    <span className="text-2xl">💰</span>
-                    <p className="font-medium text-sage-800 text-sm mt-2">Budget</p>
+                    <span className="text-xl sm:text-2xl">💰</span>
+                    <p className="font-medium text-sage-800 text-sm mt-1 sm:mt-2">Budget</p>
                     {budgetSummary ? (
                       <p className="text-sage-500 text-xs mt-1">
                         ${budgetSummary.totalCommitted.toLocaleString()} committed
@@ -989,10 +989,10 @@ export default function Dashboard() {
                   {/* Borrow Brochure Card */}
                   <button
                     onClick={() => setShowBorrowModal(true)}
-                    className="bg-gradient-to-br from-orange-50 to-cream-50 rounded-xl p-4 border border-orange-200 hover:border-orange-300 hover:shadow-md transition text-left"
+                    className="bg-gradient-to-br from-orange-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-orange-200 hover:border-orange-300 hover:shadow-md transition text-left"
                   >
-                    <span className="text-2xl">📋</span>
-                    <p className="font-medium text-sage-800 text-sm mt-2">Borrow Brochure</p>
+                    <span className="text-xl sm:text-2xl">📋</span>
+                    <p className="font-medium text-sage-800 text-sm mt-1 sm:mt-2">Borrow Brochure</p>
                     <p className="text-sage-500 text-xs mt-1">Browse & select items</p>
                   </button>
                 </div>
@@ -1223,8 +1223,8 @@ export default function Dashboard() {
 
       {/* Vendor Checklist Modal */}
       {showVendorModal && profile?.wedding_id && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
-          <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3 sm:px-4">
+          <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-serif text-xl text-sage-700">Vendor Checklist</h3>
               <button
@@ -1243,8 +1243,8 @@ export default function Dashboard() {
 
       {/* Inspo Gallery Modal */}
       {showInspoModal && profile?.wedding_id && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
-          <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3 sm:px-4">
+          <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-6 max-w-4xl w-full max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-serif text-xl text-sage-700">Inspiration Gallery</h3>
               <button
@@ -1263,8 +1263,8 @@ export default function Dashboard() {
 
       {/* Planning Checklist Modal */}
       {showChecklistModal && profile?.wedding_id && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
-          <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3 sm:px-4">
+          <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-serif text-xl text-sage-700">Planning Checklist</h3>
               <button
@@ -1308,8 +1308,8 @@ export default function Dashboard() {
 
       {/* Table Planner Modal */}
       {showTablesModal && profile?.wedding_id && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
-          <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 sm:p-4">
+          <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-6 max-w-3xl w-full max-h-[95vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
                 <span className="text-2xl">🪑</span>
@@ -1331,8 +1331,8 @@ export default function Dashboard() {
 
       {/* Staffing Calculator Modal */}
       {showStaffingModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
-          <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 sm:p-4">
+          <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-6 max-w-2xl w-full max-h-[95vh] overflow-hidden flex flex-col">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
                 <span className="text-2xl">🙋</span>
@@ -1356,8 +1356,8 @@ export default function Dashboard() {
 
       {/* Budget Tracker Modal */}
       {showBudgetModal && profile?.wedding_id && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
-          <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3 sm:px-4">
+          <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-2">
                 <span className="text-2xl">💰</span>
@@ -1392,8 +1392,8 @@ export default function Dashboard() {
 
       {/* Borrow Brochure Modal */}
       {showBorrowModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
-          <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3 sm:px-4">
+          <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-6 max-w-4xl w-full max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-2">
                 <span className="text-2xl">📋</span>

@@ -160,7 +160,8 @@ export default function BudgetTracker({ weddingId }) {
 
       {/* Category rows */}
       <div>
-        <div className="grid grid-cols-[1fr_100px_100px_60px_28px] gap-2 text-xs font-medium text-sage-500 uppercase tracking-wide mb-2 px-1">
+        {/* Header — desktop only */}
+        <div className="hidden sm:grid sm:grid-cols-[1fr_100px_100px_60px_28px] gap-2 text-xs font-medium text-sage-500 uppercase tracking-wide mb-2 px-1">
           <span>Category</span>
           <span className="text-right">Budgeted</span>
           <span className="text-right">Committed</span>
@@ -174,8 +175,8 @@ export default function BudgetTracker({ weddingId }) {
 
             return (
               <div key={key} className={`rounded-xl border p-3 ${isOver ? 'border-amber-300 bg-amber-50' : 'border-cream-200 bg-white'}`}>
-                <div className="grid grid-cols-[1fr_100px_100px_60px_28px] gap-2 items-center">
-                  {/* Label — editable for custom rows */}
+                {/* Desktop layout */}
+                <div className="hidden sm:grid sm:grid-cols-[1fr_100px_100px_60px_28px] gap-2 items-center">
                   {cat.isCustom ? (
                     <input
                       type="text"
@@ -212,7 +213,6 @@ export default function BudgetTracker({ weddingId }) {
                   <span className={`text-right text-sm font-medium ${isOver ? 'text-red-600' : 'text-sage-500'}`}>
                     {cat.budgeted > 0 ? `${catPercent}%` : '—'}
                   </span>
-                  {/* Delete button */}
                   <button
                     onClick={() => deleteCategory(key)}
                     title="Remove row"
@@ -223,6 +223,70 @@ export default function BudgetTracker({ weddingId }) {
                     </svg>
                   </button>
                 </div>
+
+                {/* Mobile layout */}
+                <div className="sm:hidden">
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    {cat.isCustom ? (
+                      <input
+                        type="text"
+                        value={cat.label}
+                        onChange={(e) => updateCategoryLabel(key, e.target.value)}
+                        placeholder="Category name"
+                        className="flex-1 text-sm font-medium text-sage-800 border-b border-dashed border-sage-300 bg-transparent focus:outline-none focus:border-sage-500"
+                      />
+                    ) : (
+                      <span className="text-sm font-medium text-sage-800">{cat.label}</span>
+                    )}
+                    <button
+                      onClick={() => deleteCategory(key)}
+                      title="Remove row"
+                      className="flex items-center justify-center w-6 h-6 rounded-full text-sage-300 hover:text-red-500 hover:bg-red-50 transition flex-shrink-0"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <p className="text-xs text-sage-400 mb-1">Budgeted</p>
+                      <div className="relative">
+                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-sage-400 text-xs">$</span>
+                        <input
+                          type="text"
+                          value={cat.budgeted === 0 ? '' : cat.budgeted.toLocaleString('en-US')}
+                          onChange={(e) => updateCategory(key, 'budgeted', e.target.value)}
+                          placeholder="0"
+                          className="w-full pl-5 pr-1 py-1.5 rounded-lg border border-cream-200 text-right text-sm text-sage-700 focus:outline-none focus:ring-1 focus:ring-sage-300"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-xs text-sage-400 mb-1">
+                        Committed
+                        {cat.budgeted > 0 && (
+                          <span className={`ml-1 font-medium ${isOver ? 'text-red-600' : 'text-sage-500'}`}>
+                            ({catPercent}%)
+                          </span>
+                        )}
+                      </p>
+                      <div className="relative">
+                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-sage-400 text-xs">$</span>
+                        <input
+                          type="text"
+                          value={cat.committed === 0 ? '' : cat.committed.toLocaleString('en-US')}
+                          onChange={(e) => updateCategory(key, 'committed', e.target.value)}
+                          placeholder="0"
+                          className={`w-full pl-5 pr-1 py-1.5 rounded-lg border text-right text-sm focus:outline-none focus:ring-1 focus:ring-sage-300 ${
+                            isOver ? 'border-amber-300 text-amber-700' : 'border-cream-200 text-sage-700'
+                          }`}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 {cat.budgeted > 0 && (
                   <div className="mt-1.5 h-1 bg-cream-200 rounded-full overflow-hidden">
                     <div
