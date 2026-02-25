@@ -885,7 +885,14 @@ app.post('/api/chat', async (req, res) => {
     res.json({ message: assistantMessage, confidence });
   } catch (error) {
     console.error('Chat error:', error);
-    res.status(500).json({ error: 'Failed to get response from Sage' });
+    // Detect Anthropic overload / rate-limit errors so the client can retry
+    const isRetryable = error.status === 529 || error.status === 503 || error.status === 429;
+    res.status(500).json({
+      error: isRetryable
+        ? 'Sage is temporarily busy. Please try again shortly.'
+        : 'Failed to get response from Sage',
+      retryable: isRetryable
+    });
   }
 });
 

@@ -129,6 +129,7 @@ export default function Dashboard() {
     inspiration: false,
     resourceLinks: false
   })
+  const [retryState, setRetryState] = useState(null) // { userMessage, baseMessages, secondsLeft }
   const fileInputRef = useRef(null)
   const messagesEndRef = useRef(null)
 
@@ -295,6 +296,56 @@ export default function Dashboard() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }
 
+  // Countdown tick — when it hits 0 auto-retry
+  useEffect(() => {
+    if (!retryState) return
+    if (retryState.secondsLeft <= 0) {
+      doSageRequest(retryState.userMessage, retryState.baseMessages)
+      return
+    }
+    const t = setTimeout(() => {
+      setRetryState(prev => prev ? { ...prev, secondsLeft: prev.secondsLeft - 1 } : null)
+    }, 1000)
+    return () => clearTimeout(t)
+  }, [retryState]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Extracted Sage API call — used by sendMessage and the retry loop
+  const doSageRequest = async (userMessage, baseMessages) => {
+    setSending(true)
+    try {
+      const response = await fetch(`${API_URL}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: userMessage,
+          userId: user.id,
+          profile: profile,
+          conversationHistory: baseMessages.slice(-10)
+        })
+      })
+      const data = await response.json()
+      if (data.message) {
+        const saveRes = await fetch(`${API_URL}/api/sage-messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: user.id, content: data.message, sender: 'sage' })
+        })
+        const saveData = await saveRes.json()
+        if (saveData.message) {
+          setMessages([...baseMessages, saveData.message])
+          setRetryState(null)
+        }
+      } else {
+        throw new Error(data.error || 'No response from Sage')
+      }
+    } catch (error) {
+      console.error('Error getting Sage response:', error)
+      // Show countdown bubble and auto-retry in 60 s
+      setRetryState({ userMessage, baseMessages, secondsLeft: 60 })
+    }
+    setSending(false)
+  }
+
   const loadMessages = async () => {
     try {
       const response = await fetch(`${API_URL}/api/sage-messages/user/${user.id}`)
@@ -352,6 +403,8 @@ export default function Dashboard() {
     e.preventDefault()
     if (!newMessage.trim() || sending) return
 
+    setRetryState(null) // cancel any pending retry when user sends a new message
+
     const userMessageContent = newMessage.trim()
     setSending(true)
     setNewMessage('')
@@ -384,61 +437,7 @@ export default function Dashboard() {
     const updatedMessages = [...messages, userData]
     setMessages(updatedMessages)
 
-    // Get Sage's response
-    try {
-      const response = await fetch(`${API_URL}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: userMessageContent,
-          userId: user.id,
-          profile: profile,
-          conversationHistory: updatedMessages.slice(-10) // Last 10 messages for context
-        })
-      })
-
-      const data = await response.json()
-
-      if (data.message) {
-        // Save Sage's response via server endpoint
-        const saveRes = await fetch(`${API_URL}/api/sage-messages`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            user_id: user.id,
-            content: data.message,
-            sender: 'sage'
-          })
-        })
-        const saveData = await saveRes.json()
-
-        if (saveData.message) {
-          setMessages([...updatedMessages, saveData.message])
-        }
-      } else {
-        // Server returned an error body (e.g. 500) — not a network failure so catch won't fire
-        throw new Error(data.error || 'No response from Sage')
-      }
-    } catch (error) {
-      console.error('Error getting Sage response:', error)
-      // Save error message so it's visible in both the chat and the admin view
-      const saveRes = await fetch(`${API_URL}/api/sage-messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_id: user.id,
-          content: "I'm having trouble connecting right now. Please try again in a moment.",
-          sender: 'sage'
-        })
-      })
-      const saveData = await saveRes.json()
-
-      if (saveData.message) {
-        setMessages([...updatedMessages, saveData.message])
-      }
-    }
-
-    setSending(false)
+    await doSageRequest(userMessageContent, updatedMessages)
   }
 
   const handleFileSelect = (e) => {
@@ -833,6 +832,22 @@ export default function Dashboard() {
                         <span className="animate-bounce" style={{ animationDelay: '0.1s' }}>.</span>
                         <span className="animate-bounce" style={{ animationDelay: '0.2s' }}>.</span>
                       </div>
+                    </div>
+                  </div>
+                )}
+                {retryState && !sending && (
+                  <div className="flex justify-start">
+                    <div className="w-6 h-6 sm:w-8 sm:h-8 bg-sage-100 rounded-full flex items-center justify-center mr-2 flex-shrink-0 mt-1">
+                      <span className="text-sage-600 font-serif text-xs sm:text-sm">S</span>
+                    </div>
+                    <div className="bg-amber-50 border border-amber-200 text-sage-700 px-4 py-3 rounded-2xl rounded-bl-md max-w-[85%] sm:max-w-[80%]">
+                      <p className="text-sm">Having trouble connecting. Retrying in {retryState.secondsLeft}s…</p>
+                      <button
+                        onClick={() => setRetryState(prev => prev ? { ...prev, secondsLeft: 0 } : null)}
+                        className="text-xs text-sage-500 underline mt-1 hover:text-sage-700"
+                      >
+                        Try now
+                      </button>
                     </div>
                   </div>
                 )}
