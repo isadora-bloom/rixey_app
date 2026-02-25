@@ -283,6 +283,19 @@ export default function Admin() {
   const [savingNewItem, setSavingNewItem] = useState(false)
   const [addItemResult, setAddItemResult] = useState(null)
   const [borrowCatalogRefreshKey, setBorrowCatalogRefreshKey] = useState(0)
+  // Notification bell
+  const [showBell, setShowBell] = useState(false)
+  const [unansweredCount, setUnansweredCount] = useState(0)
+  // Admin interject into Sage chat
+  const [injectText, setInjectText] = useState('')
+  const [injectKb, setInjectKb] = useState(false)
+  const [injectKbCat, setInjectKbCat] = useState('')
+  const [injecting, setInjecting] = useState(false)
+
+  // Keep unanswered count in sync with loaded uncertain questions
+  useEffect(() => {
+    setUnansweredCount(uncertainQuestions.filter(q => !q.admin_answer).length)
+  }, [uncertainQuestions])
 
   useEffect(() => {
     loadData()
@@ -476,6 +489,33 @@ export default function Admin() {
     } catch (err) {
       console.error('Failed to load uncertain questions:', err)
     }
+  }
+
+  const injectNote = async (userId) => {
+    if (!injectText.trim() || injecting) return
+    setInjecting(true)
+    try {
+      const res = await fetch(`${API_URL}/api/sage-messages/inject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: userId,
+          content: injectText.trim(),
+          addToKb: injectKb,
+          kbCategory: injectKbCat || 'General'
+        })
+      })
+      const data = await res.json()
+      if (data.message) {
+        setWeddingMessages(prev => [...prev, data.message])
+        setInjectText('')
+        setInjectKb(false)
+        setInjectKbCat('')
+      }
+    } catch (err) {
+      console.error('Inject note failed:', err)
+    }
+    setInjecting(false)
   }
 
   const loadAllCouplePhotos = async () => {
@@ -2038,7 +2078,7 @@ export default function Admin() {
                             </div>
 
                             {/* Chat bubbles */}
-                            <div className="space-y-3 max-h-[600px] overflow-y-auto pr-1">
+                            <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
                               {chronological.map((msg, idx) => {
                                 const isUser = msg.sender === 'user'
                                 const isEscalation = isUser && ESCALATION_KEYWORDS.some(kw =>
@@ -2066,10 +2106,15 @@ export default function Admin() {
                                           ? isEscalation
                                             ? 'bg-red-100 text-red-800 rounded-br-sm'
                                             : 'bg-sage-600 text-white rounded-br-sm'
-                                          : 'bg-cream-100 text-sage-800 rounded-bl-sm border border-cream-200'
+                                          : msg.is_team_note
+                                            ? 'bg-amber-50 text-sage-800 rounded-bl-sm border border-amber-200'
+                                            : 'bg-cream-100 text-sage-800 rounded-bl-sm border border-cream-200'
                                       }`}>
                                         {isEscalation && (
                                           <span className="block text-xs text-red-500 font-medium mb-1">Needs attention</span>
+                                        )}
+                                        {msg.is_team_note && (
+                                          <span className="block text-xs text-amber-600 font-medium mb-1">★ Team note</span>
                                         )}
                                         <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
                                       </div>
@@ -2077,6 +2122,45 @@ export default function Admin() {
                                   </div>
                                 )
                               })}
+                            </div>
+
+                            {/* ── Inject Team Note ── */}
+                            <div className="mt-4 pt-4 border-t border-cream-200">
+                              <p className="text-xs text-sage-500 mb-2 font-medium">Inject a note as Sage</p>
+                              <textarea
+                                value={injectText}
+                                onChange={e => setInjectText(e.target.value)}
+                                placeholder="Type a correction or clarification — it will appear in the client's chat thread marked as a team note…"
+                                rows={3}
+                                className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-sage-300"
+                              />
+                              <div className="flex flex-wrap items-center gap-3 mt-2">
+                                <label className="flex items-center gap-2 text-sm text-sage-600 cursor-pointer">
+                                  <input
+                                    type="checkbox"
+                                    checked={injectKb}
+                                    onChange={e => setInjectKb(e.target.checked)}
+                                    className="rounded border-cream-300"
+                                  />
+                                  Also save to Knowledge Base
+                                </label>
+                                {injectKb && (
+                                  <input
+                                    type="text"
+                                    value={injectKbCat}
+                                    onChange={e => setInjectKbCat(e.target.value)}
+                                    placeholder="KB category (e.g. Catering)"
+                                    className="flex-1 px-3 py-1.5 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
+                                  />
+                                )}
+                                <button
+                                  onClick={() => injectNote(selectedChatUser)}
+                                  disabled={!injectText.trim() || injecting}
+                                  className="ml-auto px-4 py-1.5 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                  {injecting ? 'Sending…' : 'Send as Team Note'}
+                                </button>
+                              </div>
                             </div>
                           </div>
                         )
@@ -2471,12 +2555,75 @@ export default function Admin() {
         <div className="max-w-7xl mx-auto px-3 sm:px-4">
           <div className="flex items-center justify-between py-3">
             <h1 className="font-serif text-xl text-sage-700">Admin Dashboard</h1>
-            <button
-              onClick={async () => { await supabase.auth.signOut(); navigate('/staff'); }}
-              className="text-sage-500 hover:text-sage-700 text-sm font-medium"
-            >
-              Sign Out
-            </button>
+            <div className="flex items-center gap-3">
+              {/* Notification Bell */}
+              <div className="relative">
+                <button
+                  onClick={() => setShowBell(b => !b)}
+                  className="relative p-1.5 text-sage-500 hover:text-sage-700 transition"
+                  title="Notifications"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                  </svg>
+                  {(unreadMessages + unansweredCount) > 0 && (
+                    <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
+                      {Math.min(unreadMessages + unansweredCount, 9)}
+                    </span>
+                  )}
+                </button>
+                {showBell && (
+                  <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-xl shadow-xl border border-cream-200 z-50 overflow-hidden">
+                    <div className="p-3 border-b border-cream-100 flex items-center justify-between">
+                      <span className="font-medium text-sage-700 text-sm">Notifications</span>
+                      <button onClick={() => setShowBell(false)} className="text-sage-400 hover:text-sage-600">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                    <div className="max-h-80 overflow-y-auto divide-y divide-cream-100">
+                      {unreadMessages > 0 && (
+                        <button
+                          onClick={() => { setMainView('messages'); setShowBell(false); }}
+                          className="w-full text-left px-4 py-3 hover:bg-cream-50 transition"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="w-2 h-2 bg-red-500 rounded-full flex-shrink-0" />
+                            <p className="text-sm font-medium text-sage-800">{unreadMessages} unread message{unreadMessages !== 1 ? 's' : ''}</p>
+                          </div>
+                          <p className="text-xs text-sage-400 mt-0.5 ml-4">Go to Messages tab →</p>
+                        </button>
+                      )}
+                      {unansweredCount > 0 && (
+                        <button
+                          onClick={() => {
+                            setShowUncertainModal(true)
+                            setShowBell(false)
+                          }}
+                          className="w-full text-left px-4 py-3 hover:bg-cream-50 transition"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="w-2 h-2 bg-amber-400 rounded-full flex-shrink-0" />
+                            <p className="text-sm font-medium text-sage-800">{unansweredCount} Sage question{unansweredCount !== 1 ? 's' : ''} to review</p>
+                          </div>
+                          <p className="text-xs text-sage-400 mt-0.5 ml-4">Sage wasn't fully confident →</p>
+                        </button>
+                      )}
+                      {unreadMessages === 0 && unansweredCount === 0 && (
+                        <p className="text-sm text-sage-400 text-center py-6">All caught up!</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={async () => { await supabase.auth.signOut(); navigate('/staff'); }}
+                className="text-sage-500 hover:text-sage-700 text-sm font-medium"
+              >
+                Sign Out
+              </button>
+            </div>
           </div>
           {/* Navigation Tabs in Header */}
           <div className="flex gap-1 -mb-px overflow-x-auto scrollbar-hide">

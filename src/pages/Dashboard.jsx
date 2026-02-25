@@ -810,9 +810,14 @@ export default function Dashboard() {
                         className={`max-w-[85%] sm:max-w-[80%] px-3 sm:px-4 py-2 sm:py-3 rounded-2xl ${
                           message.sender === 'user'
                             ? 'bg-sage-600 text-white rounded-br-md'
-                            : 'bg-cream-100 text-sage-800 rounded-bl-md'
+                            : message.is_team_note
+                              ? 'bg-amber-50 border border-amber-200 text-sage-800 rounded-bl-md'
+                              : 'bg-cream-100 text-sage-800 rounded-bl-md'
                         }`}
                       >
+                        {message.is_team_note && (
+                          <p className="text-xs text-amber-600 font-medium mb-1">★ Team note</p>
+                        )}
                         <p className="whitespace-pre-wrap text-sm sm:text-base">{message.content}</p>
                         <p className={`text-xs mt-1 ${message.sender === 'user' ? 'text-sage-200' : 'text-sage-400'}`}>
                           {new Date(message.created_at).toLocaleString()}

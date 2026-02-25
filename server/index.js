@@ -4629,6 +4629,40 @@ app.post('/api/sage-messages', async (req, res) => {
   }
 });
 
+// Admin injects a team note into a couple's Sage chat thread
+app.post('/api/sage-messages/inject', async (req, res) => {
+  try {
+    const { user_id, content, addToKb, kbCategory, kbSubcategory } = req.body;
+    if (!user_id || !content) {
+      return res.status(400).json({ error: 'user_id and content required' });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('messages')
+      .insert([{ user_id, content, sender: 'sage', is_team_note: true }])
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    // Optionally save to knowledge base
+    if (addToKb && content.trim()) {
+      await supabaseAdmin.from('knowledge_base').insert({
+        title: content.substring(0, 80),
+        content,
+        category: kbCategory || 'General',
+        subcategory: kbSubcategory || null,
+        active: true
+      });
+    }
+
+    res.json({ message: data });
+  } catch (error) {
+    console.error('Inject team note error:', error);
+    res.status(500).json({ error: 'Failed to inject note' });
+  }
+});
+
 // Get all Sage chat messages for all weddings (admin view - for escalation detection)
 app.get('/api/sage-messages/all', async (req, res) => {
   try {
