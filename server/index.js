@@ -831,14 +831,23 @@ app.post('/api/chat', async (req, res) => {
       }
     ];
 
-    // Call Claude with confidence assessment instruction
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
+    // Call Claude — try Sonnet first, fall back to Haiku if overloaded
+    const sageCallParams = {
       max_tokens: 1024,
       temperature: 0.7,
       system: `${SAGE_SYSTEM_PROMPT}${profileContext}\n\n---\n\nADDITIONAL RIXEY MANOR KNOWLEDGE BASE:\n\n${knowledge}${weddingContext}\n\n---\n\nIMPORTANT: After your response, on a new line, add a confidence assessment in this exact format:\n[CONFIDENCE: XX]\nWhere XX is a number from 0-100 representing how confident you are in your answer based on the knowledge base and Rixey Manor information available to you. Use 100 for facts you know for certain, lower numbers for things you're less sure about or had to generalize.`,
       messages: messages
-    });
+    };
+
+    let response;
+    try {
+      response = await anthropic.messages.create({ model: 'claude-sonnet-4-20250514', ...sageCallParams });
+    } catch (sonnetErr) {
+      const isOverloaded = sonnetErr.status === 529 || sonnetErr.status === 503 || sonnetErr.status === 429;
+      if (!isOverloaded) throw sonnetErr;
+      console.log(`Sonnet overloaded (${sonnetErr.status}), falling back to Haiku for Sage`);
+      response = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', ...sageCallParams });
+    }
 
     let assistantMessage = response.content[0].text;
     let confidence = 100;
