@@ -15,6 +15,7 @@ import AdminInbox from '../components/AdminInbox'
 import TimelineBuilder from '../components/TimelineBuilder'
 import TableLayoutPlanner from '../components/TableLayoutPlanner'
 import BorrowCatalog from '../components/BorrowCatalog'
+import NotificationBell from '../components/NotificationBell'
 
 // Stress/escalation keywords to detect
 const ESCALATION_KEYWORDS = [
@@ -271,6 +272,9 @@ export default function Admin() {
   const [tableSummary, setTableSummary] = useState(null) // Quick view of table data
   const [staffingSummary, setStaffingSummary] = useState(null) // Quick view of staffing estimate
   const [sharedBudget, setSharedBudget] = useState(null) // Shared budget (only if is_shared=true)
+  const [internalNotes, setInternalNotes] = useState([])
+  const [newNoteText, setNewNoteText] = useState('')
+  const [savingNote, setSavingNote] = useState(false)
   const [activities, setActivities] = useState([]) // Recent client activities
   const [loadingActivities, setLoadingActivities] = useState(false)
   const [borrowSelections, setBorrowSelections] = useState([]) // Borrow items couple selected
@@ -283,8 +287,6 @@ export default function Admin() {
   const [savingNewItem, setSavingNewItem] = useState(false)
   const [addItemResult, setAddItemResult] = useState(null)
   const [borrowCatalogRefreshKey, setBorrowCatalogRefreshKey] = useState(0)
-  // Notification bell
-  const [showBell, setShowBell] = useState(false)
   const [unansweredCount, setUnansweredCount] = useState(0)
   // Admin interject into Sage chat
   const [injectText, setInjectText] = useState('')
@@ -861,6 +863,16 @@ export default function Admin() {
     }
     setLoadingActivities(false)
 
+    // Load internal notes
+    try {
+      const notesRes = await fetch(`${API_URL}/api/internal-notes/${wedding.id}`)
+      const notesData = await notesRes.json()
+      setInternalNotes(notesData.notes || [])
+    } catch (err) {
+      console.error('Failed to load internal notes:', err)
+      setInternalNotes([])
+    }
+
     setLoadingMessages(false)
   }
 
@@ -879,6 +891,35 @@ export default function Admin() {
       }
     } catch (err) {
       console.error('Failed to update note status:', err)
+    }
+  }
+
+  const addInternalNote = async () => {
+    if (!newNoteText.trim() || !viewingWedding) return
+    setSavingNote(true)
+    try {
+      const res = await fetch(`${API_URL}/api/internal-notes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ weddingId: viewingWedding.id, content: newNoteText.trim() })
+      })
+      const data = await res.json()
+      if (data.note) {
+        setInternalNotes(prev => [data.note, ...prev])
+        setNewNoteText('')
+      }
+    } catch (err) {
+      console.error('Failed to add internal note:', err)
+    }
+    setSavingNote(false)
+  }
+
+  const deleteInternalNote = async (noteId) => {
+    try {
+      await fetch(`${API_URL}/api/internal-notes/${noteId}`, { method: 'DELETE' })
+      setInternalNotes(prev => prev.filter(n => n.id !== noteId))
+    } catch (err) {
+      console.error('Failed to delete internal note:', err)
     }
   }
 
@@ -998,6 +1039,8 @@ export default function Admin() {
     setTableSummary(null)
     setStaffingSummary(null)
     setSharedBudget(null)
+    setInternalNotes([])
+    setNewNoteText('')
     setBorrowSelections([])
     setShowAddItemForm(false)
     setAddItemResult(null)
@@ -1242,6 +1285,58 @@ export default function Admin() {
                     <p className="text-sage-500 text-xs hidden sm:block">Members</p>
                   </div>
                 </div>
+              </div>
+
+              {/* Internal Notes — admin only, clients never see this */}
+              <div className="bg-white rounded-2xl shadow-sm border border-amber-100 p-4 sm:p-5">
+                <div className="flex items-center gap-2 mb-3">
+                  <h2 className="font-serif text-lg text-sage-700">Internal Notes</h2>
+                  <span className="text-xs bg-amber-50 text-amber-600 border border-amber-200 px-2 py-0.5 rounded-full">Admin only</span>
+                </div>
+
+                {/* Existing notes */}
+                <div className="space-y-2 mb-3">
+                  {internalNotes.length === 0 ? (
+                    <p className="text-sage-400 text-sm italic">No notes yet</p>
+                  ) : (
+                    internalNotes.map(note => (
+                      <div key={note.id} className="group bg-amber-50 rounded-lg px-3 py-2 text-sm">
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-sage-700 whitespace-pre-wrap leading-snug flex-1">{note.content}</p>
+                          <button
+                            onClick={() => deleteInternalNote(note.id)}
+                            className="opacity-0 group-hover:opacity-100 text-sage-300 hover:text-red-400 transition flex-shrink-0 mt-0.5"
+                            title="Delete note"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </div>
+                        <p className="text-sage-400 text-xs mt-1">
+                          {new Date(note.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                        </p>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                {/* Add new note */}
+                <textarea
+                  value={newNoteText}
+                  onChange={e => setNewNoteText(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) addInternalNote() }}
+                  placeholder="Add a note… (Cmd+Enter to save)"
+                  rows={2}
+                  className="w-full text-sm border border-cream-200 rounded-lg px-3 py-2 text-sage-700 placeholder-sage-300 focus:outline-none focus:border-sage-400 resize-none"
+                />
+                <button
+                  onClick={addInternalNote}
+                  disabled={!newNoteText.trim() || savingNote}
+                  className="mt-2 w-full py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition"
+                >
+                  {savingNote ? 'Saving…' : 'Add Note'}
+                </button>
               </div>
 
               {/* API Usage & Costs - Collapsible */}
@@ -2557,66 +2652,25 @@ export default function Admin() {
             <h1 className="font-serif text-xl text-sage-700">Admin Dashboard</h1>
             <div className="flex items-center gap-3">
               {/* Notification Bell */}
-              <div className="relative">
-                <button
-                  onClick={() => setShowBell(b => !b)}
-                  className="relative p-1.5 text-sage-500 hover:text-sage-700 transition"
-                  title="Notifications"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-                  </svg>
-                  {(unreadMessages + unansweredCount) > 0 && (
-                    <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
-                      {Math.min(unreadMessages + unansweredCount, 9)}
-                    </span>
-                  )}
-                </button>
-                {showBell && (
-                  <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-xl shadow-xl border border-cream-200 z-50 overflow-hidden">
-                    <div className="p-3 border-b border-cream-100 flex items-center justify-between">
-                      <span className="font-medium text-sage-700 text-sm">Notifications</span>
-                      <button onClick={() => setShowBell(false)} className="text-sage-400 hover:text-sage-600">
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                      </button>
-                    </div>
-                    <div className="max-h-80 overflow-y-auto divide-y divide-cream-100">
-                      {unreadMessages > 0 && (
-                        <button
-                          onClick={() => { setMainView('messages'); setShowBell(false); }}
-                          className="w-full text-left px-4 py-3 hover:bg-cream-50 transition"
-                        >
-                          <div className="flex items-center gap-2">
-                            <span className="w-2 h-2 bg-red-500 rounded-full flex-shrink-0" />
-                            <p className="text-sm font-medium text-sage-800">{unreadMessages} unread message{unreadMessages !== 1 ? 's' : ''}</p>
-                          </div>
-                          <p className="text-xs text-sage-400 mt-0.5 ml-4">Go to Messages tab →</p>
-                        </button>
-                      )}
-                      {unansweredCount > 0 && (
-                        <button
-                          onClick={() => {
-                            setShowUncertainModal(true)
-                            setShowBell(false)
-                          }}
-                          className="w-full text-left px-4 py-3 hover:bg-cream-50 transition"
-                        >
-                          <div className="flex items-center gap-2">
-                            <span className="w-2 h-2 bg-amber-400 rounded-full flex-shrink-0" />
-                            <p className="text-sm font-medium text-sage-800">{unansweredCount} Sage question{unansweredCount !== 1 ? 's' : ''} to review</p>
-                          </div>
-                          <p className="text-xs text-sage-400 mt-0.5 ml-4">Sage wasn't fully confident →</p>
-                        </button>
-                      )}
-                      {unreadMessages === 0 && unansweredCount === 0 && (
-                        <p className="text-sm text-sage-400 text-center py-6">All caught up!</p>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
+              <NotificationBell
+                recipientType="admin"
+                extraItems={[
+                  {
+                    count: unreadMessages,
+                    label: `${unreadMessages} unread message${unreadMessages !== 1 ? 's' : ''}`,
+                    sublabel: 'Go to Messages tab →',
+                    dotColor: 'bg-red-500',
+                    onClick: () => setMainView('messages'),
+                  },
+                  {
+                    count: unansweredCount,
+                    label: `${unansweredCount} Sage question${unansweredCount !== 1 ? 's' : ''} to review`,
+                    sublabel: "Sage wasn't fully confident →",
+                    dotColor: 'bg-amber-400',
+                    onClick: () => setShowUncertainModal(true),
+                  },
+                ]}
+              />
               <button
                 onClick={async () => { await supabase.auth.signOut(); navigate('/staff'); }}
                 className="text-sage-500 hover:text-sage-700 text-sm font-medium"

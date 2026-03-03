@@ -14,6 +14,7 @@ import TableLayoutPlanner from '../components/TableLayoutPlanner'
 import StaffingCalculator from '../components/StaffingCalculator'
 import BudgetTracker from '../components/BudgetTracker'
 import BorrowCatalog from '../components/BorrowCatalog'
+import NotificationBell from '../components/NotificationBell'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -620,6 +621,14 @@ export default function Dashboard() {
                 </svg>
                 Spreadsheet
               </a>
+            )}
+
+            {/* Notification Bell */}
+            {wedding?.id && (
+              <NotificationBell
+                recipientType="client"
+                weddingId={wedding.id}
+              />
             )}
 
             {/* Mobile menu button */}

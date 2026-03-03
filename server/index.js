@@ -5,6 +5,7 @@ import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import multer from 'multer';
 import { google } from 'googleapis';
+import nodemailer from 'nodemailer';
 // PDF parsing removed - using Claude vision for all documents
 
 dotenv.config();
@@ -122,6 +123,139 @@ async function logActivity(weddingId, userId, activityType, details = '') {
   } catch (err) {
     console.error('Failed to log activity:', err);
   }
+}
+
+// ============ EMAIL SETUP ============
+
+const emailTransporter = (process.env.EMAIL_USER && process.env.EMAIL_PASS)
+  ? nodemailer.createTransport({
+      host: process.env.EMAIL_HOST || 'smtp.gmail.com',
+      port: parseInt(process.env.EMAIL_PORT || '587'),
+      secure: false,
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+      },
+    })
+  : null;
+
+async function sendNotificationEmail(to, subject, bodyText, recipientType = 'admin') {
+  if (!emailTransporter || !to) {
+    console.log('[Email] Skipping (not configured or no recipient):', subject);
+    return false;
+  }
+  try {
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const linkUrl = recipientType === 'client' ? `${frontendUrl}/` : `${frontendUrl}/admin`;
+    const linkLabel = recipientType === 'client' ? 'Open your portal' : 'View in Admin';
+    await emailTransporter.sendMail({
+      from: `"${process.env.EMAIL_FROM_NAME || 'Rixey Manor'}" <${process.env.EMAIL_USER}>`,
+      to,
+      subject,
+      html: `
+        <div style="font-family: Georgia, serif; max-width: 580px; margin: 0 auto; padding: 30px 20px; color: #3d3d3d; background: #fefbf7;">
+          <div style="padding-bottom: 16px; margin-bottom: 24px; border-bottom: 2px solid #7C9070;">
+            <span style="font-size: 11px; letter-spacing: 3px; text-transform: uppercase; color: #7C9070;">Rixey Manor Planning Portal</span>
+          </div>
+          <p style="font-size: 16px; line-height: 1.7; margin: 0 0 24px;">${bodyText}</p>
+          <a href="${linkUrl}" style="display: inline-block; background: #5C6B4F; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-size: 14px;">${linkLabel} →</a>
+          <div style="margin-top: 32px; padding-top: 16px; border-top: 1px solid #e8e0d5;">
+            <p style="font-size: 12px; color: #999; margin: 0;">Rapidan, VA · rixeymanor.com</p>
+          </div>
+        </div>
+      `,
+    });
+    console.log('[Email] Sent:', subject, '→', to);
+    return true;
+  } catch (err) {
+    console.error('[Email] Failed:', err.message);
+    return false;
+  }
+}
+
+// ============ NOTIFICATIONS ============
+
+const ACTIVITY_LABELS = {
+  timeline_updated: 'updated their wedding timeline',
+  tables_updated: 'updated their table layout',
+  staffing_updated: 'updated their staffing plan',
+  vendor_added: 'added a new vendor',
+  vendor_updated: 'updated a vendor',
+  contract_uploaded: 'uploaded a vendor contract',
+  checklist_completed: 'completed a checklist item',
+  inspo_uploaded: 'added inspiration photos',
+};
+
+async function createNotification(weddingId, recipientType, type, title, body, emailTo = null) {
+  try {
+    // Rate-limit: deduplicate client_activity notifications within 5 minutes per wedding
+    if (type === 'client_activity') {
+      const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+      const { data: recent } = await supabaseAdmin
+        .from('notifications')
+        .select('id')
+        .eq('wedding_id', weddingId)
+        .eq('recipient_type', recipientType)
+        .eq('type', 'client_activity')
+        .gte('created_at', fiveMinAgo)
+        .limit(1);
+      if (recent?.length > 0) return;
+    }
+
+    const { data: notif, error } = await supabaseAdmin
+      .from('notifications')
+      .insert({ wedding_id: weddingId, recipient_type: recipientType, type, title, body })
+      .select('id')
+      .single();
+
+    if (error) {
+      console.error('[Notifications] Insert failed:', error.message);
+      return;
+    }
+
+    if (emailTo && notif) {
+      const sent = await sendNotificationEmail(emailTo, title, body || title, recipientType);
+      if (sent) {
+        await supabaseAdmin.from('notifications').update({ email_sent: true }).eq('id', notif.id);
+      }
+    }
+  } catch (err) {
+    console.error('[Notifications] Error:', err.message);
+  }
+}
+
+// Notify admin when a client does a planning activity (rate-limited, no email)
+async function notifyAdminOfActivity(weddingId, activityType, details) {
+  try {
+    const { data: wedding } = await supabaseAdmin
+      .from('weddings')
+      .select('couple_names')
+      .eq('id', weddingId)
+      .single();
+    const couple = wedding?.couple_names || 'A couple';
+    const label = ACTIVITY_LABELS[activityType] || activityType.replace(/_/g, ' ');
+    await createNotification(
+      weddingId, 'admin', 'client_activity',
+      `${couple} ${label}`,
+      details || '',
+      null
+    );
+  } catch (err) {
+    console.error('[Notifications] notifyAdminOfActivity error:', err.message);
+  }
+}
+
+// Escalation keyword detection
+const ESCALATION_KEYWORDS = [
+  'stressed', 'stress', 'anxious', 'worried', 'frustrated', 'frustrating',
+  'overwhelmed', 'urgent', 'problem', 'issue', 'wrong', 'mistake',
+  'angry', 'upset', 'confused', 'lost', 'panic', 'emergency', 'asap',
+  'deadline', 'behind', 'cancel', 'disaster', 'terrible', 'awful'
+];
+
+function hasEscalation(text) {
+  const lower = text.toLowerCase();
+  return ESCALATION_KEYWORDS.some(kw => lower.includes(kw));
 }
 
 // Gmail OAuth setup
@@ -2774,6 +2908,7 @@ app.post('/api/vendors', async (req, res) => {
 
       // Log activity
       await logActivity(weddingId, userId, 'vendor_added', `${vendorType}: ${vendorName || 'TBD'}`);
+      notifyAdminOfActivity(weddingId, 'vendor_added', `${vendorType}: ${vendorName || 'TBD'}`);
 
       res.json({ vendor: data });
     }
@@ -2935,6 +3070,7 @@ Return ONLY a valid JSON array like: [{"category": "vendor", "content": "Photogr
 
     // Log activity
     await logActivity(vendor.wedding_id, null, 'contract_uploaded', `${vendor.vendor_type} contract: ${file.originalname}`);
+    notifyAdminOfActivity(vendor.wedding_id, 'contract_uploaded', `${vendor.vendor_type} contract: ${file.originalname}`);
 
     res.json({ vendor: data });
   } catch (error) {
@@ -4165,9 +4301,39 @@ app.post('/api/messages', async (req, res) => {
 
     if (error) throw error;
 
-    // Log activity for client messages
+    // Log activity + create notifications
     if (senderType === 'client') {
       await logActivity(weddingId, senderId, 'message_sent', content.substring(0, 100));
+      // Notify admin of new client message
+      const { data: wedding } = await supabaseAdmin
+        .from('weddings').select('couple_names').eq('id', weddingId).single();
+      const couple = wedding?.couple_names || 'A client';
+      await createNotification(
+        weddingId, 'admin', 'new_message',
+        `New message from ${couple}`,
+        content.substring(0, 200),
+        process.env.ADMIN_EMAIL
+      );
+      // Escalation check
+      if (hasEscalation(content)) {
+        await createNotification(
+          weddingId, 'admin', 'escalation',
+          `${couple} may need attention`,
+          content.substring(0, 200),
+          process.env.ADMIN_EMAIL
+        );
+      }
+    } else if (senderType === 'admin') {
+      // Notify client of new admin message
+      const { data: wedding } = await supabaseAdmin
+        .from('weddings').select('profiles(email)').eq('id', weddingId).single();
+      const clientEmail = wedding?.profiles?.email;
+      await createNotification(
+        weddingId, 'client', 'new_message',
+        'New message from Rixey Manor',
+        content.substring(0, 200),
+        clientEmail
+      );
     }
 
     res.json({ message: data });
@@ -4826,6 +4992,7 @@ app.post('/api/timeline', async (req, res) => {
 
     // Log activity
     await logActivity(weddingId, userId, 'timeline_updated', `Ceremony: ${ceremonyStart}`);
+    notifyAdminOfActivity(weddingId, 'timeline_updated', `Ceremony at ${ceremonyStart}`);
 
     res.json({ timeline: data });
   } catch (error) {
@@ -4892,6 +5059,7 @@ app.post('/api/tables', async (req, res) => {
 
     // Log activity
     await logActivity(weddingId, userId, 'tables_updated', `${guestCount} guests, ${tableShape} tables`);
+    notifyAdminOfActivity(weddingId, 'tables_updated', `${guestCount} guests, ${tableShape} tables`);
 
     res.json({ tables: data });
   } catch (error) {
@@ -4958,6 +5126,7 @@ app.post('/api/staffing', async (req, res) => {
 
     // Log activity
     await logActivity(weddingId, userId, 'staffing_updated', `${totalStaff} total staff, $${totalCost} estimated`);
+    notifyAdminOfActivity(weddingId, 'staffing_updated', `${totalStaff} total staff, $${totalCost} estimated`);
 
     res.json({ staffing: data });
   } catch (error) {
@@ -5012,6 +5181,124 @@ app.post('/api/budget', async (req, res) => {
   } catch (error) {
     console.error('Save budget error:', error);
     res.status(500).json({ error: 'Failed to save budget' });
+  }
+});
+
+// ============ INTERNAL NOTES API ============
+
+// Get internal notes for a wedding (admin only)
+app.get('/api/internal-notes/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('wedding_internal_notes')
+      .select('*')
+      .eq('wedding_id', req.params.weddingId)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({ notes: data || [] });
+  } catch (error) {
+    console.error('Get internal notes error:', error);
+    res.status(500).json({ error: 'Failed to fetch notes' });
+  }
+});
+
+// Add an internal note
+app.post('/api/internal-notes', async (req, res) => {
+  try {
+    const { weddingId, content } = req.body;
+    if (!weddingId || !content?.trim()) {
+      return res.status(400).json({ error: 'Missing weddingId or content' });
+    }
+    const { data, error } = await supabaseAdmin
+      .from('wedding_internal_notes')
+      .insert({ wedding_id: weddingId, content: content.trim() })
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ note: data });
+  } catch (error) {
+    console.error('Add internal note error:', error);
+    res.status(500).json({ error: 'Failed to add note' });
+  }
+});
+
+// Delete an internal note
+app.delete('/api/internal-notes/:id', async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin
+      .from('wedding_internal_notes')
+      .delete()
+      .eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Delete internal note error:', error);
+    res.status(500).json({ error: 'Failed to delete note' });
+  }
+});
+
+// ============ NOTIFICATIONS API ============
+
+// Get admin notifications
+app.get('/api/notifications/admin', async (req, res) => {
+  try {
+    const { limit = 30 } = req.query;
+    const { data, error } = await supabaseAdmin
+      .from('notifications')
+      .select('*')
+      .eq('recipient_type', 'admin')
+      .order('created_at', { ascending: false })
+      .limit(parseInt(limit));
+    if (error) throw error;
+    const unreadCount = data?.filter(n => !n.is_read).length || 0;
+    res.json({ notifications: data || [], unreadCount });
+  } catch (error) {
+    console.error('Get admin notifications error:', error);
+    res.status(500).json({ error: 'Failed to fetch notifications' });
+  }
+});
+
+// Get client notifications for a wedding
+app.get('/api/notifications/client/:weddingId', async (req, res) => {
+  try {
+    const { weddingId } = req.params;
+    const { limit = 20 } = req.query;
+    const { data, error } = await supabaseAdmin
+      .from('notifications')
+      .select('*')
+      .eq('wedding_id', weddingId)
+      .eq('recipient_type', 'client')
+      .order('created_at', { ascending: false })
+      .limit(parseInt(limit));
+    if (error) throw error;
+    const unreadCount = data?.filter(n => !n.is_read).length || 0;
+    res.json({ notifications: data || [], unreadCount });
+  } catch (error) {
+    console.error('Get client notifications error:', error);
+    res.status(500).json({ error: 'Failed to fetch notifications' });
+  }
+});
+
+// Mark notification(s) as read
+app.put('/api/notifications/read', async (req, res) => {
+  try {
+    const { notificationId, recipientType, weddingId } = req.body;
+    let query = supabaseAdmin.from('notifications').update({ is_read: true });
+    if (notificationId) {
+      query = query.eq('id', notificationId);
+    } else if (recipientType === 'admin') {
+      query = query.eq('recipient_type', 'admin');
+    } else if (recipientType === 'client' && weddingId) {
+      query = query.eq('wedding_id', weddingId).eq('recipient_type', 'client');
+    } else {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+    const { error } = await query.eq('is_read', false);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Mark notifications read error:', error);
+    res.status(500).json({ error: 'Failed to mark notifications as read' });
   }
 });
 
