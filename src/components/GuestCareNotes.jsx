@@ -22,6 +22,12 @@ const SECTIONS = [
     placeholder: 'Anything we should know to help them feel comfortable and fully included in the day?',
   },
   {
+    key: 'sensory',
+    icon: '🌿',
+    question: 'Do any guests have sensory sensitivities — things like loud music, bright lights, or busy environments that can feel overwhelming?',
+    placeholder: 'We can arrange a quiet space to step away to, give you a heads-up before loud moments like the send-off, or adjust how we manage certain areas. Just tell us what would help.',
+  },
+  {
     key: 'dietary',
     icon: '🍽',
     question: 'Any dietary restrictions or food allergies among your guests?',
