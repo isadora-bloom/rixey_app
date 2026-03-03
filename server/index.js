@@ -5,7 +5,7 @@ import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import multer from 'multer';
 import { google } from 'googleapis';
-import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 // PDF parsing removed - using Claude vision for all documents
 
 dotenv.config();
@@ -127,20 +127,10 @@ async function logActivity(weddingId, userId, activityType, details = '') {
 
 // ============ EMAIL SETUP ============
 
-const emailTransporter = (process.env.EMAIL_USER && process.env.EMAIL_PASS)
-  ? nodemailer.createTransport({
-      host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-      port: parseInt(process.env.EMAIL_PORT || '587'),
-      secure: false,
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
-    })
-  : null;
+const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
 async function sendNotificationEmail(to, subject, bodyText, recipientType = 'admin') {
-  if (!emailTransporter || !to) {
+  if (!resend || !to) {
     console.log('[Email] Skipping (not configured or no recipient):', subject);
     return false;
   }
@@ -148,8 +138,10 @@ async function sendNotificationEmail(to, subject, bodyText, recipientType = 'adm
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const linkUrl = recipientType === 'client' ? `${frontendUrl}/` : `${frontendUrl}/admin`;
     const linkLabel = recipientType === 'client' ? 'Open your portal' : 'View in Admin';
-    await emailTransporter.sendMail({
-      from: `"${process.env.EMAIL_FROM_NAME || 'Rixey Manor'}" <${process.env.EMAIL_USER}>`,
+    const fromName = process.env.EMAIL_FROM_NAME || 'Rixey Manor';
+    const fromAddress = process.env.EMAIL_FROM_ADDRESS || 'notifications@rixeymanor.com';
+    const { error } = await resend.emails.send({
+      from: `${fromName} <${fromAddress}>`,
       to,
       subject,
       html: `
@@ -165,6 +157,7 @@ async function sendNotificationEmail(to, subject, bodyText, recipientType = 'adm
         </div>
       `,
     });
+    if (error) throw error;
     console.log('[Email] Sent:', subject, '→', to);
     return true;
   } catch (err) {
