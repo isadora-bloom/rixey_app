@@ -16,6 +16,7 @@ import TimelineBuilder from '../components/TimelineBuilder'
 import TableLayoutPlanner from '../components/TableLayoutPlanner'
 import BorrowCatalog from '../components/BorrowCatalog'
 import NotificationBell from '../components/NotificationBell'
+import GuestCareNotes from '../components/GuestCareNotes'
 
 // Stress/escalation keywords to detect
 const ESCALATION_KEYWORDS = [
@@ -275,6 +276,7 @@ export default function Admin() {
   const [internalNotes, setInternalNotes] = useState([])
   const [newNoteText, setNewNoteText] = useState('')
   const [savingNote, setSavingNote] = useState(false)
+  const [showGuestCare, setShowGuestCare] = useState(false)
   const [activities, setActivities] = useState([]) // Recent client activities
   const [loadingActivities, setLoadingActivities] = useState(false)
   const [borrowSelections, setBorrowSelections] = useState([]) // Borrow items couple selected
@@ -1041,6 +1043,7 @@ export default function Admin() {
     setSharedBudget(null)
     setInternalNotes([])
     setNewNoteText('')
+    setShowGuestCare(false)
     setBorrowSelections([])
     setShowAddItemForm(false)
     setAddItemResult(null)
@@ -1415,6 +1418,27 @@ export default function Admin() {
                     <p className="text-amber-600">⚠ No Google Sheets link</p>
                   )}
                 </div>
+              </div>
+
+              {/* Guest Care Notes — collapsible */}
+              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 overflow-hidden">
+                <button
+                  onClick={() => setShowGuestCare(v => !v)}
+                  className="w-full p-4 sm:p-5 flex items-center justify-between text-left hover:bg-cream-50 transition"
+                >
+                  <h2 className="font-serif text-lg text-sage-700">Guest Care Notes</h2>
+                  <svg
+                    className={`w-5 h-5 text-sage-400 transition-transform ${showGuestCare ? 'rotate-180' : ''}`}
+                    fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+                {showGuestCare && (
+                  <div className="border-t border-cream-100">
+                    <GuestCareNotes weddingId={viewingWedding.id} />
+                  </div>
+                )}
               </div>
 
               {/* Shared Budget Card — only shows if couple opted to share */}

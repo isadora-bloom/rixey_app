@@ -5184,6 +5184,45 @@ app.post('/api/budget', async (req, res) => {
   }
 });
 
+// ============ GUEST CARE API ============
+
+// Get guest care notes for a wedding
+app.get('/api/guest-care/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('wedding_guest_care')
+      .select('data, updated_at')
+      .eq('wedding_id', req.params.weddingId)
+      .single();
+    if (error && error.code !== 'PGRST116') throw error;
+    res.json({ data: data?.data || {}, updated_at: data?.updated_at || null });
+  } catch (error) {
+    console.error('Get guest care error:', error);
+    res.status(500).json({ error: 'Failed to fetch guest care notes' });
+  }
+});
+
+// Save (upsert) guest care notes
+app.post('/api/guest-care', async (req, res) => {
+  try {
+    const { weddingId, data } = req.body;
+    if (!weddingId) return res.status(400).json({ error: 'Missing weddingId' });
+    const { data: saved, error } = await supabaseAdmin
+      .from('wedding_guest_care')
+      .upsert(
+        { wedding_id: weddingId, data, updated_at: new Date().toISOString() },
+        { onConflict: 'wedding_id' }
+      )
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ success: true, data: saved.data });
+  } catch (error) {
+    console.error('Save guest care error:', error);
+    res.status(500).json({ error: 'Failed to save guest care notes' });
+  }
+});
+
 // ============ INTERNAL NOTES API ============
 
 // Get internal notes for a wedding (admin only)

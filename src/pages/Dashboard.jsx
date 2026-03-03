@@ -15,6 +15,7 @@ import StaffingCalculator from '../components/StaffingCalculator'
 import BudgetTracker from '../components/BudgetTracker'
 import BorrowCatalog from '../components/BorrowCatalog'
 import NotificationBell from '../components/NotificationBell'
+import GuestCareNotes from '../components/GuestCareNotes'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -1097,6 +1098,13 @@ export default function Dashboard() {
             )}
           </div>
         </div>
+
+        {/* Guest Care Notes */}
+        {profile?.wedding_id && (
+          <div className="mt-6">
+            <GuestCareNotes weddingId={profile.wedding_id} />
+          </div>
+        )}
 
         {/* Bottom Section: External Tools & Resources */}
         <div className="mt-6 grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
