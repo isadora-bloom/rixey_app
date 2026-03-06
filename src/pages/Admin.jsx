@@ -471,6 +471,20 @@ export default function Admin() {
     setZoomSyncing(false)
   }
 
+  const clearZoom = async () => {
+    if (!window.confirm('Clear all stored Zoom transcripts and processing history? You\'ll need to click Sync after to re-download everything fresh.')) return
+    setZoomSyncing(true)
+    setZoomStatus('')
+    try {
+      const response = await fetch(`${API_URL}/api/zoom/clear`, { method: 'POST' })
+      const data = await response.json()
+      setZoomStatus(data.message || data.error)
+    } catch (err) {
+      setZoomStatus('Failed to clear Zoom data')
+    }
+    setZoomSyncing(false)
+  }
+
   const disconnectZoom = async () => {
     try {
       await fetch(`${API_URL}/api/zoom/disconnect`, { method: 'POST' })
@@ -3105,6 +3119,15 @@ export default function Admin() {
                       title="Re-authorize Zoom (use if sync is failing)"
                     >
                       Re-auth
+                    </button>
+                    <span className="text-cream-300 text-xs">·</span>
+                    <button
+                      onClick={clearZoom}
+                      disabled={zoomSyncing}
+                      className="text-amber-600 hover:text-amber-800 text-xs disabled:opacity-50"
+                      title="Clear stored transcripts so next Sync re-downloads everything fresh"
+                    >
+                      Force Resync
                     </button>
                     <span className="text-cream-300 text-xs">·</span>
                     <button

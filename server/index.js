@@ -2881,6 +2881,30 @@ app.post('/api/zoom/reextract', async (req, res) => {
   }
 });
 
+// Force resync: clear all processed Zoom data so next Sync re-downloads everything fresh
+app.post('/api/zoom/clear', async (req, res) => {
+  try {
+    // Delete all processed meeting records (dedup table)
+    const { error: pmErr } = await supabaseAdmin
+      .from('processed_zoom_meetings')
+      .delete()
+      .neq('id', '00000000-0000-0000-0000-000000000000');
+
+    // Delete all zoom_transcript planning notes (they'll be re-created by next sync)
+    const { error: pnErr } = await supabaseAdmin
+      .from('planning_notes')
+      .delete()
+      .eq('category', 'zoom_transcript');
+
+    if (pmErr) console.error('Error clearing processed_zoom_meetings:', pmErr.message);
+    if (pnErr) console.error('Error clearing zoom_transcript notes:', pnErr.message);
+
+    res.json({ success: true, message: 'Cleared all processed Zoom transcripts. Click Sync to re-download everything.' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to clear: ' + error.message });
+  }
+});
+
 // Disconnect Zoom
 app.post('/api/zoom/disconnect', async (req, res) => {
   try {
