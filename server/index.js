@@ -595,219 +595,106 @@ function parseVttToText(vtt) {
     .trim();
 }
 
-// AI-powered planning note extraction for transcripts (Zoom/calls)
-async function extractPlanningNotesAI(transcriptText, weddingId, source) {
-  const cleanText = parseVttToText(transcriptText);
-  if (!cleanText || cleanText.length < 50) return [];
+// Rixey Manor business context for AI extraction
+const RIXEY_EXTRACTION_CONTEXT = `
+Rixey Manor is a wedding venue in Rapidan, VA (rural Piedmont, ~1.5 hrs from DC).
+It is an all-inclusive venue: couples bring their own caterer and alcohol, Rixey provides the space, staffing, and many included décor items.
+
+KEY DECISIONS THAT MATTER FOR COORDINATION:
+- Ceremony location: outdoor (lawn, under oak tree), ballroom, or rooftop
+- Guest count (affects staffing, table layout, bar quantities)
+- Bar setup: beer & wine only vs full bar; satellite bar on patio or not; real glassware vs plastic
+- Catering: caterer name, food truck, or DIY; any food stations or buffet vs seated dinner
+- DIETARY RESTRICTIONS AND ALLERGIES — always critical, must be flagged prominently
+- Linen choices (Rixey includes ivory; upgrades cost extra)
+- Whether couple is using the on-site bedrooms (affects move-in day and timeline)
+- Shuttle / transportation for guests
+- Rehearsal dinner plans (on-site or off-site)
+- Day-of timeline: ceremony time, cocktail hour location, dinner, first dance, cake cutting, etc.
+- Photographer, videographer, florist, DJ/band, officiant, hair & makeup
+- Any unusual requests, DIY elements, or things Rixey staff need to accommodate
+- Family dynamics that affect logistics (divorced parents, mobility needs, VIPs)
+- Budget pressure points (couple may be cost-conscious in certain areas)
+- Anything that requires coordinator follow-up or confirmation from venue
+
+CATEGORIES TO USE:
+- vendor: photographer, videographer, florist, DJ, band, caterer, food truck, officiant, hair, makeup, rentals
+- allergy: ANY dietary restriction, allergy, or food intolerance — flag all of these
+- guest_count: number of guests, estimates, final count
+- ceremony: ceremony location, time, style, vows, processional, officiant notes
+- reception: reception flow, dinner style, first dance, speeches, cake cutting, send-off
+- bar: bar setup, drink choices, glassware, satellite bar, alcohol quantities
+- catering: food/caterer details, menu choices, food stations
+- decor: florals, centerpieces, arbor, arch, backdrop, linens, candles, lighting, rentals
+- colors: color palette, style/aesthetic (e.g. "dusty rose and sage, garden romantic")
+- timeline: timing preferences for any part of the day
+- accommodations: bedrooms, getting-ready suites, overnight guests
+- shuttle: transportation, parking, shuttle service
+- family: family dynamics, VIPs, mobility needs, divorced parents, estranged relationships
+- budget: budget constraints, cost decisions, upgrades accepted or declined
+- note: anything important a coordinator must remember that doesn't fit above
+- follow_up: explicit action items for the venue to take
+`;
+
+// Unified AI-powered planning note extractor — used for all sources
+async function extractPlanningNotesAI(text, weddingId, source, sourceType = 'message') {
+  const cleanText = sourceType === 'transcript' ? parseVttToText(text) : text;
+  if (!cleanText || cleanText.length < 20) return [];
+
+  const isTranscript = sourceType === 'transcript' || sourceType === 'email';
+  const maxLen = isTranscript ? 8000 : 2000;
+
+  const instruction = isTranscript
+    ? `Extract ALL concrete decisions, preferences, and important details a coordinator would need from this ${sourceType}. Be thorough — this may be the only record of the conversation.`
+    : `Extract any concrete wedding planning details mentioned. Only capture clearly stated facts, not speculation.`;
 
   try {
     const response = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1500,
+      max_tokens: isTranscript ? 2000 : 800,
       messages: [{
         role: 'user',
-        content: `You are extracting wedding planning decisions from a meeting transcript for Rixey Manor (a wedding venue in Rapidan, VA).
+        content: `${RIXEY_EXTRACTION_CONTEXT}
 
-Extract every concrete decision, preference, or important detail that a wedding coordinator would want to remember. Include:
-- Vendors booked or being considered (florist, photographer, DJ, caterer, officiant, band, hair/makeup, etc.)
-- Guest count or estimates
-- Color palette or decor style
-- Ceremony details (indoor/outdoor, time, vows style, processional music, etc.)
-- Reception details (food style, bar preferences, first dance, speeches)
-- Dietary restrictions or allergies (critical — capture all of these)
-- Family dynamics or special considerations
-- Timeline preferences
-- Budget mentions
-- Anything the coordinator explicitly needs to follow up on
+${instruction}
 
-For each item return JSON like:
-[
-  {"category": "vendor", "content": "Booking Sarah Kim Photography"},
-  {"category": "allergy", "content": "Bride's mother is celiac — no gluten at dinner"},
-  {"category": "guest_count", "content": "Approximately 120 guests"},
-  {"category": "decor", "content": "Dusty rose and sage green color palette, garden party feel"},
-  {"category": "family", "content": "Parents divorced — separate family photos needed"},
-  {"category": "ceremony", "content": "Outdoor ceremony under the oak tree, backup plan if rain"},
-  {"category": "note", "content": "Couple wants a surprise choreographed first dance reveal"}
-]
+Return a JSON array. Each item: {"category": "<category>", "content": "<concise note>"}
+Use the categories listed above. Write content as a coordinator's note (e.g. "Bride's father uses a wheelchair — needs aisle access", not "wheelchair").
+Allergies and dietary restrictions are the highest priority — never skip these.
+If nothing noteworthy was said, return [].
+Return ONLY the JSON array.
 
-Valid categories: vendor, allergy, guest_count, decor, ceremony, colors, timeline, family, food, budget, note
-
-Only include things clearly stated — skip vague small talk. If nothing concrete was decided, return [].
-Return ONLY the JSON array, no explanation.
-
-Transcript:
-${cleanText.substring(0, 8000)}`
+${sourceType === 'transcript' ? 'Transcript' : sourceType === 'email' ? 'Email' : 'Message'}:
+${cleanText.substring(0, maxLen)}`
       }]
     });
 
-    const text = response.content[0].text.trim();
-    const jsonMatch = text.match(/\[[\s\S]*\]/);
+    const text2 = response.content[0].text.trim();
+    const jsonMatch = text2.match(/\[[\s\S]*\]/);
     if (!jsonMatch) return [];
 
     const items = JSON.parse(jsonMatch[0]);
     return items
-      .filter(item => item.category && item.content && item.content.length > 3)
+      .filter(item => item.category && item.content && item.content.length > 5)
       .map(item => ({
         wedding_id: weddingId,
         user_id: null,
         category: item.category,
         content: item.content.trim(),
-        source_message: source || 'Extracted from meeting transcript',
+        source_message: source || `Extracted from ${sourceType}`,
         status: 'pending'
       }));
   } catch (err) {
-    console.error('AI transcript extraction error:', err.message);
+    console.error(`AI extraction error (${sourceType}):`, err.message);
     return [];
   }
 }
 
-// Planning note detection patterns
-  vendor_booking: {
-    patterns: [
-      // Casual: "booking [vendor]", "def booking", "definitely using"
-      /(?:def(?:initely)?|probably|likely|actually)?\s*(?:booking|using|hiring|going with)\s+(.+?)(?:\s+(?:for|as)\s+(?:our\s+)?(.+?))?(?:\.|,|!|$)/i,
-      // Past/present: "we've booked", "we hired", "we're going with"
-      /(?:we(?:'ve|'re| have| are)?|i(?:'ve|'m| have| am)?)\s+(?:booked|hired|going with|chose|chosen|decided on|using)\s+(.+?)(?:\s+(?:for|as)\s+(?:our\s+)?(.+?))?(?:\.|,|!|$)/i,
-      // Future: "going to book", "want to use", "planning to hire"
-      /(?:we(?:'re)?|i(?:'m)?)\s+(?:going to|want to|planning to|thinking of|looking at)\s+(?:book|hire|use|go with)\s+(.+?)(?:\s+(?:for|as)\s+(?:our\s+)?(.+?))?(?:\.|,|!|$)/i,
-      // Simple: "our florist is", "my photographer will be"
-      /(?:our|my)\s+(florist|photographer|videographer|dj|caterer|planner|coordinator|officiant|band|baker|bartender|hair|makeup|flowers)\s+(?:is|will be|are)\s+(.+?)(?:\.|,|!|$)/i,
-      // Vendor name first: "hired [name] as our florist"
-      /(?:booked|hired|using)\s+(.+?)\s+(?:for|as)\s+(?:our\s+)?(florist|photographer|videographer|dj|caterer|planner|coordinator|officiant|band|baker|flowers?|photos?|video|music|food|catering)(?:\.|,|!|$)/i,
-    ],
-    category: 'vendor'
-  },
-  vendor_contact: {
-    patterns: [
-      /(?:phone|number|contact|cell|mobile)(?:\s+(?:is|:))?\s*([\d\-\(\)\s\.]{10,})/i,
-      /(?:email|e-mail)(?:\s+(?:is|:))?\s*([\w\.\-]+@[\w\.\-]+\.\w+)/i
-    ],
-    category: 'vendor_contact'
-  },
-  guest_count: {
-    patterns: [
-      /(\d+)\s*(?:guests?|people|attending|coming)/i,
-      /guest\s*(?:count|list)\s*(?:is|:)?\s*(\d+)/i
-    ],
-    category: 'guest_count'
-  },
-  decor_choice: {
-    patterns: [
-      /(?:we(?:'re|'ll| will| are)?|i(?:'m|'ll| will| am)?)\s+(?:using|going with|want|chose|choosing)\s+(?:the\s+)?(.+?)\s*(?:arbor|arch|backdrop|centerpieces?|flowers?|linens?|tablecloths?)/i,
-      /(?:for\s+)?(?:our\s+)?(?:arbor|arch|backdrop|centerpieces?)\s*(?:we(?:'re|'ll)?|i(?:'m|'ll)?)\s*(?:using|want|chose)\s+(.+?)(?:\.|,|$)/i
-    ],
-    category: 'decor'
-  },
-  ceremony_detail: {
-    patterns: [
-      /ceremony\s+(?:starts?|begins?|time|at)\s*(?:is|:)?\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i,
-      /(?:we(?:'re|'ll)?|i(?:'m|'ll)?)\s+(?:doing|having)\s+(?:our\s+)?(?:ceremony|first look)\s+(.+?)(?:\.|,|$)/i
-    ],
-    category: 'ceremony'
-  },
-  allergy: {
-    patterns: [
-      /(\w+)\s+(?:has|have)\s+(?:a\s+)?(.+?)\s*allergy/i,
-      /allergic\s+to\s+(.+?)(?:\.|,|$)/i,
-      /allergy(?:\s+(?:is|:))?\s*(.+?)(?:\.|,|$)/i
-    ],
-    category: 'allergy'
-  },
-  timeline_detail: {
-    patterns: [
-      /(?:dinner|reception|cocktail hour|first dance|speeches?)\s+(?:starts?|begins?|at)\s*(?:is|:)?\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i
-    ],
-    category: 'timeline'
-  },
-  color_theme: {
-    patterns: [
-      /(?:our\s+)?(?:wedding\s+)?colors?\s+(?:are|is|:)\s*(.+?)(?:\.|,|$)/i,
-      /(?:we(?:'re)?|i(?:'m)?)\s+(?:going with|doing|using)\s+(.+?)\s+(?:as\s+)?(?:our\s+)?colors?/i
-    ],
-    category: 'colors'
-  },
-  important_note: {
-    patterns: [
-      /(?:please\s+)?(?:note|remember|don't forget|important)(?:\s+that)?(?:\s*:)?\s*(.+?)(?:\.|$)/i,
-      /(?:we\s+)?(?:need|want)\s+to\s+(?:make sure|remember)\s+(.+?)(?:\.|$)/i
-    ],
-    category: 'note'
-  },
-  checklist_complete: {
-    patterns: [
-      /(?:we've|i've|we)\s+(?:booked|hired|sent|ordered|finished|completed|finalized|done)\s+(?:the\s+)?(.+?)(?:\.|!|$)/i,
-      /(?:just|finally)\s+(?:booked|hired|sent|ordered|finished|completed)\s+(?:the\s+)?(.+?)(?:\.|!|$)/i,
-      /(?:the\s+)?(.+?)\s+(?:is|are)\s+(?:booked|done|finished|ordered|sent|complete)(?:\.|!|$)/i
-    ],
-    category: 'checklist_complete'
-  }
-};
-
-// Extract planning notes from a message
+// Legacy alias used by chat endpoint (short user messages)
 async function extractPlanningNotes(message, userId, weddingId) {
-  const notes = [];
-  console.log('Checking message for planning notes:', message.substring(0, 100));
-
-  for (const [type, config] of Object.entries(PLANNING_PATTERNS)) {
-    for (const pattern of config.patterns) {
-      const match = message.match(pattern);
-      if (match) {
-        console.log(`  MATCH found: ${type}`, match);
-        let content = '';
-
-        // Format content based on category
-        switch (config.category) {
-          case 'vendor':
-            content = match[2]
-              ? `${match[2]}: ${match[1]}`
-              : `Vendor: ${match[1]}`;
-            break;
-          case 'vendor_contact':
-            content = `Contact info: ${match[1]}`;
-            break;
-          case 'guest_count':
-            content = `Guest count: ${match[1]}`;
-            break;
-          case 'decor':
-            content = `Decor choice: ${match[1]}`;
-            break;
-          case 'ceremony':
-            content = `Ceremony: ${match[1]}`;
-            break;
-          case 'allergy':
-            content = match[2]
-              ? `Allergy: ${match[1]} - ${match[2]}`
-              : `Allergy: ${match[1]}`;
-            break;
-          case 'timeline':
-            content = `Timeline: ${match[0]}`;
-            break;
-          case 'colors':
-            content = `Colors: ${match[1]}`;
-            break;
-          case 'note':
-            content = match[1];
-            break;
-          default:
-            content = match[1] || match[0];
-        }
-
-        notes.push({
-          wedding_id: weddingId,
-          user_id: userId,
-          category: config.category,
-          content: content.trim(),
-          source_message: message.substring(0, 500),
-          status: 'pending'
-        });
-
-        break; // Only capture first match per pattern type
-      }
-    }
-  }
-
-  return notes;
+  const notes = await extractPlanningNotesAI(message, weddingId, message.substring(0, 200), 'message');
+  // Restore userId on notes from chat (userId may be set)
+  return notes.map(n => ({ ...n, user_id: userId }));
 }
 
 // Save planning notes to database
@@ -2071,12 +1958,9 @@ app.post('/api/gmail/sync', async (req, res) => {
               console.error('Error saving email to planning_notes:', noteError);
             }
 
-            // Also extract specific planning details
-            const notes = await extractPlanningNotes(bodyText, null, weddingId);
+            // AI extraction of planning details from email body
+            const notes = await extractPlanningNotesAI(bodyText, weddingId, `Email: "${subject}" (${dateHeader})`, 'email');
             if (notes.length > 0) {
-              notes.forEach(n => {
-                n.source_message = `From email "${subject}" (${dateHeader})`;
-              });
               await savePlanningNotes(notes);
               notesExtracted += notes.length;
             }
@@ -2350,13 +2234,11 @@ app.post('/api/quo/sync', async (req, res) => {
             }
           }
 
-          // Extract specific planning details from inbound messages
+          // AI extraction from inbound SMS messages
           if (direction === 'inbound' && messageBody) {
-            const notes = await extractPlanningNotes(messageBody, userId, weddingId);
+            const notes = await extractPlanningNotesAI(messageBody, weddingId, `SMS: ${messageBody.substring(0, 120)}`, 'sms');
             if (notes.length > 0) {
-              notes.forEach(n => {
-                n.source_message = `From text message: ${messageBody.substring(0, 100)}...`;
-              });
+              notes.forEach(n => { n.user_id = userId; });
               await savePlanningNotes(notes);
               notesExtracted += notes.length;
             }
@@ -2444,13 +2326,11 @@ app.post('/api/quo/sync', async (req, res) => {
               console.log(`DEBUG: Saved call transcript as planning note for wedding ${weddingId}`);
             }
 
-            // Extract specific planning details from transcript
+            // AI extraction from call transcript
             if (transcript) {
-              const notes = await extractPlanningNotes(transcript, userId, weddingId);
+              const notes = await extractPlanningNotesAI(transcript, weddingId, `Phone call transcript`, 'transcript');
               if (notes.length > 0) {
-                notes.forEach(n => {
-                  n.source_message = `From call transcript: ${transcript.substring(0, 100)}...`;
-                });
+                notes.forEach(n => { n.user_id = userId; });
                 await savePlanningNotes(notes);
                 notesExtracted += notes.length;
               }
