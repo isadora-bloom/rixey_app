@@ -22,6 +22,10 @@ self.addEventListener('fetch', (event) => {
   // Skip non-http(s) requests (e.g. chrome-extension://)
   if (!event.request.url.startsWith('http')) return;
 
+  // Skip external origins — only cache same-origin requests
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) return;
+
   // Skip API requests - always go to network
   if (event.request.url.includes('/api/')) return;
 
