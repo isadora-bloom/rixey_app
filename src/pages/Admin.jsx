@@ -1012,12 +1012,24 @@ export default function Admin() {
       case 'vendor': return '👥'
       case 'vendor_contact': return '📞'
       case 'guest_count': return '🎫'
-      case 'decor': return '🎨'
+      case 'decor': return '🌸'
       case 'ceremony': return '💒'
       case 'allergy': return '⚠️'
       case 'timeline': return '⏰'
       case 'colors': return '🎨'
+      case 'reception': return '🥂'
+      case 'bar': return '🍷'
+      case 'catering': return '🍽️'
+      case 'accommodations': return '🛏️'
+      case 'shuttle': return '🚌'
+      case 'family': return '👨‍👩‍👧'
+      case 'budget': return '💰'
+      case 'stress': return '💛'
+      case 'grief': return '🕊️'
+      case 'relationship': return '💑'
+      case 'health': return '💙'
       case 'note': return '📝'
+      case 'follow_up': return '🔔'
       case 'sms_message': return '💬'
       case 'call_transcript': return '📱'
       case 'zoom_transcript': return '🎥'
@@ -1034,10 +1046,22 @@ export default function Admin() {
       case 'guest_count': return 'Guest Count'
       case 'decor': return 'Decor'
       case 'ceremony': return 'Ceremony'
-      case 'allergy': return 'Allergy'
+      case 'allergy': return 'Allergy / Dietary'
       case 'timeline': return 'Timeline'
-      case 'colors': return 'Colors'
+      case 'colors': return 'Colors & Style'
+      case 'reception': return 'Reception'
+      case 'bar': return 'Bar Setup'
+      case 'catering': return 'Catering'
+      case 'accommodations': return 'Accommodations'
+      case 'shuttle': return 'Transportation'
+      case 'family': return 'Family'
+      case 'budget': return 'Budget'
+      case 'stress': return 'Stress / Worry'
+      case 'grief': return 'Grief / Loss'
+      case 'relationship': return 'Couple Dynamics'
+      case 'health': return 'Health / Access'
       case 'note': return 'Note'
+      case 'follow_up': return 'Follow Up'
       case 'sms_message': return 'SMS'
       case 'call_transcript': return 'Call'
       case 'zoom_transcript': return 'Zoom'
@@ -1534,23 +1558,41 @@ export default function Admin() {
                               if (note.status === 'pending') acc[cat].pending++
                               return acc
                             }, {})
+                            const PRIORITY_CATS = ['allergy', 'stress', 'grief', 'health', 'family', 'follow_up', 'relationship']
                             const sortedCats = Object.entries(notesByCategory).sort((a, b) => {
-                              if (a[0] === 'allergy') return -1
-                              if (b[0] === 'allergy') return 1
+                              const aP = PRIORITY_CATS.indexOf(a[0])
+                              const bP = PRIORITY_CATS.indexOf(b[0])
+                              if (aP !== -1 && bP !== -1) return aP - bP
+                              if (aP !== -1) return -1
+                              if (bP !== -1) return 1
                               return b[1].pending - a[1].pending || b[1].total - a[1].total
                             })
-                            return sortedCats.map(([cat, counts]) => (
-                              <button key={cat} onClick={() => setActiveTab('notes')} className={`text-left rounded-lg p-2.5 hover:border-sage-300 transition border ${cat === 'allergy' ? 'bg-amber-50 border-amber-300' : 'bg-cream-50 border-cream-200'}`}>
-                                <p className={`text-xs font-medium flex items-center gap-1.5 ${cat === 'allergy' ? 'text-amber-800' : 'text-sage-700'}`}>
+                            return sortedCats.map(([cat, counts]) => {
+                              const isHighAlert = cat === 'allergy'
+                              const isEmotional = ['stress', 'grief', 'relationship', 'family', 'health'].includes(cat)
+                              const isFollowUp = cat === 'follow_up'
+                              const tileClass = isHighAlert
+                                ? 'bg-amber-50 border-amber-300'
+                                : isEmotional
+                                ? 'bg-rose-50 border-rose-200'
+                                : isFollowUp
+                                ? 'bg-blue-50 border-blue-200'
+                                : 'bg-cream-50 border-cream-200'
+                              const labelClass = isHighAlert ? 'text-amber-800' : isEmotional ? 'text-rose-700' : isFollowUp ? 'text-blue-700' : 'text-sage-700'
+                              const subClass = isHighAlert ? 'text-amber-700' : isEmotional ? 'text-rose-500' : isFollowUp ? 'text-blue-500' : 'text-sage-400'
+                              return (
+                              <button key={cat} onClick={() => setActiveTab('notes')} className={`text-left rounded-lg p-2.5 hover:border-sage-300 transition border ${tileClass}`}>
+                                <p className={`text-xs font-medium flex items-center gap-1.5 ${labelClass}`}>
                                   <span>{getCategoryIcon(cat)}</span>
                                   <span className="capitalize">{getCategoryLabel(cat)}</span>
                                 </p>
-                                <p className={`text-xs mt-0.5 ${cat === 'allergy' ? 'text-amber-700' : 'text-sage-400'}`}>
+                                <p className={`text-xs mt-0.5 ${subClass}`}>
                                   {counts.total} note{counts.total !== 1 ? 's' : ''}
                                   {counts.pending > 0 && <span className="ml-1 text-amber-600">· {counts.pending} new</span>}
                                 </p>
                               </button>
-                            ))
+                              )
+                            })
                           })()}
                         </div>
                       </div>

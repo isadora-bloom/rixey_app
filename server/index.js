@@ -599,41 +599,56 @@ function parseVttToText(vtt) {
 const RIXEY_EXTRACTION_CONTEXT = `
 Rixey Manor is a wedding venue in Rapidan, VA (rural Piedmont, ~1.5 hrs from DC).
 It is an all-inclusive venue: couples bring their own caterer and alcohol, Rixey provides the space, staffing, and many included décor items.
+The coordinator's job is not just logistics — it's making couples feel genuinely cared for. That means noticing when something is hard, stressful, or emotionally loaded, not just what decisions have been made.
 
-KEY DECISIONS THAT MATTER FOR COORDINATION:
+LOGISTICS TO CAPTURE:
 - Ceremony location: outdoor (lawn, under oak tree), ballroom, or rooftop
 - Guest count (affects staffing, table layout, bar quantities)
 - Bar setup: beer & wine only vs full bar; satellite bar on patio or not; real glassware vs plastic
-- Catering: caterer name, food truck, or DIY; any food stations or buffet vs seated dinner
+- Catering: caterer name, food truck, or DIY; buffet vs seated dinner
 - DIETARY RESTRICTIONS AND ALLERGIES — always critical, must be flagged prominently
 - Linen choices (Rixey includes ivory; upgrades cost extra)
-- Whether couple is using the on-site bedrooms (affects move-in day and timeline)
+- Whether couple is using the on-site bedrooms
 - Shuttle / transportation for guests
-- Rehearsal dinner plans (on-site or off-site)
-- Day-of timeline: ceremony time, cocktail hour location, dinner, first dance, cake cutting, etc.
+- Rehearsal dinner plans
+- Day-of timeline: ceremony time, cocktail hour, dinner, first dance, cake cutting, send-off
 - Photographer, videographer, florist, DJ/band, officiant, hair & makeup
 - Any unusual requests, DIY elements, or things Rixey staff need to accommodate
-- Family dynamics that affect logistics (divorced parents, mobility needs, VIPs)
-- Budget pressure points (couple may be cost-conscious in certain areas)
-- Anything that requires coordinator follow-up or confirmation from venue
+
+EMOTIONAL & PERSONAL SIGNALS TO CAPTURE — this is just as important as logistics:
+- Stress or anxiety (budget pressure, overwhelmed by planning, family conflict, timeline fears)
+- Grief or loss (deceased parent or loved one they want honoured, difficult anniversary, health issues)
+- Family tension (divorced parents who can't be in the same room, estranged relatives, drama risk)
+- Relationship dynamics (one partner more engaged in planning, cold feet mentions, external pressure)
+- Financial stress (cutting corners, apologising for budget, feeling guilty about spending)
+- Excitement or meaning (what the day truly means to them, a deeply personal vision or tradition)
+- Vulnerability (first-time event hosts, no wedding party, eloping from large family expectations)
+- Health or accessibility needs (mobility, chronic illness, mental health, pregnancy)
+- External pressure (in-laws pushing preferences, cultural/religious expectations they're navigating)
+- Things they're nervous to ask about or feel embarrassed by
+- Anything that suggests they need extra care, reassurance, or a proactive check-in
 
 CATEGORIES TO USE:
 - vendor: photographer, videographer, florist, DJ, band, caterer, food truck, officiant, hair, makeup, rentals
-- allergy: ANY dietary restriction, allergy, or food intolerance — flag all of these
+- allergy: ANY dietary restriction, allergy, or food intolerance — never skip these
 - guest_count: number of guests, estimates, final count
 - ceremony: ceremony location, time, style, vows, processional, officiant notes
 - reception: reception flow, dinner style, first dance, speeches, cake cutting, send-off
 - bar: bar setup, drink choices, glassware, satellite bar, alcohol quantities
 - catering: food/caterer details, menu choices, food stations
 - decor: florals, centerpieces, arbor, arch, backdrop, linens, candles, lighting, rentals
-- colors: color palette, style/aesthetic (e.g. "dusty rose and sage, garden romantic")
+- colors: color palette, style/aesthetic
 - timeline: timing preferences for any part of the day
 - accommodations: bedrooms, getting-ready suites, overnight guests
 - shuttle: transportation, parking, shuttle service
-- family: family dynamics, VIPs, mobility needs, divorced parents, estranged relationships
-- budget: budget constraints, cost decisions, upgrades accepted or declined
-- note: anything important a coordinator must remember that doesn't fit above
-- follow_up: explicit action items for the venue to take
+- family: family dynamics, VIPs, mobility needs, divorced parents, estranged relationships, who needs special handling
+- budget: budget constraints, financial stress, cost decisions, upgrades accepted or declined
+- stress: couple is overwhelmed, anxious, or under pressure about something specific
+- grief: honouring someone who passed, health issues, difficult emotional context
+- relationship: partner dynamics, external pressure on the couple, what this day means to them personally
+- health: accessibility needs, chronic illness, pregnancy, mental health considerations
+- note: important coordinator context that doesn't fit another category
+- follow_up: explicit action items or things the venue should proactively address
 `;
 
 // Unified AI-powered planning note extractor — used for all sources
@@ -645,8 +660,8 @@ async function extractPlanningNotesAI(text, weddingId, source, sourceType = 'mes
   const maxLen = isTranscript ? 8000 : 2000;
 
   const instruction = isTranscript
-    ? `Extract ALL concrete decisions, preferences, and important details a coordinator would need from this ${sourceType}. Be thorough — this may be the only record of the conversation.`
-    : `Extract any concrete wedding planning details mentioned. Only capture clearly stated facts, not speculation.`;
+    ? `Read this ${sourceType} as a thoughtful wedding coordinator would. Extract every logistics decision AND every emotional signal — stress, grief, family tension, financial worry, what this day means to them. This may be the only written record of the conversation, so be thorough.`
+    : `Read this message as a thoughtful wedding coordinator. Capture any logistics decisions AND any emotional signals — worry, stress, something personally significant, or anything that suggests they need extra care.`;
 
   try {
     const response = await anthropic.messages.create({
@@ -658,9 +673,9 @@ async function extractPlanningNotesAI(text, weddingId, source, sourceType = 'mes
 
 ${instruction}
 
-Return a JSON array. Each item: {"category": "<category>", "content": "<concise note>"}
-Use the categories listed above. Write content as a coordinator's note (e.g. "Bride's father uses a wheelchair — needs aisle access", not "wheelchair").
-Allergies and dietary restrictions are the highest priority — never skip these.
+Return a JSON array. Each item: {"category": "<category>", "content": "<concise coordinator note>"}
+Write notes the way a caring, experienced coordinator would jot them — specific and human (e.g. "Bride is stressed about her mom and future MIL being in the same room — both have strong personalities", not just "family tension").
+Allergies and emotional signals are the highest priority — never skip these.
 If nothing noteworthy was said, return [].
 Return ONLY the JSON array.
 
