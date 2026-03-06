@@ -3034,14 +3034,21 @@ export default function Admin() {
                       {zoomSyncing ? 'Syncing...' : 'Sync'}
                     </button>
                     <button
+                      onClick={connectZoom}
+                      className="px-4 py-2 text-blue-600 hover:text-blue-800 text-sm font-medium"
+                      title="Re-authorize Zoom (use if sync is failing)"
+                    >
+                      Re-auth
+                    </button>
+                    <button
                       onClick={disconnectZoom}
-                      className="px-4 py-2 text-sage-500 hover:text-sage-700 text-sm"
+                      className="px-4 py-2 text-sage-400 hover:text-sage-600 text-sm"
                     >
                       Disconnect
                     </button>
                   </div>
                   {zoomStatus && (
-                    <p className="text-sage-600 text-sm bg-cream-50 p-2 rounded">{zoomStatus}</p>
+                    <p className={`text-sm p-2 rounded ${zoomStatus.includes('fail') || zoomStatus.includes('error') || zoomStatus.includes('Error') ? 'text-red-700 bg-red-50' : 'text-sage-600 bg-cream-50'}`}>{zoomStatus}</p>
                   )}
                 </div>
               ) : (
@@ -3058,6 +3065,9 @@ export default function Admin() {
                     </svg>
                     Connect Zoom
                   </button>
+                  {zoomStatus && (
+                    <p className="text-sage-600 text-sm bg-cream-50 p-2 rounded">{zoomStatus}</p>
+                  )}
                 </div>
               )}
             </div>
