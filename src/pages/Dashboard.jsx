@@ -94,6 +94,21 @@ function WeddingCountdown({ weddingDate }) {
   )
 }
 
+const TILE_META = {
+  timeline:  { emoji: '📅', label: 'Timeline',         btnCls: 'from-amber-50 border-amber-200 hover:border-amber-300',    modal: 'timeline' },
+  tables:    { emoji: '🪑', label: 'Tables',           btnCls: 'from-sage-50 border-sage-200 hover:border-sage-300',       modal: 'tables' },
+  budget:    { emoji: '💰', label: 'Budget',           btnCls: 'from-emerald-50 border-emerald-200 hover:border-emerald-300', modal: 'budget' },
+  vendor:    { emoji: '👥', label: 'Vendors',          btnCls: 'from-rose-50 border-rose-200 hover:border-rose-300',        modal: 'vendor' },
+  checklist: { emoji: '✅', label: 'Checklist',        btnCls: 'from-blue-50 border-blue-200 hover:border-blue-300',        modal: 'checklist' },
+  staffing:  { emoji: '🙋', label: 'Staffing Guide',   btnCls: 'from-purple-50 border-purple-200 hover:border-purple-300',  modal: 'staffing' },
+  inspo:     { emoji: '💡', label: 'Inspiration',      btnCls: 'from-pink-50 border-pink-200 hover:border-pink-300',        modal: 'inspo' },
+  guestcare: { emoji: '💝', label: 'Guest Care',       btnCls: 'from-teal-50 border-teal-200 hover:border-teal-300',        modal: null },
+  borrow:    { emoji: '📋', label: 'Borrow Brochure',  btnCls: 'from-orange-50 border-orange-200 hover:border-orange-300',  modal: 'borrow' },
+  picks:     { emoji: '🛍', label: 'Rixey Picks',      btnCls: 'from-yellow-50 border-yellow-200 hover:border-yellow-300',  modal: 'picks' },
+}
+const GRID_TILE_ORDER    = ['timeline', 'tables', 'budget', 'vendor', 'checklist', 'staffing', 'inspo', 'borrow', 'picks']
+const ADDABLE_TILE_ORDER = ['timeline', 'tables', 'budget', 'staffing', 'inspo', 'borrow', 'picks', 'guestcare']
+
 export default function Dashboard() {
   const { user, signOut } = useAuth()
   const navigate = useNavigate()
@@ -136,6 +151,7 @@ export default function Dashboard() {
     resourceLinks: false
   })
   const [retryState, setRetryState] = useState(null) // { userMessage, baseMessages, secondsLeft }
+  const [manuallyAddedTiles, setManuallyAddedTiles] = useState([])
   const fileInputRef = useRef(null)
   const messagesEndRef = useRef(null)
 
@@ -175,6 +191,11 @@ export default function Dashboard() {
 
         if (weddingData) {
           setWedding(weddingData)
+          // Restore manually-added tiles from localStorage
+          try {
+            const saved = JSON.parse(localStorage.getItem(`dtiles_${data.wedding_id}`) || '[]')
+            setManuallyAddedTiles(saved)
+          } catch { /* ignore */ }
         }
 
         // Load budget summary
@@ -593,12 +614,44 @@ export default function Dashboard() {
     setSavingProfile(false)
   }
 
+  const addTile = (key) => {
+    setManuallyAddedTiles(prev => {
+      const next = [...new Set([...prev, key])]
+      if (profile?.wedding_id) localStorage.setItem(`dtiles_${profile.wedding_id}`, JSON.stringify(next))
+      return next
+    })
+  }
+
   const resourceLinks = [
     { name: 'Vendor Directory', href: '/vendors' },
     { name: 'Accommodations', href: '/accommodations' },
     { name: 'Venue Gallery', href: 'https://www.rixeymanor.com/weddingsbyseason' },
     { name: 'Planning Resources', href: 'https://www.rixeymanor.com/planning' },
   ]
+
+  // Modular tile activation
+  const autoActiveTileSet = new Set([
+    'vendor', 'checklist',
+    ...(timelineSummary ? ['timeline'] : []),
+    ...(tableSummary ? ['tables'] : []),
+    ...(budgetSummary ? ['budget'] : []),
+  ])
+  const allActiveTileSet = new Set([...autoActiveTileSet, ...manuallyAddedTiles])
+  const activeGridTileKeys = GRID_TILE_ORDER.filter(k => allActiveTileSet.has(k))
+  const availableToAddKeys = ADDABLE_TILE_ORDER.filter(k => !allActiveTileSet.has(k))
+
+  const getTilePreview = (key) => {
+    if (key === 'timeline') return timelineSummary?.ceremonyTime
+      ? new Date(`2000-01-01T${timelineSummary.ceremonyTime}`).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+      : 'Set up →'
+    if (key === 'tables') return tableSummary ? `${tableSummary.guestCount} guests` : 'Set up →'
+    if (key === 'budget') return budgetSummary ? `$${budgetSummary.totalCommitted.toLocaleString()} committed` : 'Set up →'
+    const previews = {
+      vendor: 'Manage →', checklist: 'View tasks →', staffing: 'Estimate →',
+      inspo: 'Gallery →', guestcare: 'View notes →', borrow: 'Browse & select →', picks: 'Coordinator favorites →'
+    }
+    return previews[key] || 'Open →'
+  }
 
   return (
     <div className="min-h-screen bg-cream-50">
@@ -938,134 +991,61 @@ export default function Dashboard() {
 
           {/* Right Column: Planning Tools & Quick Actions */}
           <div className="order-1 lg:order-2 space-y-4">
-            {/* Planning at a Glance - 2x2 Grid */}
+            {/* Planning Tools — modular tiles */}
             {profile?.wedding_id && (
               <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-5">
-                <h3 className="font-serif text-lg text-sage-700">Planning at a Glance</h3>
+                <h3 className="font-serif text-lg text-sage-700">Planning Tools</h3>
                 <p className="text-sage-400 text-xs mb-4">
-                  These tools give you a rough idea to help with planning. Final details are always finalized personally with your coordinator.
+                  These tools give a rough picture to help with planning. Final details are always confirmed with your coordinator.
                 </p>
+
+                {/* Active tiles */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
-                  {/* Timeline Card */}
-                  <button
-                    onClick={() => setOpenModal('timeline')}
-                    className="bg-gradient-to-br from-amber-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-amber-200 hover:border-amber-300 hover:shadow-md transition text-left"
-                  >
-                    <span className="text-xl sm:text-2xl">📅</span>
-                    <p className="font-medium text-sage-800 text-sm mt-1 sm:mt-2">Timeline</p>
-                    {timelineSummary ? (
-                      <p className="text-sage-500 text-xs mt-1">
-                        {timelineSummary.ceremonyTime ?
-                          new Date(`2000-01-01T${timelineSummary.ceremonyTime}`).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-                          : 'Not set'}
-                      </p>
-                    ) : (
-                      <p className="text-sage-500 text-xs mt-1">Set up →</p>
-                    )}
-                  </button>
-
-                  {/* Tables Card */}
-                  <button
-                    onClick={() => setOpenModal('tables')}
-                    className="bg-gradient-to-br from-sage-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-sage-200 hover:border-sage-300 hover:shadow-md transition text-left"
-                  >
-                    <span className="text-xl sm:text-2xl">🪑</span>
-                    <p className="font-medium text-sage-800 text-sm mt-1 sm:mt-2">Tables</p>
-                    {tableSummary ? (
-                      <p className="text-sage-500 text-xs mt-1">{tableSummary.guestCount} guests</p>
-                    ) : (
-                      <p className="text-sage-500 text-xs mt-1">Set up →</p>
-                    )}
-                  </button>
-
-                  {/* Vendors Card */}
-                  <button
-                    onClick={() => setOpenModal('vendor')}
-                    className="bg-gradient-to-br from-rose-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-rose-200 hover:border-rose-300 hover:shadow-md transition text-left"
-                  >
-                    <span className="text-xl sm:text-2xl">👥</span>
-                    <p className="font-medium text-sage-800 text-sm mt-1 sm:mt-2">Vendors</p>
-                    <p className="text-sage-500 text-xs mt-1">Manage →</p>
-                  </button>
-
-                  {/* Checklist Card */}
-                  <button
-                    onClick={() => setOpenModal('checklist')}
-                    className="bg-gradient-to-br from-blue-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-blue-200 hover:border-blue-300 hover:shadow-md transition text-left"
-                  >
-                    <span className="text-xl sm:text-2xl">✅</span>
-                    <p className="font-medium text-sage-800 text-sm mt-1 sm:mt-2">Checklist</p>
-                    <p className="text-sage-500 text-xs mt-1">View tasks →</p>
-                  </button>
-
-                  {/* Staffing Card */}
-                  <button
-                    onClick={() => setOpenModal('staffing')}
-                    className="bg-gradient-to-br from-purple-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-purple-200 hover:border-purple-300 hover:shadow-md transition text-left"
-                  >
-                    <span className="text-xl sm:text-2xl">🙋</span>
-                    <p className="font-medium text-sage-800 text-sm mt-1 sm:mt-2">Staffing</p>
-                    <p className="text-sage-500 text-xs mt-1">Estimate →</p>
-                  </button>
-
-                  {/* Inspo Gallery Card */}
-                  <button
-                    onClick={() => setOpenModal('inspo')}
-                    className="bg-gradient-to-br from-pink-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-pink-200 hover:border-pink-300 hover:shadow-md transition text-left"
-                  >
-                    <span className="text-xl sm:text-2xl">💡</span>
-                    <p className="font-medium text-sage-800 text-sm mt-1 sm:mt-2">Inspiration</p>
-                    <p className="text-sage-500 text-xs mt-1">Gallery →</p>
-                  </button>
-
-                  {/* Budget Card */}
-                  <button
-                    onClick={() => setOpenModal('budget')}
-                    className="bg-gradient-to-br from-emerald-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-emerald-200 hover:border-emerald-300 hover:shadow-md transition text-left"
-                  >
-                    <span className="text-xl sm:text-2xl">💰</span>
-                    <p className="font-medium text-sage-800 text-sm mt-1 sm:mt-2">Budget</p>
-                    {budgetSummary ? (
-                      <p className="text-sage-500 text-xs mt-1">
-                        ${budgetSummary.totalCommitted.toLocaleString()} committed
-                      </p>
-                    ) : (
-                      <p className="text-sage-500 text-xs mt-1">Set up →</p>
-                    )}
-                  </button>
-
-                  {/* Borrow Brochure Card */}
-                  <button
-                    onClick={() => setOpenModal('borrow')}
-                    className="bg-gradient-to-br from-orange-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-orange-200 hover:border-orange-300 hover:shadow-md transition text-left"
-                  >
-                    <span className="text-xl sm:text-2xl">📋</span>
-                    <p className="font-medium text-sage-800 text-sm mt-1 sm:mt-2">Borrow Brochure</p>
-                    <p className="text-sage-500 text-xs mt-1">Browse & select items</p>
-                  </button>
-
-                  {/* Rixey Picks Card */}
-                  <button
-                    onClick={() => setOpenModal('picks')}
-                    className="bg-gradient-to-br from-yellow-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-yellow-200 hover:border-yellow-300 hover:shadow-md transition text-left"
-                  >
-                    <span className="text-xl sm:text-2xl">🛍</span>
-                    <p className="font-medium text-sage-800 text-sm mt-1 sm:mt-2">Rixey Picks</p>
-                    <p className="text-sage-500 text-xs mt-1">Coordinator favorites →</p>
-                  </button>
+                  {activeGridTileKeys.map(key => {
+                    const meta = TILE_META[key]
+                    return (
+                      <button
+                        key={key}
+                        onClick={() => meta.modal && setOpenModal(meta.modal)}
+                        className={`bg-gradient-to-br ${meta.btnCls} to-cream-50 rounded-xl p-3 sm:p-4 border hover:shadow-md transition text-left`}
+                      >
+                        <span className="text-xl sm:text-2xl">{meta.emoji}</span>
+                        <p className="font-medium text-sage-800 text-sm mt-1 sm:mt-2">{meta.label}</p>
+                        <p className="text-sage-500 text-xs mt-1">{getTilePreview(key)}</p>
+                      </button>
+                    )
+                  })}
                 </div>
+
+                {/* Available tiles to add */}
+                {availableToAddKeys.length > 0 && (
+                  <div className="mt-4 pt-3 border-t border-cream-100">
+                    <p className="text-sage-400 text-xs mb-2">Add to your dashboard:</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {availableToAddKeys.map(key => (
+                        <button
+                          key={key}
+                          onClick={() => addTile(key)}
+                          className="flex items-center gap-1 px-2.5 py-1 bg-cream-50 border border-cream-200 rounded-full text-xs text-sage-500 hover:border-sage-300 hover:text-sage-700 transition"
+                        >
+                          {TILE_META[key].emoji} {TILE_META[key].label}
+                          <svg className="w-3 h-3 text-sage-300 ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+                          </svg>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
-            {/* Quick Actions Row */}
-            <div className="grid grid-cols-2 gap-4">
-              {/* Message the Team */}
-              {profile?.wedding_id && (
-                <div className="col-span-2">
-                  <ClientInbox weddingId={profile.wedding_id} userId={user?.id} />
-                </div>
-              )}
-            </div>
+            {/* Client Inbox */}
+            {profile?.wedding_id && (
+              <div>
+                <ClientInbox weddingId={profile.wedding_id} userId={user?.id} />
+              </div>
+            )}
 
             {/* Book a Meeting */}
             <div className="bg-white rounded-2xl shadow-sm border border-cream-200 overflow-hidden">
@@ -1090,46 +1070,12 @@ export default function Dashboard() {
                 </div>
               )}
             </div>
-
-            {/* Inspiration Gallery */}
-            {profile?.wedding_id && (
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 overflow-hidden">
-                <button
-                  onClick={() => setExpandedSections(prev => ({ ...prev, inspiration: !prev.inspiration }))}
-                  className="w-full flex items-center justify-between p-4 hover:bg-cream-50 transition"
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="text-xl">💐</span>
-                    <span className="font-medium text-sage-700">Inspiration Gallery</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span
-                      onClick={(e) => { e.stopPropagation(); setOpenModal('inspo') }}
-                      className="text-sage-500 hover:text-sage-700 text-sm"
-                    >
-                      View All
-                    </span>
-                    <svg
-                      className={`w-5 h-5 text-sage-400 transition-transform ${expandedSections.inspiration ? 'rotate-180' : ''}`}
-                      fill="none" stroke="currentColor" viewBox="0 0 24 24"
-                    >
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    </svg>
-                  </div>
-                </button>
-                {expandedSections.inspiration && (
-                  <div className="px-4 pb-4">
-                    <InspoGallery weddingId={profile.wedding_id} userId={user?.id} compact />
-                  </div>
-                )}
-              </div>
-            )}
           </div>
         </div>
 
-        {/* Guest Care Notes */}
-        {profile?.wedding_id && (
-          <div className="mt-6">
+        {/* Guest Care Notes — only shows when tile is manually added */}
+        {profile?.wedding_id && allActiveTileSet.has('guestcare') && (
+          <div className="mt-6" id="guest-care-section">
             <GuestCareNotes weddingId={profile.wedding_id} />
           </div>
         )}

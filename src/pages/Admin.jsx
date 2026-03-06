@@ -1386,12 +1386,12 @@ export default function Admin() {
                 )}
               </div>
 
-              {/* Members */}
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
-                <h2 className="font-serif text-lg text-sage-700 mb-4">Wedding Party</h2>
-                <div className="space-y-3">
-                  {viewingWedding.profiles?.length > 0 ? (
-                    viewingWedding.profiles.map(p => (
+              {/* Members — only show when people have joined */}
+              {viewingWedding.profiles?.length > 0 && (
+                <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
+                  <h2 className="font-serif text-lg text-sage-700 mb-4">Wedding Party</h2>
+                  <div className="space-y-3">
+                    {viewingWedding.profiles.map(p => (
                       <div key={p.id} className="flex items-center justify-between p-3 bg-cream-50 rounded-lg">
                         <div>
                           <p className="font-medium text-sage-800">{p.name}</p>
@@ -1401,12 +1401,10 @@ export default function Admin() {
                           {p.role.replace('couple-', '').replace('-', ' ')}
                         </span>
                       </div>
-                    ))
-                  ) : (
-                    <p className="text-sage-400 text-sm">No members yet</p>
-                  )}
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Links Status */}
               <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
@@ -1505,20 +1503,20 @@ export default function Admin() {
                 )
               })()}
 
-              {/* Timeline Summary Card */}
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
-                <div className="flex items-center justify-between mb-3">
-                  <h2 className="font-serif text-lg text-sage-700 flex items-center gap-2">
-                    <span>📅</span> Timeline
-                  </h2>
-                  <button
-                    onClick={() => setActiveTab('timeline')}
-                    className="text-sage-500 hover:text-sage-700 text-sm"
-                  >
-                    View Full →
-                  </button>
-                </div>
-                {timelineSummary ? (
+              {/* Timeline Summary — only show when couple has set one up */}
+              {timelineSummary && (
+                <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
+                  <div className="flex items-center justify-between mb-3">
+                    <h2 className="font-serif text-lg text-sage-700 flex items-center gap-2">
+                      <span>📅</span> Timeline
+                    </h2>
+                    <button
+                      onClick={() => setActiveTab('timeline')}
+                      className="text-sage-500 hover:text-sage-700 text-sm"
+                    >
+                      View Full →
+                    </button>
+                  </div>
                   <div className="space-y-2 text-sm">
                     <div className="flex justify-between">
                       <span className="text-sage-500">Ceremony</span>
@@ -1556,25 +1554,23 @@ export default function Admin() {
                       </p>
                     )}
                   </div>
-                ) : (
-                  <p className="text-sage-400 text-sm">No timeline created yet</p>
-                )}
-              </div>
-
-              {/* Table Layout Summary Card */}
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
-                <div className="flex items-center justify-between mb-3">
-                  <h2 className="font-serif text-lg text-sage-700 flex items-center gap-2">
-                    <span>🪑</span> Table Layout
-                  </h2>
-                  <button
-                    onClick={() => setActiveTab('tables')}
-                    className="text-sage-500 hover:text-sage-700 text-sm"
-                  >
-                    View Full →
-                  </button>
                 </div>
-                {tableSummary ? (
+              )}
+
+              {/* Table Layout Summary — only show when couple has set one up */}
+              {tableSummary && (
+                <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
+                  <div className="flex items-center justify-between mb-3">
+                    <h2 className="font-serif text-lg text-sage-700 flex items-center gap-2">
+                      <span>🪑</span> Table Layout
+                    </h2>
+                    <button
+                      onClick={() => setActiveTab('tables')}
+                      className="text-sage-500 hover:text-sage-700 text-sm"
+                    >
+                      View Full →
+                    </button>
+                  </div>
                   <div className="space-y-2 text-sm">
                     <div className="flex justify-between">
                       <span className="text-sage-500">Guest Count</span>
@@ -1620,17 +1616,15 @@ export default function Admin() {
                       </p>
                     )}
                   </div>
-                ) : (
-                  <p className="text-sage-400 text-sm">No table layout created yet</p>
-                )}
-              </div>
+                </div>
+              )}
 
-              {/* Staffing Summary Card */}
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
-                <h2 className="font-serif text-lg text-sage-700 flex items-center gap-2 mb-3">
-                  <span>🙋</span> Staffing Estimate
-                </h2>
-                {staffingSummary ? (
+              {/* Staffing Summary — only show when couple has run the calculator */}
+              {staffingSummary && (
+                <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
+                  <h2 className="font-serif text-lg text-sage-700 flex items-center gap-2 mb-3">
+                    <span>🙋</span> Staffing Estimate
+                  </h2>
                   <div className="space-y-3 text-sm">
                     {staffingSummary.friday_total > 0 && (
                       <div className="bg-amber-50 rounded-lg p-3">
@@ -1660,10 +1654,8 @@ export default function Admin() {
                       </p>
                     )}
                   </div>
-                ) : (
-                  <p className="text-sage-400 text-sm">No staffing estimate yet</p>
-                )}
-              </div>
+                </div>
+              )}
 
               {/* Allergy / Dietary Notes Card */}
               {(() => {
@@ -1685,20 +1677,20 @@ export default function Admin() {
                 )
               })()}
 
-              {/* Borrow Selections Card */}
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
-                <div className="flex items-center justify-between mb-3">
-                  <h2 className="font-serif text-lg text-sage-700 flex items-center gap-2">
-                    <span>📋</span> Borrow Selections
-                  </h2>
-                  <button
-                    onClick={() => setActiveTab('borrow')}
-                    className="text-sage-500 hover:text-sage-700 text-sm"
-                  >
-                    View All →
-                  </button>
-                </div>
-                {borrowSelections.length > 0 ? (
+              {/* Borrow Selections — only show when couple has picked items */}
+              {borrowSelections.length > 0 && (
+                <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
+                  <div className="flex items-center justify-between mb-3">
+                    <h2 className="font-serif text-lg text-sage-700 flex items-center gap-2">
+                      <span>📋</span> Borrow Selections
+                    </h2>
+                    <button
+                      onClick={() => setActiveTab('borrow')}
+                      className="text-sage-500 hover:text-sage-700 text-sm"
+                    >
+                      View All →
+                    </button>
+                  </div>
                   <ul className="space-y-1">
                     {borrowSelections.map(s => (
                       <li key={s.item_id} className="text-sm text-sage-700 flex items-center gap-2">
@@ -1707,10 +1699,8 @@ export default function Admin() {
                       </li>
                     ))}
                   </ul>
-                ) : (
-                  <p className="text-sage-400 text-sm">No items selected yet</p>
-                )}
-              </div>
+                </div>
+              )}
 
               {/* Contract Upload */}
               <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
