@@ -2770,6 +2770,30 @@ app.post('/api/zoom/sync', async (req, res) => {
   }
 });
 
+// Debug: inspect stored Zoom transcripts
+app.get('/api/zoom/transcripts', async (req, res) => {
+  try {
+    const { data: meetings } = await supabaseAdmin
+      .from('processed_zoom_meetings')
+      .select('zoom_meeting_id, meeting_topic, wedding_id, created_at, transcript_text')
+      .order('created_at', { ascending: false });
+
+    const summary = (meetings || []).map(m => ({
+      id: m.zoom_meeting_id,
+      topic: m.meeting_topic,
+      wedding_id: m.wedding_id,
+      created_at: m.created_at,
+      transcript_length: m.transcript_text?.length || 0,
+      transcript_preview: m.transcript_text?.substring(0, 500) || null,
+      parsed_preview: m.transcript_text ? parseVttToText(m.transcript_text).substring(0, 500) : null
+    }));
+
+    res.json({ count: summary.length, meetings: summary });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Re-extract planning notes from already-processed Zoom transcripts
 app.post('/api/zoom/reextract', async (req, res) => {
   try {
