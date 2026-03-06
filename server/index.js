@@ -657,7 +657,7 @@ async function extractPlanningNotesAI(text, weddingId, source, sourceType = 'mes
   if (!cleanText || cleanText.length < 20) return [];
 
   const isTranscript = sourceType === 'transcript' || sourceType === 'email';
-  const maxLen = isTranscript ? 8000 : 2000;
+  const maxLen = isTranscript ? 30000 : 2000;
 
   const instruction = isTranscript
     ? `Read this ${sourceType} as a thoughtful wedding coordinator would. Extract every logistics decision AND every emotional signal — stress, grief, family tension, financial worry, what this day means to them. This may be the only written record of the conversation, so be thorough.`
@@ -666,7 +666,7 @@ async function extractPlanningNotesAI(text, weddingId, source, sourceType = 'mes
   try {
     const response = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: isTranscript ? 2000 : 800,
+      max_tokens: isTranscript ? 3000 : 800,
       messages: [{
         role: 'user',
         content: `${RIXEY_EXTRACTION_CONTEXT}
@@ -2736,7 +2736,7 @@ app.post('/api/zoom/sync', async (req, res) => {
           wedding_id: matchedWeddingId,
           user_id: null,
           category: 'zoom_transcript',
-          content: `[Zoom Meeting: ${meetingLabel} — ${meetingDate}]\n${cleanTranscript.substring(0, 10000)}`,
+          content: `[Zoom Meeting: ${meetingLabel} — ${meetingDate}]\n${cleanTranscript.substring(0, 40000)}`,
           source_message: `Zoom meeting on ${meetingDate}`,
           status: 'confirmed'
         });
@@ -2819,28 +2819,62 @@ app.get('/api/zoom/transcripts', async (req, res) => {
 // Re-extract planning notes from already-processed Zoom transcripts
 app.post('/api/zoom/reextract', async (req, res) => {
   try {
+    let sources = [];
+
+    // Primary: processed_zoom_meetings table
     const { data: meetings } = await supabaseAdmin
       .from('processed_zoom_meetings')
       .select('*')
       .not('transcript_text', 'is', null)
       .not('wedding_id', 'is', null);
 
-    if (!meetings || meetings.length === 0) {
-      return res.json({ message: 'No processed meetings with transcripts found.' });
+    if (meetings && meetings.length > 0) {
+      sources = meetings.map(m => ({
+        text: m.transcript_text,
+        wedding_id: m.wedding_id,
+        label: m.meeting_topic || 'Untitled'
+      }));
     }
 
-    let totalNotes = 0;
-    for (const meeting of meetings) {
-      const source = `Zoom meeting: ${meeting.meeting_topic || 'Untitled'}`;
-      const notes = await extractPlanningNotesAI(meeting.transcript_text, meeting.wedding_id, source);
-      if (notes.length > 0) {
-        await savePlanningNotes(notes);
-        totalNotes += notes.length;
-        console.log(`Re-extracted ${notes.length} notes from "${meeting.meeting_topic}"`);
+    // Fallback: zoom_transcript planning notes (used when processed_zoom_meetings is empty)
+    if (sources.length === 0) {
+      const { data: transcriptNotes } = await supabaseAdmin
+        .from('planning_notes')
+        .select('*')
+        .eq('category', 'zoom_transcript')
+        .not('wedding_id', 'is', null);
+
+      if (transcriptNotes && transcriptNotes.length > 0) {
+        sources = transcriptNotes.map(n => {
+          // Strip the [Zoom Meeting: ...] header line
+          const body = n.content.replace(/^\[Zoom Meeting:[^\]]*\]\n?/, '');
+          return {
+            text: body,
+            wedding_id: n.wedding_id,
+            label: n.source_message || 'Zoom meeting'
+          };
+        });
+        console.log(`Re-extract: using ${sources.length} zoom_transcript planning notes as source`);
       }
     }
 
-    res.json({ message: `Re-extracted ${totalNotes} planning notes from ${meetings.length} meeting(s).` });
+    if (sources.length === 0) {
+      return res.json({ message: 'No Zoom transcripts found to re-extract from.' });
+    }
+
+    let totalNotes = 0;
+    for (const src of sources) {
+      const notes = await extractPlanningNotesAI(src.text, src.wedding_id, `Zoom meeting: ${src.label}`, 'transcript');
+      if (notes.length > 0) {
+        await savePlanningNotes(notes);
+        totalNotes += notes.length;
+        console.log(`Re-extracted ${notes.length} notes from "${src.label}"`);
+      } else {
+        console.log(`No notes extracted from "${src.label}" (text length: ${src.text?.length || 0})`);
+      }
+    }
+
+    res.json({ message: `Re-extracted ${totalNotes} planning notes from ${sources.length} transcript(s).` });
   } catch (error) {
     console.error('Re-extract error:', error);
     res.status(500).json({ error: 'Failed to re-extract: ' + error.message });
