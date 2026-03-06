@@ -94,20 +94,6 @@ function WeddingCountdown({ weddingDate }) {
   )
 }
 
-const TILE_META = {
-  timeline:  { emoji: '📅', label: 'Timeline',         btnCls: 'from-amber-50 border-amber-200 hover:border-amber-300',    modal: 'timeline' },
-  tables:    { emoji: '🪑', label: 'Tables',           btnCls: 'from-sage-50 border-sage-200 hover:border-sage-300',       modal: 'tables' },
-  budget:    { emoji: '💰', label: 'Budget',           btnCls: 'from-emerald-50 border-emerald-200 hover:border-emerald-300', modal: 'budget' },
-  vendor:    { emoji: '👥', label: 'Vendors',          btnCls: 'from-rose-50 border-rose-200 hover:border-rose-300',        modal: 'vendor' },
-  checklist: { emoji: '✅', label: 'Checklist',        btnCls: 'from-blue-50 border-blue-200 hover:border-blue-300',        modal: 'checklist' },
-  staffing:  { emoji: '🙋', label: 'Staffing Guide',   btnCls: 'from-purple-50 border-purple-200 hover:border-purple-300',  modal: 'staffing' },
-  inspo:     { emoji: '💡', label: 'Inspiration',      btnCls: 'from-pink-50 border-pink-200 hover:border-pink-300',        modal: 'inspo' },
-  guestcare: { emoji: '💝', label: 'Guest Care',       btnCls: 'from-teal-50 border-teal-200 hover:border-teal-300',        modal: null },
-  borrow:    { emoji: '📋', label: 'Borrow Brochure',  btnCls: 'from-orange-50 border-orange-200 hover:border-orange-300',  modal: 'borrow' },
-  picks:     { emoji: '🛍', label: 'Rixey Picks',      btnCls: 'from-yellow-50 border-yellow-200 hover:border-yellow-300',  modal: 'picks' },
-}
-const GRID_TILE_ORDER    = ['timeline', 'tables', 'budget', 'vendor', 'checklist', 'staffing', 'inspo', 'borrow', 'picks']
-const ADDABLE_TILE_ORDER = ['timeline', 'tables', 'budget', 'staffing', 'inspo', 'borrow', 'picks', 'guestcare']
 
 export default function Dashboard() {
   const { user, signOut } = useAuth()
@@ -126,41 +112,23 @@ export default function Dashboard() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [selectedFile, setSelectedFile] = useState(null)
   const [uploadingFile, setUploadingFile] = useState(false)
-  const [openModal, setOpenModal] = useState(null)
+  const [activeSection, setActiveSection] = useState('chat')
+  const [showShareModal, setShowShareModal] = useState(false)
   const [shareLinkCopied, setShareLinkCopied] = useState(false)
-  // Derived booleans for each modal — keeps all existing JSX unchanged
-  const showVendorModal    = openModal === 'vendor'
-  const showInspoModal     = openModal === 'inspo'
-  const showChecklistModal = openModal === 'checklist'
-  const showTimelineModal  = openModal === 'timeline'
-  const showTablesModal    = openModal === 'tables'
-  const showStaffingModal  = openModal === 'staffing'
-  const showShareModal     = openModal === 'share'
-  const showBudgetModal    = openModal === 'budget'
-  const showBorrowModal    = openModal === 'borrow'
-  const showPicksModal     = openModal === 'picks'
   const [budgetSummary, setBudgetSummary] = useState(null)
   const [timelineSummary, setTimelineSummary] = useState(null)
   const [tableSummary, setTableSummary] = useState(null)
-  // Collapsible sections (collapsed by default)
-  const [expandedSections, setExpandedSections] = useState({
-    externalTools: false,
-    meetings: false,
-    planningTools: false,
-    inspiration: false,
-    resourceLinks: false
-  })
   const [retryState, setRetryState] = useState(null) // { userMessage, baseMessages, secondsLeft }
-  const [manuallyAddedTiles, setManuallyAddedTiles] = useState([])
   const fileInputRef = useRef(null)
   const messagesEndRef = useRef(null)
+  const prevSectionRef = useRef('chat')
 
-  // Close any open modal on Escape
   useEffect(() => {
-    const handleEsc = (e) => { if (e.key === 'Escape') setOpenModal(null) }
-    document.addEventListener('keydown', handleEsc)
-    return () => document.removeEventListener('keydown', handleEsc)
-  }, [])
+    if (['timeline', 'tables', 'budget'].includes(prevSectionRef.current) && activeSection !== prevSectionRef.current) {
+      refreshSummaries()
+    }
+    prevSectionRef.current = activeSection
+  }, [activeSection]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (user) {
@@ -191,11 +159,6 @@ export default function Dashboard() {
 
         if (weddingData) {
           setWedding(weddingData)
-          // Restore manually-added tiles from localStorage
-          try {
-            const saved = JSON.parse(localStorage.getItem(`dtiles_${data.wedding_id}`) || '[]')
-            setManuallyAddedTiles(saved)
-          } catch { /* ignore */ }
         }
 
         // Load budget summary
@@ -614,44 +577,12 @@ export default function Dashboard() {
     setSavingProfile(false)
   }
 
-  const addTile = (key) => {
-    setManuallyAddedTiles(prev => {
-      const next = [...new Set([...prev, key])]
-      if (profile?.wedding_id) localStorage.setItem(`dtiles_${profile.wedding_id}`, JSON.stringify(next))
-      return next
-    })
-  }
-
   const resourceLinks = [
     { name: 'Vendor Directory', href: '/vendors' },
     { name: 'Accommodations', href: '/accommodations' },
     { name: 'Venue Gallery', href: 'https://www.rixeymanor.com/weddingsbyseason' },
     { name: 'Planning Resources', href: 'https://www.rixeymanor.com/planning' },
   ]
-
-  // Modular tile activation
-  const autoActiveTileSet = new Set([
-    'vendor', 'checklist',
-    ...(timelineSummary ? ['timeline'] : []),
-    ...(tableSummary ? ['tables'] : []),
-    ...(budgetSummary ? ['budget'] : []),
-  ])
-  const allActiveTileSet = new Set([...autoActiveTileSet, ...manuallyAddedTiles])
-  const activeGridTileKeys = GRID_TILE_ORDER.filter(k => allActiveTileSet.has(k))
-  const availableToAddKeys = ADDABLE_TILE_ORDER.filter(k => !allActiveTileSet.has(k))
-
-  const getTilePreview = (key) => {
-    if (key === 'timeline') return timelineSummary?.ceremonyTime
-      ? new Date(`2000-01-01T${timelineSummary.ceremonyTime}`).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-      : 'Set up →'
-    if (key === 'tables') return tableSummary ? `${tableSummary.guestCount} guests` : 'Set up →'
-    if (key === 'budget') return budgetSummary ? `$${budgetSummary.totalCommitted.toLocaleString()} committed` : 'Set up →'
-    const previews = {
-      vendor: 'Manage →', checklist: 'View tasks →', staffing: 'Estimate →',
-      inspo: 'Gallery →', guestcare: 'View notes →', borrow: 'Browse & select →', picks: 'Coordinator favorites →'
-    }
-    return previews[key] || 'Open →'
-  }
 
   return (
     <div className="min-h-screen bg-cream-50">
@@ -785,11 +716,11 @@ export default function Dashboard() {
               } else if (action === 'first_message_sent') {
                 document.getElementById('sage-input')?.focus()
               } else if (action === 'vendor_added') {
-                setOpenModal('vendor')
+                setActiveSection('vendor')
               } else if (action === 'inspo_uploaded') {
-                setOpenModal('inspo')
+                setActiveSection('inspo')
               } else if (action === 'checklist_item_completed') {
-                setOpenModal('checklist')
+                setActiveSection('checklist')
               }
             }}
           />
@@ -826,7 +757,7 @@ export default function Dashboard() {
                     Event Code: <span className="font-mono bg-cream-100 px-2 py-0.5 rounded">{wedding.event_code}</span>
                   </p>
                   <button
-                    onClick={() => setOpenModal('share')}
+                    onClick={() => setShowShareModal(true)}
                     className="text-xs text-sage-600 hover:text-sage-800 flex items-center gap-1 bg-sage-100 hover:bg-sage-200 px-2 py-1 rounded transition"
                   >
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -847,23 +778,104 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Main Two-Column Layout */}
-        <div className="grid lg:grid-cols-2 gap-6">
-          {/* Left Column: Sage Chat */}
-          <div className="order-1">
-            <div className="bg-white rounded-2xl shadow-sm border border-cream-200 flex flex-col h-[420px] sm:h-[500px] lg:h-[650px]">
-              {/* Chat Header */}
-              <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-cream-200">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 sm:w-10 sm:h-10 bg-sage-100 rounded-full flex items-center justify-center">
-                    <span className="text-sage-600 font-serif text-base sm:text-lg">S</span>
+        {/* Main Layout */}
+        <div className="grid lg:grid-cols-[220px_1fr] gap-4 sm:gap-6">
+
+          {/* Compact Nav Sidebar */}
+          <div className="order-2 lg:order-1">
+            <div className="bg-white rounded-2xl shadow-sm border border-cream-200 overflow-hidden lg:sticky lg:top-24">
+              <nav className="p-2">
+                {[
+                  { key: 'chat', label: 'Chat with Sage', emoji: '💬' },
+                  { section: 'Planning Tools' },
+                  { key: 'timeline', label: 'Timeline', emoji: '📅', dot: !!timelineSummary },
+                  { key: 'tables', label: 'Tables', emoji: '🪑', dot: !!tableSummary },
+                  { key: 'budget', label: 'Budget', emoji: '💰', dot: !!budgetSummary },
+                  { key: 'vendor', label: 'Vendors', emoji: '👥' },
+                  { key: 'checklist', label: 'Checklist', emoji: '✅' },
+                  { key: 'staffing', label: 'Staffing Guide', emoji: '🙋' },
+                  { key: 'inspo', label: 'Inspiration', emoji: '💡' },
+                  { key: 'borrow', label: 'Borrow Brochure', emoji: '📋' },
+                  { key: 'picks', label: 'Rixey Picks', emoji: '🛍' },
+                  { key: 'guestcare', label: 'Guest Care', emoji: '💝' },
+                  { section: 'Connect' },
+                  { key: 'inbox', label: 'Inbox', emoji: '📬' },
+                  { key: 'booking', label: 'Book a Meeting', emoji: '📞' },
+                  { section: 'Links' },
+                  { key: 'resources', label: 'Resources', emoji: '🔗' },
+                ].map((item, idx) => {
+                  if (item.section) {
+                    return (
+                      <p key={idx} className="text-xs font-semibold text-sage-400 uppercase tracking-wide px-3 pt-3 pb-1">
+                        {item.section}
+                      </p>
+                    )
+                  }
+                  return (
+                    <button
+                      key={item.key}
+                      onClick={() => setActiveSection(item.key)}
+                      className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition ${
+                        activeSection === item.key
+                          ? 'bg-sage-100 text-sage-700 font-medium'
+                          : 'text-sage-500 hover:bg-cream-50 hover:text-sage-700'
+                      }`}
+                    >
+                      <span className="flex items-center gap-2">
+                        <span>{item.emoji}</span>
+                        <span>{item.label}</span>
+                      </span>
+                      {item.dot && <span className="w-1.5 h-1.5 rounded-full bg-sage-400 flex-shrink-0" />}
+                    </button>
+                  )
+                })}
+              </nav>
+            </div>
+          </div>
+
+          {/* Main Content */}
+          <div className="order-1 lg:order-2">
+            {/* Mobile: section dropdown */}
+            <div className="lg:hidden mb-3">
+              <select
+                value={activeSection}
+                onChange={e => setActiveSection(e.target.value)}
+                className="w-full p-3 border border-cream-200 rounded-xl bg-cream-50 text-sage-700 font-medium focus:outline-none focus:ring-2 focus:ring-sage-300"
+              >
+                <option value="chat">💬 Chat with Sage</option>
+                <option value="timeline">📅 Timeline</option>
+                <option value="tables">🪑 Tables</option>
+                <option value="budget">💰 Budget</option>
+                <option value="vendor">👥 Vendors</option>
+                <option value="checklist">✅ Checklist</option>
+                <option value="staffing">🙋 Staffing Guide</option>
+                <option value="inspo">💡 Inspiration</option>
+                <option value="borrow">📋 Borrow Brochure</option>
+                <option value="picks">🛍 Rixey Picks</option>
+                <option value="guestcare">💝 Guest Care</option>
+                <option value="inbox">📬 Inbox</option>
+                <option value="booking">📞 Book a Meeting</option>
+                <option value="resources">🔗 Resources</option>
+              </select>
+            </div>
+
+            <div className="bg-white rounded-2xl shadow-sm border border-cream-200 overflow-hidden">
+
+              {/* Chat section */}
+              {activeSection === 'chat' && (
+                <div className="flex flex-col h-[450px] sm:h-[550px] lg:h-[650px]">
+                  {/* Chat Header */}
+                  <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-cream-200 shrink-0">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 sm:w-10 sm:h-10 bg-sage-100 rounded-full flex items-center justify-center">
+                        <span className="text-sage-600 font-serif text-base sm:text-lg">S</span>
+                      </div>
+                      <div>
+                        <h2 className="font-serif text-lg sm:text-xl text-sage-700">Chat with Sage</h2>
+                        <p className="text-sage-400 text-xs sm:text-sm">Your personal wedding planning assistant</p>
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <h2 className="font-serif text-lg sm:text-xl text-sage-700">Chat with Sage</h2>
-                    <p className="text-sage-400 text-xs sm:text-sm">Your personal wedding planning assistant</p>
-                  </div>
-                </div>
-              </div>
 
               {/* Messages */}
               <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
@@ -941,7 +953,7 @@ export default function Dashboard() {
               </div>
 
               {/* Message Input */}
-              <form onSubmit={selectedFile ? sendWithFile : sendMessage} className="p-3 sm:p-4 border-t border-cream-200">
+              <form onSubmit={selectedFile ? sendWithFile : sendMessage} className="p-3 sm:p-4 border-t border-cream-200 shrink-0">
                 {selectedFile && (
                   <div className="mb-2 flex items-center gap-2 px-3 py-2 bg-sage-50 rounded-lg text-sm">
                     <svg className="w-4 h-4 text-sage-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -986,176 +998,156 @@ export default function Dashboard() {
                   </button>
                 </div>
               </form>
-            </div>
-          </div>
-
-          {/* Right Column: Planning Tools & Quick Actions */}
-          <div className="order-1 lg:order-2 space-y-4">
-            {/* Planning Tools — modular tiles */}
-            {profile?.wedding_id && (
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-5">
-                <h3 className="font-serif text-lg text-sage-700">Planning Tools</h3>
-                <p className="text-sage-400 text-xs mb-4">
-                  These tools give a rough picture to help with planning. Final details are always confirmed with your coordinator.
-                </p>
-
-                {/* Active tiles */}
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
-                  {activeGridTileKeys.map(key => {
-                    const meta = TILE_META[key]
-                    return (
-                      <button
-                        key={key}
-                        onClick={() => meta.modal && setOpenModal(meta.modal)}
-                        className={`bg-gradient-to-br ${meta.btnCls} to-cream-50 rounded-xl p-3 sm:p-4 border hover:shadow-md transition text-left`}
-                      >
-                        <span className="text-xl sm:text-2xl">{meta.emoji}</span>
-                        <p className="font-medium text-sage-800 text-sm mt-1 sm:mt-2">{meta.label}</p>
-                        <p className="text-sage-500 text-xs mt-1">{getTilePreview(key)}</p>
-                      </button>
-                    )
-                  })}
-                </div>
-
-                {/* Available tiles to add */}
-                {availableToAddKeys.length > 0 && (
-                  <div className="mt-4 pt-3 border-t border-cream-100">
-                    <p className="text-sage-400 text-xs mb-2">Add to your dashboard:</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {availableToAddKeys.map(key => (
-                        <button
-                          key={key}
-                          onClick={() => addTile(key)}
-                          className="flex items-center gap-1 px-2.5 py-1 bg-cream-50 border border-cream-200 rounded-full text-xs text-sage-500 hover:border-sage-300 hover:text-sage-700 transition"
-                        >
-                          {TILE_META[key].emoji} {TILE_META[key].label}
-                          <svg className="w-3 h-3 text-sage-300 ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
-                          </svg>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Client Inbox */}
-            {profile?.wedding_id && (
-              <div>
-                <ClientInbox weddingId={profile.wedding_id} userId={user?.id} />
-              </div>
-            )}
-
-            {/* Book a Meeting */}
-            <div className="bg-white rounded-2xl shadow-sm border border-cream-200 overflow-hidden">
-              <button
-                onClick={() => setExpandedSections(prev => ({ ...prev, meetings: !prev.meetings }))}
-                className="w-full flex items-center justify-between p-4 hover:bg-cream-50 transition"
-              >
-                <div className="flex items-center gap-3">
-                  <span className="text-xl">📞</span>
-                  <span className="font-medium text-sage-700">Book a Meeting</span>
-                </div>
-                <svg
-                  className={`w-5 h-5 text-sage-400 transition-transform ${expandedSections.meetings ? 'rotate-180' : ''}`}
-                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-              {expandedSections.meetings && (
-                <div className="px-4 pb-4">
-                  <BookingCalendly hideTitle />
                 </div>
               )}
+
+
+              {/* Timeline section */}
+              {activeSection === 'timeline' && profile?.wedding_id && (
+                <div className="p-4 sm:p-6">
+                  <TimelineBuilder weddingId={profile.wedding_id} weddingDate={wedding?.wedding_date} userId={user?.id} />
+                </div>
+              )}
+
+              {/* Tables section */}
+              {activeSection === 'tables' && profile?.wedding_id && (
+                <div className="p-4 sm:p-6">
+                  <TableLayoutPlanner weddingId={profile.wedding_id} userId={user?.id} />
+                </div>
+              )}
+
+              {/* Budget section */}
+              {activeSection === 'budget' && profile?.wedding_id && (
+                <div className="p-4 sm:p-6">
+                  <BudgetTracker weddingId={profile.wedding_id} userId={user?.id} />
+                </div>
+              )}
+
+              {/* Vendors section */}
+              {activeSection === 'vendor' && profile?.wedding_id && (
+                <div className="p-4 sm:p-6">
+                  <VendorChecklist weddingId={profile.wedding_id} />
+                </div>
+              )}
+
+              {/* Checklist section */}
+              {activeSection === 'checklist' && profile?.wedding_id && (
+                <div className="p-4 sm:p-6">
+                  <PlanningChecklist weddingId={profile.wedding_id} userId={user?.id} />
+                </div>
+              )}
+
+              {/* Staffing section */}
+              {activeSection === 'staffing' && profile?.wedding_id && (
+                <div className="p-4 sm:p-6">
+                  <StaffingCalculator weddingId={profile.wedding_id} userId={user?.id} />
+                </div>
+              )}
+
+              {/* Inspiration section */}
+              {activeSection === 'inspo' && profile?.wedding_id && (
+                <div className="p-4 sm:p-6">
+                  <InspoGallery weddingId={profile.wedding_id} userId={user?.id} />
+                </div>
+              )}
+
+              {/* Borrow section */}
+              {activeSection === 'borrow' && profile?.wedding_id && (
+                <div className="p-4 sm:p-6">
+                  <BorrowCatalog weddingId={profile.wedding_id} />
+                </div>
+              )}
+
+              {/* Picks section */}
+              {activeSection === 'picks' && (
+                <div className="p-4 sm:p-6">
+                  <StorefrontBrowser />
+                </div>
+              )}
+
+              {/* Guest Care section */}
+              {activeSection === 'guestcare' && profile?.wedding_id && (
+                <div className="p-4 sm:p-6">
+                  <GuestCareNotes weddingId={profile.wedding_id} />
+                </div>
+              )}
+
+              {/* Inbox section */}
+              {activeSection === 'inbox' && profile?.wedding_id && (
+                <div className="p-4 sm:p-6">
+                  <ClientInbox weddingId={profile.wedding_id} userId={user?.id} />
+                </div>
+              )}
+
+              {/* Booking section */}
+              {activeSection === 'booking' && (
+                <div className="p-4 sm:p-6">
+                  <BookingCalendly />
+                </div>
+              )}
+
+              {/* Resources section */}
+              {activeSection === 'resources' && (
+                <div className="p-4 sm:p-6 space-y-3">
+                  {wedding?.honeybook_link && (
+                    <a href={wedding.honeybook_link} target="_blank" rel="noopener noreferrer"
+                      className="flex items-center gap-3 p-4 bg-white rounded-xl border border-cream-200 hover:border-sage-300 hover:shadow-sm transition">
+                      <div className="w-10 h-10 bg-sage-100 rounded-lg flex items-center justify-center">
+                        <svg className="w-5 h-5 text-sage-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                      </div>
+                      <div>
+                        <p className="font-medium text-sage-800 text-sm">HoneyBook</p>
+                        <p className="text-sage-400 text-xs">Contracts & Payments</p>
+                      </div>
+                    </a>
+                  )}
+                  <a href="https://members.isadoraandco.com/offers/hWX4WHcQ" target="_blank" rel="noopener noreferrer"
+                    className="flex items-center gap-3 p-4 bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl border border-amber-200 hover:border-amber-300 hover:shadow-sm transition">
+                    <div className="w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center">
+                      <svg className="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="font-medium text-sage-800 text-sm">Planning Course</p>
+                      <p className="text-amber-600 text-xs font-medium">FREE with code: RIXEYFAMILY</p>
+                    </div>
+                  </a>
+                  {[
+                    { name: 'Vendor Directory', href: '/vendors' },
+                    { name: 'Accommodations', href: '/accommodations' },
+                    { name: 'Venue Gallery', href: 'https://www.rixeymanor.com/weddingsbyseason' },
+                    { name: 'Planning Resources', href: 'https://www.rixeymanor.com/planning' },
+                  ].map((link) => (
+                    link.href.startsWith('/') ? (
+                      <button key={link.name} onClick={() => navigate(link.href)}
+                        className="w-full flex items-center gap-3 p-4 bg-white rounded-xl border border-cream-200 hover:border-sage-300 hover:shadow-sm transition text-left">
+                        <div className="w-10 h-10 bg-cream-100 rounded-lg flex items-center justify-center">
+                          <svg className="w-5 h-5 text-sage-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                          </svg>
+                        </div>
+                        <p className="font-medium text-sage-800 text-sm">{link.name}</p>
+                      </button>
+                    ) : (
+                      <a key={link.name} href={link.href} target="_blank" rel="noopener noreferrer"
+                        className="flex items-center gap-3 p-4 bg-white rounded-xl border border-cream-200 hover:border-sage-300 hover:shadow-sm transition">
+                        <div className="w-10 h-10 bg-cream-100 rounded-lg flex items-center justify-center">
+                          <svg className="w-5 h-5 text-sage-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                          </svg>
+                        </div>
+                        <p className="font-medium text-sage-800 text-sm">{link.name}</p>
+                      </a>
+                    )
+                  ))}
+                </div>
+              )}
+
             </div>
           </div>
-        </div>
-
-        {/* Guest Care Notes — only shows when tile is manually added */}
-        {profile?.wedding_id && allActiveTileSet.has('guestcare') && (
-          <div className="mt-6" id="guest-care-section">
-            <GuestCareNotes weddingId={profile.wedding_id} />
-          </div>
-        )}
-
-        {/* Bottom Section: External Tools & Resources */}
-        <div className="mt-6 grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {/* HoneyBook */}
-          {wedding?.honeybook_link && (
-            <a
-              href={wedding.honeybook_link}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-3 p-4 bg-white rounded-xl border border-cream-200 hover:border-sage-300 hover:shadow-sm transition"
-            >
-              <div className="w-10 h-10 bg-sage-100 rounded-lg flex items-center justify-center">
-                <svg className="w-5 h-5 text-sage-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-              </div>
-              <div>
-                <p className="font-medium text-sage-800 text-sm">HoneyBook</p>
-                <p className="text-sage-400 text-xs">Contracts & Payments</p>
-              </div>
-            </a>
-          )}
-
-          {/* Planning Course */}
-          <a
-            href="https://members.isadoraandco.com/offers/hWX4WHcQ"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-3 p-4 bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl border border-amber-200 hover:border-amber-300 hover:shadow-sm transition"
-          >
-            <div className="w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center">
-              <svg className="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-              </svg>
-            </div>
-            <div>
-              <p className="font-medium text-sage-800 text-sm">Planning Course</p>
-              <p className="text-amber-600 text-xs font-medium">FREE with code: RIXEYFAMILY</p>
-            </div>
-          </a>
-
-          {/* Resource Links */}
-          {resourceLinks.map((link) => (
-            link.href.startsWith('/') ? (
-              <button
-                key={link.name}
-                onClick={() => navigate(link.href)}
-                className="flex items-center gap-3 p-4 bg-white rounded-xl border border-cream-200 hover:border-sage-300 hover:shadow-sm transition text-left"
-              >
-                <div className="w-10 h-10 bg-cream-100 rounded-lg flex items-center justify-center">
-                  <svg className="w-5 h-5 text-sage-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                  </svg>
-                </div>
-                <div>
-                  <p className="font-medium text-sage-800 text-sm">{link.name}</p>
-                </div>
-              </button>
-            ) : (
-              <a
-                key={link.name}
-                href={link.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-3 p-4 bg-white rounded-xl border border-cream-200 hover:border-sage-300 hover:shadow-sm transition"
-              >
-                <div className="w-10 h-10 bg-cream-100 rounded-lg flex items-center justify-center">
-                  <svg className="w-5 h-5 text-sage-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                  </svg>
-                </div>
-                <div>
-                  <p className="font-medium text-sage-800 text-sm">{link.name}</p>
-                </div>
-              </a>
-            )
-          ))}
         </div>
       </main>
 
@@ -1232,205 +1224,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Vendor Checklist Modal */}
-      {showVendorModal && profile?.wedding_id && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3 sm:px-4">
-          <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-serif text-xl text-sage-700">Vendor Checklist</h3>
-              <button
-                onClick={() => setOpenModal(null)}
-                className="text-sage-400 hover:text-sage-600"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            <VendorChecklist weddingId={profile.wedding_id} />
-          </div>
-        </div>
-      )}
 
-      {/* Inspo Gallery Modal */}
-      {showInspoModal && profile?.wedding_id && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3 sm:px-4">
-          <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-6 max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-serif text-xl text-sage-700">Inspiration Gallery</h3>
-              <button
-                onClick={() => setOpenModal(null)}
-                className="text-sage-400 hover:text-sage-600"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            <InspoGallery weddingId={profile.wedding_id} userId={user?.id} />
-          </div>
-        </div>
-      )}
-
-      {/* Planning Checklist Modal */}
-      {showChecklistModal && profile?.wedding_id && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3 sm:px-4">
-          <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-serif text-xl text-sage-700">Planning Checklist</h3>
-              <button
-                onClick={() => setOpenModal(null)}
-                className="text-sage-400 hover:text-sage-600"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            <PlanningChecklist weddingId={profile.wedding_id} userId={user?.id} />
-          </div>
-        </div>
-      )}
-
-      {/* Timeline Builder Modal */}
-      {showTimelineModal && profile?.wedding_id && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 sm:p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[95vh] flex flex-col">
-            <div className="flex items-center justify-between p-4 sm:p-6 border-b border-cream-200 shrink-0">
-              <div className="flex items-center gap-2">
-                <span className="text-2xl">📅</span>
-                <h3 className="font-serif text-xl text-sage-700">Timeline Builder</h3>
-              </div>
-              <button
-                onClick={() => { setOpenModal(null); refreshSummaries(); }}
-                className="text-sage-400 hover:text-sage-600"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-4 sm:p-6">
-              <TimelineBuilder weddingId={profile.wedding_id} weddingDate={wedding?.wedding_date} userId={user?.id} />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Table Planner Modal */}
-      {showTablesModal && profile?.wedding_id && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 sm:p-4">
-          <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-6 max-w-3xl w-full max-h-[95vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <span className="text-2xl">🪑</span>
-                <h3 className="font-serif text-xl text-sage-700">Table & Seating Planner</h3>
-              </div>
-              <button
-                onClick={() => { setOpenModal(null); refreshSummaries(); }}
-                className="text-sage-400 hover:text-sage-600"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            <TableLayoutPlanner weddingId={profile.wedding_id} userId={user?.id} />
-          </div>
-        </div>
-      )}
-
-      {/* Staffing Calculator Modal */}
-      {showStaffingModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 sm:p-4">
-          <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-6 max-w-2xl w-full max-h-[95vh] overflow-hidden flex flex-col">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <span className="text-2xl">🙋</span>
-                <h3 className="font-serif text-xl text-sage-700">Staffing Guide</h3>
-              </div>
-              <button
-                onClick={() => setOpenModal(null)}
-                className="text-sage-400 hover:text-sage-600"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto">
-              <StaffingCalculator guestCount={tableSummary?.guestCount} weddingId={profile?.wedding_id} userId={user?.id} />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Budget Tracker Modal */}
-      {showBudgetModal && profile?.wedding_id && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3 sm:px-4">
-          <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-6">
-              <div className="flex items-center gap-2">
-                <span className="text-2xl">💰</span>
-                <h3 className="font-serif text-xl text-sage-700">Budget Tracker</h3>
-              </div>
-              <button
-                onClick={() => {
-                  setOpenModal(null)
-                  // Refresh budget summary
-                  fetch(`${API_URL}/api/budget/${profile.wedding_id}`)
-                    .then(r => r.ok ? r.json() : null)
-                    .then(data => {
-                      if (data?.budget) {
-                        const cats = data.budget.categories || {}
-                        const totalCommitted = Object.values(cats).reduce((s, c) => s + (c.committed || 0), 0)
-                        setBudgetSummary({ totalBudget: data.budget.total_budget, totalCommitted })
-                      }
-                    })
-                    .catch(() => {})
-                }}
-                className="text-sage-400 hover:text-sage-600"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            <BudgetTracker weddingId={profile.wedding_id} />
-          </div>
-        </div>
-      )}
-
-      {/* Borrow Brochure Modal */}
-      {showBorrowModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3 sm:px-4">
-          <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-6 max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-6">
-              <div className="flex items-center gap-2">
-                <span className="text-2xl">📋</span>
-                <h3 className="font-serif text-xl text-sage-700">Borrow Brochure</h3>
-              </div>
-              <button
-                onClick={() => setOpenModal(null)}
-                className="text-sage-400 hover:text-sage-600"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            <p className="text-sage-500 text-sm mb-4">Check the items you'd like to use — Sage will remember your selections.</p>
-            <BorrowCatalog
-              weddingId={profile?.wedding_id}
-              onAskSage={(itemName) => {
-                setOpenModal(null)
-                setNewMessage(`Tell me about the ${itemName} from the borrow catalog`)
-                setTimeout(() => document.getElementById('sage-input')?.focus(), 100)
-              }}
-            />
-          </div>
-        </div>
-      )}
 
       {/* Share / Invite Modal */}
       {showShareModal && wedding?.event_code && (
@@ -1439,7 +1233,7 @@ export default function Dashboard() {
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-serif text-xl text-sage-700">Invite Family & Friends</h3>
               <button
-                onClick={() => { setOpenModal(null); setShareLinkCopied(false); }}
+                onClick={() => { setShowShareModal(false); setShareLinkCopied(false); }}
                 className="text-sage-400 hover:text-sage-600"
               >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1535,30 +1329,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Rixey Picks Modal */}
-      {showPicksModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3 sm:px-4">
-          <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-6 max-w-4xl w-full max-h-[90vh] flex flex-col">
-            <div className="flex items-center justify-between mb-4 flex-shrink-0">
-              <div>
-                <h3 className="font-serif text-xl text-sage-700">Rixey Picks 🛍</h3>
-                <p className="text-sage-400 text-xs mt-0.5">Coordinator-curated product recommendations with affiliate links</p>
-              </div>
-              <button
-                onClick={() => setOpenModal(null)}
-                className="text-sage-400 hover:text-sage-600"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            <div className="overflow-y-auto flex-1">
-              <StorefrontBrowser />
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
