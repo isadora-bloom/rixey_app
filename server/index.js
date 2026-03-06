@@ -355,6 +355,14 @@ THINGS RIXEY PROVIDES:
   When someone asks about borrowing items or what decor is available, the full catalog with
   photos will be injected into your context automatically — use it to give specific answers
   and show images of the actual items.
+- RIXEY PICKS: A curated set of coordinator-recommended products couples can buy online
+  (disposable glassware, plates, cutlery, napkins, candles, guest books, fans, confetti,
+  glow sticks, send-off ideas, welcome bags, wedding favors, cake stands, dessert displays,
+  and more). Each pick is tagged Best Save, Best Splurge, Best Practical, Best Custom, or
+  Best Seasonal. When someone asks what to buy, where to find something, or wants a
+  product recommendation, the relevant picks with direct purchase links will be injected
+  into your context automatically. Always include the affiliate link as a clickable markdown
+  link when recommending a pick. Note that these are affiliate links that support Rixey Manor.
 
 SEASONAL TOUCHES:
 - Spring/Summer: welcome drinks (lemonade, iced tea)
@@ -897,6 +905,65 @@ app.post('/api/chat', async (req, res) => {
         }
       } catch (borrowErr) {
         console.error('Error fetching borrow catalog:', borrowErr);
+      }
+    }
+
+    // Inject Rixey Picks when the question is about shopping, buying products, or specific items
+    const picksKeywords = [
+      // Shopping intent
+      'recommend', 'recommendation', 'where to buy', 'where can i buy', 'what should i buy',
+      'what should i get', 'where do i get', 'shopping', 'purchase', 'amazon', 'etsy',
+      'buy online', 'order online', 'link', 'affordable', 'budget option', 'splurge',
+      // Product categories in the catalog
+      'disposable', 'plastic cup', 'plastic glass', 'plastic plate', 'plastic flute',
+      'champagne flute', 'wine glass', 'wine cup', 'coupe', 'stemless',
+      'plates', 'cutlery', 'flatware', 'napkin', 'cups', 'glassware',
+      'cake stand', 'cake cutting', 'knife and server', 'knife & server', 'cupcake tower',
+      'dessert display', 'dessert tower', 'dessert stand',
+      'candle', 'tealight', 'tea light', 'votive', 'mercury glass',
+      'guest book', 'guestbook', 'pen', 'marker',
+      'fans', 'parasol', 'hand fan', 'paper fan',
+      'confetti', 'glow stick', 'led wand', 'foam wand', 'fiber optic',
+      'send off', 'sendoff', 'exit idea', 'grand exit', 'sparkle', 'balloon',
+      'welcome bag', 'welcome box', 'favor', 'favors', 'gift bag',
+      'rixey picks', 'picks', 'coordinator recommends', 'you recommend',
+      'what do you suggest', 'suggestions', 'good option', 'good choice',
+    ];
+    const isPicksQuestion = picksKeywords.some(kw => lowerMsg.includes(kw));
+
+    if (isPicksQuestion) {
+      try {
+        const { data: picksItems } = await supabaseAdmin
+          .from('storefront_items')
+          .select('product_type, category, pick_name, pick_type, description, affiliate_link, color_options')
+          .eq('is_active', true)
+          .order('category')
+          .order('product_type')
+          .order('pick_name');
+
+        if (picksItems && picksItems.length > 0) {
+          const byType = {};
+          picksItems.forEach(item => {
+            const key = item.product_type;
+            if (!byType[key]) byType[key] = [];
+            byType[key].push(item);
+          });
+
+          weddingContext += '\n\nRIXEY PICKS — Coordinator-curated products with affiliate purchase links:\n';
+          weddingContext += '(Always include the link as [Pick Name](URL) in markdown when recommending one of these.)\n';
+          for (const [productType, items] of Object.entries(byType)) {
+            weddingContext += `\n${productType}:\n`;
+            items.forEach(item => {
+              weddingContext += `- ${item.pick_name} [${item.pick_type}]: ${item.description}`;
+              if (item.color_options) weddingContext += ` Colors: ${item.color_options}.`;
+              if (item.affiliate_link) weddingContext += ` → ${item.affiliate_link}`;
+              weddingContext += '\n';
+            });
+          }
+          weddingContext += '\nNote: these are affiliate links that support Rixey Manor at no cost to the couple.\n';
+        }
+      } catch (picksErr) {
+        console.error('Error fetching Rixey Picks for Sage:', picksErr);
       }
     }
 
