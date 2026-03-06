@@ -237,7 +237,7 @@ export default function Admin() {
   const [showArchived, setShowArchived] = useState(false)
   const [escalations, setEscalations] = useState({})
   const [planningNotes, setPlanningNotes] = useState([])
-  const [activeTab, setActiveTab] = useState('notes') // 'notes' or 'messages'
+  const [activeTab, setActiveTab] = useState('overview')
   const [showUsageStats, setShowUsageStats] = useState(false) // Collapsed by default on mobile
   const [uploadingContract, setUploadingContract] = useState(false)
   const [uploadResult, setUploadResult] = useState(null)
@@ -1281,515 +1281,84 @@ export default function Admin() {
             </div>
           )}
 
-          <div className="grid lg:grid-cols-3 gap-4 sm:gap-8">
-            {/* Stats & Info */}
-            <div className="lg:col-span-1 space-y-4 sm:space-y-6 order-2 lg:order-1">
-              {/* Quick Stats */}
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-3 sm:p-6">
-                <h2 className="font-serif text-lg text-sage-700 mb-3 sm:mb-4">Activity Overview</h2>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-4">
-                  <div className="bg-sage-50 rounded-lg p-2 sm:p-3 flex sm:block items-center justify-between sm:text-center">
-                    <p className="text-sage-500 text-xs sm:hidden">Questions Asked</p>
-                    <p className="text-xl sm:text-2xl font-semibold text-sage-700">{msgStats.userMsgs}</p>
-                    <p className="text-sage-500 text-xs hidden sm:block">Questions Asked</p>
-                  </div>
-                  <div className="bg-cream-100 rounded-lg p-2 sm:p-3 flex sm:block items-center justify-between sm:text-center">
-                    <p className="text-sage-500 text-xs sm:hidden">Total Messages</p>
-                    <p className="text-xl sm:text-2xl font-semibold text-sage-700">{msgStats.total}</p>
-                    <p className="text-sage-500 text-xs hidden sm:block">Total Messages</p>
-                  </div>
-                  <div className="bg-amber-50 rounded-lg p-2 sm:p-3 flex sm:block items-center justify-between sm:text-center">
-                    <p className="text-sage-500 text-xs sm:hidden">Active Days</p>
-                    <p className="text-xl sm:text-2xl font-semibold text-sage-700">{msgStats.uniqueDays}</p>
-                    <p className="text-sage-500 text-xs hidden sm:block">Active Days</p>
-                  </div>
-                  <div className="bg-green-50 rounded-lg p-2 sm:p-3 flex sm:block items-center justify-between sm:text-center">
-                    <p className="text-sage-500 text-xs sm:hidden">Members</p>
-                    <p className="text-xl sm:text-2xl font-semibold text-sage-700">{viewingWedding.profiles?.length || 0}</p>
-                    <p className="text-sage-500 text-xs hidden sm:block">Members</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Internal Notes — admin only, clients never see this */}
-              <div className="bg-white rounded-2xl shadow-sm border border-amber-100 p-4 sm:p-5">
-                <div className="flex items-center gap-2 mb-3">
-                  <h2 className="font-serif text-lg text-sage-700">Internal Notes</h2>
-                  <span className="text-xs bg-amber-50 text-amber-600 border border-amber-200 px-2 py-0.5 rounded-full">Admin only</span>
-                </div>
-
-                {/* Existing notes */}
-                <div className="space-y-2 mb-3">
-                  {internalNotes.length === 0 ? (
-                    <p className="text-sage-400 text-sm italic">No notes yet</p>
-                  ) : (
-                    internalNotes.map(note => (
-                      <div key={note.id} className="group bg-amber-50 rounded-lg px-3 py-2 text-sm">
-                        <div className="flex items-start justify-between gap-2">
-                          <p className="text-sage-700 whitespace-pre-wrap leading-snug flex-1">{note.content}</p>
-                          <button
-                            onClick={() => deleteInternalNote(note.id)}
-                            className="opacity-0 group-hover:opacity-100 text-sage-300 hover:text-red-400 transition flex-shrink-0 mt-0.5"
-                            title="Delete note"
-                          >
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                          </button>
-                        </div>
-                        <p className="text-sage-400 text-xs mt-1">
-                          {new Date(note.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+          <div className="grid lg:grid-cols-[220px_1fr] gap-4 sm:gap-8">
+            {/* Compact Nav Sidebar */}
+            <div className="order-2 lg:order-1">
+              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 overflow-hidden lg:sticky lg:top-24">
+                <nav className="p-2">
+                  {[
+                    { tab: 'overview', label: 'Overview', emoji: '🏠' },
+                    { section: 'Planning' },
+                    { tab: 'notes', label: 'Planning Notes', emoji: '📝', badge: planningNotes.filter(n => n.status === 'pending').length },
+                    { tab: 'vendors', label: 'Vendors', emoji: '👥' },
+                    { tab: 'inspo', label: 'Inspiration', emoji: '💡' },
+                    { tab: 'checklist', label: 'Checklist', emoji: '✅' },
+                    { section: 'Conversations' },
+                    { tab: 'messages', label: 'Conversations', emoji: '💬' },
+                    { tab: 'uncertain', label: "Uncertain Q's", emoji: '❓', badge: uncertainQuestions.filter(q => q.wedding_id === viewingWedding.id).length },
+                    { tab: 'meetings', label: 'Meetings', emoji: '📅' },
+                    { tab: 'direct-messages', label: 'Direct Messages', emoji: '✉️' },
+                    { section: 'Tools' },
+                    { tab: 'timeline', label: 'Timeline', emoji: '⏱' },
+                    { tab: 'tables', label: 'Tables', emoji: '🪑' },
+                    { tab: 'borrow', label: 'Borrow Brochure', emoji: '📋', badge: borrowSelections.length },
+                    { tab: 'guest-care', label: 'Guest Care', emoji: '💝' },
+                    { tab: 'activity', label: 'Recent Activity', emoji: '⚡', badge: activities.length },
+                    { section: 'Admin' },
+                    { tab: 'contract-upload', label: 'Upload Contract', emoji: '📄' },
+                    { tab: 'ask', label: 'Ask About Wedding', emoji: '🤖' },
+                    { tab: 'api-usage', label: 'API Usage', emoji: '📊' },
+                  ].map((item, idx) => {
+                    if (item.section) {
+                      return (
+                        <p key={idx} className="text-xs font-semibold text-sage-400 uppercase tracking-wide px-3 pt-3 pb-1">
+                          {item.section}
                         </p>
-                      </div>
-                    ))
-                  )}
-                </div>
-
-                {/* Add new note */}
-                <textarea
-                  value={newNoteText}
-                  onChange={e => setNewNoteText(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) addInternalNote() }}
-                  placeholder="Add a note… (Cmd+Enter to save)"
-                  rows={2}
-                  className="w-full text-sm border border-cream-200 rounded-lg px-3 py-2 text-sage-700 placeholder-sage-300 focus:outline-none focus:border-sage-400 resize-none"
-                />
-                <button
-                  onClick={addInternalNote}
-                  disabled={!newNoteText.trim() || savingNote}
-                  className="mt-2 w-full py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition"
-                >
-                  {savingNote ? 'Saving…' : 'Add Note'}
-                </button>
-              </div>
-
-              {/* API Usage & Costs - Collapsible */}
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 overflow-hidden">
-                <button
-                  onClick={() => setShowUsageStats(!showUsageStats)}
-                  className="w-full p-3 sm:p-4 flex items-center justify-between text-left hover:bg-cream-50 transition"
-                >
-                  <h2 className="font-serif text-lg text-sage-700">API Usage</h2>
-                  <svg
-                    className={`w-5 h-5 text-sage-400 transition-transform ${showUsageStats ? 'rotate-180' : ''}`}
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </button>
-                {showUsageStats && (
-                  <div className="px-3 pb-3 sm:px-4 sm:pb-4">
-                    <UsageStats weddingId={viewingWedding.id} />
-                  </div>
-                )}
-              </div>
-
-              {/* Members — only show when people have joined */}
-              {viewingWedding.profiles?.length > 0 && (
-                <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
-                  <h2 className="font-serif text-lg text-sage-700 mb-4">Wedding Party</h2>
-                  <div className="space-y-3">
-                    {viewingWedding.profiles.map(p => (
-                      <div key={p.id} className="flex items-center justify-between p-3 bg-cream-50 rounded-lg">
-                        <div>
-                          <p className="font-medium text-sage-800">{p.name}</p>
-                          <p className="text-sage-500 text-xs">{p.email}</p>
-                        </div>
-                        <span className="bg-sage-100 text-sage-600 text-xs px-2 py-1 rounded">
-                          {p.role.replace('couple-', '').replace('-', ' ')}
+                      )
+                    }
+                    return (
+                      <button
+                        key={item.tab}
+                        onClick={() => {
+                          setActiveTab(item.tab)
+                          if (item.tab === 'messages') { setSelectedChatUser(null); setSearchQuery('') }
+                        }}
+                        className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition ${
+                          activeTab === item.tab
+                            ? 'bg-sage-100 text-sage-700 font-medium'
+                            : 'text-sage-500 hover:bg-cream-50 hover:text-sage-700'
+                        }`}
+                      >
+                        <span className="flex items-center gap-2">
+                          <span>{item.emoji}</span>
+                          <span>{item.label}</span>
                         </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Links Status */}
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
-                <h2 className="font-serif text-lg text-sage-700 mb-4">Planning Tools</h2>
-                <div className="space-y-2 text-sm">
-                  {viewingWedding.honeybook_link ? (
-                    <a
-                      href={viewingWedding.honeybook_link}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-2 text-green-600 hover:text-green-700"
-                    >
-                      <span>✓</span> HoneyBook Portal
-                      <span className="text-sage-400">↗</span>
-                    </a>
-                  ) : (
-                    <p className="text-amber-600">⚠ No HoneyBook link</p>
-                  )}
-                  {viewingWedding.google_sheets_link ? (
-                    <a
-                      href={viewingWedding.google_sheets_link}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-2 text-green-600 hover:text-green-700"
-                    >
-                      <span>✓</span> Planning Spreadsheet
-                      <span className="text-sage-400">↗</span>
-                    </a>
-                  ) : (
-                    <p className="text-amber-600">⚠ No Google Sheets link</p>
-                  )}
-                </div>
-              </div>
-
-              {/* Guest Care Notes — collapsible */}
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 overflow-hidden">
-                <button
-                  onClick={() => setShowGuestCare(v => !v)}
-                  className="w-full p-4 sm:p-5 flex items-center justify-between text-left hover:bg-cream-50 transition"
-                >
-                  <h2 className="font-serif text-lg text-sage-700">Guest Care Notes</h2>
-                  <svg
-                    className={`w-5 h-5 text-sage-400 transition-transform ${showGuestCare ? 'rotate-180' : ''}`}
-                    fill="none" stroke="currentColor" viewBox="0 0 24 24"
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </button>
-                {showGuestCare && (
-                  <div className="border-t border-cream-100">
-                    <GuestCareNotes weddingId={viewingWedding.id} />
-                  </div>
-                )}
-              </div>
-
-              {/* Shared Budget Card — only shows if couple opted to share */}
-              {sharedBudget && (() => {
-                const cats = sharedBudget.categories || {}
-                const totalBudgeted = Object.values(cats).reduce((s, c) => s + (c.budgeted || 0), 0)
-                const totalCommitted = Object.values(cats).reduce((s, c) => s + (c.committed || 0), 0)
-                const effectiveBudget = sharedBudget.total_budget || totalBudgeted
-                const pct = effectiveBudget > 0 ? Math.min(100, Math.round((totalCommitted / effectiveBudget) * 100)) : 0
-                const isOver = totalCommitted > effectiveBudget && effectiveBudget > 0
-                return (
-                  <div className="bg-white rounded-2xl shadow-sm border border-emerald-200 p-6">
-                    <h2 className="font-serif text-lg text-sage-700 flex items-center gap-2 mb-3">
-                      <span>💰</span> Budget <span className="text-xs font-normal text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">Shared by couple</span>
-                    </h2>
-                    <div className="space-y-2 text-sm mb-3">
-                      <div className="flex justify-between">
-                        <span className="text-sage-500">Total Budget</span>
-                        <span className="font-medium text-sage-700">${effectiveBudget.toLocaleString('en-US')}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-sage-500">Committed</span>
-                        <span className={`font-medium ${isOver ? 'text-red-600' : 'text-sage-700'}`}>
-                          ${totalCommitted.toLocaleString('en-US')} ({pct}%)
-                        </span>
-                      </div>
-                    </div>
-                    <div className="h-2 bg-cream-100 rounded-full overflow-hidden mb-3">
-                      <div
-                        className={`h-full rounded-full ${isOver ? 'bg-red-500' : 'bg-emerald-500'}`}
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      {Object.entries(cats).filter(([, c]) => c.budgeted > 0 || c.committed > 0).map(([key, cat]) => (
-                        <div key={key} className="flex justify-between text-xs text-sage-600">
-                          <span>{cat.label}</span>
-                          <span>${(cat.committed || 0).toLocaleString()} / ${(cat.budgeted || 0).toLocaleString()}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )
-              })()}
-
-              {/* Timeline Summary — only show when couple has set one up */}
-              {timelineSummary && (
-                <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
-                  <div className="flex items-center justify-between mb-3">
-                    <h2 className="font-serif text-lg text-sage-700 flex items-center gap-2">
-                      <span>📅</span> Timeline
-                    </h2>
-                    <button
-                      onClick={() => setActiveTab('timeline')}
-                      className="text-sage-500 hover:text-sage-700 text-sm"
-                    >
-                      View Full →
-                    </button>
-                  </div>
-                  <div className="space-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-sage-500">Ceremony</span>
-                      <span className="font-medium text-sage-700">
-                        {timelineSummary.ceremonyTime ?
-                          new Date(`2000-01-01T${timelineSummary.ceremonyTime}`).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-                          : '—'}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sage-500">Reception Ends</span>
-                      <span className="font-medium text-sage-700">
-                        {timelineSummary.receptionEnd ?
-                          new Date(`2000-01-01T${timelineSummary.receptionEnd}`).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-                          : '—'}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sage-500">First Look</span>
-                      <span className={`font-medium ${timelineSummary.doingFirstLook ? 'text-green-600' : 'text-sage-500'}`}>
-                        {timelineSummary.doingFirstLook ? 'Yes' : 'No'}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sage-500">Dinner Style</span>
-                      <span className="font-medium text-sage-700 capitalize">{timelineSummary.dinnerType || '—'}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sage-500">Events Planned</span>
-                      <span className="font-medium text-sage-700">{timelineSummary.includedEvents || 0}</span>
-                    </div>
-                    {timelineSummary.updatedAt && (
-                      <p className="text-xs text-sage-400 pt-2 border-t border-cream-100">
-                        Last updated: {new Date(timelineSummary.updatedAt).toLocaleDateString()}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Table Layout Summary — only show when couple has set one up */}
-              {tableSummary && (
-                <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
-                  <div className="flex items-center justify-between mb-3">
-                    <h2 className="font-serif text-lg text-sage-700 flex items-center gap-2">
-                      <span>🪑</span> Table Layout
-                    </h2>
-                    <button
-                      onClick={() => setActiveTab('tables')}
-                      className="text-sage-500 hover:text-sage-700 text-sm"
-                    >
-                      View Full →
-                    </button>
-                  </div>
-                  <div className="space-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-sage-500">Guest Count</span>
-                      <span className="font-medium text-sage-700">{tableSummary.guestCount || '—'}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sage-500">Tables Needed</span>
-                      <span className="font-medium text-sage-700">{tableSummary.tablesNeeded || '—'}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sage-500">Table Shape</span>
-                      <span className="font-medium text-sage-700 capitalize">{tableSummary.tableShape || '—'}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sage-500">Head Table</span>
-                      <span className={`font-medium ${tableSummary.headTable ? 'text-green-600' : 'text-sage-500'}`}>
-                        {tableSummary.headTable ? 'Yes' : 'No'}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sage-500">Sweetheart Table</span>
-                      <span className={`font-medium ${tableSummary.sweetheartTable ? 'text-green-600' : 'text-sage-500'}`}>
-                        {tableSummary.sweetheartTable ? 'Yes' : 'No'}
-                      </span>
-                    </div>
-                    {(tableSummary.linenColor || tableSummary.napkinColor) && (
-                      <div className="flex justify-between items-center">
-                        <span className="text-sage-500">Colors</span>
-                        <div className="flex items-center gap-2">
-                          {tableSummary.linenColor && (
-                            <span className="capitalize text-sage-700">{tableSummary.linenColor}</span>
-                          )}
-                          {tableSummary.linenColor && tableSummary.napkinColor && <span className="text-sage-300">/</span>}
-                          {tableSummary.napkinColor && (
-                            <span className="capitalize text-sage-700">{tableSummary.napkinColor}</span>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                    {tableSummary.updatedAt && (
-                      <p className="text-xs text-sage-400 pt-2 border-t border-cream-100">
-                        Last updated: {new Date(tableSummary.updatedAt).toLocaleDateString()}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Staffing Summary — only show when couple has run the calculator */}
-              {staffingSummary && (
-                <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
-                  <h2 className="font-serif text-lg text-sage-700 flex items-center gap-2 mb-3">
-                    <span>🙋</span> Staffing Estimate
-                  </h2>
-                  <div className="space-y-3 text-sm">
-                    {staffingSummary.friday_total > 0 && (
-                      <div className="bg-amber-50 rounded-lg p-3">
-                        <p className="font-medium text-amber-800 mb-1">Friday Night</p>
-                        <div className="flex justify-between text-amber-700">
-                          <span>Bartenders: {staffingSummary.friday_bartenders}</span>
-                          <span>Extra Hands: {staffingSummary.friday_extra_hands}</span>
-                        </div>
-                      </div>
-                    )}
-                    <div className="bg-sage-50 rounded-lg p-3">
-                      <p className="font-medium text-sage-800 mb-1">Saturday</p>
-                      <div className="flex justify-between text-sage-700">
-                        <span>Bartenders: {staffingSummary.saturday_bartenders}</span>
-                        <span>Extra Hands: {staffingSummary.saturday_extra_hands}</span>
-                      </div>
-                    </div>
-                    <div className="flex justify-between pt-2 border-t border-cream-100">
-                      <span className="font-medium text-sage-700">Weekend Total</span>
-                      <span className="font-bold text-sage-800">
-                        {staffingSummary.total_staff} staff · ${Number(staffingSummary.total_cost).toLocaleString()}
-                      </span>
-                    </div>
-                    {staffingSummary.updated_at && (
-                      <p className="text-xs text-sage-400">
-                        Last updated: {new Date(staffingSummary.updated_at).toLocaleDateString()}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Allergy / Dietary Notes Card */}
-              {(() => {
-                const allergyNotes = planningNotes.filter(n => n.category === 'allergy')
-                if (allergyNotes.length === 0) return null
-                return (
-                  <div className="bg-amber-50 rounded-2xl shadow-sm border border-amber-300 p-5">
-                    <h2 className="font-serif text-lg text-amber-800 flex items-center gap-2 mb-3">
-                      <span>⚠</span> Dietary &amp; Allergy Notes
-                    </h2>
-                    <ul className="space-y-2">
-                      {allergyNotes.map(n => (
-                        <li key={n.id} className="text-amber-900 text-sm bg-amber-100 rounded-lg px-3 py-2">
-                          {n.content}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )
-              })()}
-
-              {/* Borrow Selections — only show when couple has picked items */}
-              {borrowSelections.length > 0 && (
-                <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
-                  <div className="flex items-center justify-between mb-3">
-                    <h2 className="font-serif text-lg text-sage-700 flex items-center gap-2">
-                      <span>📋</span> Borrow Selections
-                    </h2>
-                    <button
-                      onClick={() => setActiveTab('borrow')}
-                      className="text-sage-500 hover:text-sage-700 text-sm"
-                    >
-                      View All →
-                    </button>
-                  </div>
-                  <ul className="space-y-1">
-                    {borrowSelections.map(s => (
-                      <li key={s.item_id} className="text-sm text-sage-700 flex items-center gap-2">
-                        <span className="text-sage-400">•</span> {s.item_name}
-                        {s.category && <span className="text-sage-400 text-xs">({s.category})</span>}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {/* Contract Upload */}
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
-                <h2 className="font-serif text-lg text-sage-700 mb-4">Upload Contract</h2>
-                <p className="text-sage-500 text-sm mb-4">
-                  Upload vendor contracts (PDF or image) and Claude will extract key details as planning notes.
-                </p>
-                <label className={`block w-full p-4 border-2 border-dashed rounded-lg text-center cursor-pointer transition ${
-                  uploadingContract
-                    ? 'border-sage-300 bg-sage-50'
-                    : 'border-cream-300 hover:border-sage-400 hover:bg-cream-50'
-                }`}>
-                  <input
-                    type="file"
-                    accept=".pdf,image/*"
-                    onChange={handleContractUpload}
-                    disabled={uploadingContract}
-                    className="hidden"
-                  />
-                  {uploadingContract ? (
-                    <span className="text-sage-600">
-                      <svg className="w-5 h-5 animate-spin inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                      </svg>
-                      Extracting details...
-                    </span>
-                  ) : (
-                    <span className="text-sage-500">
-                      <svg className="w-6 h-6 mx-auto mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                      </svg>
-                      Click to upload PDF or image
-                    </span>
-                  )}
-                </label>
-                {uploadResult && (
-                  <div className={`mt-3 p-3 rounded-lg text-sm ${
-                    uploadResult.success
-                      ? 'bg-green-50 text-green-700'
-                      : 'bg-red-50 text-red-700'
-                  }`}>
-                    {uploadResult.message}
-                  </div>
-                )}
-              </div>
-
-              {/* Ask About Wedding */}
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
-                <h2 className="font-serif text-lg text-sage-700 mb-4">Ask About This Wedding</h2>
-                <p className="text-sage-500 text-sm mb-3">
-                  Search contracts & planning notes (e.g., "Is the caterer doing a welcome drink?" or "How many guests?")
-                </p>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={contractQuestion}
-                    onChange={(e) => setContractQuestion(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && askContractQuestion()}
-                    placeholder="Ask a question..."
-                    className="flex-1 px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
-                    disabled={askingQuestion}
-                  />
-                  <button
-                    onClick={askContractQuestion}
-                    disabled={askingQuestion || !contractQuestion.trim()}
-                    className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
-                  >
-                    {askingQuestion ? '...' : 'Ask'}
-                  </button>
-                </div>
-                {contractAnswer && (
-                  <div className="mt-3 p-3 bg-cream-50 rounded-lg text-sm text-sage-700 whitespace-pre-wrap">
-                    {contractAnswer}
-                  </div>
-                )}
+                        {item.badge > 0 && (
+                          <span className="bg-amber-100 text-amber-700 text-xs px-1.5 py-0.5 rounded-full min-w-[1.25rem] text-center">
+                            {item.badge}
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
+                </nav>
               </div>
             </div>
 
-            {/* Planning Notes & Messages */}
-            <div className="lg:col-span-2 order-1 lg:order-2">
+            {/* Main Content Panel */}
+            <div className="order-1 lg:order-2">
               <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-3 sm:p-4 lg:p-6">
                 {/* Mobile: Dropdown selector */}
-                <div className="sm:hidden mb-4">
+                <div className="lg:hidden mb-4">
                   <select
                     value={activeTab}
-                    onChange={(e) => setActiveTab(e.target.value)}
+                    onChange={(e) => {
+                      setActiveTab(e.target.value)
+                      if (e.target.value === 'messages') { setSelectedChatUser(null); setSearchQuery('') }
+                    }}
                     className="w-full p-3 border border-cream-200 rounded-lg bg-cream-50 text-sage-700 font-medium focus:outline-none focus:ring-2 focus:ring-sage-300"
                   >
+                    <option value="overview">Overview</option>
                     <option value="notes">
                       Planning Notes {planningNotes.filter(n => n.status === 'pending').length > 0 ? `(${planningNotes.filter(n => n.status === 'pending').length})` : ''}
                     </option>
@@ -1801,158 +1370,200 @@ export default function Admin() {
                       Uncertain Q's {uncertainQuestions.filter(q => q.wedding_id === viewingWedding.id).length > 0 ? `(${uncertainQuestions.filter(q => q.wedding_id === viewingWedding.id).length})` : ''}
                     </option>
                     <option value="meetings">Meetings</option>
+                    <option value="direct-messages">Direct Messages</option>
                     <option value="timeline">Timeline</option>
                     <option value="tables">Tables</option>
                     <option value="borrow">Borrow Brochure</option>
+                    <option value="guest-care">Guest Care</option>
                     <option value="activity">
                       Recent Activity {activities.length > 0 ? `(${activities.length})` : ''}
                     </option>
+                    <option value="contract-upload">Upload Contract</option>
+                    <option value="ask">Ask About Wedding</option>
+                    <option value="api-usage">API Usage</option>
                   </select>
                 </div>
 
-                {/* Desktop: Tab buttons */}
-                <div className="hidden sm:flex gap-4 mb-4 border-b border-cream-200 overflow-x-auto scrollbar-hide -mx-3 px-3 sm:-mx-6 sm:px-6">
-                  <button
-                    onClick={() => setActiveTab('notes')}
-                    className={`pb-3 px-1 text-sm font-medium border-b-2 transition whitespace-nowrap ${
-                      activeTab === 'notes'
-                        ? 'border-sage-600 text-sage-700'
-                        : 'border-transparent text-sage-400 hover:text-sage-600'
-                    }`}
-                  >
-                    Planning Notes
-                    {planningNotes.filter(n => n.status === 'pending').length > 0 && (
-                      <span className="ml-2 bg-amber-100 text-amber-700 text-xs px-2 py-0.5 rounded-full">
-                        {planningNotes.filter(n => n.status === 'pending').length}
-                      </span>
+                {/* Overview Tab */}
+                {activeTab === 'overview' && (
+                  <div className="space-y-5">
+                    {/* Stats Row */}
+                    <div className="grid grid-cols-4 gap-2 sm:gap-3">
+                      <div className="bg-sage-50 rounded-xl p-2 sm:p-3 text-center">
+                        <p className="text-xl sm:text-2xl font-semibold text-sage-700">{msgStats.userMsgs}</p>
+                        <p className="text-sage-500 text-xs mt-0.5">Questions</p>
+                      </div>
+                      <div className="bg-cream-100 rounded-xl p-2 sm:p-3 text-center">
+                        <p className="text-xl sm:text-2xl font-semibold text-sage-700">{msgStats.total}</p>
+                        <p className="text-sage-500 text-xs mt-0.5">Messages</p>
+                      </div>
+                      <div className="bg-amber-50 rounded-xl p-2 sm:p-3 text-center">
+                        <p className="text-xl sm:text-2xl font-semibold text-sage-700">{msgStats.uniqueDays}</p>
+                        <p className="text-sage-500 text-xs mt-0.5">Active Days</p>
+                      </div>
+                      <div className="bg-green-50 rounded-xl p-2 sm:p-3 text-center">
+                        <p className="text-xl sm:text-2xl font-semibold text-sage-700">{viewingWedding.profiles?.length || 0}</p>
+                        <p className="text-sage-500 text-xs mt-0.5">Members</p>
+                      </div>
+                    </div>
+
+                    {/* Planning Links */}
+                    <div className="flex flex-wrap gap-2">
+                      {viewingWedding.honeybook_link ? (
+                        <a href={viewingWedding.honeybook_link} target="_blank" rel="noopener noreferrer"
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 text-green-700 border border-green-200 rounded-lg hover:bg-green-100 transition text-xs">
+                          ✓ HoneyBook ↗
+                        </a>
+                      ) : (
+                        <span className="px-3 py-1.5 bg-amber-50 text-amber-600 border border-amber-200 rounded-lg text-xs">⚠ No HoneyBook link</span>
+                      )}
+                      {viewingWedding.google_sheets_link ? (
+                        <a href={viewingWedding.google_sheets_link} target="_blank" rel="noopener noreferrer"
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 text-green-700 border border-green-200 rounded-lg hover:bg-green-100 transition text-xs">
+                          ✓ Spreadsheet ↗
+                        </a>
+                      ) : (
+                        <span className="px-3 py-1.5 bg-amber-50 text-amber-600 border border-amber-200 rounded-lg text-xs">⚠ No Spreadsheet</span>
+                      )}
+                    </div>
+
+                    {/* AI Summary */}
+                    <div className="bg-gradient-to-r from-sage-50 to-cream-50 rounded-xl p-4 border border-sage-100">
+                      <div className="flex items-center justify-between mb-2">
+                        <h3 className="font-medium text-sage-700 flex items-center gap-2">
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                          </svg>
+                          AI Summary
+                        </h3>
+                        <button
+                          onClick={getNotesHighlights}
+                          disabled={loadingHighlights || planningNotes.length === 0}
+                          className="px-3 py-1 bg-sage-600 text-white text-xs rounded-lg hover:bg-sage-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {loadingHighlights ? 'Generating...' : 'Generate Highlights'}
+                        </button>
+                      </div>
+                      {notesHighlights ? (
+                        <div className="bg-white rounded-lg p-3 text-sm text-sage-700 whitespace-pre-wrap">{notesHighlights}</div>
+                      ) : (
+                        <p className="text-sage-400 text-sm">Generate a quick AI summary of all planning notes.</p>
+                      )}
+                    </div>
+
+                    {/* Data Tiles */}
+                    {(timelineSummary || tableSummary || staffingSummary || sharedBudget || borrowSelections.length > 0 || viewingWedding.profiles?.length > 0) && (
+                      <div>
+                        <h3 className="text-xs font-semibold text-sage-400 uppercase tracking-wide mb-3">Wedding Details</h3>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                          {timelineSummary && (
+                            <button onClick={() => setActiveTab('timeline')} className="text-left bg-amber-50 border border-amber-200 rounded-xl p-3 hover:shadow-sm transition group">
+                              <p className="text-sm font-medium text-sage-700 mb-1">📅 Timeline</p>
+                              <p className="text-xs text-sage-500">{timelineSummary.ceremonyTime ? new Date(`2000-01-01T${timelineSummary.ceremonyTime}`).toLocaleTimeString('en-US', {hour:'numeric',minute:'2-digit'}) : '—'} ceremony</p>
+                              <p className="text-xs text-sage-400 mt-1 group-hover:text-sage-600">View →</p>
+                            </button>
+                          )}
+                          {tableSummary && (
+                            <button onClick={() => setActiveTab('tables')} className="text-left bg-sage-50 border border-sage-200 rounded-xl p-3 hover:shadow-sm transition group">
+                              <p className="text-sm font-medium text-sage-700 mb-1">🪑 Tables</p>
+                              <p className="text-xs text-sage-500">{tableSummary.guestCount} guests · {tableSummary.tablesNeeded} tables</p>
+                              <p className="text-xs text-sage-400 mt-1 group-hover:text-sage-600">View →</p>
+                            </button>
+                          )}
+                          {staffingSummary && (
+                            <button onClick={() => setActiveTab('timeline')} className="text-left bg-purple-50 border border-purple-200 rounded-xl p-3 hover:shadow-sm transition group">
+                              <p className="text-sm font-medium text-sage-700 mb-1">🙋 Staffing</p>
+                              <p className="text-xs text-sage-500">{staffingSummary.total_staff} staff · ${Number(staffingSummary.total_cost).toLocaleString()}</p>
+                              <p className="text-xs text-sage-400 mt-1 group-hover:text-sage-600">View →</p>
+                            </button>
+                          )}
+                          {sharedBudget && (() => {
+                            const cats = sharedBudget.categories || {}
+                            const totalCommitted = Object.values(cats).reduce((s, c) => s + (c.committed || 0), 0)
+                            const effectiveBudget = sharedBudget.total_budget || Object.values(cats).reduce((s, c) => s + (c.budgeted || 0), 0)
+                            return (
+                              <div className="text-left bg-emerald-50 border border-emerald-200 rounded-xl p-3">
+                                <p className="text-sm font-medium text-sage-700 mb-1">💰 Budget</p>
+                                <p className="text-xs text-sage-500">${totalCommitted.toLocaleString()} / ${effectiveBudget.toLocaleString()}</p>
+                              </div>
+                            )
+                          })()}
+                          {borrowSelections.length > 0 && (
+                            <button onClick={() => setActiveTab('borrow')} className="text-left bg-orange-50 border border-orange-200 rounded-xl p-3 hover:shadow-sm transition group">
+                              <p className="text-sm font-medium text-sage-700 mb-1">📋 Borrow</p>
+                              <p className="text-xs text-sage-500">{borrowSelections.length} items selected</p>
+                              <p className="text-xs text-sage-400 mt-1 group-hover:text-sage-600">View →</p>
+                            </button>
+                          )}
+                          {viewingWedding.profiles?.length > 0 && (
+                            <div className="text-left bg-blue-50 border border-blue-200 rounded-xl p-3">
+                              <p className="text-sm font-medium text-sage-700 mb-1">👥 Party</p>
+                              <p className="text-xs text-sage-500">{viewingWedding.profiles.length} member{viewingWedding.profiles.length !== 1 ? 's' : ''} joined</p>
+                            </div>
+                          )}
+                          {(() => {
+                            const allergyNotes = planningNotes.filter(n => n.category === 'allergy')
+                            if (allergyNotes.length === 0) return null
+                            return (
+                              <div className="col-span-2 sm:col-span-3 bg-amber-50 border border-amber-300 rounded-xl p-3">
+                                <p className="text-sm font-medium text-amber-800 mb-1">⚠ Dietary & Allergy</p>
+                                <p className="text-xs text-amber-700">{allergyNotes.length} note{allergyNotes.length !== 1 ? 's' : ''} flagged</p>
+                              </div>
+                            )
+                          })()}
+                        </div>
+                      </div>
                     )}
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('vendors')}
-                    className={`pb-3 px-1 text-sm font-medium border-b-2 transition whitespace-nowrap ${
-                      activeTab === 'vendors'
-                        ? 'border-sage-600 text-sage-700'
-                        : 'border-transparent text-sage-400 hover:text-sage-600'
-                    }`}
-                  >
-                    Vendors & Contracts
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('inspo')}
-                    className={`pb-3 px-1 text-sm font-medium border-b-2 transition whitespace-nowrap ${
-                      activeTab === 'inspo'
-                        ? 'border-sage-600 text-sage-700'
-                        : 'border-transparent text-sage-400 hover:text-sage-600'
-                    }`}
-                  >
-                    Inspiration
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('checklist')}
-                    className={`pb-3 px-1 text-sm font-medium border-b-2 transition whitespace-nowrap ${
-                      activeTab === 'checklist'
-                        ? 'border-sage-600 text-sage-700'
-                        : 'border-transparent text-sage-400 hover:text-sage-600'
-                    }`}
-                  >
-                    Checklist
-                  </button>
-                  <button
-                    onClick={() => { setActiveTab('messages'); setSelectedChatUser(null); setSearchQuery('') }}
-                    className={`pb-3 px-1 text-sm font-medium border-b-2 transition whitespace-nowrap ${
-                      activeTab === 'messages'
-                        ? 'border-sage-600 text-sage-700'
-                        : 'border-transparent text-sage-400 hover:text-sage-600'
-                    }`}
-                  >
-                    All Conversations
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('uncertain')}
-                    className={`pb-3 px-1 text-sm font-medium border-b-2 transition whitespace-nowrap ${
-                      activeTab === 'uncertain'
-                        ? 'border-sage-600 text-sage-700'
-                        : 'border-transparent text-sage-400 hover:text-sage-600'
-                    }`}
-                  >
-                    Uncertain Q's
-                    {uncertainQuestions.filter(q => q.wedding_id === viewingWedding.id).length > 0 && (
-                      <span className="ml-2 bg-amber-100 text-amber-700 text-xs px-2 py-0.5 rounded-full">
-                        {uncertainQuestions.filter(q => q.wedding_id === viewingWedding.id).length}
-                      </span>
-                    )}
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('meetings')}
-                    className={`pb-3 px-1 text-sm font-medium border-b-2 transition whitespace-nowrap ${
-                      activeTab === 'meetings'
-                        ? 'border-sage-600 text-sage-700'
-                        : 'border-transparent text-sage-400 hover:text-sage-600'
-                    }`}
-                  >
-                    Meetings
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('direct-messages')}
-                    className={`pb-3 px-1 text-sm font-medium border-b-2 transition whitespace-nowrap ${
-                      activeTab === 'direct-messages'
-                        ? 'border-sage-600 text-sage-700'
-                        : 'border-transparent text-sage-400 hover:text-sage-600'
-                    }`}
-                  >
-                    Direct Messages
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('timeline')}
-                    className={`pb-3 px-1 text-sm font-medium border-b-2 transition whitespace-nowrap ${
-                      activeTab === 'timeline'
-                        ? 'border-sage-600 text-sage-700'
-                        : 'border-transparent text-sage-400 hover:text-sage-600'
-                    }`}
-                  >
-                    Timeline
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('tables')}
-                    className={`pb-3 px-1 text-sm font-medium border-b-2 transition whitespace-nowrap ${
-                      activeTab === 'tables'
-                        ? 'border-sage-600 text-sage-700'
-                        : 'border-transparent text-sage-400 hover:text-sage-600'
-                    }`}
-                  >
-                    Tables
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('borrow')}
-                    className={`pb-3 px-1 text-sm font-medium border-b-2 transition whitespace-nowrap ${
-                      activeTab === 'borrow'
-                        ? 'border-sage-600 text-sage-700'
-                        : 'border-transparent text-sage-400 hover:text-sage-600'
-                    }`}
-                  >
-                    Borrow Brochure
-                    {borrowSelections.length > 0 && (
-                      <span className="ml-2 bg-orange-100 text-orange-700 text-xs px-2 py-0.5 rounded-full">
-                        {borrowSelections.length}
-                      </span>
-                    )}
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('activity')}
-                    className={`pb-3 px-1 text-sm font-medium border-b-2 transition whitespace-nowrap ${
-                      activeTab === 'activity'
-                        ? 'border-sage-600 text-sage-700'
-                        : 'border-transparent text-sage-400 hover:text-sage-600'
-                    }`}
-                  >
-                    Recent Activity
-                    {activities.length > 0 && (
-                      <span className="ml-2 bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full">
-                        {activities.length}
-                      </span>
-                    )}
-                  </button>
-                </div>
+
+                    {/* Internal Notes */}
+                    <div className="border border-amber-100 rounded-xl p-4">
+                      <div className="flex items-center gap-2 mb-3">
+                        <h3 className="font-medium text-sage-700">Internal Notes</h3>
+                        <span className="text-xs bg-amber-50 text-amber-600 border border-amber-200 px-2 py-0.5 rounded-full">Admin only</span>
+                      </div>
+                      <div className="space-y-2 mb-3 max-h-48 overflow-y-auto">
+                        {internalNotes.length === 0 ? (
+                          <p className="text-sage-400 text-sm italic">No notes yet</p>
+                        ) : (
+                          internalNotes.map(note => (
+                            <div key={note.id} className="group bg-amber-50 rounded-lg px-3 py-2 text-sm">
+                              <div className="flex items-start justify-between gap-2">
+                                <p className="text-sage-700 whitespace-pre-wrap leading-snug flex-1">{note.content}</p>
+                                <button
+                                  onClick={() => deleteInternalNote(note.id)}
+                                  className="opacity-0 group-hover:opacity-100 text-sage-300 hover:text-red-400 transition flex-shrink-0 mt-0.5"
+                                  title="Delete note"
+                                >
+                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                  </svg>
+                                </button>
+                              </div>
+                              <p className="text-sage-400 text-xs mt-1">
+                                {new Date(note.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                              </p>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                      <textarea
+                        value={newNoteText}
+                        onChange={e => setNewNoteText(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) addInternalNote() }}
+                        placeholder="Add a note… (Cmd+Enter to save)"
+                        rows={2}
+                        className="w-full text-sm border border-cream-200 rounded-lg px-3 py-2 text-sage-700 placeholder-sage-300 focus:outline-none focus:border-sage-400 resize-none"
+                      />
+                      <button
+                        onClick={addInternalNote}
+                        disabled={!newNoteText.trim() || savingNote}
+                        className="mt-2 w-full py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition"
+                      >
+                        {savingNote ? 'Saving…' : 'Add Note'}
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Planning Notes Tab */}
                 {activeTab === 'notes' && (
@@ -2667,6 +2278,100 @@ export default function Admin() {
                         })}
                       </div>
                     )}
+                  </div>
+                )}
+
+                {/* Guest Care Tab */}
+                {activeTab === 'guest-care' && (
+                  <GuestCareNotes weddingId={viewingWedding.id} />
+                )}
+
+                {/* Contract Upload Tab */}
+                {activeTab === 'contract-upload' && (
+                  <div>
+                    <h3 className="font-medium text-sage-700 mb-3">Upload Contract</h3>
+                    <p className="text-sage-500 text-sm mb-4">
+                      Upload vendor contracts (PDF or image) and Claude will extract key details as planning notes.
+                    </p>
+                    <label className={`block w-full p-4 border-2 border-dashed rounded-lg text-center cursor-pointer transition ${
+                      uploadingContract
+                        ? 'border-sage-300 bg-sage-50'
+                        : 'border-cream-300 hover:border-sage-400 hover:bg-cream-50'
+                    }`}>
+                      <input
+                        type="file"
+                        accept=".pdf,image/*"
+                        onChange={handleContractUpload}
+                        disabled={uploadingContract}
+                        className="hidden"
+                      />
+                      {uploadingContract ? (
+                        <span className="text-sage-600">
+                          <svg className="w-5 h-5 animate-spin inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          Extracting details...
+                        </span>
+                      ) : (
+                        <span className="text-sage-500">
+                          <svg className="w-6 h-6 mx-auto mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                          </svg>
+                          Click to upload PDF or image
+                        </span>
+                      )}
+                    </label>
+                    {uploadResult && (
+                      <div className={`mt-3 p-3 rounded-lg text-sm ${
+                        uploadResult.success
+                          ? 'bg-green-50 text-green-700'
+                          : 'bg-red-50 text-red-700'
+                      }`}>
+                        {uploadResult.message}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Ask About Wedding Tab */}
+                {activeTab === 'ask' && (
+                  <div>
+                    <h3 className="font-medium text-sage-700 mb-2">Ask About This Wedding</h3>
+                    <p className="text-sage-500 text-sm mb-4">
+                      Search contracts & planning notes (e.g., "Is the caterer doing a welcome drink?" or "How many guests?")
+                    </p>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={contractQuestion}
+                        onChange={(e) => setContractQuestion(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && askContractQuestion()}
+                        placeholder="Ask a question..."
+                        className="flex-1 px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
+                        disabled={askingQuestion}
+                      />
+                      <button
+                        onClick={askContractQuestion}
+                        disabled={askingQuestion || !contractQuestion.trim()}
+                        className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
+                      >
+                        {askingQuestion ? '...' : 'Ask'}
+                      </button>
+                    </div>
+                    {contractAnswer && (
+                      <div className="mt-3 p-3 bg-cream-50 rounded-lg text-sm text-sage-700 whitespace-pre-wrap">
+                        {contractAnswer}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* API Usage Tab */}
+                {activeTab === 'api-usage' && (
+                  <div>
+                    <h3 className="font-medium text-sage-700 mb-4">API Usage & Costs</h3>
+                    <UsageStats weddingId={viewingWedding.id} />
                   </div>
                 )}
               </div>
