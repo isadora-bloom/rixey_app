@@ -457,6 +457,20 @@ export default function Admin() {
     setZoomSyncing(false)
   }
 
+  const reextractZoom = async () => {
+    setZoomSyncing(true)
+    setZoomStatus('')
+    try {
+      const response = await fetch(`${API_URL}/api/zoom/reextract`, { method: 'POST' })
+      const data = await response.json()
+      setZoomStatus(data.message || data.error)
+      loadData()
+    } catch (err) {
+      setZoomStatus('Failed to re-extract notes')
+    }
+    setZoomSyncing(false)
+  }
+
   const disconnectZoom = async () => {
     try {
       await fetch(`${API_URL}/api/zoom/disconnect`, { method: 'POST' })
@@ -3025,24 +3039,35 @@ export default function Admin() {
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
                     Connected
                   </p>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 flex-wrap">
                     <button
                       onClick={syncZoom}
                       disabled={zoomSyncing}
                       className="flex-1 px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
                     >
-                      {zoomSyncing ? 'Syncing...' : 'Sync'}
+                      {zoomSyncing ? 'Working...' : 'Sync'}
                     </button>
                     <button
+                      onClick={reextractZoom}
+                      disabled={zoomSyncing}
+                      className="flex-1 px-4 py-2 bg-cream-100 text-sage-700 rounded-lg text-sm hover:bg-cream-200 disabled:opacity-50"
+                      title="Re-run AI extraction on already-synced transcripts"
+                    >
+                      Re-extract
+                    </button>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
                       onClick={connectZoom}
-                      className="px-4 py-2 text-blue-600 hover:text-blue-800 text-sm font-medium"
+                      className="text-blue-600 hover:text-blue-800 text-xs"
                       title="Re-authorize Zoom (use if sync is failing)"
                     >
                       Re-auth
                     </button>
+                    <span className="text-cream-300 text-xs">·</span>
                     <button
                       onClick={disconnectZoom}
-                      className="px-4 py-2 text-sage-400 hover:text-sage-600 text-sm"
+                      className="text-sage-400 hover:text-sage-600 text-xs"
                     >
                       Disconnect
                     </button>

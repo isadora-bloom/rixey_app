@@ -579,8 +579,90 @@ async function getRelevantKnowledge(question) {
   return knowledge;
 }
 
+// Strip VTT timestamps/headers to plain conversation text
+function parseVttToText(vtt) {
+  return vtt
+    .split('\n')
+    .filter(line => {
+      if (!line.trim()) return false;
+      if (line.trim() === 'WEBVTT') return false;
+      if (/^\d+$/.test(line.trim())) return false; // sequence numbers
+      if (/\d{2}:\d{2}:\d{2}\.\d{3}\s*-->\s*/.test(line)) return false; // timestamps
+      return true;
+    })
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// AI-powered planning note extraction for transcripts (Zoom/calls)
+async function extractPlanningNotesAI(transcriptText, weddingId, source) {
+  const cleanText = parseVttToText(transcriptText);
+  if (!cleanText || cleanText.length < 50) return [];
+
+  try {
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1500,
+      messages: [{
+        role: 'user',
+        content: `You are extracting wedding planning decisions from a meeting transcript for Rixey Manor (a wedding venue in Rapidan, VA).
+
+Extract every concrete decision, preference, or important detail that a wedding coordinator would want to remember. Include:
+- Vendors booked or being considered (florist, photographer, DJ, caterer, officiant, band, hair/makeup, etc.)
+- Guest count or estimates
+- Color palette or decor style
+- Ceremony details (indoor/outdoor, time, vows style, processional music, etc.)
+- Reception details (food style, bar preferences, first dance, speeches)
+- Dietary restrictions or allergies (critical — capture all of these)
+- Family dynamics or special considerations
+- Timeline preferences
+- Budget mentions
+- Anything the coordinator explicitly needs to follow up on
+
+For each item return JSON like:
+[
+  {"category": "vendor", "content": "Booking Sarah Kim Photography"},
+  {"category": "allergy", "content": "Bride's mother is celiac — no gluten at dinner"},
+  {"category": "guest_count", "content": "Approximately 120 guests"},
+  {"category": "decor", "content": "Dusty rose and sage green color palette, garden party feel"},
+  {"category": "family", "content": "Parents divorced — separate family photos needed"},
+  {"category": "ceremony", "content": "Outdoor ceremony under the oak tree, backup plan if rain"},
+  {"category": "note", "content": "Couple wants a surprise choreographed first dance reveal"}
+]
+
+Valid categories: vendor, allergy, guest_count, decor, ceremony, colors, timeline, family, food, budget, note
+
+Only include things clearly stated — skip vague small talk. If nothing concrete was decided, return [].
+Return ONLY the JSON array, no explanation.
+
+Transcript:
+${cleanText.substring(0, 8000)}`
+      }]
+    });
+
+    const text = response.content[0].text.trim();
+    const jsonMatch = text.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return [];
+
+    const items = JSON.parse(jsonMatch[0]);
+    return items
+      .filter(item => item.category && item.content && item.content.length > 3)
+      .map(item => ({
+        wedding_id: weddingId,
+        user_id: null,
+        category: item.category,
+        content: item.content.trim(),
+        source_message: source || 'Extracted from meeting transcript',
+        status: 'pending'
+      }));
+  } catch (err) {
+    console.error('AI transcript extraction error:', err.message);
+    return [];
+  }
+}
+
 // Planning note detection patterns
-const PLANNING_PATTERNS = {
   vendor_booking: {
     patterns: [
       // Casual: "booking [vendor]", "def booking", "definitely using"
@@ -2748,12 +2830,16 @@ app.post('/api/zoom/sync', async (req, res) => {
 
       // Save full transcript as a planning note so Sage can search it
       if (matchedWeddingId && transcriptText) {
+        const cleanTranscript = parseVttToText(transcriptText);
+        const meetingLabel = meeting.topic || 'Untitled';
+        const meetingDate = meeting.start_time ? new Date(meeting.start_time).toLocaleDateString() : 'unknown date';
+
         const { error: noteError } = await supabaseAdmin.from('planning_notes').insert({
           wedding_id: matchedWeddingId,
           user_id: null,
           category: 'zoom_transcript',
-          content: `[Zoom Meeting: ${meeting.topic || 'Untitled'}]\n${transcriptText.substring(0, 10000)}`,
-          source_message: `From Zoom meeting on ${meeting.start_time || 'unknown date'}`,
+          content: `[Zoom Meeting: ${meetingLabel} — ${meetingDate}]\n${cleanTranscript.substring(0, 10000)}`,
+          source_message: `Zoom meeting on ${meetingDate}`,
           status: 'confirmed'
         });
 
@@ -2761,14 +2847,13 @@ app.post('/api/zoom/sync', async (req, res) => {
           console.error('Error saving Zoom transcript to planning_notes:', noteError);
         }
 
-        // Also extract specific planning details
-        const notes = await extractPlanningNotes(transcriptText, null, matchedWeddingId);
+        // AI-powered extraction of specific planning details
+        const source = `Zoom meeting: ${meetingLabel} (${meetingDate})`;
+        const notes = await extractPlanningNotesAI(transcriptText, matchedWeddingId, source);
         if (notes.length > 0) {
-          notes.forEach(n => {
-            n.source_message = `From Zoom meeting: ${meeting.topic || 'Untitled'}`;
-          });
           await savePlanningNotes(notes);
           notesExtracted += notes.length;
+          console.log(`  Extracted ${notes.length} planning notes from "${meetingLabel}"`);
         }
       }
 
@@ -2787,6 +2872,37 @@ app.post('/api/zoom/sync', async (req, res) => {
   } catch (error) {
     console.error('Zoom sync error:', error);
     res.status(500).json({ error: 'Failed to sync Zoom: ' + error.message });
+  }
+});
+
+// Re-extract planning notes from already-processed Zoom transcripts
+app.post('/api/zoom/reextract', async (req, res) => {
+  try {
+    const { data: meetings } = await supabaseAdmin
+      .from('processed_zoom_meetings')
+      .select('*')
+      .not('transcript_text', 'is', null)
+      .not('wedding_id', 'is', null);
+
+    if (!meetings || meetings.length === 0) {
+      return res.json({ message: 'No processed meetings with transcripts found.' });
+    }
+
+    let totalNotes = 0;
+    for (const meeting of meetings) {
+      const source = `Zoom meeting: ${meeting.meeting_topic || 'Untitled'}`;
+      const notes = await extractPlanningNotesAI(meeting.transcript_text, meeting.wedding_id, source);
+      if (notes.length > 0) {
+        await savePlanningNotes(notes);
+        totalNotes += notes.length;
+        console.log(`Re-extracted ${notes.length} notes from "${meeting.meeting_topic}"`);
+      }
+    }
+
+    res.json({ message: `Re-extracted ${totalNotes} planning notes from ${meetings.length} meeting(s).` });
+  } catch (error) {
+    console.error('Re-extract error:', error);
+    res.status(500).json({ error: 'Failed to re-extract: ' + error.message });
   }
 });
 
