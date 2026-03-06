@@ -17,6 +17,7 @@ import TableLayoutPlanner from '../components/TableLayoutPlanner'
 import BorrowCatalog from '../components/BorrowCatalog'
 import NotificationBell from '../components/NotificationBell'
 import GuestCareNotes from '../components/GuestCareNotes'
+import StorefrontAdmin from '../components/StorefrontAdmin'
 
 // Stress/escalation keywords to detect
 const ESCALATION_KEYWORDS = [
@@ -2731,6 +2732,7 @@ export default function Admin() {
               { id: 'meetings', label: 'Meetings' },
               { id: 'vendors', label: 'Vendors' },
               { id: 'borrow-catalog', label: 'Borrow Catalog' },
+              { id: 'picks', label: '🛍 Picks' },
               { id: 'knowledge-base', label: 'KB' },
               { id: 'usage', label: 'Usage' },
             ].map(tab => (
@@ -2787,6 +2789,13 @@ export default function Admin() {
         </div>
 
         {/* Borrow Catalog View */}
+        {/* Rixey Picks Admin */}
+        {mainView === 'picks' && (
+          <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
+            <StorefrontAdmin />
+          </div>
+        )}
+
         {mainView === 'borrow-catalog' && (
           <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
             <div className="flex items-center justify-between mb-6">

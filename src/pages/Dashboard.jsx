@@ -16,6 +16,7 @@ import BudgetTracker from '../components/BudgetTracker'
 import BorrowCatalog from '../components/BorrowCatalog'
 import NotificationBell from '../components/NotificationBell'
 import GuestCareNotes from '../components/GuestCareNotes'
+import StorefrontBrowser from '../components/StorefrontBrowser'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -122,6 +123,7 @@ export default function Dashboard() {
   const showShareModal     = openModal === 'share'
   const showBudgetModal    = openModal === 'budget'
   const showBorrowModal    = openModal === 'borrow'
+  const showPicksModal     = openModal === 'picks'
   const [budgetSummary, setBudgetSummary] = useState(null)
   const [timelineSummary, setTimelineSummary] = useState(null)
   const [tableSummary, setTableSummary] = useState(null)
@@ -1041,6 +1043,16 @@ export default function Dashboard() {
                     <p className="font-medium text-sage-800 text-sm mt-1 sm:mt-2">Borrow Brochure</p>
                     <p className="text-sage-500 text-xs mt-1">Browse & select items</p>
                   </button>
+
+                  {/* Rixey Picks Card */}
+                  <button
+                    onClick={() => setOpenModal('picks')}
+                    className="bg-gradient-to-br from-yellow-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-yellow-200 hover:border-yellow-300 hover:shadow-md transition text-left"
+                  >
+                    <span className="text-xl sm:text-2xl">🛍</span>
+                    <p className="font-medium text-sage-800 text-sm mt-1 sm:mt-2">Rixey Picks</p>
+                    <p className="text-sage-500 text-xs mt-1">Coordinator favorites →</p>
+                  </button>
                 </div>
               </div>
             )}
@@ -1572,6 +1584,31 @@ export default function Dashboard() {
                 </svg>
                 Email
               </a>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rixey Picks Modal */}
+      {showPicksModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3 sm:px-4">
+          <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-6 max-w-4xl w-full max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between mb-4 flex-shrink-0">
+              <div>
+                <h3 className="font-serif text-xl text-sage-700">Rixey Picks 🛍</h3>
+                <p className="text-sage-400 text-xs mt-0.5">Coordinator-curated product recommendations with affiliate links</p>
+              </div>
+              <button
+                onClick={() => setOpenModal(null)}
+                className="text-sage-400 hover:text-sage-600"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="overflow-y-auto flex-1">
+              <StorefrontBrowser />
             </div>
           </div>
         </div>

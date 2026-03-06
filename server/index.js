@@ -5334,6 +5334,95 @@ app.put('/api/notifications/read', async (req, res) => {
   }
 });
 
+// ─── STOREFRONT / RIXEY PICKS ─────────────────────────────────────────────
+
+// GET /api/storefront — all active items (public)
+app.get('/api/storefront', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('storefront_items')
+      .select('*')
+      .eq('is_active', true)
+      .order('product_type')
+      .order('sort_order')
+      .order('pick_name');
+    if (error) throw error;
+    res.json({ items: data || [] });
+  } catch (error) {
+    console.error('Storefront error:', error);
+    res.status(500).json({ error: 'Failed to fetch storefront items' });
+  }
+});
+
+// GET /api/storefront/all — all items including inactive (admin)
+app.get('/api/storefront/all', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('storefront_items')
+      .select('*')
+      .order('category')
+      .order('product_type')
+      .order('pick_name');
+    if (error) throw error;
+    res.json({ items: data || [] });
+  } catch (error) {
+    console.error('Storefront all error:', error);
+    res.status(500).json({ error: 'Failed to fetch storefront items' });
+  }
+});
+
+// POST /api/storefront — add item
+app.post('/api/storefront', async (req, res) => {
+  try {
+    const { product_type, category, pick_name, pick_type, description, affiliate_link, image_url, color_options, is_active, sort_order } = req.body;
+    const { data, error } = await supabaseAdmin
+      .from('storefront_items')
+      .insert({ product_type, category, pick_name, pick_type, description, affiliate_link, image_url, color_options, is_active: is_active !== false, sort_order: sort_order || 0 })
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ success: true, item: data });
+  } catch (error) {
+    console.error('Storefront add error:', error);
+    res.status(500).json({ error: 'Failed to add storefront item' });
+  }
+});
+
+// PUT /api/storefront/:id — update item
+app.put('/api/storefront/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { product_type, category, pick_name, pick_type, description, affiliate_link, image_url, color_options, is_active, sort_order } = req.body;
+    const { data, error } = await supabaseAdmin
+      .from('storefront_items')
+      .update({ product_type, category, pick_name, pick_type, description, affiliate_link, image_url, color_options, is_active, sort_order })
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ success: true, item: data });
+  } catch (error) {
+    console.error('Storefront update error:', error);
+    res.status(500).json({ error: 'Failed to update storefront item' });
+  }
+});
+
+// DELETE /api/storefront/:id — delete item
+app.delete('/api/storefront/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { error } = await supabaseAdmin
+      .from('storefront_items')
+      .delete()
+      .eq('id', id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Storefront delete error:', error);
+    res.status(500).json({ error: 'Failed to delete storefront item' });
+  }
+});
+
 const PORT = process.env.PORT || 3001;
 const server = app.listen(PORT, () => {
   console.log(`Sage backend running on port ${PORT}`);
