@@ -1,4 +1,4 @@
-const CACHE_NAME = 'rixey-portal-v1';
+const CACHE_NAME = 'rixey-portal-v2';
 
 // Install event - cache essential files
 self.addEventListener('install', (event) => {
@@ -7,13 +7,20 @@ self.addEventListener('install', (event) => {
 
 // Activate event - clean up old caches
 self.addEventListener('activate', (event) => {
-  event.waitUntil(clients.claim());
+  event.waitUntil(
+    caches.keys().then(keys =>
+      Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))
+    ).then(() => clients.claim())
+  );
 });
 
 // Fetch event - network first, fall back to cache
 self.addEventListener('fetch', (event) => {
   // Skip non-GET requests
   if (event.request.method !== 'GET') return;
+
+  // Skip non-http(s) requests (e.g. chrome-extension://)
+  if (!event.request.url.startsWith('http')) return;
 
   // Skip API requests - always go to network
   if (event.request.url.includes('/api/')) return;
