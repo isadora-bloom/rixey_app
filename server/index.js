@@ -2715,13 +2715,16 @@ app.post('/api/zoom/sync', async (req, res) => {
       }
 
       // Save processed meeting
-      await supabaseAdmin.from('processed_zoom_meetings').insert({
+      const { error: insertErr } = await supabaseAdmin.from('processed_zoom_meetings').insert({
         zoom_meeting_id: meetingId,
         wedding_id: matchedWeddingId,
         meeting_topic: meeting.topic,
-        participant_names: participantNames,
+        participant_names: participantNames.join(', '), // TEXT column — must be string
         transcript_text: transcriptText.substring(0, 50000)
       });
+      if (insertErr) {
+        console.error('Failed to save processed meeting (dedup will not work):', insertErr.message);
+      }
 
       // Save full transcript as a planning note so Sage can search it
       if (matchedWeddingId && transcriptText) {
@@ -2778,17 +2781,36 @@ app.get('/api/zoom/transcripts', async (req, res) => {
       .select('zoom_meeting_id, meeting_topic, wedding_id, created_at, transcript_text')
       .order('created_at', { ascending: false });
 
-    const summary = (meetings || []).map(m => ({
+    // Also check planning_notes for zoom_transcript entries
+    const { data: transcriptNotes } = await supabaseAdmin
+      .from('planning_notes')
+      .select('id, wedding_id, content, source_message, created_at')
+      .eq('category', 'zoom_transcript')
+      .order('created_at', { ascending: false });
+
+    const meetings_summary = (meetings || []).map(m => ({
       id: m.zoom_meeting_id,
       topic: m.meeting_topic,
       wedding_id: m.wedding_id,
       created_at: m.created_at,
       transcript_length: m.transcript_text?.length || 0,
-      transcript_preview: m.transcript_text?.substring(0, 500) || null,
-      parsed_preview: m.transcript_text ? parseVttToText(m.transcript_text).substring(0, 500) : null
+      transcript_preview: m.transcript_text?.substring(0, 300) || null,
+      parsed_preview: m.transcript_text ? parseVttToText(m.transcript_text).substring(0, 300) : null
     }));
 
-    res.json({ count: summary.length, meetings: summary });
+    const notes_summary = (transcriptNotes || []).map(n => ({
+      id: n.id,
+      wedding_id: n.wedding_id,
+      source: n.source_message,
+      created_at: n.created_at,
+      content_length: n.content?.length || 0,
+      content_preview: n.content?.substring(0, 500) || null
+    }));
+
+    res.json({
+      processed_meetings: { count: meetings_summary.length, data: meetings_summary },
+      zoom_transcript_notes: { count: notes_summary.length, data: notes_summary }
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
