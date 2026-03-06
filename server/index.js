@@ -2559,17 +2559,31 @@ app.get('/api/zoom/status', async (req, res) => {
 
 // Helper to refresh Zoom token if needed
 async function getZoomAccessToken() {
-  const { data: tokens } = await supabaseAdmin
+  const { data: tokens, error: tokenError } = await supabaseAdmin
     .from('zoom_tokens')
     .select('*')
     .limit(1)
     .single();
 
-  if (!tokens) return null;
+  if (tokenError) {
+    console.error('getZoomAccessToken DB error:', tokenError.message);
+    return null;
+  }
+  if (!tokens) {
+    console.log('getZoomAccessToken: no tokens in DB');
+    return null;
+  }
+
+  const isExpired = tokens.expiry_date && Date.now() > tokens.expiry_date - 300000;
+  console.log(`Zoom token found. Expired: ${isExpired}. Expiry: ${tokens.expiry_date ? new Date(tokens.expiry_date).toISOString() : 'none'}`);
 
   // Check if token is expired (with 5 min buffer)
-  if (tokens.expiry_date && Date.now() > tokens.expiry_date - 300000) {
-    // Refresh token
+  if (isExpired) {
+    if (!tokens.refresh_token) {
+      console.error('getZoomAccessToken: token expired but no refresh_token stored');
+      return tokens.access_token; // try anyway
+    }
+    console.log('Refreshing Zoom access token...');
     const refreshResponse = await fetch('https://zoom.us/oauth/token', {
       method: 'POST',
       headers: {
@@ -2585,16 +2599,19 @@ async function getZoomAccessToken() {
     const newTokens = await refreshResponse.json();
 
     if (newTokens.access_token) {
+      console.log('Zoom token refreshed successfully');
       await supabaseAdmin.from('zoom_tokens')
         .update({
           access_token: newTokens.access_token,
           refresh_token: newTokens.refresh_token || tokens.refresh_token,
-          expiry_date: Date.now() + (newTokens.expires_in * 1000),
-          updated_at: new Date().toISOString()
+          expiry_date: Date.now() + (newTokens.expires_in * 1000)
         })
         .eq('id', tokens.id);
 
       return newTokens.access_token;
+    } else {
+      console.error('Zoom token refresh failed:', JSON.stringify(newTokens));
+      throw new Error(`Zoom token refresh failed: ${newTokens.error || newTokens.reason || 'unknown'}. Please re-connect Zoom in the admin panel.`);
     }
   }
 
@@ -2655,8 +2672,13 @@ app.post('/api/zoom/sync', async (req, res) => {
 
     if (!recordingsResponse.ok) {
       const errText = await recordingsResponse.text();
-      console.error('Zoom recordings error:', errText);
-      return res.status(500).json({ error: 'Failed to fetch Zoom recordings' });
+      console.error('Zoom recordings API error:', recordingsResponse.status, errText);
+      const hint = recordingsResponse.status === 401
+        ? ' Your Zoom access token is invalid or expired — please re-connect Zoom.'
+        : recordingsResponse.status === 124
+        ? ' Your Zoom account plan may not support cloud recordings.'
+        : '';
+      return res.status(500).json({ error: `Zoom recordings API returned ${recordingsResponse.status}.${hint}` });
     }
 
     const recordingsData = await recordingsResponse.json();
