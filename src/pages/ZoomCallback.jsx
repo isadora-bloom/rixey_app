@@ -29,9 +29,10 @@ export default function ZoomCallback() {
           if (data.success) {
             setStatus('Zoom connected successfully! Redirecting...')
           } else {
-            setStatus('Failed to connect: ' + (data.error || 'Unknown error'))
+            const detail = [data.error, data.reason, data.redirect_uri_used ? `redirect_uri: ${data.redirect_uri_used}` : ''].filter(Boolean).join(' | ')
+            setStatus('Failed to connect: ' + detail)
           }
-          setTimeout(() => navigate('/admin'), 2000)
+          setTimeout(() => navigate('/admin'), 5000)
         })
         .catch(() => {
           setStatus('Connection error. Redirecting...')

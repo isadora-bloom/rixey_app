@@ -2514,9 +2514,15 @@ app.post('/api/zoom/callback', async (req, res) => {
 
     const tokens = await tokenResponse.json();
 
-    if (tokens.error) {
-      console.error('Zoom token error:', tokens);
-      return res.status(400).json({ error: tokens.error });
+    if (tokens.error || !tokens.access_token) {
+      console.error('Zoom token exchange failed:', JSON.stringify(tokens));
+      console.error('redirect_uri used:', ZOOM_REDIRECT_URI);
+      console.error('ZOOM_CLIENT_ID set:', !!ZOOM_CLIENT_ID, 'ZOOM_CLIENT_SECRET set:', !!ZOOM_CLIENT_SECRET);
+      return res.status(400).json({
+        error: tokens.error || 'No access token returned',
+        reason: tokens.reason,
+        redirect_uri_used: ZOOM_REDIRECT_URI
+      });
     }
 
     console.log('Got Zoom tokens:', { hasAccessToken: !!tokens.access_token, hasRefreshToken: !!tokens.refresh_token });
