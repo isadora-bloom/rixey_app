@@ -1029,7 +1029,7 @@ export default function Admin() {
       case 'zoom_transcript': return 'Zoom'
       case 'email': return 'Email'
       case 'borrow_selection': return 'Borrow Selection'
-      default: return 'Info'
+      default: return category.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
     }
   }
 
@@ -1471,11 +1471,10 @@ export default function Admin() {
                             </button>
                           )}
                           {staffingSummary && (
-                            <button onClick={() => setActiveTab('timeline')} className="text-left bg-purple-50 border border-purple-200 rounded-xl p-3 hover:shadow-sm transition group">
+                            <div className="text-left bg-purple-50 border border-purple-200 rounded-xl p-3">
                               <p className="text-sm font-medium text-sage-700 mb-1">🙋 Staffing</p>
                               <p className="text-xs text-sage-500">{staffingSummary.total_staff} staff · ${Number(staffingSummary.total_cost).toLocaleString()}</p>
-                              <p className="text-xs text-sage-400 mt-1 group-hover:text-sage-600">View →</p>
-                            </button>
+                            </div>
                           )}
                           {sharedBudget && (() => {
                             const cats = sharedBudget.categories || {}
@@ -1501,15 +1500,43 @@ export default function Admin() {
                               <p className="text-xs text-sage-500">{viewingWedding.profiles.length} member{viewingWedding.profiles.length !== 1 ? 's' : ''} joined</p>
                             </div>
                           )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Planning Notes by Category */}
+                    {planningNotes.length > 0 && (
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <h3 className="text-xs font-semibold text-sage-400 uppercase tracking-wide">Planning Notes</h3>
+                          <button onClick={() => setActiveTab('notes')} className="text-xs text-sage-500 hover:text-sage-700">View all →</button>
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                           {(() => {
-                            const allergyNotes = planningNotes.filter(n => n.category === 'allergy')
-                            if (allergyNotes.length === 0) return null
-                            return (
-                              <div className="col-span-2 sm:col-span-3 bg-amber-50 border border-amber-300 rounded-xl p-3">
-                                <p className="text-sm font-medium text-amber-800 mb-1">⚠ Dietary & Allergy</p>
-                                <p className="text-xs text-amber-700">{allergyNotes.length} note{allergyNotes.length !== 1 ? 's' : ''} flagged</p>
-                              </div>
-                            )
+                            const notesByCategory = planningNotes.reduce((acc, note) => {
+                              const cat = note.category || 'note'
+                              if (!acc[cat]) acc[cat] = { total: 0, pending: 0 }
+                              acc[cat].total++
+                              if (note.status === 'pending') acc[cat].pending++
+                              return acc
+                            }, {})
+                            const sortedCats = Object.entries(notesByCategory).sort((a, b) => {
+                              if (a[0] === 'allergy') return -1
+                              if (b[0] === 'allergy') return 1
+                              return b[1].pending - a[1].pending || b[1].total - a[1].total
+                            })
+                            return sortedCats.map(([cat, counts]) => (
+                              <button key={cat} onClick={() => setActiveTab('notes')} className={`text-left rounded-lg p-2.5 hover:border-sage-300 transition border ${cat === 'allergy' ? 'bg-amber-50 border-amber-300' : 'bg-cream-50 border-cream-200'}`}>
+                                <p className={`text-xs font-medium flex items-center gap-1.5 ${cat === 'allergy' ? 'text-amber-800' : 'text-sage-700'}`}>
+                                  <span>{getCategoryIcon(cat)}</span>
+                                  <span className="capitalize">{getCategoryLabel(cat)}</span>
+                                </p>
+                                <p className={`text-xs mt-0.5 ${cat === 'allergy' ? 'text-amber-700' : 'text-sage-400'}`}>
+                                  {counts.total} note{counts.total !== 1 ? 's' : ''}
+                                  {counts.pending > 0 && <span className="ml-1 text-amber-600">· {counts.pending} new</span>}
+                                </p>
+                              </button>
+                            ))
                           })()}
                         </div>
                       </div>
