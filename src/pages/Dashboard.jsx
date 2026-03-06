@@ -110,16 +110,18 @@ export default function Dashboard() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [selectedFile, setSelectedFile] = useState(null)
   const [uploadingFile, setUploadingFile] = useState(false)
-  const [showVendorModal, setShowVendorModal] = useState(false)
-  const [showInspoModal, setShowInspoModal] = useState(false)
-  const [showChecklistModal, setShowChecklistModal] = useState(false)
-  const [showTimelineModal, setShowTimelineModal] = useState(false)
-  const [showTablesModal, setShowTablesModal] = useState(false)
-  const [showStaffingModal, setShowStaffingModal] = useState(false)
-  const [showShareModal, setShowShareModal] = useState(false)
+  const [openModal, setOpenModal] = useState(null)
   const [shareLinkCopied, setShareLinkCopied] = useState(false)
-  const [showBudgetModal, setShowBudgetModal] = useState(false)
-  const [showBorrowModal, setShowBorrowModal] = useState(false)
+  // Derived booleans for each modal — keeps all existing JSX unchanged
+  const showVendorModal    = openModal === 'vendor'
+  const showInspoModal     = openModal === 'inspo'
+  const showChecklistModal = openModal === 'checklist'
+  const showTimelineModal  = openModal === 'timeline'
+  const showTablesModal    = openModal === 'tables'
+  const showStaffingModal  = openModal === 'staffing'
+  const showShareModal     = openModal === 'share'
+  const showBudgetModal    = openModal === 'budget'
+  const showBorrowModal    = openModal === 'borrow'
   const [budgetSummary, setBudgetSummary] = useState(null)
   const [timelineSummary, setTimelineSummary] = useState(null)
   const [tableSummary, setTableSummary] = useState(null)
@@ -134,6 +136,13 @@ export default function Dashboard() {
   const [retryState, setRetryState] = useState(null) // { userMessage, baseMessages, secondsLeft }
   const fileInputRef = useRef(null)
   const messagesEndRef = useRef(null)
+
+  // Close any open modal on Escape
+  useEffect(() => {
+    const handleEsc = (e) => { if (e.key === 'Escape') setOpenModal(null) }
+    document.addEventListener('keydown', handleEsc)
+    return () => document.removeEventListener('keydown', handleEsc)
+  }, [])
 
   useEffect(() => {
     if (user) {
@@ -721,11 +730,11 @@ export default function Dashboard() {
               } else if (action === 'first_message_sent') {
                 document.getElementById('sage-input')?.focus()
               } else if (action === 'vendor_added') {
-                setShowVendorModal(true)
+                setOpenModal('vendor')
               } else if (action === 'inspo_uploaded') {
-                setShowInspoModal(true)
+                setOpenModal('inspo')
               } else if (action === 'checklist_item_completed') {
-                setShowChecklistModal(true)
+                setOpenModal('checklist')
               }
             }}
           />
@@ -762,7 +771,7 @@ export default function Dashboard() {
                     Event Code: <span className="font-mono bg-cream-100 px-2 py-0.5 rounded">{wedding.event_code}</span>
                   </p>
                   <button
-                    onClick={() => setShowShareModal(true)}
+                    onClick={() => setOpenModal('share')}
                     className="text-xs text-sage-600 hover:text-sage-800 flex items-center gap-1 bg-sage-100 hover:bg-sage-200 px-2 py-1 rounded transition"
                   >
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -786,7 +795,7 @@ export default function Dashboard() {
         {/* Main Two-Column Layout */}
         <div className="grid lg:grid-cols-2 gap-6">
           {/* Left Column: Sage Chat */}
-          <div className="order-2 lg:order-1">
+          <div className="order-1">
             <div className="bg-white rounded-2xl shadow-sm border border-cream-200 flex flex-col h-[420px] sm:h-[500px] lg:h-[650px]">
               {/* Chat Header */}
               <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-cream-200">
@@ -804,7 +813,14 @@ export default function Dashboard() {
               {/* Messages */}
               <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
                 {loadingMessages ? (
-                  <div className="text-center text-sage-400 py-8">Loading messages...</div>
+                  <div className="space-y-4">
+                    {[1, 2, 3].map(i => (
+                      <div key={i} className={`flex ${i % 2 === 0 ? 'justify-end' : 'justify-start'}`}>
+                        {i % 2 !== 0 && <div className="w-8 h-8 bg-cream-200 rounded-full mr-2 flex-shrink-0 animate-pulse" />}
+                        <div className={`h-12 rounded-2xl animate-pulse bg-cream-200 ${i % 2 === 0 ? 'w-2/3' : 'w-3/4'}`} />
+                      </div>
+                    ))}
+                  </div>
                 ) : (
                   messages.map((message) => (
                     <div
@@ -930,7 +946,7 @@ export default function Dashboard() {
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
                   {/* Timeline Card */}
                   <button
-                    onClick={() => setShowTimelineModal(true)}
+                    onClick={() => setOpenModal('timeline')}
                     className="bg-gradient-to-br from-amber-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-amber-200 hover:border-amber-300 hover:shadow-md transition text-left"
                   >
                     <span className="text-xl sm:text-2xl">📅</span>
@@ -942,13 +958,13 @@ export default function Dashboard() {
                           : 'Not set'}
                       </p>
                     ) : (
-                      <p className="text-sage-400 text-xs mt-1">Set up →</p>
+                      <p className="text-sage-500 text-xs mt-1">Set up →</p>
                     )}
                   </button>
 
                   {/* Tables Card */}
                   <button
-                    onClick={() => setShowTablesModal(true)}
+                    onClick={() => setOpenModal('tables')}
                     className="bg-gradient-to-br from-sage-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-sage-200 hover:border-sage-300 hover:shadow-md transition text-left"
                   >
                     <span className="text-xl sm:text-2xl">🪑</span>
@@ -956,53 +972,53 @@ export default function Dashboard() {
                     {tableSummary ? (
                       <p className="text-sage-500 text-xs mt-1">{tableSummary.guestCount} guests</p>
                     ) : (
-                      <p className="text-sage-400 text-xs mt-1">Set up →</p>
+                      <p className="text-sage-500 text-xs mt-1">Set up →</p>
                     )}
                   </button>
 
                   {/* Vendors Card */}
                   <button
-                    onClick={() => setShowVendorModal(true)}
+                    onClick={() => setOpenModal('vendor')}
                     className="bg-gradient-to-br from-rose-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-rose-200 hover:border-rose-300 hover:shadow-md transition text-left"
                   >
                     <span className="text-xl sm:text-2xl">👥</span>
                     <p className="font-medium text-sage-800 text-sm mt-1 sm:mt-2">Vendors</p>
-                    <p className="text-sage-400 text-xs mt-1">Manage →</p>
+                    <p className="text-sage-500 text-xs mt-1">Manage →</p>
                   </button>
 
                   {/* Checklist Card */}
                   <button
-                    onClick={() => setShowChecklistModal(true)}
+                    onClick={() => setOpenModal('checklist')}
                     className="bg-gradient-to-br from-blue-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-blue-200 hover:border-blue-300 hover:shadow-md transition text-left"
                   >
                     <span className="text-xl sm:text-2xl">✅</span>
                     <p className="font-medium text-sage-800 text-sm mt-1 sm:mt-2">Checklist</p>
-                    <p className="text-sage-400 text-xs mt-1">View tasks →</p>
+                    <p className="text-sage-500 text-xs mt-1">View tasks →</p>
                   </button>
 
                   {/* Staffing Card */}
                   <button
-                    onClick={() => setShowStaffingModal(true)}
+                    onClick={() => setOpenModal('staffing')}
                     className="bg-gradient-to-br from-purple-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-purple-200 hover:border-purple-300 hover:shadow-md transition text-left"
                   >
                     <span className="text-xl sm:text-2xl">🙋</span>
                     <p className="font-medium text-sage-800 text-sm mt-1 sm:mt-2">Staffing</p>
-                    <p className="text-sage-400 text-xs mt-1">Estimate →</p>
+                    <p className="text-sage-500 text-xs mt-1">Estimate →</p>
                   </button>
 
                   {/* Inspo Gallery Card */}
                   <button
-                    onClick={() => setShowInspoModal(true)}
+                    onClick={() => setOpenModal('inspo')}
                     className="bg-gradient-to-br from-pink-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-pink-200 hover:border-pink-300 hover:shadow-md transition text-left"
                   >
                     <span className="text-xl sm:text-2xl">💡</span>
                     <p className="font-medium text-sage-800 text-sm mt-1 sm:mt-2">Inspiration</p>
-                    <p className="text-sage-400 text-xs mt-1">Gallery →</p>
+                    <p className="text-sage-500 text-xs mt-1">Gallery →</p>
                   </button>
 
                   {/* Budget Card */}
                   <button
-                    onClick={() => setShowBudgetModal(true)}
+                    onClick={() => setOpenModal('budget')}
                     className="bg-gradient-to-br from-emerald-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-emerald-200 hover:border-emerald-300 hover:shadow-md transition text-left"
                   >
                     <span className="text-xl sm:text-2xl">💰</span>
@@ -1012,13 +1028,13 @@ export default function Dashboard() {
                         ${budgetSummary.totalCommitted.toLocaleString()} committed
                       </p>
                     ) : (
-                      <p className="text-sage-400 text-xs mt-1">Set up →</p>
+                      <p className="text-sage-500 text-xs mt-1">Set up →</p>
                     )}
                   </button>
 
                   {/* Borrow Brochure Card */}
                   <button
-                    onClick={() => setShowBorrowModal(true)}
+                    onClick={() => setOpenModal('borrow')}
                     className="bg-gradient-to-br from-orange-50 to-cream-50 rounded-xl p-3 sm:p-4 border border-orange-200 hover:border-orange-300 hover:shadow-md transition text-left"
                   >
                     <span className="text-xl sm:text-2xl">📋</span>
@@ -1076,7 +1092,7 @@ export default function Dashboard() {
                   </div>
                   <div className="flex items-center gap-2">
                     <span
-                      onClick={(e) => { e.stopPropagation(); setShowInspoModal(true); }}
+                      onClick={(e) => { e.stopPropagation(); setOpenModal('inspo') }}
                       className="text-sage-500 hover:text-sage-700 text-sm"
                     >
                       View All
@@ -1265,7 +1281,7 @@ export default function Dashboard() {
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-serif text-xl text-sage-700">Vendor Checklist</h3>
               <button
-                onClick={() => setShowVendorModal(false)}
+                onClick={() => setOpenModal(null)}
                 className="text-sage-400 hover:text-sage-600"
               >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1285,7 +1301,7 @@ export default function Dashboard() {
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-serif text-xl text-sage-700">Inspiration Gallery</h3>
               <button
-                onClick={() => setShowInspoModal(false)}
+                onClick={() => setOpenModal(null)}
                 className="text-sage-400 hover:text-sage-600"
               >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1305,7 +1321,7 @@ export default function Dashboard() {
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-serif text-xl text-sage-700">Planning Checklist</h3>
               <button
-                onClick={() => setShowChecklistModal(false)}
+                onClick={() => setOpenModal(null)}
                 className="text-sage-400 hover:text-sage-600"
               >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1328,7 +1344,7 @@ export default function Dashboard() {
                 <h3 className="font-serif text-xl text-sage-700">Timeline Builder</h3>
               </div>
               <button
-                onClick={() => { setShowTimelineModal(false); refreshSummaries(); }}
+                onClick={() => { setOpenModal(null); refreshSummaries(); }}
                 className="text-sage-400 hover:text-sage-600"
               >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1353,7 +1369,7 @@ export default function Dashboard() {
                 <h3 className="font-serif text-xl text-sage-700">Table & Seating Planner</h3>
               </div>
               <button
-                onClick={() => { setShowTablesModal(false); refreshSummaries(); }}
+                onClick={() => { setOpenModal(null); refreshSummaries(); }}
                 className="text-sage-400 hover:text-sage-600"
               >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1376,7 +1392,7 @@ export default function Dashboard() {
                 <h3 className="font-serif text-xl text-sage-700">Staffing Guide</h3>
               </div>
               <button
-                onClick={() => setShowStaffingModal(false)}
+                onClick={() => setOpenModal(null)}
                 className="text-sage-400 hover:text-sage-600"
               >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1402,7 +1418,7 @@ export default function Dashboard() {
               </div>
               <button
                 onClick={() => {
-                  setShowBudgetModal(false)
+                  setOpenModal(null)
                   // Refresh budget summary
                   fetch(`${API_URL}/api/budget/${profile.wedding_id}`)
                     .then(r => r.ok ? r.json() : null)
@@ -1437,7 +1453,7 @@ export default function Dashboard() {
                 <h3 className="font-serif text-xl text-sage-700">Borrow Brochure</h3>
               </div>
               <button
-                onClick={() => setShowBorrowModal(false)}
+                onClick={() => setOpenModal(null)}
                 className="text-sage-400 hover:text-sage-600"
               >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1449,7 +1465,7 @@ export default function Dashboard() {
             <BorrowCatalog
               weddingId={profile?.wedding_id}
               onAskSage={(itemName) => {
-                setShowBorrowModal(false)
+                setOpenModal(null)
                 setNewMessage(`Tell me about the ${itemName} from the borrow catalog`)
                 setTimeout(() => document.getElementById('sage-input')?.focus(), 100)
               }}
@@ -1465,7 +1481,7 @@ export default function Dashboard() {
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-serif text-xl text-sage-700">Invite Family & Friends</h3>
               <button
-                onClick={() => { setShowShareModal(false); setShareLinkCopied(false); }}
+                onClick={() => { setOpenModal(null); setShareLinkCopied(false); }}
                 className="text-sage-400 hover:text-sage-600"
               >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">

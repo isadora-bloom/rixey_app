@@ -1169,6 +1169,16 @@ export default function Admin() {
     return (
       <div className="min-h-screen min-h-[100dvh] bg-cream-50">
         <header className="bg-white border-b border-cream-200 sticky top-0 z-40">
+          {/* Breadcrumb */}
+          <div className="max-w-6xl mx-auto px-3 sm:px-4 pt-2 pb-0">
+            <nav className="flex items-center gap-1.5 text-xs text-sage-400">
+              <button onClick={closeProfile} className="hover:text-sage-600 transition">Admin</button>
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+              <span className="text-sage-600 font-medium truncate">{viewingWedding.couple_names || 'Wedding'}</span>
+            </nav>
+          </div>
           <div className="max-w-6xl mx-auto px-3 sm:px-4 py-3 sm:py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               {/* Couple Photo in Header */}
@@ -1229,9 +1239,12 @@ export default function Admin() {
             </div>
             <button
               onClick={closeProfile}
-              className="text-sage-500 hover:text-sage-700 text-sm font-medium"
+              className="flex items-center gap-1.5 text-sage-500 hover:text-sage-700 text-sm font-medium"
             >
-              Back to Admin
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+              Back
             </button>
           </div>
         </header>
@@ -1257,12 +1270,19 @@ export default function Admin() {
               <p className="text-red-600 text-sm">
                 This client may be stressed or need extra support. Review their recent messages below.
               </p>
+              {escalation.messages?.[0] && (
+                <p className="mt-2 text-sm text-red-700 bg-red-100 rounded-lg px-3 py-2 italic line-clamp-2">
+                  "{escalation.messages[0].content.length > 140
+                    ? escalation.messages[0].content.slice(0, 140) + '…'
+                    : escalation.messages[0].content}"
+                </p>
+              )}
             </div>
           )}
 
           <div className="grid lg:grid-cols-3 gap-4 sm:gap-8">
             {/* Stats & Info */}
-            <div className="lg:col-span-1 space-y-4 sm:space-y-6">
+            <div className="lg:col-span-1 space-y-4 sm:space-y-6 order-2 lg:order-1">
               {/* Quick Stats */}
               <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-3 sm:p-6">
                 <h2 className="font-serif text-lg text-sage-700 mb-3 sm:mb-4">Activity Overview</h2>
@@ -1770,7 +1790,7 @@ export default function Admin() {
             </div>
 
             {/* Planning Notes & Messages */}
-            <div className="lg:col-span-2">
+            <div className="lg:col-span-2 order-1 lg:order-2">
               <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-3 sm:p-4 lg:p-6">
                 {/* Mobile: Dropdown selector */}
                 <div className="sm:hidden mb-4">
