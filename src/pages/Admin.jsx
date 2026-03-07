@@ -1333,6 +1333,38 @@ export default function Admin() {
             </div>
           )}
 
+          {/* Ask About This Wedding — always visible at top */}
+          <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 mb-4 sm:mb-6">
+            <div className="flex gap-2">
+              <span className="text-lg leading-none mt-1.5">🤖</span>
+              <div className="flex-1">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={contractQuestion}
+                    onChange={(e) => setContractQuestion(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && askContractQuestion()}
+                    placeholder="Ask anything about this wedding…"
+                    className="flex-1 px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
+                    disabled={askingQuestion}
+                  />
+                  <button
+                    onClick={askContractQuestion}
+                    disabled={askingQuestion || !contractQuestion.trim()}
+                    className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
+                  >
+                    {askingQuestion ? '…' : 'Ask'}
+                  </button>
+                </div>
+                {contractAnswer && (
+                  <div className="mt-3 p-3 bg-cream-50 rounded-lg text-sm text-sage-700 whitespace-pre-wrap">
+                    {contractAnswer}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
           <div className="grid lg:grid-cols-[220px_1fr] gap-4 sm:gap-8">
             {/* Compact Nav Sidebar */}
             <div className="order-2 lg:order-1">
