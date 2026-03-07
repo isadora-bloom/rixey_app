@@ -786,23 +786,23 @@ export default function Dashboard() {
             <div className="bg-white rounded-2xl shadow-sm border border-cream-200 overflow-hidden lg:sticky lg:top-24">
               <nav className="p-2">
                 {[
-                  { key: 'chat', label: 'Chat with Sage', emoji: '💬' },
+                  { key: 'chat', label: 'Chat with Sage', icon: '/icons/sage-chat.svg' },
                   { section: 'Planning Tools' },
-                  { key: 'timeline', label: 'Timeline', emoji: '📅', dot: !!timelineSummary },
-                  { key: 'tables', label: 'Tables', emoji: '🪑', dot: !!tableSummary },
-                  { key: 'budget', label: 'Budget', emoji: '💰', dot: !!budgetSummary },
-                  { key: 'vendor', label: 'Vendors', emoji: '👥' },
-                  { key: 'checklist', label: 'Checklist', emoji: '✅' },
-                  { key: 'staffing', label: 'Staffing Guide', emoji: '🙋' },
-                  { key: 'inspo', label: 'Inspiration', emoji: '💡' },
-                  { key: 'borrow', label: 'Borrow Brochure', emoji: '📋' },
-                  { key: 'picks', label: 'Rixey Picks', emoji: '🛍' },
-                  { key: 'guestcare', label: 'Guest Care', emoji: '💝' },
+                  { key: 'timeline', label: 'Timeline', icon: '/icons/timeline.svg', dot: !!timelineSummary },
+                  { key: 'tables', label: 'Tables', icon: '/icons/tables.svg', dot: !!tableSummary },
+                  { key: 'budget', label: 'Budget', icon: '/icons/budget.svg', dot: !!budgetSummary },
+                  { key: 'vendor', label: 'Vendors', icon: '/icons/vendors.svg' },
+                  { key: 'checklist', label: 'Checklist', icon: '/icons/checklist.svg' },
+                  { key: 'staffing', label: 'Staffing Guide', icon: '/icons/staffing-guide.svg' },
+                  { key: 'inspo', label: 'Inspiration', icon: '/icons/inspiration.svg' },
+                  { key: 'borrow', label: 'Borrow Brochure', icon: '/icons/borrow-brochure.svg' },
+                  { key: 'picks', label: 'Rixey Picks', icon: '/icons/rixey-picks.svg' },
+                  { key: 'guestcare', label: 'Guest Care', icon: '/icons/guest-care.svg' },
                   { section: 'Connect' },
-                  { key: 'inbox', label: 'Inbox', emoji: '📬' },
-                  { key: 'booking', label: 'Book a Meeting', emoji: '📞' },
+                  { key: 'inbox', label: 'Inbox', icon: '/icons/inbox.svg' },
+                  { key: 'booking', label: 'Book a Meeting', icon: '/icons/book-a-meeting.svg' },
                   { section: 'Links' },
-                  { key: 'resources', label: 'Resources', emoji: '🔗' },
+                  { key: 'resources', label: 'Resources', icon: '/icons/resources.svg' },
                 ].map((item, idx) => {
                   if (item.section) {
                     return (
@@ -822,7 +822,7 @@ export default function Dashboard() {
                       }`}
                     >
                       <span className="flex items-center gap-2">
-                        <span>{item.emoji}</span>
+                        <img src={item.icon} className="w-5 h-5 flex-shrink-0" alt="" />
                         <span>{item.label}</span>
                       </span>
                       {item.dot && <span className="w-1.5 h-1.5 rounded-full bg-sage-400 flex-shrink-0" />}

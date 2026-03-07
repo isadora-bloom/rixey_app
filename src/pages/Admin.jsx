@@ -1336,7 +1336,7 @@ export default function Admin() {
           {/* Ask About This Wedding — always visible at top */}
           <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 mb-4 sm:mb-6">
             <div className="flex gap-2">
-              <span className="text-lg leading-none mt-1.5">🤖</span>
+              <img src="/icons/ask-about-wedding.svg" className="w-5 h-5 flex-shrink-0 mt-2" alt="" />
               <div className="flex-1">
                 <div className="flex gap-2">
                   <input
@@ -1371,27 +1371,27 @@ export default function Admin() {
               <div className="bg-white rounded-2xl shadow-sm border border-cream-200 overflow-hidden lg:sticky lg:top-24">
                 <nav className="p-2">
                   {[
-                    { tab: 'overview', label: 'Overview', emoji: '🏠' },
+                    { tab: 'overview', label: 'Overview', icon: '/icons/overview.svg' },
                     { section: 'Planning' },
-                    { tab: 'notes', label: 'Planning Notes', emoji: '📝', badge: planningNotes.filter(n => n.status === 'pending').length },
-                    { tab: 'vendors', label: 'Vendors', emoji: '👥' },
-                    { tab: 'inspo', label: 'Inspiration', emoji: '💡' },
-                    { tab: 'checklist', label: 'Checklist', emoji: '✅' },
+                    { tab: 'notes', label: 'Planning Notes', icon: '/icons/planning-notes.svg', badge: planningNotes.filter(n => n.status === 'pending').length },
+                    { tab: 'vendors', label: 'Vendors', icon: '/icons/vendors.svg' },
+                    { tab: 'inspo', label: 'Inspiration', icon: '/icons/inspiration.svg' },
+                    { tab: 'checklist', label: 'Checklist', icon: '/icons/checklist.svg' },
                     { section: 'Conversations' },
-                    { tab: 'messages', label: 'Conversations', emoji: '💬' },
-                    { tab: 'uncertain', label: "Uncertain Q's", emoji: '❓', badge: uncertainQuestions.filter(q => q.wedding_id === viewingWedding.id).length },
-                    { tab: 'meetings', label: 'Meetings', emoji: '📅' },
-                    { tab: 'direct-messages', label: 'Direct Messages', emoji: '✉️' },
+                    { tab: 'messages', label: 'Conversations', icon: '/icons/conversations.svg' },
+                    { tab: 'uncertain', label: "Uncertain Q's", icon: '/icons/uncertain-questions.svg', badge: uncertainQuestions.filter(q => q.wedding_id === viewingWedding.id).length },
+                    { tab: 'meetings', label: 'Meetings', icon: '/icons/meetings.svg' },
+                    { tab: 'direct-messages', label: 'Direct Messages', icon: '/icons/direct-messages.svg' },
                     { section: 'Tools' },
-                    { tab: 'timeline', label: 'Timeline', emoji: '⏱' },
-                    { tab: 'tables', label: 'Tables', emoji: '🪑' },
-                    { tab: 'borrow', label: 'Borrow Brochure', emoji: '📋', badge: borrowSelections.length },
-                    { tab: 'guest-care', label: 'Guest Care', emoji: '💝' },
-                    { tab: 'activity', label: 'Recent Activity', emoji: '⚡', badge: activities.length },
+                    { tab: 'timeline', label: 'Timeline', icon: '/icons/timeline.svg' },
+                    { tab: 'tables', label: 'Tables', icon: '/icons/tables.svg' },
+                    { tab: 'borrow', label: 'Borrow Brochure', icon: '/icons/borrow-brochure.svg', badge: borrowSelections.length },
+                    { tab: 'guest-care', label: 'Guest Care', icon: '/icons/guest-care.svg' },
+                    { tab: 'activity', label: 'Recent Activity', icon: '/icons/recent-activity.svg', badge: activities.length },
                     { section: 'Admin' },
-                    { tab: 'contract-upload', label: 'Upload Contract', emoji: '📄' },
-                    { tab: 'ask', label: 'Ask About Wedding', emoji: '🤖' },
-                    { tab: 'api-usage', label: 'API Usage', emoji: '📊' },
+                    { tab: 'contract-upload', label: 'Upload Contract', icon: '/icons/upload-contract.svg' },
+                    { tab: 'ask', label: 'Ask About Wedding', icon: '/icons/ask-about-wedding.svg' },
+                    { tab: 'api-usage', label: 'API Usage', icon: '/icons/api-usage.svg' },
                   ].map((item, idx) => {
                     if (item.section) {
                       return (
@@ -1414,7 +1414,7 @@ export default function Admin() {
                         }`}
                       >
                         <span className="flex items-center gap-2">
-                          <span>{item.emoji}</span>
+                          <img src={item.icon} className="w-5 h-5 flex-shrink-0" alt="" />
                           <span>{item.label}</span>
                         </span>
                         {item.badge > 0 && (
