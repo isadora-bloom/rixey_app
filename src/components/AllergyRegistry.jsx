@@ -1,5 +1,10 @@
 import { useState, useEffect } from 'react'
-import { Plus, Pencil, Trash2, AlertTriangle, X, Check } from 'lucide-react'
+const PlusIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+const PencilIcon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+const Trash2Icon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
+const AlertTriangleIcon = ({className}) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+const XIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+const CheckIcon = ({className}) => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polyline points="20 6 9 17 4 12"/></svg>
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -158,7 +163,7 @@ export default function AllergyRegistry({ weddingId, userId }) {
     <div className="space-y-4">
       {/* Amber banner */}
       <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
-        <AlertTriangle size={16} className="text-amber-500 mt-0.5 shrink-0" />
+        <AlertTriangleIcon className="text-amber-500 mt-0.5 shrink-0" />
         <p className="text-sm text-amber-800">
           Share this list with your caterer before the wedding.
         </p>
@@ -172,7 +177,7 @@ export default function AllergyRegistry({ weddingId, userId }) {
             onClick={handleAddClick}
             className="flex items-center gap-2 px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 transition-colors"
           >
-            <Plus size={15} />
+            <PlusIcon />
             Add Guest
           </button>
         )}
@@ -212,14 +217,14 @@ export default function AllergyRegistry({ weddingId, userId }) {
                       </td>
                       <td className="px-4 py-3">
                         {row.caterer_alerted ? (
-                          <Check size={15} className="text-sage-600" />
+                          <CheckIcon className="text-sage-600" />
                         ) : (
                           <span className="text-cream-400">—</span>
                         )}
                       </td>
                       <td className="px-4 py-3">
                         {row.staying_overnight ? (
-                          <Check size={15} className="text-sage-600" />
+                          <CheckIcon className="text-sage-600" />
                         ) : (
                           <span className="text-cream-400">—</span>
                         )}
@@ -231,7 +236,7 @@ export default function AllergyRegistry({ weddingId, userId }) {
                             className="p-1 text-sage-400 hover:text-sage-600 transition-colors"
                             title="Edit"
                           >
-                            <Pencil size={14} />
+                            <PencilIcon />
                           </button>
                           <button
                             onClick={() => handleDelete(row.id)}
@@ -239,7 +244,7 @@ export default function AllergyRegistry({ weddingId, userId }) {
                             className="p-1 text-sage-400 hover:text-rose-400 transition-colors disabled:opacity-50"
                             title="Delete"
                           >
-                            <Trash2 size={14} />
+                            <Trash2Icon />
                           </button>
                         </div>
                       </td>
@@ -262,7 +267,7 @@ export default function AllergyRegistry({ weddingId, userId }) {
                 onClick={handleCancel}
                 className="p-1 text-sage-400 hover:text-sage-600 transition-colors"
               >
-                <X size={16} />
+                <XIcon />
               </button>
             </div>
 
@@ -369,7 +374,7 @@ export default function AllergyRegistry({ weddingId, userId }) {
           onClick={handleAddClick}
           className="flex items-center gap-2 text-sm text-sage-500 hover:text-sage-700 transition-colors"
         >
-          <Plus size={15} />
+          <PlusIcon />
           Add another guest
         </button>
       )}

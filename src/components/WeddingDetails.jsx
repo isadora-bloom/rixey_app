@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { Save, Check } from 'lucide-react'
+const SaveIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+const CheckIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -332,7 +333,7 @@ export default function WeddingDetails({ weddingId, userId }) {
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-cream-200 px-6 py-3 flex items-center justify-end gap-3 z-20 lg:pl-64">
         {saved && (
           <span className="flex items-center gap-1.5 text-sm text-sage-600">
-            <Check size={15} />
+            <CheckIcon />
             Saved
           </span>
         )}
@@ -341,7 +342,7 @@ export default function WeddingDetails({ weddingId, userId }) {
           disabled={saving}
           className="flex items-center gap-2 px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50 transition-colors"
         >
-          <Save size={15} />
+          <SaveIcon />
           {saving ? 'Saving…' : 'Save Details'}
         </button>
       </div>
