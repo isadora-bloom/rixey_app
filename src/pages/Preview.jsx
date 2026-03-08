@@ -253,8 +253,8 @@ function SignUpForm() {
 
   return (
     <div className="bg-white rounded-2xl border border-cream-200 shadow-sm p-7">
-      <h3 className="font-serif text-2xl text-sage-800 mb-1">Start planning</h3>
-      <p className="text-sm text-sage-400 mb-6">Create your portal in under a minute.</p>
+      <h3 className="font-serif text-2xl text-sage-800 mb-1">Claim your portal</h3>
+      <p className="text-sm text-sage-400 mb-6">Exclusively for booked Rixey Manor couples.</p>
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
@@ -341,18 +341,19 @@ export default function Preview() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
           {/* Left: copy */}
           <div>
-            <p className="text-xs font-semibold uppercase tracking-widest text-sage-400 mb-5">
-              Rixey Manor · Planning Portal
-            </p>
+            <div className="inline-flex items-center gap-2 bg-sage-50 border border-sage-200 rounded-full px-4 py-1.5 mb-6">
+              <span className="w-2 h-2 rounded-full bg-sage-500" />
+              <span className="text-xs font-semibold text-sage-600 uppercase tracking-wider">Exclusive to Rixey Manor couples</span>
+            </div>
             <h1 className="font-serif text-5xl sm:text-6xl text-sage-800 leading-[1.1] mb-6">
               Your wedding,<br />planned in one place.
             </h1>
             <p className="text-lg text-sage-500 leading-relaxed mb-8">
-              We built this so the two of you can fill in every detail at your own pace —
+              We built this ourselves — just for our couples. Fill in every detail at your own pace
               and everything lands straight with your coordinator. No email chains. No repeating yourself.
             </p>
             <div className="flex flex-wrap gap-3 text-sm text-sage-500">
-              {['11 planning tools', 'AI assistant included', 'Direct coordinator messages', 'Free with your booking'].map(f => (
+              {['Built in-house by Rixey', 'Included with your booking', 'AI assistant trained on Rixey', 'Direct coordinator access'].map(f => (
                 <span key={f} className="flex items-center gap-1.5 bg-white border border-cream-200 rounded-full px-3 py-1.5">
                   <span className="text-sage-500">✓</span> {f}
                 </span>
@@ -378,7 +379,7 @@ export default function Preview() {
           <h2 className="font-serif text-3xl sm:text-4xl text-sage-800 mb-3">
             Everything you need. Nothing you don't.
           </h2>
-          <p className="text-sage-400 text-sm">Eleven tools, all set up for your wedding the moment you log in.</p>
+          <p className="text-sage-400 text-sm">Eleven tools, built in-house and set up for your wedding the moment you log in. No third-party app. No subscription. Just yours.</p>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -442,16 +443,17 @@ export default function Preview() {
       <section className="bg-rose-100 py-16 px-6">
         <div className="max-w-2xl mx-auto text-center">
           <p className="font-serif text-2xl sm:text-3xl text-sage-800 leading-relaxed mb-5">
-            "We wanted couples to feel looked after from the moment they book — not just on the day itself."
+            "We built this ourselves because we wanted our couples to feel looked after from the moment they booked — not just on the day itself."
           </p>
           <p className="text-sm text-sage-500 tracking-wide">— The Rixey Manor Team</p>
+          <p className="text-xs text-sage-400 mt-3">This portal is built in-house and available exclusively to Rixey Manor couples. It is not a third-party service.</p>
         </div>
       </section>
 
       {/* ── Footer CTA ── */}
       <section className="py-20 px-6 text-center">
         <h2 className="font-serif text-3xl sm:text-4xl text-sage-800 mb-3">Ready to start planning?</h2>
-        <p className="text-sage-400 text-sm mb-8">Your portal is waiting — takes 30 seconds to set up.</p>
+        <p className="text-sage-400 text-sm mb-8">Your portal is included with your Rixey booking — takes 30 seconds to set up.</p>
         <a
           href="#top"
           onClick={e => { e.preventDefault(); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
