@@ -11,12 +11,16 @@ import Accommodations from './pages/Accommodations'
 import Admin from './pages/Admin'
 import GmailCallback from './pages/GmailCallback'
 import ZoomCallback from './pages/ZoomCallback'
+import Preview from './pages/Preview'
 
 function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
         <Routes>
+          {/* Public preview / explainer page */}
+          <Route path="/preview" element={<Preview />} />
+
           {/* Client login */}
           <Route path="/" element={<Login />} />
           <Route path="/reset-password" element={<ResetPassword />} />
