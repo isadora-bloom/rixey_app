@@ -807,6 +807,146 @@ app.post('/api/chat', async (req, res) => {
           });
         }
 
+        // ── New planning form tables ─────────────────────────────────────
+        const [
+          { data: weddingDetails },
+          { data: allergyRows },
+          { data: bedroomRows },
+          { data: ceremonyRows },
+          { data: decorRows },
+          { data: makeupRows },
+          { data: shuttleRows },
+          { data: rehearsalRow }
+        ] = await Promise.all([
+          supabaseAdmin.from('wedding_details').select('*').eq('wedding_id', weddingId).maybeSingle(),
+          supabaseAdmin.from('allergy_registry').select('*').eq('wedding_id', weddingId).order('sort_order'),
+          supabaseAdmin.from('bedroom_assignments').select('*').eq('wedding_id', weddingId).order('sort_order'),
+          supabaseAdmin.from('ceremony_order').select('*').eq('wedding_id', weddingId).order('sort_order'),
+          supabaseAdmin.from('decor_inventory').select('*').eq('wedding_id', weddingId).order('space_name').order('sort_order'),
+          supabaseAdmin.from('makeup_schedule').select('*').eq('wedding_id', weddingId).order('sort_order'),
+          supabaseAdmin.from('shuttle_schedule').select('*').eq('wedding_id', weddingId).order('sort_order'),
+          supabaseAdmin.from('rehearsal_dinner').select('*').eq('wedding_id', weddingId).maybeSingle(),
+        ]);
+
+        if (weddingDetails) {
+          weddingContext += '\n\nWEDDING DETAILS:\n';
+          if (weddingDetails.wedding_colors) weddingContext += `- Colors: ${weddingDetails.wedding_colors}\n`;
+          if (weddingDetails.partner1_social) weddingContext += `- Partner 1 social: ${weddingDetails.partner1_social}\n`;
+          if (weddingDetails.partner2_social) weddingContext += `- Partner 2 social: ${weddingDetails.partner2_social}\n`;
+          if (weddingDetails.ceremony_location) weddingContext += `- Ceremony location: ${weddingDetails.ceremony_location}\n`;
+          if (weddingDetails.arbor_choice) weddingContext += `- Arbor choice: ${weddingDetails.arbor_choice}\n`;
+          if (weddingDetails.unity_table) weddingContext += `- Unity table: yes\n`;
+          if (weddingDetails.ceremony_notes) weddingContext += `- Ceremony notes: ${weddingDetails.ceremony_notes}\n`;
+          if (weddingDetails.seating_method) weddingContext += `- Guest seating method: ${weddingDetails.seating_method}\n`;
+          const providing = [];
+          if (weddingDetails.providing_table_numbers) providing.push('table numbers');
+          if (weddingDetails.providing_charger_plates) providing.push('charger plates');
+          if (weddingDetails.providing_champagne_glasses) providing.push('champagne glasses');
+          if (weddingDetails.providing_cake_cutter) providing.push('cake cutter');
+          if (weddingDetails.providing_cake_topper) providing.push('cake topper');
+          if (providing.length) weddingContext += `- Couple is providing: ${providing.join(', ')}\n`;
+          if (weddingDetails.favors_description) weddingContext += `- Favors/gifts: ${weddingDetails.favors_description}\n`;
+          if (weddingDetails.send_off_type) weddingContext += `- Send-off: ${weddingDetails.send_off_type}${weddingDetails.send_off_notes ? ` — ${weddingDetails.send_off_notes}` : ''}\n`;
+          if (weddingDetails.dogs_coming) weddingContext += `- Dogs coming: yes${weddingDetails.dogs_description ? ` (${weddingDetails.dogs_description})` : ''}\n`;
+          if (weddingDetails.reception_notes) weddingContext += `- Reception notes: ${weddingDetails.reception_notes}\n`;
+        }
+
+        if (allergyRows && allergyRows.length > 0) {
+          weddingContext += '\n\nALLERGY REGISTRY (share with caterer):\n';
+          allergyRows.forEach(a => {
+            weddingContext += `- ${a.guest_name}: ${a.allergy} [${a.severity}]`;
+            if (a.caterer_alerted) weddingContext += ' — caterer alerted';
+            if (a.staying_overnight) weddingContext += ' — overnight guest';
+            if (a.notes) weddingContext += ` — ${a.notes}`;
+            weddingContext += '\n';
+          });
+        }
+
+        if (bedroomRows && bedroomRows.some(r => r.guest_friday || r.guest_saturday)) {
+          weddingContext += '\n\nBEDROOM ASSIGNMENTS:\n';
+          bedroomRows.forEach(r => {
+            if (r.guest_friday || r.guest_saturday) {
+              weddingContext += `- ${r.room_name}: Friday: ${r.guest_friday || '—'} | Saturday: ${r.guest_saturday || '—'}`;
+              if (r.notes) weddingContext += ` (${r.notes})`;
+              weddingContext += '\n';
+            }
+          });
+        }
+
+        if (ceremonyRows && ceremonyRows.length > 0) {
+          weddingContext += '\n\nCEREMONY ORDER:\n';
+          ['processional', 'family_escort', 'recessional'].forEach(section => {
+            const entries = ceremonyRows.filter(e => e.section === section);
+            if (entries.length === 0) return;
+            weddingContext += `${section.replace('_', ' ').toUpperCase()}:\n`;
+            entries.forEach(e => {
+              weddingContext += `  - ${e.participant_name || '(unnamed)'}`;
+              if (e.role) weddingContext += ` [${e.role}]`;
+              if (e.side && e.side !== 'center') weddingContext += ` (${e.side.replace('_', "'s ")})`;
+              if (e.walk_with) weddingContext += ` — walks with ${e.walk_with}`;
+              weddingContext += '\n';
+            });
+          });
+        }
+
+        if (decorRows && decorRows.length > 0) {
+          weddingContext += '\n\nDECOR INVENTORY:\n';
+          const bySpace = {};
+          decorRows.forEach(d => {
+            if (!bySpace[d.space_name]) bySpace[d.space_name] = [];
+            bySpace[d.space_name].push(d);
+          });
+          for (const [space, items] of Object.entries(bySpace)) {
+            weddingContext += `${space}:\n`;
+            items.forEach(d => {
+              weddingContext += `  - ${d.item_name}`;
+              if (d.source) weddingContext += ` (from: ${d.source})`;
+              if (d.leaving_it) weddingContext += ' [leaving at venue]';
+              else if (d.goes_home_with) weddingContext += ` [going home with: ${d.goes_home_with}]`;
+              weddingContext += '\n';
+            });
+          }
+        }
+
+        if (makeupRows && makeupRows.length > 0) {
+          weddingContext += '\n\nHAIR & MAKEUP SCHEDULE:\n';
+          makeupRows.forEach(m => {
+            weddingContext += `- ${m.participant_name}${m.role ? ` (${m.role})` : ''}`;
+            if (m.hair_start_time) weddingContext += ` — hair: ${m.hair_start_time}`;
+            if (m.makeup_start_time) weddingContext += ` — makeup: ${m.makeup_start_time}`;
+            weddingContext += '\n';
+          });
+        }
+
+        if (shuttleRows && shuttleRows.length > 0) {
+          weddingContext += '\n\nSHUTTLE SCHEDULE:\n';
+          shuttleRows.forEach(s => {
+            weddingContext += `- ${s.run_label || 'Run'}:`;
+            if (s.pickup_location && s.pickup_time) weddingContext += ` pickup ${s.pickup_location} at ${s.pickup_time}`;
+            if (s.dropoff_location && s.dropoff_time) weddingContext += ` → drop off at ${s.dropoff_location} at ${s.dropoff_time}`;
+            if (s.seat_count) weddingContext += ` (${s.seat_count} seats)`;
+            weddingContext += '\n';
+          });
+        }
+
+        if (rehearsalRow) {
+          weddingContext += '\n\nREHEARSAL DINNER:\n';
+          if (rehearsalRow.bar_type) weddingContext += `- Bar: ${rehearsalRow.bar_type}\n`;
+          if (rehearsalRow.food_type) weddingContext += `- Food: ${rehearsalRow.food_type}${rehearsalRow.food_notes ? ` — ${rehearsalRow.food_notes}` : ''}\n`;
+          if (rehearsalRow.location) weddingContext += `- Location: ${rehearsalRow.location}${rehearsalRow.location_notes ? ` — ${rehearsalRow.location_notes}` : ''}\n`;
+          if (rehearsalRow.seating_type) weddingContext += `- Seating: ${rehearsalRow.seating_type}\n`;
+          if (rehearsalRow.table_layout) weddingContext += `- Tables: ${rehearsalRow.table_layout}\n`;
+          if (rehearsalRow.guest_count) weddingContext += `- Guest count: ${rehearsalRow.guest_count}\n`;
+          const rentals = [];
+          if (rehearsalRow.using_disposables) rentals.push('disposables');
+          if (rehearsalRow.renting_china) rentals.push('renting china');
+          if (rehearsalRow.renting_flatware) rentals.push('renting flatware');
+          if (rentals.length) weddingContext += `- Rentals: ${rentals.join(', ')}\n`;
+          if (rehearsalRow.high_chairs_needed) weddingContext += `- High chairs needed: ${rehearsalRow.high_chairs_count || 'yes'}\n`;
+          if (rehearsalRow.notes) weddingContext += `- Notes: ${rehearsalRow.notes}\n`;
+        }
+        // ── End new planning form tables ──────────────────────────────────
+
         // Check if the question is contract/vendor related
         const contractKeywords = [
           'contract', 'vendor', 'cost', 'price', 'payment', 'deposit', 'fee',
@@ -1644,44 +1784,98 @@ app.post('/api/ask-contracts', async (req, res) => {
       return res.status(400).json({ error: 'Wedding ID and question required' });
     }
 
-    // Get all contracts for this wedding
-    const { data: contracts } = await supabaseAdmin
-      .from('contracts')
-      .select('filename, extracted_text')
-      .eq('wedding_id', weddingId);
+    // Fetch all wedding data in parallel
+    const [
+      { data: contracts },
+      { data: planningNotes },
+      { data: weddingDetails },
+      { data: allergyRows },
+      { data: bedroomRows },
+      { data: ceremonyRows },
+      { data: decorRows },
+      { data: makeupRows },
+      { data: shuttleRows },
+      { data: rehearsalRow },
+      { data: vendors },
+    ] = await Promise.all([
+      supabaseAdmin.from('contracts').select('filename, extracted_text').eq('wedding_id', weddingId),
+      supabaseAdmin.from('planning_notes').select('category, content, source_message').eq('wedding_id', weddingId),
+      supabaseAdmin.from('wedding_details').select('*').eq('wedding_id', weddingId).maybeSingle(),
+      supabaseAdmin.from('allergy_registry').select('*').eq('wedding_id', weddingId).order('sort_order'),
+      supabaseAdmin.from('bedroom_assignments').select('*').eq('wedding_id', weddingId).order('sort_order'),
+      supabaseAdmin.from('ceremony_order').select('*').eq('wedding_id', weddingId).order('sort_order'),
+      supabaseAdmin.from('decor_inventory').select('*').eq('wedding_id', weddingId).order('space_name'),
+      supabaseAdmin.from('makeup_schedule').select('*').eq('wedding_id', weddingId).order('sort_order'),
+      supabaseAdmin.from('shuttle_schedule').select('*').eq('wedding_id', weddingId).order('sort_order'),
+      supabaseAdmin.from('rehearsal_dinner').select('*').eq('wedding_id', weddingId).maybeSingle(),
+      supabaseAdmin.from('vendor_checklist').select('vendor_type, vendor_name, vendor_contact, is_booked, notes').eq('wedding_id', weddingId),
+    ]);
 
-    // Get all planning notes for this wedding
-    const { data: planningNotes } = await supabaseAdmin
-      .from('planning_notes')
-      .select('category, content, source_message, created_at')
-      .eq('wedding_id', weddingId);
+    // Build comprehensive context
+    let fullContext = '';
 
-    const hasContracts = contracts && contracts.length > 0;
-    const hasNotes = planningNotes && planningNotes.length > 0;
-
-    if (!hasContracts && !hasNotes) {
-      return res.json({
-        answer: "No contracts or planning notes have been recorded for this wedding yet. Upload contracts or have the client chat with Sage to build up their planning file."
-      });
+    if (contracts?.length) {
+      fullContext += `CONTRACTS:\n${contracts.map(c => `--- ${c.filename} ---\n${c.extracted_text}`).join('\n\n')}\n\n`;
+    }
+    if (planningNotes?.length) {
+      fullContext += `PLANNING NOTES:\n${planningNotes.map(n => `[${n.category.toUpperCase()}] ${n.content}`).join('\n')}\n\n`;
+    }
+    if (vendors?.length) {
+      fullContext += `VENDORS:\n${vendors.map(v => `- ${v.vendor_type}: ${v.vendor_name || 'TBD'}${v.is_booked ? ' (booked)' : ''}${v.vendor_contact ? ` — ${v.vendor_contact}` : ''}${v.notes ? ` — ${v.notes}` : ''}`).join('\n')}\n\n`;
+    }
+    if (weddingDetails) {
+      const d = weddingDetails;
+      const lines = [];
+      if (d.wedding_colors) lines.push(`Colors: ${d.wedding_colors}`);
+      if (d.ceremony_location) lines.push(`Ceremony: ${d.ceremony_location}`);
+      if (d.arbor_choice) lines.push(`Arbor: ${d.arbor_choice}`);
+      if (d.unity_table) lines.push('Unity table: yes');
+      if (d.seating_method) lines.push(`Guest seating: ${d.seating_method}`);
+      const providing = [d.providing_table_numbers && 'table numbers', d.providing_charger_plates && 'charger plates', d.providing_champagne_glasses && 'champagne glasses', d.providing_cake_cutter && 'cake cutter', d.providing_cake_topper && 'cake topper'].filter(Boolean);
+      if (providing.length) lines.push(`Couple providing: ${providing.join(', ')}`);
+      if (d.favors_description) lines.push(`Favors: ${d.favors_description}`);
+      if (d.send_off_type) lines.push(`Send-off: ${d.send_off_type}${d.send_off_notes ? ` — ${d.send_off_notes}` : ''}`);
+      if (d.dogs_coming) lines.push(`Dogs: ${d.dogs_description || 'yes'}`);
+      if (d.ceremony_notes) lines.push(`Ceremony notes: ${d.ceremony_notes}`);
+      if (d.reception_notes) lines.push(`Reception notes: ${d.reception_notes}`);
+      if (lines.length) fullContext += `WEDDING DETAILS:\n${lines.map(l => `- ${l}`).join('\n')}\n\n`;
+    }
+    if (allergyRows?.length) {
+      fullContext += `ALLERGY REGISTRY:\n${allergyRows.map(a => `- ${a.guest_name}: ${a.allergy} [${a.severity}]${a.caterer_alerted ? ' — caterer alerted' : ''}${a.staying_overnight ? ' — overnight guest' : ''}${a.notes ? ` — ${a.notes}` : ''}`).join('\n')}\n\n`;
+    }
+    if (ceremonyRows?.length) {
+      fullContext += `CEREMONY ORDER:\n${ceremonyRows.map(e => `- ${e.section}: ${e.participant_name || '?'}${e.role ? ` [${e.role}]` : ''}${e.walk_with ? ` with ${e.walk_with}` : ''}`).join('\n')}\n\n`;
+    }
+    if (decorRows?.length) {
+      const bySpace = {};
+      decorRows.forEach(d => { if (!bySpace[d.space_name]) bySpace[d.space_name] = []; bySpace[d.space_name].push(d); });
+      fullContext += `DECOR INVENTORY:\n${Object.entries(bySpace).map(([s, items]) => `${s}:\n${items.map(d => `  - ${d.item_name}${d.source ? ` (from ${d.source})` : ''}${d.leaving_it ? ' [leaving]' : d.goes_home_with ? ` [→ ${d.goes_home_with}]` : ''}`).join('\n')}`).join('\n')}\n\n`;
+    }
+    if (makeupRows?.length) {
+      fullContext += `HAIR & MAKEUP SCHEDULE:\n${makeupRows.map(m => `- ${m.participant_name}${m.role ? ` (${m.role})` : ''}${m.hair_start_time ? ` hair: ${m.hair_start_time}` : ''}${m.makeup_start_time ? ` makeup: ${m.makeup_start_time}` : ''}`).join('\n')}\n\n`;
+    }
+    if (shuttleRows?.length) {
+      fullContext += `SHUTTLE SCHEDULE:\n${shuttleRows.map(s => `- ${s.run_label || 'Run'}: ${s.pickup_location || ''} ${s.pickup_time || ''} → ${s.dropoff_location || ''} ${s.dropoff_time || ''}${s.seat_count ? ` (${s.seat_count} seats)` : ''}`).join('\n')}\n\n`;
+    }
+    if (bedroomRows?.some(r => r.guest_friday || r.guest_saturday)) {
+      fullContext += `BEDROOM ASSIGNMENTS:\n${bedroomRows.filter(r => r.guest_friday || r.guest_saturday).map(r => `- ${r.room_name}: Fri: ${r.guest_friday || '—'} | Sat: ${r.guest_saturday || '—'}`).join('\n')}\n\n`;
+    }
+    if (rehearsalRow) {
+      const r = rehearsalRow;
+      const lines = [];
+      if (r.bar_type) lines.push(`Bar: ${r.bar_type}`);
+      if (r.food_type) lines.push(`Food: ${r.food_type}${r.food_notes ? ` — ${r.food_notes}` : ''}`);
+      if (r.location) lines.push(`Location: ${r.location}`);
+      if (r.seating_type) lines.push(`Seating: ${r.seating_type}`);
+      if (r.notes) lines.push(`Notes: ${r.notes}`);
+      if (lines.length) fullContext += `REHEARSAL DINNER:\n${lines.map(l => `- ${l}`).join('\n')}\n\n`;
     }
 
-    // Combine all contract text
-    let contractContext = '';
-    if (hasContracts) {
-      contractContext = contracts.map(c =>
-        `--- CONTRACT: ${c.filename} ---\n${c.extracted_text}\n`
-      ).join('\n\n');
+    if (!fullContext.trim()) {
+      return res.json({ answer: "No planning information has been recorded for this wedding yet." });
     }
 
-    // Combine planning notes
-    let notesContext = '';
-    if (hasNotes) {
-      notesContext = planningNotes.map(n =>
-        `[${n.category.toUpperCase()}] ${n.content}${n.source_message ? ` (from: "${n.source_message.substring(0, 100)}...")` : ''}`
-      ).join('\n');
-    }
-
-    console.log(`Answering question with ${contracts?.length || 0} contracts and ${planningNotes?.length || 0} notes for wedding ${weddingId}`);
+    console.log(`Answering admin question with ${Math.round(fullContext.length/1000)}K chars of context for wedding ${weddingId}`);
 
     // Ask Claude
     const response = await anthropic.messages.create({
@@ -1689,11 +1883,11 @@ app.post('/api/ask-contracts', async (req, res) => {
       max_tokens: 1000,
       messages: [{
         role: 'user',
-        content: `You are helping a wedding venue manager answer questions about a client's wedding. Based on the contracts and planning notes below, answer the following question. Be specific and cite your source (which contract or note).
+        content: `You are helping a wedding venue coordinator answer questions about a client's wedding. Use the planning information below to answer accurately and specifically. Cite your source (which section the info came from).
 
 If the information is not found, say so clearly.
 
-${hasContracts ? `CONTRACTS:\n${contractContext}\n\n` : ''}${hasNotes ? `PLANNING NOTES:\n${notesContext}\n\n` : ''}
+${fullContext}
 QUESTION: ${question}
 
 Answer concisely and helpfully:`
