@@ -5633,6 +5633,227 @@ app.delete('/api/storefront/:id', async (req, res) => {
   }
 });
 
+// ============ WEDDING PLANNING FORMS ============
+
+// --- Wedding Details (upsert) ---
+app.get('/api/wedding-details/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('wedding_details').select('*').eq('wedding_id', req.params.weddingId).maybeSingle();
+    if (error) throw error;
+    res.json({ details: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/wedding-details', async (req, res) => {
+  try {
+    const { weddingId, ...fields } = req.body;
+    const { data, error } = await supabaseAdmin.from('wedding_details')
+      .upsert({ wedding_id: weddingId, ...fields, updated_at: new Date().toISOString() }, { onConflict: 'wedding_id' })
+      .select().single();
+    if (error) throw error;
+    res.json({ details: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// --- Allergy Registry ---
+app.get('/api/allergies/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('allergy_registry').select('*').eq('wedding_id', req.params.weddingId).order('sort_order');
+    if (error) throw error;
+    res.json({ allergies: data || [] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/allergies', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('allergy_registry').insert(req.body).select().single();
+    if (error) throw error;
+    res.json({ allergy: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put('/api/allergies/:id', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('allergy_registry').update(req.body).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    res.json({ allergy: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/allergies/:id', async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin.from('allergy_registry').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// --- Bedroom Assignments ---
+const RIXEY_ROOMS = [
+  { room_name: 'Newlywed Suite', room_description: 'King bed · bathtub & shared shower · makeup salon', sort_order: 0 },
+  { room_name: 'Maple Bedroom', room_description: 'King bed · bathtub · most open floor space', sort_order: 1 },
+  { room_name: 'Mountain Room', room_description: 'Queen bed · bathtub · quietest room', sort_order: 2 },
+  { room_name: 'Garden Room', room_description: 'Queen bed · shared shower · back staircase to kitchen', sort_order: 3 },
+  { room_name: 'Cottage — Queen Room', room_description: '1 queen + 2 twin beds · bathtub', sort_order: 4 },
+  { room_name: 'Cottage — Twin Room', room_description: '2 twin beds', sort_order: 5 },
+  { room_name: 'Cottage — Pullout', room_description: 'Pullout sofa (Cottage living room)', sort_order: 6 },
+];
+app.get('/api/bedrooms/:weddingId', async (req, res) => {
+  try {
+    let { data, error } = await supabaseAdmin.from('bedroom_assignments').select('*').eq('wedding_id', req.params.weddingId).order('sort_order');
+    if (error) throw error;
+    if (!data || data.length === 0) {
+      const { data: inserted, error: ie } = await supabaseAdmin.from('bedroom_assignments')
+        .insert(RIXEY_ROOMS.map(r => ({ ...r, wedding_id: req.params.weddingId }))).select();
+      if (ie) throw ie;
+      data = inserted;
+    }
+    res.json({ rooms: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put('/api/bedrooms/:id', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('bedroom_assignments').update(req.body).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    res.json({ room: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// --- Ceremony Order ---
+app.get('/api/ceremony-order/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('ceremony_order').select('*').eq('wedding_id', req.params.weddingId).order('sort_order');
+    if (error) throw error;
+    res.json({ entries: data || [] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/ceremony-order', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('ceremony_order').insert(req.body).select().single();
+    if (error) throw error;
+    res.json({ entry: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put('/api/ceremony-order/:id', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('ceremony_order').update(req.body).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    res.json({ entry: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/ceremony-order/:id', async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin.from('ceremony_order').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// --- Decor Inventory ---
+app.get('/api/decor/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('decor_inventory').select('*').eq('wedding_id', req.params.weddingId).order('space_name').order('sort_order');
+    if (error) throw error;
+    res.json({ items: data || [] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/decor', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('decor_inventory').insert(req.body).select().single();
+    if (error) throw error;
+    res.json({ item: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put('/api/decor/:id', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('decor_inventory').update(req.body).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    res.json({ item: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/decor/:id', async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin.from('decor_inventory').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// --- Makeup Schedule ---
+app.get('/api/makeup/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('makeup_schedule').select('*').eq('wedding_id', req.params.weddingId).order('sort_order');
+    if (error) throw error;
+    res.json({ entries: data || [] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/makeup', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('makeup_schedule').insert(req.body).select().single();
+    if (error) throw error;
+    res.json({ entry: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put('/api/makeup/:id', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('makeup_schedule').update(req.body).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    res.json({ entry: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/makeup/:id', async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin.from('makeup_schedule').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// --- Shuttle Schedule ---
+app.get('/api/shuttle/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('shuttle_schedule').select('*').eq('wedding_id', req.params.weddingId).order('sort_order');
+    if (error) throw error;
+    res.json({ runs: data || [] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/shuttle', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('shuttle_schedule').insert(req.body).select().single();
+    if (error) throw error;
+    res.json({ run: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put('/api/shuttle/:id', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('shuttle_schedule').update(req.body).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    res.json({ run: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/shuttle/:id', async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin.from('shuttle_schedule').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// --- Rehearsal Dinner (upsert) ---
+app.get('/api/rehearsal-dinner/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('rehearsal_dinner').select('*').eq('wedding_id', req.params.weddingId).maybeSingle();
+    if (error) throw error;
+    res.json({ rehearsal: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/rehearsal-dinner', async (req, res) => {
+  try {
+    const { weddingId, ...fields } = req.body;
+    const { data, error } = await supabaseAdmin.from('rehearsal_dinner')
+      .upsert({ wedding_id: weddingId, ...fields, updated_at: new Date().toISOString() }, { onConflict: 'wedding_id' })
+      .select().single();
+    if (error) throw error;
+    res.json({ rehearsal: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 const PORT = process.env.PORT || 3001;
 const server = app.listen(PORT, () => {
   console.log(`Sage backend running on port ${PORT}`);

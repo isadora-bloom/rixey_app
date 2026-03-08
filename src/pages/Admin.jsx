@@ -18,6 +18,14 @@ import BorrowCatalog from '../components/BorrowCatalog'
 import NotificationBell from '../components/NotificationBell'
 import GuestCareNotes from '../components/GuestCareNotes'
 import StorefrontAdmin from '../components/StorefrontAdmin'
+import WeddingDetails from '../components/WeddingDetails'
+import AllergyRegistry from '../components/AllergyRegistry'
+import BedroomAssignments from '../components/BedroomAssignments'
+import CeremonyOrder from '../components/CeremonyOrder'
+import DecorInventory from '../components/DecorInventory'
+import MakeupSchedule from '../components/MakeupSchedule'
+import ShuttleSchedule from '../components/ShuttleSchedule'
+import RehearsalDinner from '../components/RehearsalDinner'
 
 // Stress/escalation keywords to detect
 const ESCALATION_KEYWORDS = [
@@ -1377,6 +1385,14 @@ export default function Admin() {
                     { tab: 'overview', label: 'Overview', icon: '/icons/overview.svg' },
                     { section: 'Planning' },
                     { tab: 'notes', label: 'Planning Notes', icon: '/icons/planning-notes.svg', badge: planningNotes.filter(n => n.status === 'pending').length },
+                    { tab: 'wedding-details', label: 'Wedding Details', icon: '/icons/overview.svg' },
+                    { tab: 'allergies', label: 'Allergy Registry', icon: '/icons/guest-care.svg' },
+                    { tab: 'ceremony-order', label: 'Ceremony Order', icon: '/icons/timeline.svg' },
+                    { tab: 'decor', label: 'Decor Inventory', icon: '/icons/inspiration.svg' },
+                    { tab: 'makeup', label: 'Hair & Makeup', icon: '/icons/upload-photo-of-you-two.svg' },
+                    { tab: 'shuttle', label: 'Shuttle Schedule', icon: '/icons/book-a-meeting.svg' },
+                    { tab: 'rehearsal', label: 'Rehearsal Dinner', icon: '/icons/meetings.svg' },
+                    { tab: 'bedrooms', label: 'Bedroom Assignments', icon: '/icons/direct-messages.svg' },
                     { tab: 'vendors', label: 'Vendors', icon: '/icons/vendors.svg' },
                     { tab: 'inspo', label: 'Inspiration', icon: '/icons/inspiration.svg' },
                     { tab: 'checklist', label: 'Checklist', icon: '/icons/checklist.svg' },
@@ -2146,6 +2162,38 @@ export default function Admin() {
                       </div>
                     )}
                   </div>
+                )}
+
+                {activeTab === 'wedding-details' && (
+                  <WeddingDetails weddingId={viewingWedding.id} userId={null} />
+                )}
+
+                {activeTab === 'allergies' && (
+                  <AllergyRegistry weddingId={viewingWedding.id} userId={null} />
+                )}
+
+                {activeTab === 'ceremony-order' && (
+                  <CeremonyOrder weddingId={viewingWedding.id} userId={null} />
+                )}
+
+                {activeTab === 'decor' && (
+                  <DecorInventory weddingId={viewingWedding.id} userId={null} />
+                )}
+
+                {activeTab === 'makeup' && (
+                  <MakeupSchedule weddingId={viewingWedding.id} userId={null} />
+                )}
+
+                {activeTab === 'shuttle' && (
+                  <ShuttleSchedule weddingId={viewingWedding.id} userId={null} />
+                )}
+
+                {activeTab === 'rehearsal' && (
+                  <RehearsalDinner weddingId={viewingWedding.id} userId={null} />
+                )}
+
+                {activeTab === 'bedrooms' && (
+                  <BedroomAssignments weddingId={viewingWedding.id} userId={null} />
                 )}
 
                 {/* Vendors Tab */}

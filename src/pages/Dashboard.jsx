@@ -17,6 +17,14 @@ import BorrowCatalog from '../components/BorrowCatalog'
 import NotificationBell from '../components/NotificationBell'
 import GuestCareNotes from '../components/GuestCareNotes'
 import StorefrontBrowser from '../components/StorefrontBrowser'
+import WeddingDetails from '../components/WeddingDetails'
+import AllergyRegistry from '../components/AllergyRegistry'
+import BedroomAssignments from '../components/BedroomAssignments'
+import CeremonyOrder from '../components/CeremonyOrder'
+import DecorInventory from '../components/DecorInventory'
+import MakeupSchedule from '../components/MakeupSchedule'
+import ShuttleSchedule from '../components/ShuttleSchedule'
+import RehearsalDinner from '../components/RehearsalDinner'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -795,8 +803,16 @@ export default function Dashboard() {
                   { key: 'tables', label: 'Tables', icon: '/icons/tables.svg', dot: !!tableSummary },
                   { key: 'budget', label: 'Budget', icon: '/icons/budget.svg', dot: !!budgetSummary },
                   { key: 'vendor', label: 'Vendors', icon: '/icons/vendors.svg' },
+                  { key: 'wedding-details', label: 'Wedding Details', icon: '/icons/overview.svg' },
+                  { key: 'allergies', label: 'Allergy Registry', icon: '/icons/guest-care.svg' },
                   { key: 'checklist', label: 'Checklist', icon: '/icons/checklist.svg' },
                   { key: 'staffing', label: 'Staffing Guide', icon: '/icons/staffing-guide.svg' },
+                  { key: 'ceremony-order', label: 'Ceremony Order', icon: '/icons/timeline.svg' },
+                  { key: 'decor', label: 'Decor Inventory', icon: '/icons/inspiration.svg' },
+                  { key: 'makeup', label: 'Hair & Makeup', icon: '/icons/upload-photo-of-you-two.svg' },
+                  { key: 'shuttle', label: 'Shuttle Schedule', icon: '/icons/book-a-meeting.svg' },
+                  { key: 'rehearsal', label: 'Rehearsal Dinner', icon: '/icons/meetings.svg' },
+                  { key: 'bedrooms', label: 'Bedroom Assignments', icon: '/icons/direct-messages.svg' },
                   { key: 'inspo', label: 'Inspiration', icon: '/icons/inspiration.svg' },
                   { key: 'borrow', label: 'Borrow Brochure', icon: '/icons/borrow-brochure.svg' },
                   { key: 'picks', label: 'Rixey Picks', icon: '/icons/rixey-picks.svg' },
@@ -1086,6 +1102,47 @@ export default function Dashboard() {
               {activeSection === 'booking' && (
                 <div className="p-4 sm:p-6">
                   <BookingCalendly />
+                </div>
+              )}
+
+              {activeSection === 'wedding-details' && profile?.wedding_id && (
+                <div className="p-4 sm:p-6">
+                  <WeddingDetails weddingId={profile.wedding_id} userId={user?.id} />
+                </div>
+              )}
+              {activeSection === 'allergies' && profile?.wedding_id && (
+                <div className="p-4 sm:p-6">
+                  <AllergyRegistry weddingId={profile.wedding_id} userId={user?.id} />
+                </div>
+              )}
+              {activeSection === 'ceremony-order' && profile?.wedding_id && (
+                <div className="p-4 sm:p-6">
+                  <CeremonyOrder weddingId={profile.wedding_id} userId={user?.id} />
+                </div>
+              )}
+              {activeSection === 'decor' && profile?.wedding_id && (
+                <div className="p-4 sm:p-6">
+                  <DecorInventory weddingId={profile.wedding_id} userId={user?.id} />
+                </div>
+              )}
+              {activeSection === 'makeup' && profile?.wedding_id && (
+                <div className="p-4 sm:p-6">
+                  <MakeupSchedule weddingId={profile.wedding_id} userId={user?.id} />
+                </div>
+              )}
+              {activeSection === 'shuttle' && profile?.wedding_id && (
+                <div className="p-4 sm:p-6">
+                  <ShuttleSchedule weddingId={profile.wedding_id} userId={user?.id} />
+                </div>
+              )}
+              {activeSection === 'rehearsal' && profile?.wedding_id && (
+                <div className="p-4 sm:p-6">
+                  <RehearsalDinner weddingId={profile.wedding_id} userId={user?.id} />
+                </div>
+              )}
+              {activeSection === 'bedrooms' && profile?.wedding_id && (
+                <div className="p-4 sm:p-6">
+                  <BedroomAssignments weddingId={profile.wedding_id} userId={user?.id} />
                 </div>
               )}
 
