@@ -3,361 +3,349 @@ import { useState, useEffect, useCallback } from 'react';
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 const SECTIONS = [
-  { key: 'processional', label: 'Processional' },
-  { key: 'family_escort', label: 'Family Escort' },
-  { key: 'recessional', label: 'Recessional' },
+  { key: 'processional', label: 'Processional', num: 1 },
+  { key: 'family_escort', label: 'Family Escort', num: 2 },
+  { key: 'recessional', label: 'Recessional', num: 3 },
 ];
 
-const SIDE_OPTIONS = {
-  processional: [
-    { value: 'center', label: 'Center' },
-    { value: 'brides_side', label: "Bride's Side" },
-    { value: 'grooms_side', label: "Groom's Side" },
-  ],
-  family_escort: [
-    { value: 'family', label: 'Family' },
-  ],
-  recessional: [
-    { value: 'center', label: 'Center' },
-    { value: 'brides_side', label: "Bride's Side" },
-    { value: 'grooms_side', label: "Groom's Side" },
-  ],
+const ROLE_CHIPS = [
+  'Bridesmaid', 'Groomsman', 'Maid of Honor', 'Best Man',
+  'Flower Girl', 'Ring Bearer', 'Usher',
+  'Mother of Bride', 'Father of Bride',
+  'Mother of Groom', 'Father of Groom',
+  'Grandparent', 'Sibling', 'Officiant', 'Reader', 'Musician',
+];
+
+// Lower index = walks earlier in processional
+const TRAD_ORDER = [
+  'Officiant', 'Grandparent', 'Mother of Groom', 'Father of Groom',
+  'Mother of Bride', 'Father of Bride', 'Usher', 'Groomsman',
+  'Bridesmaid', 'Best Man', 'Maid of Honor', 'Ring Bearer', 'Flower Girl',
+  'Reader', 'Musician', 'Sibling',
+];
+const roleRank = (role) => {
+  const i = TRAD_ORDER.indexOf(role);
+  return i === -1 ? 99 : i;
 };
 
-const SIDE_LABEL = {
-  brides_side: "Bride's Side",
-  grooms_side: "Groom's Side",
-  center: 'Center',
-  family: 'Family',
-};
-
-const EMPTY_FORM = {
-  participant_name: '',
-  role: '',
-  side: '',
-  walk_with: '',
-  notes: '',
-};
-
-function EntryRow({ entry, onDelete, onMoveUp, onMoveDown, isFirst, isLast }) {
-  const [editing, setEditing] = useState({});
-  const [values, setValues] = useState({
-    participant_name: entry.participant_name || '',
-    role: entry.role || '',
-    walk_with: entry.walk_with || '',
-    notes: entry.notes || '',
+// Group a flat sorted array into steps: [[e1,e2], [e3], [e4,e5]]
+function toSteps(entries) {
+  const sorted = [...entries].sort((a, b) => a.sort_order - b.sort_order);
+  const map = new Map();
+  sorted.forEach(e => {
+    if (!map.has(e.sort_order)) map.set(e.sort_order, []);
+    map.get(e.sort_order).push(e);
   });
+  return [...map.values()];
+}
 
-  const handleBlur = async (field) => {
-    if (values[field] === (entry[field] || '')) return;
-    try {
-      await fetch(`${API_URL}/api/ceremony-order/${entry.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ [field]: values[field] }),
-      });
-    } catch (err) {
-      console.error('Failed to save field', field, err);
-    }
-    setEditing((e) => ({ ...e, [field]: false }));
-  };
+// Compute sort_order updates needed to persist a new steps arrangement
+function buildUpdates(steps) {
+  const updates = [];
+  steps.forEach((step, i) => {
+    step.forEach(e => updates.push({ id: e.id, sort_order: i + 1 }));
+  });
+  return updates;
+}
 
-  const handleChange = (field, val) => setValues((v) => ({ ...v, [field]: val }));
+async function persistUpdates(updates) {
+  await Promise.all(updates.map(({ id, sort_order }) =>
+    fetch(`${API_URL}/api/ceremony-order/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sort_order }),
+    })
+  ));
+}
 
-  const handleDelete = () => {
-    if (window.confirm(`Remove "${entry.participant_name || 'this entry'}" from the order?`)) {
-      onDelete(entry.id);
-    }
-  };
+// ── Person Card ──────────────────────────────────────────────────────────────
 
-  const cell = (field, placeholder = '') => (
-    editing[field] ? (
-      <input
-        autoFocus
-        className="border border-cream-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 w-full"
-        value={values[field]}
-        placeholder={placeholder}
-        onChange={(e) => handleChange(field, e.target.value)}
-        onBlur={() => handleBlur(field)}
-      />
-    ) : (
-      <span
-        className="cursor-text hover:bg-cream-100 rounded px-1 py-0.5 text-sm text-gray-800 min-w-[60px] inline-block"
-        onClick={() => setEditing((e) => ({ ...e, [field]: true }))}
-        title="Click to edit"
-      >
-        {values[field] || <span className="text-cream-400 italic">{placeholder || 'Edit…'}</span>}
-      </span>
-    )
-  );
-
+function PersonCard({ entry, isDragging, onDragStart, onDragEnd, onDelete }) {
   return (
-    <tr className="border-b border-cream-100 hover:bg-cream-50 group">
-      <td className="py-2 px-3 w-8 text-xs text-cream-400 font-mono">{entry.sort_order}</td>
-      <td className="py-2 px-3">{cell('participant_name', 'Name')}</td>
-      <td className="py-2 px-3">{cell('role', 'Role')}</td>
-      <td className="py-2 px-3">{cell('walk_with', 'Walks with…')}</td>
-      <td className="py-2 px-3">{cell('notes', 'Notes')}</td>
-      <td className="py-2 px-2 w-16">
-        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-          <button
-            onClick={() => onMoveUp(entry.id)}
-            disabled={isFirst}
-            className="p-1 rounded hover:bg-cream-200 disabled:opacity-30 disabled:cursor-not-allowed text-cream-500"
-            title="Move up"
-          >
-            ▲
-          </button>
-          <button
-            onClick={() => onMoveDown(entry.id)}
-            disabled={isLast}
-            className="p-1 rounded hover:bg-cream-200 disabled:opacity-30 disabled:cursor-not-allowed text-cream-500"
-            title="Move down"
-          >
-            ▼
-          </button>
-          <button
-            onClick={handleDelete}
-            className="p-1 rounded hover:bg-rose-50 text-rose-400 hover:text-rose-600"
-            title="Remove"
-          >
-            ×
-          </button>
-        </div>
-      </td>
-    </tr>
+    <div
+      draggable
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      className={`relative group bg-white border-2 rounded-xl px-3 py-2.5 cursor-grab active:cursor-grabbing select-none transition-all ${
+        isDragging
+          ? 'opacity-30 border-sage-200 shadow-none'
+          : 'border-cream-200 hover:border-sage-300 shadow-sm hover:shadow'
+      }`}
+      style={{ minWidth: 130 }}
+    >
+      <p className="font-medium text-sm text-gray-900 leading-snug pr-3">
+        {entry.participant_name || '—'}
+      </p>
+      {entry.role && (
+        <p className="text-xs text-sage-500 mt-0.5">{entry.role}</p>
+      )}
+      <button
+        onMouseDown={e => e.stopPropagation()}
+        onClick={e => { e.stopPropagation(); onDelete(entry.id); }}
+        className="absolute top-1 right-1 w-4 h-4 text-cream-400 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-opacity text-sm leading-none flex items-center justify-center"
+        title="Remove"
+      >×</button>
+    </div>
   );
 }
 
-function AddForm({ section, onAdd, onCancel }) {
-  const [form, setForm] = useState({ ...EMPTY_FORM, side: SIDE_OPTIONS[section][0]?.value || 'center' });
-  const [saving, setSaving] = useState(false);
+// ── Gap Zone (insert between steps) ──────────────────────────────────────────
 
-  const set = (field, val) => setForm((f) => ({ ...f, [field]: val }));
+function GapZone({ active, onDrop }) {
+  const [over, setOver] = useState(false);
+  return (
+    <div
+      style={{ height: active ? 36 : 4 }}
+      className="mx-3 transition-all duration-100"
+      onDragOver={active ? e => { e.preventDefault(); setOver(true); } : undefined}
+      onDragLeave={active ? () => setOver(false) : undefined}
+      onDrop={active ? e => { e.preventDefault(); setOver(false); onDrop(); } : undefined}
+    >
+      {active && (
+        <div
+          className={`w-full h-full rounded-lg pointer-events-none border-2 border-dashed transition-colors ${
+            over ? 'border-sage-400 bg-sage-50' : 'border-cream-200'
+          }`}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Step Row ──────────────────────────────────────────────────────────────────
+
+function StepRow({ step, stepNum, draggingId, onDragStart, onDragEnd, onDelete, onDropOnStep, isDragging }) {
+  const [over, setOver] = useState(false);
+  const draggingIsHere = step.some(e => e.id === draggingId);
+  const canReceive = isDragging && !draggingIsHere && step.length < 3;
+
+  return (
+    <div
+      className={`flex items-center gap-2 px-2 py-1.5 rounded-xl transition-colors ${
+        over && canReceive ? 'bg-sage-50 ring-2 ring-sage-200' : ''
+      }`}
+      onDragOver={canReceive ? e => { e.preventDefault(); setOver(true); } : undefined}
+      onDragLeave={canReceive ? e => {
+        if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget)) setOver(false);
+      } : undefined}
+      onDrop={canReceive ? e => { e.preventDefault(); setOver(false); onDropOnStep(); } : undefined}
+    >
+      <span className="text-xs text-cream-400 font-mono w-5 text-right shrink-0 select-none">
+        {stepNum}
+      </span>
+      <div className="flex flex-wrap gap-2 flex-1">
+        {step.map(entry => (
+          <PersonCard
+            key={entry.id}
+            entry={entry}
+            isDragging={entry.id === draggingId}
+            onDragStart={() => onDragStart(entry.id)}
+            onDragEnd={onDragEnd}
+            onDelete={onDelete}
+          />
+        ))}
+        {over && canReceive && (
+          <div className="border-2 border-dashed border-sage-300 rounded-xl px-3 py-2.5 text-xs text-sage-400 flex items-center pointer-events-none" style={{ minWidth: 130 }}>
+            walk together
+          </div>
+        )}
+      </div>
+      {step.length >= 3 && isDragging && !draggingIsHere && (
+        <span className="text-xs text-cream-300 shrink-0">max 3</span>
+      )}
+    </div>
+  );
+}
+
+// ── Add Person Form ───────────────────────────────────────────────────────────
+
+function AddPersonForm({ onAdd, onCancel }) {
+  const [name, setName] = useState('');
+  const [role, setRole] = useState('');
+  const [custom, setCustom] = useState('');
+  const [saving, setSaving] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!form.participant_name.trim()) return;
+    if (!name.trim()) return;
     setSaving(true);
-    await onAdd(form);
+    await onAdd({ participant_name: name.trim(), role: custom.trim() || role });
     setSaving(false);
-    setForm({ ...EMPTY_FORM, side: SIDE_OPTIONS[section][0]?.value || 'center' });
+    setName(''); setRole(''); setCustom('');
   };
 
   return (
-    <tr className="bg-cream-50 border-b border-cream-200">
-      <td colSpan={6} className="px-3 py-3">
-        <form onSubmit={handleSubmit} className="flex flex-wrap gap-2 items-end">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-sage-500 font-medium">Name *</label>
-            <input
-              autoFocus
-              className="border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
-              placeholder="Full name"
-              value={form.participant_name}
-              onChange={(e) => set('participant_name', e.target.value)}
-            />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-sage-500 font-medium">Role</label>
-            <input
-              className="border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
-              placeholder="e.g. Bridesmaid"
-              value={form.role}
-              onChange={(e) => set('role', e.target.value)}
-            />
-          </div>
-          {SIDE_OPTIONS[section].length > 1 && (
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-sage-500 font-medium">Side</label>
-              <select
-                className="border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
-                value={form.side}
-                onChange={(e) => set('side', e.target.value)}
-              >
-                {SIDE_OPTIONS[section].map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
-            </div>
-          )}
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-sage-500 font-medium">Walks with</label>
-            <input
-              className="border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
-              placeholder="Name of partner"
-              value={form.walk_with}
-              onChange={(e) => set('walk_with', e.target.value)}
-            />
-          </div>
-          <div className="flex flex-col gap-1 flex-1 min-w-[120px]">
-            <label className="text-xs text-sage-500 font-medium">Notes</label>
-            <input
-              className="border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 w-full"
-              placeholder="Any notes"
-              value={form.notes}
-              onChange={(e) => set('notes', e.target.value)}
-            />
-          </div>
-          <div className="flex gap-2">
+    <div className="bg-cream-50 border-t border-cream-200 px-4 py-4 space-y-3">
+      <input
+        autoFocus
+        value={name}
+        onChange={e => setName(e.target.value)}
+        onKeyDown={e => e.key === 'Escape' && onCancel()}
+        placeholder="Full name *"
+        className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sage-300"
+      />
+      <div>
+        <p className="text-xs text-sage-500 font-medium mb-2">Role</p>
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {ROLE_CHIPS.map(r => (
             <button
-              type="submit"
-              disabled={saving || !form.participant_name.trim()}
-              className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
-            >
-              {saving ? 'Adding…' : 'Add'}
-            </button>
-            <button
+              key={r}
               type="button"
-              onClick={onCancel}
-              className="px-4 py-2 bg-cream-200 text-gray-700 rounded-lg text-sm hover:bg-cream-300"
-            >
-              Cancel
-            </button>
-          </div>
-        </form>
-      </td>
-    </tr>
+              onClick={() => { setRole(r === role ? '' : r); setCustom(''); }}
+              className={`px-2.5 py-1 rounded-full text-xs border transition-colors ${
+                role === r && !custom
+                  ? 'bg-sage-600 text-white border-sage-600'
+                  : 'bg-white text-sage-600 border-cream-300 hover:border-sage-400'
+              }`}
+            >{r}</button>
+          ))}
+        </div>
+        <input
+          value={custom}
+          onChange={e => { setCustom(e.target.value); if (e.target.value) setRole(''); }}
+          placeholder="Or type a custom role…"
+          className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sage-300"
+        />
+      </div>
+      <div className="flex gap-2">
+        <button
+          onClick={handleSubmit}
+          disabled={saving || !name.trim()}
+          className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
+        >
+          {saving ? 'Adding…' : 'Add to end'}
+        </button>
+        <button onClick={onCancel} className="px-4 py-2 bg-cream-200 text-gray-700 rounded-lg text-sm hover:bg-cream-300">
+          Cancel
+        </button>
+      </div>
+    </div>
   );
 }
 
-function ProcessionalSection({ entries, onAdd, onDelete, onMoveUp, onMoveDown, section }) {
-  const [showForm, setShowForm] = useState(false);
+// ── Section Builder ───────────────────────────────────────────────────────────
 
-  const centerRows = entries.filter((e) => e.side === 'center');
-  const brideRows = entries.filter((e) => e.side === 'brides_side');
-  const groomRows = entries.filter((e) => e.side === 'grooms_side');
+function SectionBuilder({ section, sectionEntries, onAdd, onDelete, onReorder }) {
+  const [draggingId, setDraggingId] = useState(null);
+  const [showAdd, setShowAdd] = useState(false);
 
-  const handleAdd = async (form) => {
-    await onAdd(form);
-    setShowForm(false);
+  const steps = toSteps(sectionEntries);
+  const isDragging = draggingId !== null;
+
+  const applyNewSteps = async (newSteps) => {
+    const updates = buildUpdates(newSteps);
+    onReorder(updates);
+    setDraggingId(null);
+    await persistUpdates(updates);
   };
 
-  const makeRows = (rows) =>
-    rows.map((entry, idx) => (
-      <EntryRow
-        key={entry.id}
-        entry={entry}
-        onDelete={onDelete}
-        onMoveUp={onMoveUp}
-        onMoveDown={onMoveDown}
-        isFirst={idx === 0}
-        isLast={idx === rows.length - 1}
-      />
-    ));
+  const handleDropOnStep = async (targetStepIdx) => {
+    if (!draggingId) return;
+    const dragged = sectionEntries.find(e => e.id === draggingId);
+
+    // Remove dragged from current steps, drop empty steps
+    const without = steps
+      .map(step => step.filter(e => e.id !== draggingId))
+      .filter(s => s.length > 0);
+
+    // Find target step by a stable entry id (since indices may have shifted)
+    const anchorId = steps[targetStepIdx]?.find(e => e.id !== draggingId)?.id;
+    if (!anchorId) return;
+    const newTargetIdx = without.findIndex(s => s.some(e => e.id === anchorId));
+    if (newTargetIdx === -1) return;
+
+    without[newTargetIdx] = [...without[newTargetIdx], dragged];
+    await applyNewSteps(without);
+  };
+
+  const handleDropOnGap = async (gapIdx) => {
+    if (!draggingId) return;
+    const dragged = sectionEntries.find(e => e.id === draggingId);
+
+    const origStepIdx = steps.findIndex(s => s.some(e => e.id === draggingId));
+    const willRemoveStep = origStepIdx !== -1 && steps[origStepIdx].length === 1;
+
+    const without = steps
+      .map(step => step.filter(e => e.id !== draggingId))
+      .filter(s => s.length > 0);
+
+    let adj = gapIdx;
+    if (willRemoveStep && origStepIdx < gapIdx) adj--;
+    adj = Math.max(0, Math.min(adj, without.length));
+
+    without.splice(adj, 0, [dragged]);
+    await applyNewSteps(without);
+  };
+
+  const handleTraditionalSort = async () => {
+    const sorted = [...sectionEntries].sort((a, b) => {
+      const diff = roleRank(a.role) - roleRank(b.role);
+      if (section === 'recessional') return -diff;
+      return diff;
+    });
+    await applyNewSteps(sorted.map(e => [e]));
+  };
+
+  const handleAdd = async (form) => {
+    await onAdd(section, form);
+    setShowAdd(false);
+  };
 
   return (
     <div className="bg-white rounded-xl border border-cream-200 overflow-hidden">
-      {/* Center rows */}
-      {centerRows.length > 0 && (
-        <div className="border-b border-cream-200">
-          <div className="px-4 py-2 bg-cream-50">
-            <span className="text-xs font-semibold text-sage-600 uppercase tracking-wide">Center</span>
-          </div>
-          <table className="w-full">
-            <thead>
-              <tr className="text-xs text-cream-500 bg-cream-50 border-b border-cream-100">
-                <th className="py-1.5 px-3 w-8 text-left">#</th>
-                <th className="py-1.5 px-3 text-left">Name</th>
-                <th className="py-1.5 px-3 text-left">Role</th>
-                <th className="py-1.5 px-3 text-left">Walks With</th>
-                <th className="py-1.5 px-3 text-left">Notes</th>
-                <th className="py-1.5 px-2 w-16" />
-              </tr>
-            </thead>
-            <tbody>{makeRows(centerRows)}</tbody>
-          </table>
+      {/* Hint bar */}
+      {sectionEntries.length > 0 && (
+        <div className="px-4 py-2 bg-cream-50 border-b border-cream-100 flex items-center justify-between">
+          <p className="text-xs text-cream-400">
+            Drag to reorder · drop onto a card to walk together (max 3)
+          </p>
+          <button
+            onClick={handleTraditionalSort}
+            className="text-xs text-sage-600 hover:text-sage-700 font-medium"
+          >
+            Sort traditionally
+          </button>
         </div>
       )}
 
-      {/* Two-column: bride's side + groom's side */}
-      <div className="grid grid-cols-2 divide-x divide-cream-200">
-        <div>
-          <div className="px-4 py-2 bg-cream-50 border-b border-cream-100">
-            <span className="text-xs font-semibold text-rose-400 uppercase tracking-wide">Bride's Side</span>
-          </div>
-          <table className="w-full">
-            <thead>
-              <tr className="text-xs text-cream-500 bg-cream-50 border-b border-cream-100">
-                <th className="py-1.5 px-3 w-8 text-left">#</th>
-                <th className="py-1.5 px-3 text-left">Name</th>
-                <th className="py-1.5 px-3 text-left">Role</th>
-                <th className="py-1.5 px-3 text-left">Walks With</th>
-                <th className="py-1.5 px-2 w-8" />
-              </tr>
-            </thead>
-            <tbody>
-              {brideRows.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="py-4 px-3 text-sm text-cream-400 italic text-center">No entries</td>
-                </tr>
-              ) : (
-                brideRows.map((entry, idx) => (
-                  <EntryRow
-                    key={entry.id}
-                    entry={entry}
-                    onDelete={onDelete}
-                    onMoveUp={onMoveUp}
-                    onMoveDown={onMoveDown}
-                    isFirst={idx === 0}
-                    isLast={idx === brideRows.length - 1}
-                  />
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-        <div>
-          <div className="px-4 py-2 bg-cream-50 border-b border-cream-100">
-            <span className="text-xs font-semibold text-sage-600 uppercase tracking-wide">Groom's Side</span>
-          </div>
-          <table className="w-full">
-            <thead>
-              <tr className="text-xs text-cream-500 bg-cream-50 border-b border-cream-100">
-                <th className="py-1.5 px-3 w-8 text-left">#</th>
-                <th className="py-1.5 px-3 text-left">Name</th>
-                <th className="py-1.5 px-3 text-left">Role</th>
-                <th className="py-1.5 px-3 text-left">Walks With</th>
-                <th className="py-1.5 px-2 w-8" />
-              </tr>
-            </thead>
-            <tbody>
-              {groomRows.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="py-4 px-3 text-sm text-cream-400 italic text-center">No entries</td>
-                </tr>
-              ) : (
-                groomRows.map((entry, idx) => (
-                  <EntryRow
-                    key={entry.id}
-                    entry={entry}
-                    onDelete={onDelete}
-                    onMoveUp={onMoveUp}
-                    onMoveDown={onMoveDown}
-                    isFirst={idx === 0}
-                    isLast={idx === groomRows.length - 1}
-                  />
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+      {/* Steps */}
+      <div className="py-2">
+        {steps.length === 0 ? (
+          <p className="text-sm text-cream-400 italic text-center py-8">
+            Add people below to build this section.
+          </p>
+        ) : (
+          <>
+            <GapZone active={isDragging} onDrop={() => handleDropOnGap(0)} />
+            {steps.map((step, i) => (
+              <div key={i}>
+                <StepRow
+                  step={step}
+                  stepNum={i + 1}
+                  draggingId={draggingId}
+                  onDragStart={setDraggingId}
+                  onDragEnd={() => setDraggingId(null)}
+                  onDelete={onDelete}
+                  onDropOnStep={() => handleDropOnStep(i)}
+                  isDragging={isDragging}
+                />
+                <GapZone active={isDragging} onDrop={() => handleDropOnGap(i + 1)} />
+              </div>
+            ))}
+          </>
+        )}
       </div>
 
-      {/* Add form + button */}
-      {showForm ? (
-        <table className="w-full">
-          <tbody>
-            <AddForm section={section} onAdd={handleAdd} onCancel={() => setShowForm(false)} />
-          </tbody>
-        </table>
+      {/* Add / button */}
+      {showAdd ? (
+        <AddPersonForm onAdd={handleAdd} onCancel={() => setShowAdd(false)} />
       ) : (
         <div className="px-4 py-3 border-t border-cream-100">
           <button
-            onClick={() => setShowForm(true)}
+            onClick={() => setShowAdd(true)}
             className="text-sm text-sage-600 hover:text-sage-700 font-medium flex items-center gap-1"
           >
-            <span className="text-lg leading-none">+</span> Add entry
+            <span className="text-lg leading-none">+</span> Add person
           </button>
         </div>
       )}
@@ -365,67 +353,9 @@ function ProcessionalSection({ entries, onAdd, onDelete, onMoveUp, onMoveDown, s
   );
 }
 
-function FamilyEscortSection({ entries, onAdd, onDelete, onMoveUp, onMoveDown, section }) {
-  const [showForm, setShowForm] = useState(false);
+// ── Main Component ────────────────────────────────────────────────────────────
 
-  const handleAdd = async (form) => {
-    await onAdd({ ...form, side: 'family' });
-    setShowForm(false);
-  };
-
-  return (
-    <div className="bg-white rounded-xl border border-cream-200 overflow-hidden">
-      <table className="w-full">
-        <thead>
-          <tr className="text-xs text-cream-500 bg-cream-50 border-b border-cream-100">
-            <th className="py-1.5 px-3 w-8 text-left">#</th>
-            <th className="py-1.5 px-3 text-left">Name</th>
-            <th className="py-1.5 px-3 text-left">Role / Relation</th>
-            <th className="py-1.5 px-3 text-left">Escorted By</th>
-            <th className="py-1.5 px-3 text-left">Notes</th>
-            <th className="py-1.5 px-2 w-16" />
-          </tr>
-        </thead>
-        <tbody>
-          {entries.length === 0 && !showForm ? (
-            <tr>
-              <td colSpan={6} className="py-8 text-center text-sm text-cream-400 italic">
-                No family escort entries yet.
-              </td>
-            </tr>
-          ) : (
-            entries.map((entry, idx) => (
-              <EntryRow
-                key={entry.id}
-                entry={entry}
-                onDelete={onDelete}
-                onMoveUp={onMoveUp}
-                onMoveDown={onMoveDown}
-                isFirst={idx === 0}
-                isLast={idx === entries.length - 1}
-              />
-            ))
-          )}
-          {showForm && (
-            <AddForm section={section} onAdd={handleAdd} onCancel={() => setShowForm(false)} />
-          )}
-        </tbody>
-      </table>
-      {!showForm && (
-        <div className="px-4 py-3 border-t border-cream-100">
-          <button
-            onClick={() => setShowForm(true)}
-            className="text-sm text-sage-600 hover:text-sage-700 font-medium flex items-center gap-1"
-          >
-            <span className="text-lg leading-none">+</span> Add family member
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-export default function CeremonyOrder({ weddingId, userId }) {
+export default function CeremonyOrder({ weddingId }) {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -434,9 +364,9 @@ export default function CeremonyOrder({ weddingId, userId }) {
     try {
       setLoading(true);
       const res = await fetch(`${API_URL}/api/ceremony-order/${weddingId}`);
-      if (!res.ok) throw new Error('Failed to load ceremony order');
+      if (!res.ok) throw new Error('Failed to load');
       const data = await res.json();
-      setEntries(data);
+      setEntries(Array.isArray(data) ? data : []);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -446,32 +376,28 @@ export default function CeremonyOrder({ weddingId, userId }) {
 
   useEffect(() => { load(); }, [load]);
 
-  const getNextSortOrder = (section) => {
-    const sectionEntries = entries.filter((e) => e.section === section);
-    return sectionEntries.length > 0
-      ? Math.max(...sectionEntries.map((e) => e.sort_order)) + 1
-      : 1;
-  };
-
   const handleAdd = async (section, form) => {
+    const inSection = entries.filter(e => e.section === section);
+    const maxOrder = inSection.length > 0
+      ? Math.max(...inSection.map(e => e.sort_order))
+      : 0;
+    const payload = {
+      wedding_id: weddingId,
+      section,
+      participant_name: form.participant_name,
+      role: form.role || '',
+      sort_order: maxOrder + 1,
+      side: 'center',
+    };
     try {
-      const payload = {
-        wedding_id: weddingId,
-        section,
-        side: form.side,
-        participant_name: form.participant_name,
-        role: form.role,
-        walk_with: form.walk_with,
-        notes: form.notes,
-        sort_order: getNextSortOrder(section),
-      };
       const res = await fetch(`${API_URL}/api/ceremony-order`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error('Failed to add entry');
-      await load();
+      if (!res.ok) throw new Error('Failed to add');
+      const newEntry = await res.json();
+      setEntries(prev => [...prev, newEntry]);
     } catch (err) {
       console.error(err);
     }
@@ -479,61 +405,19 @@ export default function CeremonyOrder({ weddingId, userId }) {
 
   const handleDelete = async (id) => {
     try {
-      const res = await fetch(`${API_URL}/api/ceremony-order/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Failed to delete entry');
-      setEntries((prev) => prev.filter((e) => e.id !== id));
+      await fetch(`${API_URL}/api/ceremony-order/${id}`, { method: 'DELETE' });
+      setEntries(prev => prev.filter(e => e.id !== id));
     } catch (err) {
       console.error(err);
     }
   };
 
-  const handleMove = async (id, direction) => {
-    const entry = entries.find((e) => e.id === id);
-    if (!entry) return;
-
-    const sectionEntries = entries
-      .filter((e) => e.section === entry.section && e.side === entry.side)
-      .sort((a, b) => a.sort_order - b.sort_order);
-
-    const idx = sectionEntries.findIndex((e) => e.id === id);
-    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
-    if (swapIdx < 0 || swapIdx >= sectionEntries.length) return;
-
-    const swapEntry = sectionEntries[swapIdx];
-    const newOrderA = swapEntry.sort_order;
-    const newOrderB = entry.sort_order;
-
-    try {
-      await Promise.all([
-        fetch(`${API_URL}/api/ceremony-order/${id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sort_order: newOrderA }),
-        }),
-        fetch(`${API_URL}/api/ceremony-order/${swapEntry.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sort_order: newOrderB }),
-        }),
-      ]);
-      setEntries((prev) =>
-        prev.map((e) => {
-          if (e.id === id) return { ...e, sort_order: newOrderA };
-          if (e.id === swapEntry.id) return { ...e, sort_order: newOrderB };
-          return e;
-        })
-      );
-    } catch (err) {
-      console.error('Failed to reorder', err);
-    }
+  const handleReorder = (updates) => {
+    setEntries(prev => prev.map(e => {
+      const u = updates.find(up => up.id === e.id);
+      return u ? { ...e, sort_order: u.sort_order } : e;
+    }));
   };
-
-  const forSection = (section) =>
-    entries
-      .filter((e) => e.section === section)
-      .sort((a, b) => a.sort_order - b.sort_order);
-
-  const totalEntries = entries.length;
 
   if (loading) {
     return (
@@ -554,65 +438,30 @@ export default function CeremonyOrder({ weddingId, userId }) {
 
   return (
     <div className="space-y-8">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-semibold text-gray-900">Ceremony Order</h2>
-          <p className="text-sm text-sage-500 mt-0.5">
-            {totalEntries === 0
-              ? 'Add your wedding party, family, and officiant to build your processional order.'
-              : `${totalEntries} ${totalEntries === 1 ? 'entry' : 'entries'} across all sections`}
-          </p>
-        </div>
+      <div>
+        <h2 className="text-xl font-semibold text-gray-900">Ceremony Order</h2>
+        <p className="text-sm text-sage-500 mt-0.5">
+          Add people to each section, then drag to reorder. Drop a card onto another to walk together.
+        </p>
       </div>
 
-      {/* Processional */}
-      <section>
-        <h3 className="text-base font-semibold text-gray-800 mb-3 flex items-center gap-2">
-          <span className="w-6 h-6 rounded-full bg-sage-100 text-sage-700 text-xs flex items-center justify-center font-bold">1</span>
-          Processional
-        </h3>
-        <ProcessionalSection
-          entries={forSection('processional')}
-          onAdd={(form) => handleAdd('processional', form)}
-          onDelete={handleDelete}
-          onMoveUp={(id) => handleMove(id, 'up')}
-          onMoveDown={(id) => handleMove(id, 'down')}
-          section="processional"
-        />
-      </section>
-
-      {/* Family Escort */}
-      <section>
-        <h3 className="text-base font-semibold text-gray-800 mb-3 flex items-center gap-2">
-          <span className="w-6 h-6 rounded-full bg-sage-100 text-sage-700 text-xs flex items-center justify-center font-bold">2</span>
-          Family Escort
-        </h3>
-        <FamilyEscortSection
-          entries={forSection('family_escort')}
-          onAdd={(form) => handleAdd('family_escort', form)}
-          onDelete={handleDelete}
-          onMoveUp={(id) => handleMove(id, 'up')}
-          onMoveDown={(id) => handleMove(id, 'down')}
-          section="family_escort"
-        />
-      </section>
-
-      {/* Recessional */}
-      <section>
-        <h3 className="text-base font-semibold text-gray-800 mb-3 flex items-center gap-2">
-          <span className="w-6 h-6 rounded-full bg-sage-100 text-sage-700 text-xs flex items-center justify-center font-bold">3</span>
-          Recessional
-        </h3>
-        <ProcessionalSection
-          entries={forSection('recessional')}
-          onAdd={(form) => handleAdd('recessional', form)}
-          onDelete={handleDelete}
-          onMoveUp={(id) => handleMove(id, 'up')}
-          onMoveDown={(id) => handleMove(id, 'down')}
-          section="recessional"
-        />
-      </section>
+      {SECTIONS.map(({ key, label, num }) => (
+        <section key={key}>
+          <h3 className="text-base font-semibold text-gray-800 mb-3 flex items-center gap-2">
+            <span className="w-6 h-6 rounded-full bg-sage-100 text-sage-700 text-xs flex items-center justify-center font-bold">
+              {num}
+            </span>
+            {label}
+          </h3>
+          <SectionBuilder
+            section={key}
+            sectionEntries={entries.filter(e => e.section === key)}
+            onAdd={handleAdd}
+            onDelete={handleDelete}
+            onReorder={handleReorder}
+          />
+        </section>
+      ))}
     </div>
   );
 }

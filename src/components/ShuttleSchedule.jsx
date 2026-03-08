@@ -2,6 +2,216 @@ import { useState, useEffect } from 'react';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
+// ── time helpers ──────────────────────────────────────────────────
+function parseTime(str) {
+  if (!str) return null;
+  const m = str.trim().match(/^(\d{1,2}):(\d{2})\s*(am|pm)$/i);
+  if (!m) return null;
+  let h = parseInt(m[1]);
+  const min = parseInt(m[2]);
+  const period = m[3].toLowerCase();
+  if (period === 'pm' && h !== 12) h += 12;
+  if (period === 'am' && h === 12) h = 0;
+  return h * 60 + min;
+}
+
+function formatTime(totalMinutes) {
+  if (totalMinutes < 0) totalMinutes += 1440;
+  const h = Math.floor(totalMinutes / 60) % 24;
+  const m = totalMinutes % 60;
+  const period = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 || 12;
+  return `${h12}:${String(m).padStart(2, '0')} ${period}`;
+}
+
+// ── Suggested Schedule panel ──────────────────────────────────────
+function SuggestedSchedule({ onGenerateRuns }) {
+  const [open, setOpen] = useState(false);
+  const [pre, setPre] = useState({ ceremonyTime: '', numRuns: '2', pickupLocation: '' });
+  const [post, setPost] = useState({ eventEndTime: '', numRuns: '2', dropoffLocation: '' });
+  const [generating, setGenerating] = useState('');
+
+  const setPreField = (f, v) => setPre((p) => ({ ...p, [f]: v }));
+  const setPostField = (f, v) => setPost((p) => ({ ...p, [f]: v }));
+
+  const generatePreRuns = async () => {
+    const base = parseTime(pre.ceremonyTime);
+    if (!base) return;
+    const n = parseInt(pre.numRuns) || 1;
+    const TRANSIT = 25; // minutes hotel → venue
+    const ARRIVE_BEFORE = 5; // arrive this many minutes before ceremony
+    // last pickup departs hotel so guests arrive ~5 min before ceremony
+    const lastPickup = base - TRANSIT - ARRIVE_BEFORE;
+    const runs = [];
+    for (let i = n - 1; i >= 0; i--) {
+      const pickupTime = lastPickup - i * 30;
+      const dropoffTime = pickupTime + TRANSIT;
+      runs.push({
+        run_label: n > 1 ? `Pre-Ceremony — Run ${n - i} of ${n}` : 'Pre-Ceremony Run',
+        pickup_location: pre.pickupLocation || 'Hotel',
+        pickup_time: formatTime(pickupTime),
+        dropoff_location: 'Rixey Manor',
+        dropoff_time: formatTime(dropoffTime),
+        seat_count: '',
+        notes: '',
+      });
+    }
+    setGenerating('pre');
+    await onGenerateRuns(runs);
+    setGenerating('');
+  };
+
+  const generatePostRuns = async () => {
+    const base = parseTime(post.eventEndTime);
+    if (!base) return;
+    const n = parseInt(post.numRuns) || 1;
+    const TRANSIT = 25;
+    const runs = [];
+    for (let i = 0; i < n; i++) {
+      const pickupTime = base + i * 30;
+      const dropoffTime = pickupTime + TRANSIT;
+      runs.push({
+        run_label: n > 1 ? `End of Night — Run ${i + 1} of ${n}` : 'End of Night Run',
+        pickup_location: 'Rixey Manor',
+        pickup_time: formatTime(pickupTime),
+        dropoff_location: post.dropoffLocation || 'Hotel',
+        dropoff_time: formatTime(dropoffTime),
+        seat_count: '',
+        notes: '',
+      });
+    }
+    setGenerating('post');
+    await onGenerateRuns(runs);
+    setGenerating('');
+  };
+
+  const numOptions = ['1', '2', '3', '4'];
+
+  return (
+    <div className="bg-cream-50 border border-cream-200 rounded-xl overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-sage-700 hover:bg-cream-100 transition-colors"
+      >
+        <span>Generate Suggested Runs</span>
+        <svg
+          className={`w-4 h-4 text-sage-400 transition-transform ${open ? 'rotate-180' : ''}`}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {open && (
+        <div className="border-t border-cream-200 p-5 grid grid-cols-1 sm:grid-cols-2 gap-6">
+          {/* Pre-ceremony */}
+          <div className="space-y-3">
+            <h4 className="text-xs font-bold text-sage-500 uppercase tracking-wider">Pre-Ceremony</h4>
+            <div>
+              <label className="block text-xs font-medium text-sage-600 mb-1">Ceremony time</label>
+              <input
+                value={pre.ceremonyTime}
+                onChange={(e) => setPreField('ceremonyTime', e.target.value)}
+                placeholder="e.g. 4:00 PM"
+                className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-sage-600 mb-1">Number of runs</label>
+              <div className="flex gap-2">
+                {numOptions.map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setPreField('numRuns', n)}
+                    className={`w-10 py-1.5 rounded-lg text-sm border transition-colors ${
+                      pre.numRuns === n
+                        ? 'bg-sage-600 text-white border-sage-600'
+                        : 'bg-white text-sage-600 border-cream-300 hover:border-sage-400'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-sage-600 mb-1">Pickup location</label>
+              <input
+                value={pre.pickupLocation}
+                onChange={(e) => setPreField('pickupLocation', e.target.value)}
+                placeholder="e.g. Hampton Inn, Culpeper"
+                className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
+              />
+            </div>
+            <button
+              type="button"
+              disabled={!pre.ceremonyTime || generating === 'pre'}
+              onClick={generatePreRuns}
+              className="w-full px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
+            >
+              {generating === 'pre' ? 'Generating…' : 'Generate Pre-Ceremony Runs'}
+            </button>
+          </div>
+
+          {/* End of night */}
+          <div className="space-y-3">
+            <h4 className="text-xs font-bold text-sage-500 uppercase tracking-wider">End of Night</h4>
+            <div>
+              <label className="block text-xs font-medium text-sage-600 mb-1">Event ends at</label>
+              <input
+                value={post.eventEndTime}
+                onChange={(e) => setPostField('eventEndTime', e.target.value)}
+                placeholder="e.g. 11:00 PM"
+                className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-sage-600 mb-1">Number of runs</label>
+              <div className="flex gap-2">
+                {numOptions.map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setPostField('numRuns', n)}
+                    className={`w-10 py-1.5 rounded-lg text-sm border transition-colors ${
+                      post.numRuns === n
+                        ? 'bg-sage-600 text-white border-sage-600'
+                        : 'bg-white text-sage-600 border-cream-300 hover:border-sage-400'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-sage-600 mb-1">Dropoff location</label>
+              <input
+                value={post.dropoffLocation}
+                onChange={(e) => setPostField('dropoffLocation', e.target.value)}
+                placeholder="e.g. Hampton Inn, Culpeper"
+                className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
+              />
+            </div>
+            <button
+              type="button"
+              disabled={!post.eventEndTime || generating === 'post'}
+              onClick={generatePostRuns}
+              className="w-full px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
+            >
+              {generating === 'post' ? 'Generating…' : 'Generate End-of-Night Runs'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ShuttleSchedule({ weddingId, userId }) {
   const [runs, setRuns] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -37,20 +247,24 @@ export default function ShuttleSchedule({ weddingId, userId }) {
 
   function handleFormChange(e) {
     const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
+    setFormData((prev) => ({ ...prev, [name]: value }));
+  }
+
+  async function addRun(data) {
+    const res = await fetch(`${API_URL}/api/shuttle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ wedding_id: weddingId, ...data }),
+    });
+    return await res.json();
   }
 
   async function handleAddRun(e) {
     e.preventDefault();
     setSaving(true);
     try {
-      const res = await fetch(`${API_URL}/api/shuttle`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ wedding_id: weddingId, ...formData }),
-      });
-      const newRun = await res.json();
-      setRuns(prev => [...prev, newRun]);
+      const newRun = await addRun(formData);
+      setRuns((prev) => [...prev, newRun]);
       setFormData({
         run_label: '',
         pickup_location: '',
@@ -68,8 +282,21 @@ export default function ShuttleSchedule({ weddingId, userId }) {
     }
   }
 
+  async function handleGenerateRuns(runDataArray) {
+    const newRuns = [];
+    for (const data of runDataArray) {
+      try {
+        const run = await addRun(data);
+        newRuns.push(run);
+      } catch (err) {
+        console.error('Failed to add run:', err);
+      }
+    }
+    setRuns((prev) => [...prev, ...newRuns]);
+  }
+
   function handleEditField(runId, field, value) {
-    setEditingFields(prev => ({
+    setEditingFields((prev) => ({
       ...prev,
       [`${runId}_${field}`]: value,
     }));
@@ -85,7 +312,7 @@ export default function ShuttleSchedule({ weddingId, userId }) {
     if (!(key in editingFields)) return;
     const newValue = editingFields[key];
     if (newValue === run[field]) {
-      setEditingFields(prev => {
+      setEditingFields((prev) => {
         const copy = { ...prev };
         delete copy[key];
         return copy;
@@ -100,11 +327,11 @@ export default function ShuttleSchedule({ weddingId, userId }) {
         body: JSON.stringify({ ...updated, userId }),
       });
       const saved = await res.json();
-      setRuns(prev => prev.map(r => (r.id === run.id ? saved : r)));
+      setRuns((prev) => prev.map((r) => (r.id === run.id ? saved : r)));
     } catch (err) {
       console.error('Failed to update shuttle run:', err);
     } finally {
-      setEditingFields(prev => {
+      setEditingFields((prev) => {
         const copy = { ...prev };
         delete copy[key];
         return copy;
@@ -120,7 +347,7 @@ export default function ShuttleSchedule({ weddingId, userId }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId }),
       });
-      setRuns(prev => prev.filter(r => r.id !== runId));
+      setRuns((prev) => prev.filter((r) => r.id !== runId));
     } catch (err) {
       console.error('Failed to delete shuttle run:', err);
     }
@@ -145,7 +372,7 @@ export default function ShuttleSchedule({ weddingId, userId }) {
           </p>
         </div>
         <button
-          onClick={() => setShowForm(prev => !prev)}
+          onClick={() => setShowForm((prev) => !prev)}
           className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50 shrink-0"
         >
           {showForm ? 'Cancel' : '+ Add Run'}
@@ -156,6 +383,9 @@ export default function ShuttleSchedule({ weddingId, userId }) {
       <div className="bg-cream-100 border border-cream-300 rounded-lg px-4 py-3 text-sm text-sage-600">
         Please avoid having guests arrive too early — aim for pickup 5 mins before they're needed.
       </div>
+
+      {/* Suggested schedule generator */}
+      <SuggestedSchedule onGenerateRuns={handleGenerateRuns} />
 
       {/* Add Run Form */}
       {showForm && (
@@ -282,7 +512,7 @@ export default function ShuttleSchedule({ weddingId, userId }) {
       {/* Run Cards */}
       {runs.length === 0 ? (
         <div className="text-center py-12 text-sage-400 text-sm">
-          No shuttle runs yet. Add your first run above.
+          No shuttle runs yet. Generate suggested runs above or add one manually.
         </div>
       ) : (
         <div className="space-y-4">
@@ -300,7 +530,7 @@ export default function ShuttleSchedule({ weddingId, userId }) {
                   <span className="text-sage-300 shrink-0">—</span>
                   <input
                     value={getEditValue(run.id, 'run_label', run.run_label || '')}
-                    onChange={e => handleEditField(run.id, 'run_label', e.target.value)}
+                    onChange={(e) => handleEditField(run.id, 'run_label', e.target.value)}
                     onBlur={() => handleBlur(run, 'run_label')}
                     placeholder="Label this run..."
                     className="flex-1 min-w-0 bg-transparent text-sm font-medium text-sage-700 placeholder-sage-300 focus:outline-none border-b border-transparent focus:border-sage-300"
@@ -323,14 +553,14 @@ export default function ShuttleSchedule({ weddingId, userId }) {
                   </div>
                   <input
                     value={getEditValue(run.id, 'pickup_location', run.pickup_location || '')}
-                    onChange={e => handleEditField(run.id, 'pickup_location', e.target.value)}
+                    onChange={(e) => handleEditField(run.id, 'pickup_location', e.target.value)}
                     onBlur={() => handleBlur(run, 'pickup_location')}
                     placeholder="Location"
                     className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
                   />
                   <input
                     value={getEditValue(run.id, 'pickup_time', run.pickup_time || '')}
-                    onChange={e => handleEditField(run.id, 'pickup_time', e.target.value)}
+                    onChange={(e) => handleEditField(run.id, 'pickup_time', e.target.value)}
                     onBlur={() => handleBlur(run, 'pickup_time')}
                     placeholder="Time (e.g. 3:45 PM)"
                     className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
@@ -361,14 +591,14 @@ export default function ShuttleSchedule({ weddingId, userId }) {
                   </div>
                   <input
                     value={getEditValue(run.id, 'dropoff_location', run.dropoff_location || '')}
-                    onChange={e => handleEditField(run.id, 'dropoff_location', e.target.value)}
+                    onChange={(e) => handleEditField(run.id, 'dropoff_location', e.target.value)}
                     onBlur={() => handleBlur(run, 'dropoff_location')}
                     placeholder="Location"
                     className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
                   />
                   <input
                     value={getEditValue(run.id, 'dropoff_time', run.dropoff_time || '')}
-                    onChange={e => handleEditField(run.id, 'dropoff_time', e.target.value)}
+                    onChange={(e) => handleEditField(run.id, 'dropoff_time', e.target.value)}
                     onBlur={() => handleBlur(run, 'dropoff_time')}
                     placeholder="Time (e.g. 4:10 PM)"
                     className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
@@ -384,7 +614,7 @@ export default function ShuttleSchedule({ weddingId, userId }) {
                     type="number"
                     min="1"
                     value={getEditValue(run.id, 'seat_count', run.seat_count ?? '')}
-                    onChange={e => handleEditField(run.id, 'seat_count', e.target.value)}
+                    onChange={(e) => handleEditField(run.id, 'seat_count', e.target.value)}
                     onBlur={() => handleBlur(run, 'seat_count')}
                     placeholder="—"
                     className="w-20 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
@@ -394,7 +624,7 @@ export default function ShuttleSchedule({ weddingId, userId }) {
                   <label className="text-xs font-medium text-sage-500 shrink-0">Notes:</label>
                   <input
                     value={getEditValue(run.id, 'notes', run.notes || '')}
-                    onChange={e => handleEditField(run.id, 'notes', e.target.value)}
+                    onChange={(e) => handleEditField(run.id, 'notes', e.target.value)}
                     onBlur={() => handleBlur(run, 'notes')}
                     placeholder="Any special instructions..."
                     className="flex-1 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"

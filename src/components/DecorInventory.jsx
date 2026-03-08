@@ -2,17 +2,19 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
-const DEFAULT_SPACES = [
+const SPACE_OPTIONS = [
+  'Round Guest Tables',
+  'Long/Rectangular Guest Tables',
+  'Head Table',
+  'Sweetheart Table',
+  'Cocktail Tables',
   'Ceremony Space',
-  'Guest Tables',
-  'Head Table / Sweetheart Table',
-  'Cocktail Hour Tables',
-  'Card Table & Guest Book',
-  'Drinks Station',
+  'Card & Gift Table',
+  'Cake Table',
+  'Dessert Table',
+  'Bar Area',
   'Favor Table',
   'Memorial Table',
-  'Dessert Table',
-  'Cake Table',
   'Photo Booth',
 ];
 
@@ -216,7 +218,7 @@ function AddItemRow({ spaceName, onAdd, onCancel }) {
   );
 }
 
-function SpaceSection({ spaceName, items, onAddItem, onDeleteItem, onUpdateItem }) {
+function SpaceSection({ spaceName, items, onAddItem, onDeleteItem, onUpdateItem, onDeleteSpace }) {
   const [showForm, setShowForm] = useState(false);
 
   const handleAdd = async (space, form) => {
@@ -226,12 +228,19 @@ function SpaceSection({ spaceName, items, onAddItem, onDeleteItem, onUpdateItem 
 
   return (
     <div className="bg-white rounded-xl border border-cream-200 overflow-hidden">
-      {/* Space header */}
       <div className="px-4 py-3 bg-cream-50 border-b border-cream-200 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-sage-700">{spaceName}</h3>
-        <span className="text-xs text-cream-500">
-          {items.length} {items.length === 1 ? 'item' : 'items'}
-        </span>
+        <div className="flex items-center gap-3">
+          <h3 className="text-sm font-semibold text-sage-700">{spaceName}</h3>
+          <span className="text-xs text-cream-400">
+            {items.length} {items.length === 1 ? 'item' : 'items'}
+          </span>
+        </div>
+        <button
+          onClick={() => onDeleteSpace(spaceName)}
+          className="text-xs text-rose-400 hover:text-rose-600 px-2 py-1 rounded hover:bg-rose-50 transition-colors"
+        >
+          Remove
+        </button>
       </div>
 
       <div className="overflow-x-auto">
@@ -292,9 +301,9 @@ export default function DecorInventory({ weddingId, userId }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [customSpaces, setCustomSpaces] = useState([]);
-  const [newSpaceInput, setNewSpaceInput] = useState('');
-  const [addingSpace, setAddingSpace] = useState(false);
+  const [activeSpaces, setActiveSpaces] = useState([]);
+  const [showPicker, setShowPicker] = useState(false);
+  const [customSpaceInput, setCustomSpaceInput] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -303,11 +312,9 @@ export default function DecorInventory({ weddingId, userId }) {
       if (!res.ok) throw new Error('Failed to load decor inventory');
       const data = await res.json();
       setItems(data);
-
-      // Discover any custom spaces already in the data that aren't in defaults
+      // Derive active spaces from DB items
       const existingSpaces = [...new Set(data.map((i) => i.space_name))];
-      const custom = existingSpaces.filter((s) => !DEFAULT_SPACES.includes(s));
-      setCustomSpaces(custom);
+      setActiveSpaces(existingSpaces);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -317,16 +324,27 @@ export default function DecorInventory({ weddingId, userId }) {
 
   useEffect(() => { load(); }, [load]);
 
-  // All spaces to display: defaults + any custom ones (from DB or newly added)
-  const allSpaces = [
-    ...DEFAULT_SPACES,
-    ...customSpaces.filter((s) => !DEFAULT_SPACES.includes(s)),
-  ];
+  const handleAddSpace = (spaceName) => {
+    const trimmed = spaceName.trim();
+    if (!trimmed) return;
+    if (!activeSpaces.includes(trimmed)) {
+      setActiveSpaces((prev) => [...prev, trimmed]);
+    }
+    setShowPicker(false);
+    setCustomSpaceInput('');
+  };
 
-  const itemsForSpace = (spaceName) =>
-    items
-      .filter((i) => i.space_name === spaceName)
-      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+  const handleDeleteSpace = async (spaceName) => {
+    if (!window.confirm(`Remove "${spaceName}" and all its items?`)) return;
+    const spaceItems = items.filter((i) => i.space_name === spaceName);
+    await Promise.all(
+      spaceItems.map((item) =>
+        fetch(`${API_URL}/api/decor/${item.id}`, { method: 'DELETE' }).catch(console.error)
+      )
+    );
+    setItems((prev) => prev.filter((i) => i.space_name !== spaceName));
+    setActiveSpaces((prev) => prev.filter((s) => s !== spaceName));
+  };
 
   const getNextSortOrder = (spaceName) => {
     const spaceItems = items.filter((i) => i.space_name === spaceName);
@@ -374,22 +392,10 @@ export default function DecorInventory({ weddingId, userId }) {
     setItems((prev) => prev.map((i) => (i.id === updated.id ? { ...i, ...updated } : i)));
   };
 
-  const handleAddSpace = (e) => {
-    e.preventDefault();
-    const trimmed = newSpaceInput.trim();
-    if (!trimmed) return;
-    if (allSpaces.includes(trimmed)) {
-      setNewSpaceInput('');
-      setAddingSpace(false);
-      return;
-    }
-    setCustomSpaces((prev) => [...prev, trimmed]);
-    setNewSpaceInput('');
-    setAddingSpace(false);
-  };
-
-  const totalItems = items.length;
-  const populatedSpaces = allSpaces.filter((s) => itemsForSpace(s).length > 0).length;
+  const itemsForSpace = (spaceName) =>
+    items
+      .filter((i) => i.space_name === spaceName)
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
 
   if (loading) {
     return (
@@ -411,67 +417,106 @@ export default function DecorInventory({ weddingId, userId }) {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900">Decor Inventory</h2>
+          <h2 className="text-xl font-semibold text-sage-700">Decor Inventory</h2>
           <p className="text-sm text-sage-500 mt-0.5">
-            {totalItems === 0
-              ? 'Track all your decor items — where they come from and where they go.'
-              : `${totalItems} ${totalItems === 1 ? 'item' : 'items'} across ${populatedSpaces} ${populatedSpaces === 1 ? 'space' : 'spaces'}`}
+            Track what's coming, where it goes, and what gets left behind.
           </p>
         </div>
+        <button
+          onClick={() => setShowPicker(true)}
+          className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 shrink-0"
+        >
+          + Add Space
+        </button>
       </div>
 
-      {/* Space sections */}
-      {allSpaces.map((spaceName) => (
-        <SpaceSection
-          key={spaceName}
-          spaceName={spaceName}
-          items={itemsForSpace(spaceName)}
-          onAddItem={handleAddItem}
-          onDeleteItem={handleDeleteItem}
-          onUpdateItem={handleUpdateItem}
-        />
-      ))}
-
-      {/* Add custom space */}
-      <div className="pt-2">
-        {addingSpace ? (
-          <form
-            onSubmit={handleAddSpace}
-            className="flex items-center gap-3 bg-white border border-cream-200 rounded-xl px-4 py-3"
-          >
-            <input
-              autoFocus
-              className="border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 flex-1"
-              placeholder="New space name (e.g. Bar Cart)"
-              value={newSpaceInput}
-              onChange={(e) => setNewSpaceInput(e.target.value)}
-            />
-            <button
-              type="submit"
-              disabled={!newSpaceInput.trim()}
-              className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
-            >
-              Add Space
-            </button>
+      {/* Space picker panel */}
+      {showPicker && (
+        <div className="bg-cream-50 border border-cream-200 rounded-xl p-5 space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-sage-700">Add a Space or Table</h3>
             <button
               type="button"
-              onClick={() => { setAddingSpace(false); setNewSpaceInput(''); }}
-              className="px-4 py-2 bg-cream-200 text-gray-700 rounded-lg text-sm hover:bg-cream-300"
+              onClick={() => { setShowPicker(false); setCustomSpaceInput(''); }}
+              className="text-sage-400 hover:text-sage-600 text-xl leading-none"
             >
-              Cancel
+              ×
             </button>
-          </form>
-        ) : (
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {SPACE_OPTIONS.map((opt) => {
+              const active = activeSpaces.includes(opt);
+              return (
+                <button
+                  key={opt}
+                  type="button"
+                  disabled={active}
+                  onClick={() => handleAddSpace(opt)}
+                  className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+                    active
+                      ? 'bg-cream-100 text-cream-400 border-cream-200 cursor-not-allowed'
+                      : 'bg-white text-sage-600 border-cream-300 hover:border-sage-400 hover:bg-sage-50'
+                  }`}
+                >
+                  {opt}{active ? ' ✓' : ''}
+                </button>
+              );
+            })}
+          </div>
+          <div className="flex items-center gap-2 pt-2 border-t border-cream-200">
+            <span className="text-xs font-medium text-sage-500 shrink-0">Other:</span>
+            <input
+              className="flex-1 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
+              placeholder="Custom space or table name"
+              value={customSpaceInput}
+              onChange={(e) => setCustomSpaceInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && customSpaceInput.trim()) {
+                  handleAddSpace(customSpaceInput);
+                }
+              }}
+            />
+            <button
+              type="button"
+              disabled={!customSpaceInput.trim()}
+              onClick={() => handleAddSpace(customSpaceInput)}
+              className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50 shrink-0"
+            >
+              Add
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Empty state */}
+      {activeSpaces.length === 0 ? (
+        <div className="text-center py-16 border-2 border-dashed border-cream-200 rounded-xl">
+          <p className="text-sage-600 text-sm font-medium mb-1">No spaces added yet</p>
+          <p className="text-sage-400 text-sm mb-5">
+            Add a table or space to start tracking your decor items.
+          </p>
           <button
-            onClick={() => setAddingSpace(true)}
-            className="w-full text-sm text-sage-600 hover:text-sage-700 font-medium border border-dashed border-sage-300 rounded-xl py-3 hover:bg-sage-50 transition-colors flex items-center justify-center gap-2"
+            onClick={() => setShowPicker(true)}
+            className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700"
           >
-            <span className="text-lg leading-none">+</span> Add custom space
+            + Add your first space
           </button>
-        )}
-      </div>
+        </div>
+      ) : (
+        activeSpaces.map((spaceName) => (
+          <SpaceSection
+            key={spaceName}
+            spaceName={spaceName}
+            items={itemsForSpace(spaceName)}
+            onAddItem={handleAddItem}
+            onDeleteItem={handleDeleteItem}
+            onUpdateItem={handleUpdateItem}
+            onDeleteSpace={handleDeleteSpace}
+          />
+        ))
+      )}
     </div>
   );
 }

@@ -151,7 +151,7 @@ export default function RehearsalDinner({ weddingId, userId }) {
 
         <Field label="Bar type">
           <ToggleGroup
-            options={['Beer & Wine Only', 'Full Bar', 'No Bar']}
+            options={['Dry', 'Beer & Wine', 'Full Bar']}
             value={form.bar_type}
             onChange={v => set('bar_type', v)}
           />
