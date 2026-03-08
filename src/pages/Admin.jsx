@@ -1369,6 +1369,9 @@ export default function Admin() {
             {/* Compact Nav Sidebar */}
             <div className="order-2 lg:order-1">
               <div className="bg-white rounded-2xl shadow-sm border border-cream-200 overflow-hidden lg:sticky lg:top-24">
+                <div className="px-4 pt-5 pb-3 flex justify-center border-b border-cream-200">
+                  <img src="/rixey-manor-logo.png" alt="Rixey Manor" className="h-16 w-auto" />
+                </div>
                 <nav className="p-2">
                   {[
                     { tab: 'overview', label: 'Overview', icon: '/icons/overview.svg' },
@@ -2518,7 +2521,7 @@ export default function Admin() {
       <header className="bg-white border-b border-cream-200 sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-3 sm:px-4">
           <div className="flex items-center justify-between py-3">
-            <h1 className="font-serif text-xl text-sage-700">Admin Dashboard</h1>
+            <img src="/rixey-manor-logo.png" alt="Rixey Manor" className="h-10 w-auto" />
             <div className="flex items-center gap-3">
               {/* Notification Bell */}
               <NotificationBell
