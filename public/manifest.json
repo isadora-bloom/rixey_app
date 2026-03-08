@@ -1,23 +1,23 @@
 {
-  "name": "Rixey Portal",
+  "name": "Rixey Manor Portal",
   "short_name": "Rixey",
   "description": "Wedding planning portal for Rixey Manor",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f5f5f0",
-  "theme_color": "#5c6d5e",
+  "background_color": "#FDFAF6",
+  "theme_color": "#2E7D54",
   "orientation": "portrait-primary",
   "icons": [
     {
-      "src": "/icons/icon-192.svg",
+      "src": "/rixey-r.png",
       "sizes": "192x192",
-      "type": "image/svg+xml",
+      "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icons/icon-192.svg",
+      "src": "/rixey-r.png",
       "sizes": "512x512",
-      "type": "image/svg+xml",
+      "type": "image/png",
       "purpose": "any"
     }
   ]

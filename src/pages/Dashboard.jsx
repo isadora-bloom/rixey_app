@@ -590,7 +590,7 @@ export default function Dashboard() {
       <header className="bg-white border-b border-cream-200 sticky top-0 z-40">
         <div className="max-w-6xl mx-auto px-4 py-3 sm:py-4 flex items-center justify-between">
           <div className="flex-1 min-w-0">
-            <img src="/rixey-manor-logo.png" alt="Rixey Manor" className="h-10 w-auto" />
+            <img src="/rixey-r.png" alt="Rixey Manor" className="h-9 w-auto" />
             <button
               onClick={() => setShowEditProfile(true)}
               className="text-sage-400 text-sm hover:text-sage-600 transition flex items-center gap-1"
