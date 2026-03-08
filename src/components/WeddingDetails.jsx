@@ -9,9 +9,9 @@ const defaultDetails = {
   partner1_social: '',
   partner2_social: '',
   dogs_coming: null,
-  dog_info: '',
+  dogs_description: '',
   ceremony_location: null,
-  arbor: null,
+  arbor_choice: null,
   unity_table: null,
   ceremony_notes: '',
   seating_method: '',
@@ -20,10 +20,10 @@ const defaultDetails = {
   providing_champagne_glasses: null,
   providing_cake_cutter: null,
   providing_cake_topper: null,
-  favors: '',
+  favors_description: '',
   reception_notes: '',
-  sendoff_type: null,
-  sendoff_notes: '',
+  send_off_type: null,
+  send_off_notes: '',
 }
 
 function ToggleGroup({ options, value, onChange }) {
@@ -203,8 +203,8 @@ export default function WeddingDetails({ weddingId, userId }) {
           <FieldRow label="Breed & name">
             <input
               type="text"
-              value={details.dog_info}
-              onChange={setInput('dog_info')}
+              value={details.dogs_description}
+              onChange={setInput('dogs_description')}
               placeholder="e.g. Rosie the golden retriever"
               className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
             />
@@ -225,8 +225,8 @@ export default function WeddingDetails({ weddingId, userId }) {
         <FieldRow label="Arbor">
           <ToggleGroup
             options={['White Birch', 'Hexagon', 'Other']}
-            value={details.arbor}
-            onChange={set('arbor')}
+            value={details.arbor_choice}
+            onChange={set('arbor_choice')}
           />
         </FieldRow>
 
@@ -288,8 +288,8 @@ export default function WeddingDetails({ weddingId, userId }) {
         <FieldRow label="Favors / guest gifts">
           <textarea
             rows={2}
-            value={details.favors}
-            onChange={setInput('favors')}
+            value={details.favors_description}
+            onChange={setInput('favors_description')}
             placeholder="Describe any favors or gifts for guests"
             className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 resize-none"
           />
@@ -311,17 +311,17 @@ export default function WeddingDetails({ weddingId, userId }) {
         <FieldRow label="Send-off type">
           <ToggleGroup
             options={['Sparklers', 'Wands', 'Bubbles', 'None', 'Other']}
-            value={details.sendoff_type}
-            onChange={set('sendoff_type')}
+            value={details.send_off_type}
+            onChange={set('send_off_type')}
           />
         </FieldRow>
 
-        {details.sendoff_type && details.sendoff_type !== 'None' && (
+        {details.send_off_type && details.send_off_type !== 'None' && (
           <FieldRow label="Send-off notes">
             <input
               type="text"
-              value={details.sendoff_notes}
-              onChange={setInput('sendoff_notes')}
+              value={details.send_off_notes}
+              onChange={setInput('send_off_notes')}
               placeholder="Any details about the send-off…"
               className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
             />

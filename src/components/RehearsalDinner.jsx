@@ -70,13 +70,13 @@ const EMPTY_FORM = {
   seating_type: '',
   table_layout: '',
   high_chairs_needed: '',
-  high_chair_count: '',
+  high_chairs_count: '',
   guest_count: '',
   using_disposables: '',
   renting_china: '',
   renting_flatware: '',
-  linens_provided_by: '',
-  decor_provided_by: '',
+  linens_source: '',
+  decor_source: '',
   notes: '',
 };
 
@@ -238,8 +238,8 @@ export default function RehearsalDinner({ weddingId, userId }) {
             <input
               type="number"
               min="1"
-              value={form.high_chair_count}
-              onChange={e => set('high_chair_count', e.target.value)}
+              value={form.high_chairs_count}
+              onChange={e => set('high_chairs_count', e.target.value)}
               placeholder="e.g. 2"
               className="w-28 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
             />
@@ -280,16 +280,16 @@ export default function RehearsalDinner({ weddingId, userId }) {
         <Field label="Linens provided by">
           <ToggleGroup
             options={['Venue', 'Couple brings', 'Rental company']}
-            value={form.linens_provided_by}
-            onChange={v => set('linens_provided_by', v)}
+            value={form.linens_source}
+            onChange={v => set('linens_source', v)}
           />
         </Field>
 
         <Field label="Decor provided by">
           <ToggleGroup
             options={['Couple brings', 'Venue', 'Florist']}
-            value={form.decor_provided_by}
-            onChange={v => set('decor_provided_by', v)}
+            value={form.decor_source}
+            onChange={v => set('decor_source', v)}
           />
         </Field>
       </div>

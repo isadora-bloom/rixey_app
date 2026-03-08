@@ -47,7 +47,7 @@ export default function ShuttleSchedule({ weddingId, userId }) {
       const res = await fetch(`${API_URL}/api/shuttle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ weddingId, userId, ...formData }),
+        body: JSON.stringify({ wedding_id: weddingId, ...formData }),
       });
       const newRun = await res.json();
       setRuns(prev => [...prev, newRun]);

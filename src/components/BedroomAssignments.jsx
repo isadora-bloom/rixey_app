@@ -115,9 +115,9 @@ export default function BedroomAssignments({ weddingId, userId }) {
               <tr key={room.id} className="hover:bg-cream-50 transition-colors">
                 <td className="px-4 py-3 align-top">
                   <div className="font-medium text-sage-700">{room.room_name}</div>
-                  {room.description && (
+                  {room.room_description && (
                     <div className="text-xs text-sage-400 mt-0.5 leading-snug">
-                      {room.description}
+                      {room.room_description}
                     </div>
                   )}
                 </td>
@@ -174,8 +174,8 @@ export default function BedroomAssignments({ weddingId, userId }) {
             <div className="flex items-start justify-between">
               <div>
                 <div className="font-medium text-sage-700">{room.room_name}</div>
-                {room.description && (
-                  <div className="text-xs text-sage-400 mt-0.5">{room.description}</div>
+                {room.room_description && (
+                  <div className="text-xs text-sage-400 mt-0.5">{room.room_description}</div>
                 )}
               </div>
               {savedRows[room.id] && (
