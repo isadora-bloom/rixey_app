@@ -1586,6 +1586,32 @@ Return ONLY a valid JSON array, no other text. Example:
   }
 });
 
+// Public Sage preview — no auth required, no wedding context
+app.post('/api/sage-preview', async (req, res) => {
+  try {
+    const { message, conversationHistory = [] } = req.body;
+    if (!message?.trim()) return res.status(400).json({ error: 'Message required' });
+
+    const knowledge = await getRelevantKnowledge(message);
+
+    const response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 600,
+      system: `${SAGE_SYSTEM_PROMPT}\n\nADDITIONAL RIXEY MANOR KNOWLEDGE BASE:\n\n${knowledge}\n\n---\n\nNOTE: You're chatting with a prospective couple on the Rixey Manor preview page. They haven't created their account yet. Keep replies concise and welcoming. If they ask about their specific wedding details, gently note they'll have a personalised portal once they sign up.`,
+      messages: [
+        ...conversationHistory,
+        { role: 'user', content: message },
+      ],
+    });
+
+    const reply = response.content[0]?.text || '';
+    res.json({ reply });
+  } catch (err) {
+    console.error('Sage preview error:', err);
+    res.status(500).json({ error: 'Failed to get response' });
+  }
+});
+
 // Chat with file upload (for client chat)
 app.post('/api/chat-with-file', upload.single('file'), async (req, res) => {
   try {
