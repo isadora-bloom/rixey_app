@@ -5978,7 +5978,7 @@ app.get('/api/wedding-details/:weddingId', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('wedding_details').select('*').eq('wedding_id', req.params.weddingId).maybeSingle();
     if (error) throw error;
-    res.json({ details: data });
+    res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/wedding-details', async (req, res) => {
@@ -5988,7 +5988,7 @@ app.post('/api/wedding-details', async (req, res) => {
       .upsert({ wedding_id: weddingId, ...fields, updated_at: new Date().toISOString() }, { onConflict: 'wedding_id' })
       .select().single();
     if (error) throw error;
-    res.json({ details: data });
+    res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -5997,21 +5997,21 @@ app.get('/api/allergies/:weddingId', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('allergy_registry').select('*').eq('wedding_id', req.params.weddingId).order('sort_order');
     if (error) throw error;
-    res.json({ allergies: data || [] });
+    res.json(data || []);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/allergies', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('allergy_registry').insert(req.body).select().single();
     if (error) throw error;
-    res.json({ allergy: data });
+    res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.put('/api/allergies/:id', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('allergy_registry').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
-    res.json({ allergy: data });
+    res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.delete('/api/allergies/:id', async (req, res) => {
@@ -6042,14 +6042,14 @@ app.get('/api/bedrooms/:weddingId', async (req, res) => {
       if (ie) throw ie;
       data = inserted;
     }
-    res.json({ rooms: data });
+    res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.put('/api/bedrooms/:id', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('bedroom_assignments').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
-    res.json({ room: data });
+    res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -6058,21 +6058,21 @@ app.get('/api/ceremony-order/:weddingId', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('ceremony_order').select('*').eq('wedding_id', req.params.weddingId).order('sort_order');
     if (error) throw error;
-    res.json({ entries: data || [] });
+    res.json(data || []);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/ceremony-order', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('ceremony_order').insert(req.body).select().single();
     if (error) throw error;
-    res.json({ entry: data });
+    res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.put('/api/ceremony-order/:id', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('ceremony_order').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
-    res.json({ entry: data });
+    res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.delete('/api/ceremony-order/:id', async (req, res) => {
@@ -6088,21 +6088,21 @@ app.get('/api/decor/:weddingId', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('decor_inventory').select('*').eq('wedding_id', req.params.weddingId).order('space_name').order('sort_order');
     if (error) throw error;
-    res.json({ items: data || [] });
+    res.json(data || []);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/decor', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('decor_inventory').insert(req.body).select().single();
     if (error) throw error;
-    res.json({ item: data });
+    res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.put('/api/decor/:id', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('decor_inventory').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
-    res.json({ item: data });
+    res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.delete('/api/decor/:id', async (req, res) => {
@@ -6118,21 +6118,21 @@ app.get('/api/makeup/:weddingId', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('makeup_schedule').select('*').eq('wedding_id', req.params.weddingId).order('sort_order');
     if (error) throw error;
-    res.json({ entries: data || [] });
+    res.json(data || []);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/makeup', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('makeup_schedule').insert(req.body).select().single();
     if (error) throw error;
-    res.json({ entry: data });
+    res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.put('/api/makeup/:id', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('makeup_schedule').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
-    res.json({ entry: data });
+    res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.delete('/api/makeup/:id', async (req, res) => {
@@ -6148,21 +6148,21 @@ app.get('/api/shuttle/:weddingId', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('shuttle_schedule').select('*').eq('wedding_id', req.params.weddingId).order('sort_order');
     if (error) throw error;
-    res.json({ runs: data || [] });
+    res.json(data || []);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/shuttle', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('shuttle_schedule').insert(req.body).select().single();
     if (error) throw error;
-    res.json({ run: data });
+    res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.put('/api/shuttle/:id', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('shuttle_schedule').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
-    res.json({ run: data });
+    res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.delete('/api/shuttle/:id', async (req, res) => {
@@ -6178,7 +6178,7 @@ app.get('/api/rehearsal-dinner/:weddingId', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('rehearsal_dinner').select('*').eq('wedding_id', req.params.weddingId).maybeSingle();
     if (error) throw error;
-    res.json({ rehearsal: data });
+    res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/rehearsal-dinner', async (req, res) => {
@@ -6188,7 +6188,7 @@ app.post('/api/rehearsal-dinner', async (req, res) => {
       .upsert({ wedding_id: weddingId, ...fields, updated_at: new Date().toISOString() }, { onConflict: 'wedding_id' })
       .select().single();
     if (error) throw error;
-    res.json({ rehearsal: data });
+    res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
