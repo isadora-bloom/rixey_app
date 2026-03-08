@@ -9,19 +9,37 @@ const SECTIONS = [
 ];
 
 const ROLE_CHIPS = [
+  // Couple
+  'Bride', 'Groom',
+  // Wedding party — traditional
   'Bridesmaid', 'Groomsman', 'Maid of Honor', 'Best Man',
-  'Flower Girl', 'Ring Bearer', 'Usher',
-  'Mother of Bride', 'Father of Bride',
-  'Mother of Groom', 'Father of Groom',
-  'Grandparent', 'Sibling', 'Officiant', 'Reader', 'Musician',
+  // Wedding party — gender-neutral / inclusive
+  'Attendant', 'Best Woman', 'Man of Honor', 'Bride\'s Person', 'Groom\'s Person',
+  // Kids
+  'Flower Girl', 'Ring Bearer', 'Junior Bridesmaid',
+  // Family
+  'Mother of Bride', 'Father of Bride', 'Parent of Bride',
+  'Mother of Groom', 'Father of Groom', 'Parent of Groom',
+  'Grandparent', 'Sibling',
+  // Other
+  'Usher', 'Officiant', 'Reader', 'Musician',
 ];
 
 // Lower index = walks earlier in processional
 const TRAD_ORDER = [
-  'Officiant', 'Grandparent', 'Mother of Groom', 'Father of Groom',
-  'Mother of Bride', 'Father of Bride', 'Usher', 'Groomsman',
-  'Bridesmaid', 'Best Man', 'Maid of Honor', 'Ring Bearer', 'Flower Girl',
-  'Reader', 'Musician', 'Sibling',
+  'Officiant',
+  'Grandparent',
+  'Mother of Groom', 'Father of Groom', 'Parent of Groom',
+  'Mother of Bride', 'Father of Bride', 'Parent of Bride',
+  'Usher', 'Sibling',
+  'Groomsman', 'Groom\'s Person',
+  'Bridesmaid', 'Bride\'s Person', 'Attendant',
+  'Best Man', 'Best Woman',
+  'Maid of Honor', 'Man of Honor',
+  'Junior Bridesmaid',
+  'Ring Bearer', 'Flower Girl',
+  'Reader', 'Musician',
+  'Groom', 'Bride',
 ];
 const roleRank = (role) => {
   const i = TRAD_ORDER.indexOf(role);
