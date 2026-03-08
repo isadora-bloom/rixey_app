@@ -86,10 +86,24 @@ function SageDemo() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: q, conversationHistory }),
       });
+      // Guard against HTML error pages (Railway/Vercel errors)
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        const text = await res.text();
+        console.error('Sage preview: non-JSON response', res.status, text.slice(0, 300));
+        setMessages(prev => [...prev, { role: 'assistant', content: `Server error (${res.status}) — check console for details.` }]);
+        return;
+      }
       const data = await res.json();
+      if (!res.ok) {
+        console.error('Sage preview error:', data);
+        setMessages(prev => [...prev, { role: 'assistant', content: data.error || 'Something went wrong.' }]);
+        return;
+      }
       setMessages(prev => [...prev, { role: 'assistant', content: data.reply || 'Sorry, I couldn\'t get a response.' }]);
-    } catch {
-      setMessages(prev => [...prev, { role: 'assistant', content: 'Something went wrong — try again in a moment.' }]);
+    } catch (err) {
+      console.error('Sage preview fetch error:', err);
+      setMessages(prev => [...prev, { role: 'assistant', content: 'Network error — is the server running? Check console.' }]);
     } finally {
       setLoading(false);
     }
