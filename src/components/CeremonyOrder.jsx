@@ -29,8 +29,8 @@ const ROLE_CHIPS = [
 const TRAD_ORDER = [
   'Officiant',
   'Grandparent',
+  'Groom',
   'Mother of Groom', 'Father of Groom', 'Parent of Groom',
-  'Mother of Bride', 'Father of Bride', 'Parent of Bride',
   'Usher', 'Sibling',
   'Groomsman', 'Groom\'s Person',
   'Bridesmaid', 'Bride\'s Person', 'Attendant',
@@ -39,7 +39,9 @@ const TRAD_ORDER = [
   'Junior Bridesmaid',
   'Ring Bearer', 'Flower Girl',
   'Reader', 'Musician',
-  'Groom', 'Bride',
+  'Mother of Bride',
+  'Father of Bride', 'Parent of Bride',
+  'Bride',
 ];
 const roleRank = (role) => {
   const i = TRAD_ORDER.indexOf(role);
