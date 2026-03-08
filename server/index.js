@@ -945,7 +945,83 @@ app.post('/api/chat', async (req, res) => {
           if (rehearsalRow.high_chairs_needed) weddingContext += `- High chairs needed: ${rehearsalRow.high_chairs_count || 'yes'}\n`;
           if (rehearsalRow.notes) weddingContext += `- Notes: ${rehearsalRow.notes}\n`;
         }
-        // ── End new planning form tables ──────────────────────────────────
+        // ── Timeline, tables, staffing, checklist, borrow, guest care ────
+        const [
+          { data: timelineRow },
+          { data: tablesRow },
+          { data: staffingRow },
+          { data: checklistItems },
+          { data: borrowSelections },
+          { data: guestCareNotes },
+        ] = await Promise.all([
+          supabaseAdmin.from('wedding_timeline').select('ceremony_start, reception_start, reception_end, notes, timeline_data').eq('wedding_id', weddingId).maybeSingle(),
+          supabaseAdmin.from('wedding_tables').select('*').eq('wedding_id', weddingId).maybeSingle(),
+          supabaseAdmin.from('wedding_staffing').select('friday_bartenders, friday_extra_hands, friday_total, saturday_bartenders, saturday_extra_hands, saturday_total, total_staff, total_cost').eq('wedding_id', weddingId).maybeSingle(),
+          supabaseAdmin.from('planning_checklist').select('task_text, category, is_completed').eq('wedding_id', weddingId).order('category'),
+          supabaseAdmin.from('wedding_borrow_selections').select('item_name, category, quantity, notes').eq('wedding_id', weddingId),
+          supabaseAdmin.from('wedding_guest_care').select('guest_name, note_type, notes').eq('wedding_id', weddingId),
+        ]);
+
+        if (timelineRow) {
+          weddingContext += '\n\nWEDDING TIMELINE:\n';
+          if (timelineRow.ceremony_start) weddingContext += `- Ceremony starts: ${timelineRow.ceremony_start}\n`;
+          if (timelineRow.reception_start) weddingContext += `- Reception starts: ${timelineRow.reception_start}\n`;
+          if (timelineRow.reception_end) weddingContext += `- Reception ends: ${timelineRow.reception_end}\n`;
+          if (timelineRow.notes) weddingContext += `- Timeline notes: ${timelineRow.notes}\n`;
+          const td = timelineRow.timeline_data;
+          if (td && typeof td === 'object') {
+            const events = Object.entries(td).filter(([, v]) => v?.time || v?.label);
+            events.forEach(([key, v]) => {
+              if (v?.time) weddingContext += `- ${v.label || key}: ${v.time}${v.notes ? ` — ${v.notes}` : ''}\n`;
+            });
+          }
+        }
+
+        if (tablesRow) {
+          weddingContext += '\n\nTABLE LAYOUT:\n';
+          if (tablesRow.guest_count) weddingContext += `- Guest count: ${tablesRow.guest_count}\n`;
+          if (tablesRow.table_shape) weddingContext += `- Table shape: ${tablesRow.table_shape}\n`;
+          if (tablesRow.guests_per_table) weddingContext += `- Guests per table: ${tablesRow.guests_per_table}\n`;
+          if (tablesRow.head_table) weddingContext += `- Head table: ${tablesRow.head_table_size || 'yes'}\n`;
+          if (tablesRow.sweetheart_table) weddingContext += `- Sweetheart table: yes\n`;
+          if (tablesRow.cocktail_tables) weddingContext += `- Cocktail tables: yes\n`;
+          if (tablesRow.kids_table) weddingContext += `- Kids table: yes (${tablesRow.kids_count || '?'} kids)\n`;
+          if (tablesRow.linen_color) weddingContext += `- Linen color: ${tablesRow.linen_color}\n`;
+          if (tablesRow.napkin_color) weddingContext += `- Napkin color: ${tablesRow.napkin_color}\n`;
+          if (tablesRow.centerpiece_notes) weddingContext += `- Centrepiece notes: ${tablesRow.centerpiece_notes}\n`;
+          if (tablesRow.layout_notes) weddingContext += `- Layout notes: ${tablesRow.layout_notes}\n`;
+        }
+
+        if (staffingRow && (staffingRow.total_staff > 0)) {
+          weddingContext += '\n\nSTAFFING:\n';
+          if (staffingRow.friday_total > 0) weddingContext += `- Friday: ${staffingRow.friday_bartenders} bartender(s), ${staffingRow.friday_extra_hands} extra hand(s)\n`;
+          if (staffingRow.saturday_total > 0) weddingContext += `- Saturday: ${staffingRow.saturday_bartenders} bartender(s), ${staffingRow.saturday_extra_hands} extra hand(s)\n`;
+          if (staffingRow.total_cost > 0) weddingContext += `- Estimated staff cost: $${staffingRow.total_cost.toLocaleString('en-US')}\n`;
+        }
+
+        if (checklistItems && checklistItems.length > 0) {
+          const done = checklistItems.filter(t => t.is_completed);
+          const pending = checklistItems.filter(t => !t.is_completed);
+          weddingContext += `\n\nPLANNING CHECKLIST: ${done.length} done, ${pending.length} still to do\n`;
+          if (pending.length > 0) {
+            weddingContext += `Pending tasks:\n${pending.slice(0, 15).map(t => `- [${t.category}] ${t.task_text}`).join('\n')}\n`;
+          }
+        }
+
+        if (borrowSelections && borrowSelections.length > 0) {
+          weddingContext += '\n\nBORROWED FROM RIXEY CATALOG:\n';
+          borrowSelections.forEach(b => {
+            weddingContext += `- ${b.item_name}${b.category ? ` (${b.category})` : ''}${b.quantity && b.quantity > 1 ? ` ×${b.quantity}` : ''}${b.notes ? ` — ${b.notes}` : ''}\n`;
+          });
+        }
+
+        if (guestCareNotes && guestCareNotes.length > 0) {
+          weddingContext += '\n\nGUEST CARE NOTES:\n';
+          guestCareNotes.forEach(g => {
+            weddingContext += `- ${g.guest_name}: ${g.notes}${g.note_type ? ` [${g.note_type}]` : ''}\n`;
+          });
+        }
+        // ── End additional context ────────────────────────────────────────
 
         // Check if the question is contract/vendor related
         const contractKeywords = [
@@ -1797,6 +1873,13 @@ app.post('/api/ask-contracts', async (req, res) => {
       { data: shuttleRows },
       { data: rehearsalRow },
       { data: vendors },
+      { data: timelineRow },
+      { data: tablesRow },
+      { data: staffingRow },
+      { data: checklistItems },
+      { data: borrowSelections },
+      { data: guestCareRows },
+      { data: internalNotes },
     ] = await Promise.all([
       supabaseAdmin.from('contracts').select('filename, extracted_text').eq('wedding_id', weddingId),
       supabaseAdmin.from('planning_notes').select('category, content, source_message').eq('wedding_id', weddingId),
@@ -1809,6 +1892,13 @@ app.post('/api/ask-contracts', async (req, res) => {
       supabaseAdmin.from('shuttle_schedule').select('*').eq('wedding_id', weddingId).order('sort_order'),
       supabaseAdmin.from('rehearsal_dinner').select('*').eq('wedding_id', weddingId).maybeSingle(),
       supabaseAdmin.from('vendor_checklist').select('vendor_type, vendor_name, vendor_contact, is_booked, notes').eq('wedding_id', weddingId),
+      supabaseAdmin.from('wedding_timeline').select('ceremony_start, reception_start, reception_end, notes, timeline_data').eq('wedding_id', weddingId).maybeSingle(),
+      supabaseAdmin.from('wedding_tables').select('*').eq('wedding_id', weddingId).maybeSingle(),
+      supabaseAdmin.from('wedding_staffing').select('friday_bartenders, friday_extra_hands, saturday_bartenders, saturday_extra_hands, total_staff, total_cost').eq('wedding_id', weddingId).maybeSingle(),
+      supabaseAdmin.from('planning_checklist').select('task_text, category, is_completed').eq('wedding_id', weddingId).order('category'),
+      supabaseAdmin.from('wedding_borrow_selections').select('item_name, category, quantity, notes').eq('wedding_id', weddingId),
+      supabaseAdmin.from('wedding_guest_care').select('guest_name, note_type, notes').eq('wedding_id', weddingId),
+      supabaseAdmin.from('wedding_internal_notes').select('content, category, created_at').eq('wedding_id', weddingId).order('created_at', { ascending: false }).limit(20),
     ]);
 
     // Build comprehensive context
@@ -1869,6 +1959,60 @@ app.post('/api/ask-contracts', async (req, res) => {
       if (r.seating_type) lines.push(`Seating: ${r.seating_type}`);
       if (r.notes) lines.push(`Notes: ${r.notes}`);
       if (lines.length) fullContext += `REHEARSAL DINNER:\n${lines.map(l => `- ${l}`).join('\n')}\n\n`;
+    }
+    if (timelineRow) {
+      const t = timelineRow;
+      const lines = [];
+      if (t.ceremony_start) lines.push(`Ceremony start: ${t.ceremony_start}`);
+      if (t.reception_start) lines.push(`Reception start: ${t.reception_start}`);
+      if (t.reception_end) lines.push(`Reception end: ${t.reception_end}`);
+      if (t.notes) lines.push(`Notes: ${t.notes}`);
+      if (t.timeline_data) {
+        try {
+          const events = typeof t.timeline_data === 'string' ? JSON.parse(t.timeline_data) : t.timeline_data;
+          if (Array.isArray(events) && events.length) {
+            lines.push(`Events: ${events.map(e => `${e.time || ''} ${e.label || e.event || ''}`).join(', ')}`);
+          }
+        } catch {}
+      }
+      if (lines.length) fullContext += `TIMELINE:\n${lines.map(l => `- ${l}`).join('\n')}\n\n`;
+    }
+    if (tablesRow) {
+      const t = tablesRow;
+      const lines = [];
+      if (t.guest_table_count) lines.push(`Guest tables: ${t.guest_table_count}`);
+      if (t.guest_table_shape) lines.push(`Table shape: ${t.guest_table_shape}`);
+      if (t.linen_color) lines.push(`Linen color: ${t.linen_color}`);
+      if (t.sweetheart_table) lines.push(`Sweetheart table: yes`);
+      if (t.cocktail_table_count) lines.push(`Cocktail tables: ${t.cocktail_table_count}`);
+      if (t.notes) lines.push(`Notes: ${t.notes}`);
+      if (lines.length) fullContext += `TABLE LAYOUT:\n${lines.map(l => `- ${l}`).join('\n')}\n\n`;
+    }
+    if (staffingRow) {
+      const s = staffingRow;
+      const lines = [];
+      if (s.friday_bartenders) lines.push(`Friday bartenders: ${s.friday_bartenders}`);
+      if (s.friday_extra_hands) lines.push(`Friday extra hands: ${s.friday_extra_hands}`);
+      if (s.saturday_bartenders) lines.push(`Saturday bartenders: ${s.saturday_bartenders}`);
+      if (s.saturday_extra_hands) lines.push(`Saturday extra hands: ${s.saturday_extra_hands}`);
+      if (s.total_staff) lines.push(`Total staff: ${s.total_staff}`);
+      if (s.total_cost) lines.push(`Total cost: $${s.total_cost}`);
+      if (lines.length) fullContext += `STAFFING:\n${lines.map(l => `- ${l}`).join('\n')}\n\n`;
+    }
+    if (checklistItems?.length) {
+      const completed = checklistItems.filter(t => t.is_completed);
+      const pending = checklistItems.filter(t => !t.is_completed);
+      if (completed.length) fullContext += `COMPLETED CHECKLIST TASKS:\n${completed.map(t => `- [${t.category}] ${t.task_text}`).join('\n')}\n\n`;
+      if (pending.length) fullContext += `PENDING CHECKLIST TASKS:\n${pending.slice(0, 20).map(t => `- [${t.category}] ${t.task_text}`).join('\n')}\n\n`;
+    }
+    if (borrowSelections?.length) {
+      fullContext += `BORROW CATALOG SELECTIONS:\n${borrowSelections.map(b => `- ${b.item_name}${b.category ? ` [${b.category}]` : ''}${b.quantity > 1 ? ` x${b.quantity}` : ''}${b.notes ? ` — ${b.notes}` : ''}`).join('\n')}\n\n`;
+    }
+    if (guestCareRows?.length) {
+      fullContext += `GUEST CARE NOTES:\n${guestCareRows.map(g => `- ${g.guest_name} [${g.note_type}]: ${g.notes}`).join('\n')}\n\n`;
+    }
+    if (internalNotes?.length) {
+      fullContext += `INTERNAL COORDINATOR NOTES:\n${internalNotes.map(n => `- ${n.category ? `[${n.category}] ` : ''}${n.content}`).join('\n')}\n\n`;
     }
 
     if (!fullContext.trim()) {
