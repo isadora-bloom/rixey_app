@@ -25,23 +25,26 @@ const ROLE_CHIPS = [
   'Usher', 'Officiant', 'Reader', 'Musician',
 ];
 
-// Lower index = walks earlier in processional
+// Traditional American processional order (lower index = walks earlier)
+// Grandparents → groom's parents → mother of bride → groom →
+// groomsmen → bridesmaids → maid of honor → kids → bride with escort
 const TRAD_ORDER = [
   'Officiant',
   'Grandparent',
-  'Groom',
   'Mother of Groom', 'Father of Groom', 'Parent of Groom',
-  'Usher', 'Sibling',
-  'Groomsman', 'Groom\'s Person',
-  'Bridesmaid', 'Bride\'s Person', 'Attendant',
-  'Best Man', 'Best Woman',
-  'Maid of Honor', 'Man of Honor',
-  'Junior Bridesmaid',
-  'Ring Bearer', 'Flower Girl',
-  'Reader', 'Musician',
   'Mother of Bride',
+  'Groom',
+  'Usher',
+  'Groomsman', 'Groom\'s Person',
+  'Best Man', 'Best Woman',
+  'Sibling', 'Attendant',
+  'Bridesmaid', 'Bride\'s Person',
+  'Junior Bridesmaid',
+  'Maid of Honor', 'Man of Honor',
+  'Ring Bearer', 'Flower Girl',
   'Father of Bride', 'Parent of Bride',
   'Bride',
+  'Reader', 'Musician',
 ];
 const roleRank = (role) => {
   const i = TRAD_ORDER.indexOf(role);
