@@ -1298,15 +1298,26 @@ export default function Admin() {
               </p>
               </div>
             </div>
-            <button
-              onClick={closeProfile}
-              className="flex items-center gap-1.5 text-sage-500 hover:text-sage-700 text-sm font-medium"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-              </svg>
-              Back
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => window.open(`/admin/print/${viewingWedding.id}`, '_blank')}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sage-100 hover:bg-sage-200 text-sage-700 text-sm font-medium transition"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                </svg>
+                Print
+              </button>
+              <button
+                onClick={closeProfile}
+                className="flex items-center gap-1.5 text-sage-500 hover:text-sage-700 text-sm font-medium"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+                Back
+              </button>
+            </div>
           </div>
         </header>
 

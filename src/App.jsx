@@ -12,6 +12,7 @@ import Admin from './pages/Admin'
 import GmailCallback from './pages/GmailCallback'
 import ZoomCallback from './pages/ZoomCallback'
 import Preview from './pages/Preview'
+import PrintView from './pages/PrintView'
 
 function App() {
   return (
@@ -76,6 +77,14 @@ function App() {
             element={
               <AdminRoute>
                 <ZoomCallback />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="/admin/print/:weddingId"
+            element={
+              <AdminRoute>
+                <PrintView />
               </AdminRoute>
             }
           />
