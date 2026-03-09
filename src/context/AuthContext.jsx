@@ -25,6 +25,19 @@ export function AuthProvider({ children }) {
   }
 
   useEffect(() => {
+    // "Stay signed in" logic:
+    // - If user chose NOT to stay signed in, we mark localStorage with 'rixey_session_only'
+    //   and mark the current tab in sessionStorage with 'rixey_tab_active'.
+    // - sessionStorage is cleared when the browser/tab closes, so on a fresh open
+    //   we detect the mismatch and sign out automatically.
+    const sessionOnly = localStorage.getItem('rixey_session_only') === 'true'
+    const tabActive = sessionStorage.getItem('rixey_tab_active') === 'true'
+
+    if (sessionOnly && !tabActive) {
+      supabase.auth.signOut().finally(() => setLoading(false))
+      return
+    }
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null)
       if (session?.user) {
@@ -49,8 +62,16 @@ export function AuthProvider({ children }) {
     return { data, error }
   }
 
-  const signIn = async (email, password) => {
+  const signIn = async (email, password, staySignedIn = true) => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+    if (!error) {
+      if (staySignedIn) {
+        localStorage.removeItem('rixey_session_only')
+      } else {
+        localStorage.setItem('rixey_session_only', 'true')
+      }
+      sessionStorage.setItem('rixey_tab_active', 'true')
+    }
     return { data, error }
   }
 

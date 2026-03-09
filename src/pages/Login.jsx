@@ -45,6 +45,7 @@ export default function Login() {
   const [loading, setLoading] = useState(false)
   const [showForgotPassword, setShowForgotPassword] = useState(false)
   const [resetEmail, setResetEmail] = useState('')
+  const [staySignedIn, setStaySignedIn] = useState(true)
   const { signIn, signUp } = useAuth()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -218,7 +219,7 @@ export default function Login() {
       setMessage('Account created! You can now sign in.')
       setIsSignUp(false)
     } else {
-      const { error } = await signIn(email, password)
+      const { error } = await signIn(email, password, staySignedIn)
       if (error) {
         setError(error.message)
       } else {
@@ -445,6 +446,19 @@ export default function Login() {
                 <p className="text-sage-400 text-xs mt-1">At least 6 characters</p>
               )}
             </div>
+
+            {/* Stay signed in — sign-in mode only */}
+            {!isSignUp && (
+              <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={staySignedIn}
+                  onChange={(e) => setStaySignedIn(e.target.checked)}
+                  className="w-4 h-4 rounded border-cream-300 text-sage-600 focus:ring-sage-400 cursor-pointer"
+                />
+                <span className="text-sm text-sage-600">Stay signed in</span>
+              </label>
+            )}
 
             {error && (
               <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm">

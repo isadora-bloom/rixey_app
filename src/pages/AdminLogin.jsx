@@ -8,6 +8,7 @@ export default function AdminLogin() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [staySignedIn, setStaySignedIn] = useState(false)
   const { signIn } = useAuth()
   const navigate = useNavigate()
 
@@ -17,7 +18,7 @@ export default function AdminLogin() {
     setLoading(true)
 
     try {
-      const { data, error: signInError } = await signIn(email, password)
+      const { data, error: signInError } = await signIn(email, password, staySignedIn)
 
       if (signInError) {
         setError(signInError.message)
@@ -88,6 +89,16 @@ export default function AdminLogin() {
                 required
               />
             </div>
+
+            <label className="flex items-center gap-2.5 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={staySignedIn}
+                onChange={(e) => setStaySignedIn(e.target.checked)}
+                className="w-4 h-4 rounded border-cream-300 text-sage-600 focus:ring-sage-400 cursor-pointer"
+              />
+              <span className="text-sm text-sage-600">Stay signed in</span>
+            </label>
 
             <button
               type="submit"
