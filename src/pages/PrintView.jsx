@@ -94,7 +94,7 @@ export default function PrintView() {
     vendors: true,
     allergies: true,
     details: true,
-    notes: true,
+    highlights: true,
   })
 
   // Data
@@ -111,7 +111,8 @@ export default function PrintView() {
   const [vendors, setVendors] = useState([])
   const [allergies, setAllergies] = useState([])
   const [weddingDetails, setWeddingDetails] = useState(null)
-  const [planningNotes, setPlanningNotes] = useState([])
+  const [highlights, setHighlights] = useState(null)
+  const [loadingHighlights, setLoadingHighlights] = useState(true)
 
   useEffect(() => {
     async function fetchAll() {
@@ -120,7 +121,7 @@ export default function PrintView() {
           weddingsRes, timelineRes, tablesRes, staffingRes,
           ceremonyRes, bedroomsRes, rehearsalRes, shuttleRes,
           makeupRes, decorRes, vendorsRes, allergiesRes,
-          detailsRes, notesRes
+          detailsRes,
         ] = await Promise.all([
           fetch(`${API_URL}/api/admin/weddings`),
           fetch(`${API_URL}/api/timeline/${weddingId}`),
@@ -135,7 +136,6 @@ export default function PrintView() {
           fetch(`${API_URL}/api/vendors/${weddingId}`),
           fetch(`${API_URL}/api/allergies/${weddingId}`),
           fetch(`${API_URL}/api/wedding-details/${weddingId}`),
-          fetch(`${API_URL}/api/planning-notes/${weddingId}`),
         ])
 
         const weddingsData = await weddingsRes.json()
@@ -164,9 +164,6 @@ export default function PrintView() {
         setAllergies(await allergiesRes.json() || [])
         setWeddingDetails(await detailsRes.json() || null)
 
-        const nn = await notesRes.json()
-        setPlanningNotes(nn.notes || [])
-
       } catch (err) {
         console.error('PrintView fetch error:', err)
         setError('Failed to load wedding data.')
@@ -174,6 +171,27 @@ export default function PrintView() {
       setLoading(false)
     }
     fetchAll()
+  }, [weddingId])
+
+  // Generate highlights separately (slower AI call — don't block the page)
+  useEffect(() => {
+    async function fetchHighlights() {
+      setLoadingHighlights(true)
+      try {
+        const res = await fetch(`${API_URL}/api/notes-highlights`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ weddingId }),
+        })
+        const data = await res.json()
+        setHighlights(data.highlights || null)
+      } catch (err) {
+        console.error('Highlights fetch error:', err)
+        setHighlights(null)
+      }
+      setLoadingHighlights(false)
+    }
+    fetchHighlights()
   }, [weddingId])
 
   // Build sorted timeline events
@@ -443,14 +461,24 @@ export default function PrintView() {
         .allergy-severity.moderate { background: #fffbeb; color: #d97706; }
         .allergy-severity.mild { background: #f0fdf4; color: #16a34a; }
 
-        /* Planning Notes */
-        .notes-list { list-style: none; }
-        .note-item {
-          padding: 12px 0; border-bottom: 1px solid #f0ebe3;
+        /* Highlights */
+        .highlights-body { font-size: 13px; color: #2d3748; line-height: 1.7; }
+        .highlights-body .hl-heading {
+          font-size: 12px; font-weight: 700; letter-spacing: 0.06em;
+          text-transform: uppercase; color: #3d5a47;
+          margin-top: 16px; margin-bottom: 4px;
         }
-        .note-item:last-child { border-bottom: none; }
-        .note-date { font-size: 11px; color: #9a8b7a; margin-bottom: 4px; }
-        .note-body { font-size: 13px; color: #2d3748; line-height: 1.5; white-space: pre-wrap; }
+        .highlights-body .hl-heading:first-child { margin-top: 0; }
+        .highlights-body .hl-bullet {
+          display: flex; gap: 8px; padding: 2px 0;
+        }
+        .highlights-body .hl-bullet::before {
+          content: '–'; color: #9a8b7a; flex-shrink: 0;
+        }
+        .highlights-loading {
+          font-size: 13px; color: #9a8b7a; font-style: italic;
+          display: flex; align-items: center; gap: 8px;
+        }
 
         /* Print footer */
         .print-footer {
@@ -498,7 +526,7 @@ export default function PrintView() {
           vendors: '📇 Vendors',
           allergies: '⚠️ Allergies',
           details: '📋 Details',
-          notes: '📝 Notes',
+          highlights: '✨ Highlights',
         }).map(([key, label]) => (
           <button
             key={key}
@@ -848,21 +876,50 @@ export default function PrintView() {
           </div>
         )}
 
-        {/* PLANNING NOTES */}
-        {sections.notes && planningNotes.length > 0 && (
+        {/* PLANNING HIGHLIGHTS */}
+        {sections.highlights && (
           <div className="print-section section-start">
-            <SectionHeader title="Planning Notes" icon="📝" />
-            <ul className="notes-list">
-              {planningNotes.map(note => (
-                <li key={note.id} className="note-item">
-                  <div className="note-date">
-                    {note.created_at ? new Date(note.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : ''}
-                    {note.source && <span style={{ marginLeft: 8, fontSize: 10, color: '#c0b5a8', textTransform: 'uppercase' }}>{note.source}</span>}
-                  </div>
-                  <div className="note-body">{note.content}</div>
-                </li>
-              ))}
-            </ul>
+            <SectionHeader title="Planning Highlights" icon="✨" />
+            {loadingHighlights ? (
+              <div className="highlights-loading">
+                <span style={{ display: 'inline-block', width: 14, height: 14, border: '2px solid #c8bfb5', borderTopColor: '#3d5a47', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+                Generating highlights…
+                <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+              </div>
+            ) : highlights ? (
+              <div className="highlights-body">
+                {highlights.split('\n').map((line, i) => {
+                  const heading = line.match(/^\*\*(.+)\*\*$/)
+                  const bullet = line.match(/^[-•*]\s+(.*)/)
+                  const numbered = line.match(/^\d+\.\s+\*\*(.+)\*\*/)
+                  if (numbered) {
+                    return <div key={i} className="hl-heading">{numbered[1]}</div>
+                  }
+                  if (heading) {
+                    return <div key={i} className="hl-heading">{heading[1]}</div>
+                  }
+                  if (bullet) {
+                    // Render inline bold within bullet
+                    const parts = bullet[1].split(/\*\*(.+?)\*\*/)
+                    return (
+                      <div key={i} className="hl-bullet">
+                        <span>{parts.map((p, j) => j % 2 === 1 ? <strong key={j}>{p}</strong> : p)}</span>
+                      </div>
+                    )
+                  }
+                  if (!line.trim()) return <div key={i} style={{ height: 6 }} />
+                  // Plain line — render inline bold
+                  const parts = line.split(/\*\*(.+?)\*\*/)
+                  return (
+                    <div key={i} style={{ marginBottom: 2 }}>
+                      {parts.map((p, j) => j % 2 === 1 ? <strong key={j}>{p}</strong> : p)}
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <p className="empty-note">No planning notes found for this wedding.</p>
+            )}
           </div>
         )}
 
