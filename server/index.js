@@ -6460,6 +6460,44 @@ app.post('/api/rehearsal-dinner', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Table Layout Canvas ───────────────────────────────────────────────────────
+
+app.get('/api/table-layout/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('table_layouts')
+      .select('*')
+      .eq('wedding_id', req.params.weddingId)
+      .single();
+    if (error && error.code !== 'PGRST116') throw error;
+    res.json({ layout: data || null });
+  } catch (err) {
+    console.error('Get table layout error:', err);
+    res.status(500).json({ error: 'Failed to get layout' });
+  }
+});
+
+app.post('/api/table-layout', async (req, res) => {
+  try {
+    const { weddingId, elements, name } = req.body;
+    if (!weddingId) return res.status(400).json({ error: 'weddingId required' });
+    const { data, error } = await supabaseAdmin
+      .from('table_layouts')
+      .upsert({
+        wedding_id: weddingId,
+        name: name || 'Reception Layout',
+        elements: elements || [],
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'wedding_id' })
+      .select().single();
+    if (error) throw error;
+    res.json({ layout: data });
+  } catch (err) {
+    console.error('Save table layout error:', err);
+    res.status(500).json({ error: 'Failed to save layout' });
+  }
+});
+
 // ─── Guest Management ──────────────────────────────────────────────────────────
 
 // GET all guests for a wedding

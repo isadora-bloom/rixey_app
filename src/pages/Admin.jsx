@@ -30,6 +30,7 @@ import RehearsalDinner from '../components/RehearsalDinner'
 import StaffingCalculator from '../components/StaffingCalculator'
 import BudgetTracker from '../components/BudgetTracker'
 import GuestList from '../components/GuestList'
+import TableCanvas from '../components/TableCanvas'
 
 // Stress/escalation keywords to detect
 const ESCALATION_KEYWORDS = [
@@ -1462,6 +1463,7 @@ export default function Admin() {
                     { tab: 'meetings', label: 'Meetings', icon: '/icons/meetings.svg' },
                     { tab: 'direct-messages', label: 'Direct Messages', icon: '/icons/direct-messages.svg' },
                     { section: 'Tools' },
+                    { tab: 'table-map', label: 'Table Map', icon: '/icons/tables.svg' },
                     { tab: 'timeline', label: 'Timeline', icon: '/icons/timeline.svg' },
                     { tab: 'tables', label: 'Tables', icon: '/icons/tables.svg' },
                     { tab: 'staffing', label: 'Staffing Guide', icon: '/icons/staffing-guide.svg' },
@@ -1537,6 +1539,7 @@ export default function Admin() {
                     </option>
                     <option value="meetings">Meetings</option>
                     <option value="direct-messages">Direct Messages</option>
+                    <option value="table-map">Table Map</option>
                     <option value="timeline">Timeline</option>
                     <option value="tables">Tables</option>
                     <option value="staffing">Staffing Guide</option>
@@ -2440,6 +2443,10 @@ export default function Admin() {
                 {/* Tables Tab */}
                 {activeTab === 'tables' && (
                   <TableLayoutPlanner weddingId={viewingWedding.id} isAdmin />
+                )}
+
+                {activeTab === 'table-map' && (
+                  <TableCanvas weddingId={viewingWedding.id} isAdmin />
                 )}
 
                 {activeTab === 'staffing' && (

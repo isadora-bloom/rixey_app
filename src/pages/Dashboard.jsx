@@ -26,6 +26,7 @@ import MakeupSchedule from '../components/MakeupSchedule'
 import ShuttleSchedule from '../components/ShuttleSchedule'
 import RehearsalDinner from '../components/RehearsalDinner'
 import GuestList from '../components/GuestList'
+import TableCanvas from '../components/TableCanvas'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -808,6 +809,7 @@ export default function Dashboard() {
                   { key: 'vendor', label: 'Vendors', icon: '/icons/vendors.svg' },
                   { key: 'wedding-details', label: 'Wedding Details', icon: '/icons/overview.svg' },
                   { key: 'guests', label: 'Guest List', icon: '/icons/guest-care.svg' },
+                  { key: 'table-map', label: 'Table Map', icon: '/icons/tables.svg' },
                   { key: 'allergies', label: 'Allergy Registry', icon: '/icons/guest-care.svg' },
                   { key: 'checklist', label: 'Checklist', icon: '/icons/checklist.svg' },
                   { key: 'staffing', label: 'Staffing Guide', icon: '/icons/staffing-guide.svg' },
@@ -871,6 +873,7 @@ export default function Dashboard() {
                 <option value="budget">💰 Budget</option>
                 <option value="vendor">👥 Vendors</option>
                 <option value="guests">👨‍👩‍👧‍👦 Guest List</option>
+                <option value="table-map">🗺 Table Map</option>
                 <option value="checklist">✅ Checklist</option>
                 <option value="staffing">🙋 Staffing Guide</option>
                 <option value="inspo">💡 Inspiration</option>
@@ -1118,6 +1121,11 @@ export default function Dashboard() {
               {activeSection === 'guests' && profile?.wedding_id && (
                 <div className="p-4 sm:p-6">
                   <GuestList weddingId={profile.wedding_id} userId={user?.id} />
+                </div>
+              )}
+              {activeSection === 'table-map' && profile?.wedding_id && (
+                <div className="p-4 sm:p-6">
+                  <TableCanvas weddingId={profile.wedding_id} />
                 </div>
               )}
               {activeSection === 'allergies' && profile?.wedding_id && (
