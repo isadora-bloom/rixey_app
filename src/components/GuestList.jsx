@@ -24,7 +24,7 @@ function RsvpBadge({ rsvp }) {
 
 // ─── Guest Add/Edit Modal ──────────────────────────────────────────────────────
 
-function GuestModal({ guest, weddingId, tagOptions, mealOptions, platedMeal, onSave, onClose }) {
+function GuestModal({ guest, weddingId, tagOptions, mealOptions, platedMeal, tableOptions, onSave, onClose }) {
   const [form, setForm] = useState({
     first_name: guest?.first_name || '',
     last_name: guest?.last_name || '',
@@ -41,6 +41,7 @@ function GuestModal({ guest, weddingId, tagOptions, mealOptions, platedMeal, onS
     plus_one_rsvp: guest?.plus_one_rsvp || 'pending',
     plus_one_meal_choice: guest?.plus_one_meal_choice || '',
     plus_one_dietary: guest?.plus_one_dietary || '',
+    table_assignment: guest?.table_assignment || '',
   })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -74,6 +75,7 @@ function GuestModal({ guest, weddingId, tagOptions, mealOptions, platedMeal, onS
       plus_one_rsvp: form.has_plus_one ? form.plus_one_rsvp : 'pending',
       plus_one_meal_choice: form.has_plus_one && platedMeal ? (form.plus_one_meal_choice || null) : null,
       plus_one_dietary: form.has_plus_one ? (form.plus_one_dietary.trim() || null) : null,
+      table_assignment: form.table_assignment || null,
     }
 
     try {
@@ -236,6 +238,23 @@ function GuestModal({ guest, weddingId, tagOptions, mealOptions, platedMeal, onS
               placeholder="Any notes..."
             />
           </div>
+
+          {/* Table assignment */}
+          {tableOptions.length > 0 && (
+            <div className="mb-4">
+              <label className="block text-xs font-medium text-sage-600 mb-1">Table Assignment</label>
+              <select
+                className="w-full border border-cream-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 bg-white"
+                value={form.table_assignment}
+                onChange={e => setForm({ ...form, table_assignment: e.target.value })}
+              >
+                <option value="">— Unassigned —</option>
+                {tableOptions.map(t => (
+                  <option key={t.label} value={t.label}>{t.label} (max {t.capacity})</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Plus one toggle */}
           <div className="mb-4">
@@ -503,11 +522,13 @@ export default function GuestList({ weddingId, userId }) {
   const [guests, setGuests] = useState([])
   const [tagOptions, setTagOptions] = useState([])
   const [mealOptions, setMealOptions] = useState([])
+  const [tableOptions, setTableOptions] = useState([]) // [{label, capacity}] from table layout
   const [platedMeal, setPlatedMeal] = useState(false)
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [filterRsvp, setFilterRsvp] = useState('all')
   const [filterTag, setFilterTag] = useState('all')
+  const [filterTable, setFilterTable] = useState('all')
   const [showAddModal, setShowAddModal] = useState(false)
   const [editingGuest, setEditingGuest] = useState(null)
   const [showSettings, setShowSettings] = useState(false)
@@ -523,16 +544,28 @@ export default function GuestList({ weddingId, userId }) {
   const loadData = async () => {
     setLoading(true)
     try {
-      const [gRes, sRes] = await Promise.all([
+      const [gRes, sRes, tRes] = await Promise.all([
         fetch(`${API_URL}/api/guests/${weddingId}`),
         fetch(`${API_URL}/api/guest-settings/${weddingId}`),
+        fetch(`${API_URL}/api/table-layout/${weddingId}`),
       ])
       const gData = await gRes.json()
       const sData = await sRes.json()
+      const tData = await tRes.json()
       setGuests(gData.guests || [])
       setTagOptions(sData.tagOptions || [])
       setMealOptions(sData.mealOptions || [])
       setPlatedMeal(sData.platedMeal || false)
+      // Extract table elements (not blocks) sorted by label
+      const tableEls = (tData.layout?.elements || [])
+        .filter(el => el.type === 'round' || el.type === 'rect')
+        .map(el => ({ label: el.label, capacity: el.capacity || 0 }))
+        .sort((a, b) => {
+          const numA = parseInt(a.label) || 0
+          const numB = parseInt(b.label) || 0
+          return numA !== numB ? numA - numB : a.label.localeCompare(b.label)
+        })
+      setTableOptions(tableEls)
     } catch (err) {
       console.error('Failed to load guests:', err)
     }
@@ -607,6 +640,81 @@ export default function GuestList({ weddingId, userId }) {
     setMealOptions(mo)
   }
 
+  // Assign a guest to a table inline (sends full guest object to preserve all fields)
+  const assignTable = async (guest, tableLabel) => {
+    const updated = { ...guest, table_assignment: tableLabel || null }
+    setGuests(prev => prev.map(g => g.id === guest.id ? updated : g))
+    try {
+      await fetch(`${API_URL}/api/guests/${guest.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          first_name: guest.first_name, last_name: guest.last_name,
+          rsvp: guest.rsvp, dietary_restrictions: guest.dietary_restrictions,
+          meal_choice: guest.meal_choice, tags: guest.tags || [], notes: guest.notes,
+          email: guest.email, phone: guest.phone, address: guest.address,
+          plus_one_name: guest.plus_one_name, plus_one_rsvp: guest.plus_one_rsvp,
+          plus_one_meal_choice: guest.plus_one_meal_choice, plus_one_dietary: guest.plus_one_dietary,
+          table_assignment: tableLabel || null,
+        }),
+      })
+    } catch (err) {
+      console.error('Failed to assign table:', err)
+      setGuests(prev => prev.map(g => g.id === guest.id ? guest : g)) // revert
+    }
+  }
+
+  const printByTable = () => {
+    // Group assigned guests by table, sorted by table label
+    const groups = {}
+    tableOptions.forEach(t => { groups[t.label] = [] })
+    guests.forEach(g => {
+      if (g.table_assignment && groups[g.table_assignment] !== undefined) {
+        groups[g.table_assignment].push(g)
+      } else if (g.table_assignment) {
+        if (!groups[g.table_assignment]) groups[g.table_assignment] = []
+        groups[g.table_assignment].push(g)
+      }
+    })
+    const unassigned = guests.filter(g => !g.table_assignment)
+
+    const tableRows = (guestList) => guestList.map(g => `
+      <tr>
+        <td style="padding:4px 8px">${g.first_name} ${g.last_name || ''}</td>
+        <td style="padding:4px 8px">${g.dietary_restrictions || ''}</td>
+        ${platedMeal ? `<td style="padding:4px 8px">${g.meal_choice || ''}</td>` : ''}
+        ${g.plus_one_name ? `<tr><td style="padding:4px 8px 4px 24px;color:#666">${g.plus_one_name} (+1)</td><td style="padding:4px 8px;color:#666">${g.plus_one_dietary || ''}</td>${platedMeal ? `<td style="padding:4px 8px;color:#666">${g.plus_one_meal_choice || ''}</td>` : ''}</tr>` : ''}
+      </tr>`).join('')
+
+    const html = `<!DOCTYPE html><html><head><title>Seating by Table</title>
+      <style>body{font-family:sans-serif;padding:20px;font-size:13px}
+      h1{font-size:18px;margin-bottom:16px}
+      h2{font-size:14px;margin:20px 0 6px;background:#f5f0e8;padding:6px 10px;border-radius:4px}
+      table{width:100%;border-collapse:collapse;margin-bottom:8px}
+      th{text-align:left;padding:4px 8px;font-size:11px;color:#666;border-bottom:1px solid #ddd}
+      tr{border-bottom:1px solid #eee}
+      .capacity{color:#888;font-weight:normal;font-size:11px;margin-left:8px}
+      @media print{button{display:none}}</style></head>
+      <body>
+      <h1>Seating Chart</h1>
+      ${Object.entries(groups).map(([label, guestList]) => {
+        const cap = tableOptions.find(t => t.label === label)?.capacity || 0
+        const used = guestList.reduce((n, g) => n + 1 + (g.plus_one_name ? 1 : 0), 0)
+        return `<h2>${label}<span class="capacity">${used}/${cap} seats</span></h2>
+        <table><thead><tr><th>Guest</th><th>Dietary</th>${platedMeal ? '<th>Meal</th>' : ''}</tr></thead>
+        <tbody>${tableRows(guestList)}</tbody></table>`
+      }).join('')}
+      ${unassigned.length > 0 ? `<h2>Unassigned<span class="capacity">${unassigned.length} guests</span></h2>
+      <table><thead><tr><th>Guest</th><th>Dietary</th>${platedMeal ? '<th>Meal</th>' : ''}</tr></thead>
+      <tbody>${tableRows(unassigned)}</tbody></table>` : ''}
+      </body></html>`
+
+    const w = window.open('', '_blank')
+    w.document.write(html)
+    w.document.close()
+    w.print()
+  }
+
   // Filtering
   const filtered = guests.filter(g => {
     if (searchTerm) {
@@ -615,8 +723,18 @@ export default function GuestList({ weddingId, userId }) {
     }
     if (filterRsvp !== 'all' && g.rsvp !== filterRsvp) return false
     if (filterTag !== 'all' && !(g.tags || []).includes(filterTag)) return false
+    if (filterTable === 'unassigned' && g.table_assignment) return false
+    if (filterTable !== 'all' && filterTable !== 'unassigned' && g.table_assignment !== filterTable) return false
     return true
   })
+
+  // Seat usage per table: count guest + plus_one per assignment
+  const tableCounts = guests.reduce((acc, g) => {
+    if (g.table_assignment) {
+      acc[g.table_assignment] = (acc[g.table_assignment] || 0) + 1 + (g.plus_one_name ? 1 : 0)
+    }
+    return acc
+  }, {})
 
   // Summary stats
   const plusOneCount = guests.filter(g => g.plus_one_name).length
@@ -664,6 +782,17 @@ export default function GuestList({ weddingId, userId }) {
               </svg>
             </button>
             <input ref={csvInputRef} type="file" accept=".csv" className="hidden" onChange={handleCsvUpload} />
+            {tableOptions.length > 0 && (
+              <button
+                onClick={printByTable}
+                className="flex items-center gap-1.5 border border-sage-300 text-sage-600 px-4 py-2 rounded-xl text-sm font-medium hover:bg-sage-50 transition"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                </svg>
+                Print by Table
+              </button>
+            )}
             <button
               onClick={() => csvInputRef.current?.click()}
               disabled={csvImporting}
@@ -738,6 +867,20 @@ export default function GuestList({ weddingId, userId }) {
               {tagOptions.map(t => <option key={t.id} value={t.label}>{t.label}</option>)}
             </select>
           )}
+          {tableOptions.length > 0 && (
+            <select
+              className="border border-cream-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 bg-white"
+              value={filterTable}
+              onChange={e => setFilterTable(e.target.value)}
+            >
+              <option value="all">All Tables</option>
+              <option value="unassigned">Unassigned</option>
+              {tableOptions.map(t => {
+                const used = tableCounts[t.label] || 0
+                return <option key={t.label} value={t.label}>{t.label} ({used}/{t.capacity})</option>
+              })}
+            </select>
+          )}
         </div>
       </div>
 
@@ -758,6 +901,9 @@ export default function GuestList({ weddingId, userId }) {
                 <tr className="border-b border-cream-200 bg-cream-50">
                   <th className="text-left px-4 py-3 text-xs font-semibold text-sage-500 uppercase tracking-wide">Name</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-sage-500 uppercase tracking-wide">RSVP</th>
+                  {tableOptions.length > 0 && (
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-sage-500 uppercase tracking-wide">Table</th>
+                  )}
                   <th className="text-left px-4 py-3 text-xs font-semibold text-sage-500 uppercase tracking-wide">Tags</th>
                   {platedMeal && (
                     <th className="text-left px-4 py-3 text-xs font-semibold text-sage-500 uppercase tracking-wide">Meal</th>
@@ -779,6 +925,26 @@ export default function GuestList({ weddingId, userId }) {
                     <td className="px-4 py-3">
                       <RsvpBadge rsvp={guest.rsvp} />
                     </td>
+                    {tableOptions.length > 0 && (
+                      <td className="px-4 py-3">
+                        <select
+                          className="border border-cream-200 rounded-lg px-2 py-1 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-sage-300 max-w-[130px]"
+                          value={guest.table_assignment || ''}
+                          onChange={e => assignTable(guest, e.target.value)}
+                        >
+                          <option value="">Unassigned</option>
+                          {tableOptions.map(t => {
+                            const used = tableCounts[t.label] || 0
+                            const isAtCap = used >= t.capacity && guest.table_assignment !== t.label
+                            return (
+                              <option key={t.label} value={t.label} disabled={isAtCap}>
+                                {t.label} {isAtCap ? '(full)' : `(${used}/${t.capacity})`}
+                              </option>
+                            )
+                          })}
+                        </select>
+                      </td>
+                    )}
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-1">
                         {(guest.tags || []).map(tag => {
@@ -851,6 +1017,7 @@ export default function GuestList({ weddingId, userId }) {
           tagOptions={tagOptions}
           mealOptions={mealOptions}
           platedMeal={platedMeal}
+          tableOptions={tableOptions}
           onSave={handleSaveGuest}
           onClose={() => { setShowAddModal(false); setEditingGuest(null) }}
         />

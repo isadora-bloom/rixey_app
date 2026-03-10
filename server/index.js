@@ -6559,6 +6559,7 @@ app.post('/api/guests', async (req, res) => {
       weddingId, first_name, last_name, rsvp, dietary_restrictions,
       meal_choice, tags, notes, email, phone, address,
       plus_one_name, plus_one_rsvp, plus_one_meal_choice, plus_one_dietary,
+      table_assignment,
     } = req.body;
     if (!weddingId || !first_name) return res.status(400).json({ error: 'weddingId and first_name required' });
     const { data, error } = await supabaseAdmin
@@ -6569,6 +6570,7 @@ app.post('/api/guests', async (req, res) => {
         notes, email, phone, address,
         plus_one_name, plus_one_rsvp: plus_one_rsvp || 'pending',
         plus_one_meal_choice, plus_one_dietary,
+        table_assignment: table_assignment || null,
         updated_at: new Date().toISOString(),
       })
       .select().single();
@@ -6587,6 +6589,7 @@ app.put('/api/guests/:id', async (req, res) => {
       first_name, last_name, rsvp, dietary_restrictions,
       meal_choice, tags, notes, email, phone, address,
       plus_one_name, plus_one_rsvp, plus_one_meal_choice, plus_one_dietary,
+      table_assignment,
     } = req.body;
     const { data, error } = await supabaseAdmin
       .from('wedding_guests')
@@ -6594,6 +6597,7 @@ app.put('/api/guests/:id', async (req, res) => {
         first_name, last_name, rsvp, dietary_restrictions,
         meal_choice, tags: tags || [], notes, email, phone, address,
         plus_one_name, plus_one_rsvp, plus_one_meal_choice, plus_one_dietary,
+        table_assignment: table_assignment || null,
         updated_at: new Date().toISOString(),
       })
       .eq('id', req.params.id)
