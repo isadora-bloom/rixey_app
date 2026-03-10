@@ -8,6 +8,7 @@ import InspoGallery from '../components/InspoGallery'
 import PlanningChecklist from '../components/PlanningChecklist'
 import CouplePhoto from '../components/CouplePhoto'
 import KnowledgeBaseAdmin from '../components/KnowledgeBaseAdmin'
+import CommunicationPulse, { PulsePill } from '../components/CommunicationPulse'
 import RecommendedVendorsAdmin from '../components/RecommendedVendorsAdmin'
 import UsageStats from '../components/UsageStats'
 import UpcomingMeetings from '../components/UpcomingMeetings'
@@ -26,6 +27,9 @@ import DecorInventory from '../components/DecorInventory'
 import MakeupSchedule from '../components/MakeupSchedule'
 import ShuttleSchedule from '../components/ShuttleSchedule'
 import RehearsalDinner from '../components/RehearsalDinner'
+import StaffingCalculator from '../components/StaffingCalculator'
+import BudgetTracker from '../components/BudgetTracker'
+import GuestList from '../components/GuestList'
 
 // Stress/escalation keywords to detect
 const ESCALATION_KEYWORDS = [
@@ -266,6 +270,7 @@ export default function Admin() {
   const [notesSearchQuery, setNotesSearchQuery] = useState('')
   const [collapsedNoteCategories, setCollapsedNoteCategories] = useState({})
   const [sortBy, setSortBy] = useState('lastActivity') // 'lastActivity' or 'weddingDate'
+  const [pulseFilter, setPulseFilter] = useState('all') // 'all' | 'less' | 'typical' | 'more'
   const [uncertainQuestions, setUncertainQuestions] = useState([])
   const [answeringQuestion, setAnsweringQuestion] = useState(null)
   const [adminAnswer, setAdminAnswer] = useState('')
@@ -304,6 +309,10 @@ export default function Admin() {
   const [injectKb, setInjectKb] = useState(false)
   const [injectKbCat, setInjectKbCat] = useState('')
   const [injecting, setInjecting] = useState(false)
+  const [checkingIn, setCheckingIn] = useState(false)
+  const [checkedIn, setCheckedIn] = useState(false)
+  const [pulses, setPulses] = useState({})
+  const [weddingPulse, setWeddingPulse] = useState(null)
 
   // Keep unanswered count in sync with loaded uncertain questions
   useEffect(() => {
@@ -643,6 +652,12 @@ export default function Admin() {
       setWeddings([])
     }
 
+    // Load communication pulses for all weddings (background, non-blocking)
+    fetch(`${API_URL}/api/communication-pulse`)
+      .then(r => r.json())
+      .then(d => { if (d.pulses) setPulses(d.pulses) })
+      .catch(() => {})
+
     // Load all Sage messages for escalation detection via server (bypasses RLS)
     if (weddingsData && weddingsData.length > 0) {
       try {
@@ -760,6 +775,11 @@ export default function Admin() {
 
   const viewWeddingProfile = async (wedding) => {
     setViewingWedding(wedding)
+    setWeddingPulse(null)
+    fetch(`${API_URL}/api/communication-pulse/${wedding.id}`)
+      .then(r => r.json())
+      .then(d => { if (d.level) setWeddingPulse(d) })
+      .catch(() => {})
     setLoadingMessages(true)
     setSearchQuery('')
     setNotesSearchQuery('')
@@ -1093,6 +1113,19 @@ export default function Admin() {
     }
   }
 
+  const sendCheckin = async () => {
+    if (!viewingWedding || checkingIn) return
+    setCheckingIn(true)
+    try {
+      await fetch(`${API_URL}/api/checkin/${viewingWedding.id}`, { method: 'POST' })
+      setCheckedIn(true)
+      setTimeout(() => setCheckedIn(false), 3000)
+    } catch (err) {
+      console.error('Check-in failed:', err)
+    }
+    setCheckingIn(false)
+  }
+
   const closeProfile = () => {
     setViewingWedding(null)
     setWeddingMessages([])
@@ -1184,6 +1217,10 @@ export default function Admin() {
     .filter(w => {
       if (showArchived) return w.archived
       return !w.archived
+    })
+    .filter(w => {
+      if (pulseFilter === 'all') return true
+      return pulses[w.id]?.level === pulseFilter
     })
     .sort((a, b) => {
       if (sortBy === 'lastActivity') {
@@ -1300,6 +1337,18 @@ export default function Admin() {
             </div>
             <div className="flex items-center gap-3">
               <button
+                onClick={sendCheckin}
+                disabled={checkingIn}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition ${
+                  checkedIn
+                    ? 'bg-green-100 text-green-700'
+                    : 'bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200'
+                }`}
+                title="Send a friendly check-in message to this couple"
+              >
+                {checkedIn ? '✓ Sent!' : checkingIn ? '…' : '💛 Check in'}
+              </button>
+              <button
                 onClick={() => window.open(`/admin/print/${viewingWedding.id}`, '_blank')}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sage-100 hover:bg-sage-200 text-sage-700 text-sm font-medium transition"
               >
@@ -1415,6 +1464,9 @@ export default function Admin() {
                     { section: 'Tools' },
                     { tab: 'timeline', label: 'Timeline', icon: '/icons/timeline.svg' },
                     { tab: 'tables', label: 'Tables', icon: '/icons/tables.svg' },
+                    { tab: 'staffing', label: 'Staffing Guide', icon: '/icons/staffing-guide.svg' },
+                    { tab: 'budget', label: 'Budget', icon: '/icons/budget.svg' },
+                    { tab: 'guests', label: 'Guest List', icon: '/icons/guest-care.svg' },
                     { tab: 'borrow', label: 'Borrow Brochure', icon: '/icons/borrow-brochure.svg', badge: borrowSelections.length },
                     { tab: 'guest-care', label: 'Guest Care', icon: '/icons/guest-care.svg' },
                     { tab: 'activity', label: 'Recent Activity', icon: '/icons/recent-activity.svg', badge: activities.length },
@@ -1487,6 +1539,9 @@ export default function Admin() {
                     <option value="direct-messages">Direct Messages</option>
                     <option value="timeline">Timeline</option>
                     <option value="tables">Tables</option>
+                    <option value="staffing">Staffing Guide</option>
+                    <option value="budget">Budget</option>
+                    <option value="guests">Guest List</option>
                     <option value="borrow">Borrow Brochure</option>
                     <option value="guest-care">Guest Care</option>
                     <option value="activity">
@@ -1501,6 +1556,9 @@ export default function Admin() {
                 {/* Overview Tab */}
                 {activeTab === 'overview' && (
                   <div className="space-y-5">
+                    {/* Communication Pulse */}
+                    <CommunicationPulse pulse={weddingPulse} />
+
                     {/* Stats Row */}
                     <div className="grid grid-cols-4 gap-2 sm:gap-3">
                       <div className="bg-sage-50 rounded-xl p-2 sm:p-3 text-center">
@@ -2384,6 +2442,18 @@ export default function Admin() {
                   <TableLayoutPlanner weddingId={viewingWedding.id} isAdmin />
                 )}
 
+                {activeTab === 'staffing' && (
+                  <StaffingCalculator weddingId={viewingWedding.id} userId={null} isAdmin />
+                )}
+
+                {activeTab === 'budget' && (
+                  <BudgetTracker weddingId={viewingWedding.id} />
+                )}
+
+                {activeTab === 'guests' && (
+                  <GuestList weddingId={viewingWedding.id} userId={null} />
+                )}
+
                 {/* Borrow Brochure Tab */}
                 {activeTab === 'borrow' && (
                   <div>
@@ -2909,6 +2979,31 @@ export default function Admin() {
                   {showArchived ? 'Archived Weddings' : 'Active Weddings'}
                 </h2>
                 <div className="flex items-center gap-3 flex-wrap">
+                  {!showArchived && Object.keys(pulses).length > 0 && (
+                    <div className="flex items-center gap-1 bg-cream-50 rounded-lg p-1">
+                      {[
+                        { key: 'all', label: 'All' },
+                        { key: 'less', label: 'Quieter' },
+                        { key: 'typical', label: 'About right' },
+                        { key: 'more', label: 'More active' },
+                      ].map(({ key, label }) => (
+                        <button
+                          key={key}
+                          onClick={() => setPulseFilter(key)}
+                          className={`px-3 py-1 text-sm rounded-md transition ${
+                            pulseFilter === key ? 'bg-white text-sage-700 shadow-sm' : 'text-sage-500 hover:text-sage-700'
+                          }`}
+                        >
+                          {label}
+                          {key !== 'all' && Object.values(pulses).filter(p => p.level === key).length > 0 && (
+                            <span className="ml-1 text-xs text-sage-400">
+                              ({Object.values(pulses).filter(p => p.level === key).length})
+                            </span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   {!showArchived && (
                     <div className="flex items-center gap-1 bg-cream-50 rounded-lg p-1">
                       <button
@@ -3005,6 +3100,9 @@ export default function Admin() {
                               {wedding.wedding_date ? new Date(wedding.wedding_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'No date set'}
                               <span className="mx-1 sm:mx-2 text-sage-300">·</span>
                               <span className="font-mono text-xs">{wedding.event_code}</span>
+                              {pulses[wedding.id] && pulses[wedding.id].level !== 'typical' && (
+                                <><span className="mx-1 sm:mx-2 text-sage-300">·</span><PulsePill level={pulses[wedding.id].level} /></>
+                              )}
                             </p>
                             {wedding.profiles?.length > 0 && (
                               <div className="flex flex-wrap gap-1 mt-1.5 sm:mt-2">
@@ -3327,7 +3425,7 @@ export default function Admin() {
               <div className="flex items-center justify-between p-4 border-b border-cream-200">
                 <div>
                   <h3 className="font-serif text-xl text-sage-700">Sage Needs Help</h3>
-                  <p className="text-sage-500 text-sm">Questions Sage was uncertain about (less than 75% confident)</p>
+                  <p className="text-sage-500 text-sm">Questions Sage was uncertain about or deferred to the team</p>
                 </div>
                 <button
                   onClick={() => { setShowUncertainModal(false); setAnsweringQuestion(null); setAdminAnswer(''); setAddToKb(false) }}

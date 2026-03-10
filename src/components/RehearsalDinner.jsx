@@ -187,7 +187,7 @@ export default function RehearsalDinner({ weddingId, userId }) {
 
         <Field label="Where will the rehearsal dinner be held?">
           <ToggleGroup
-            options={['Patio', 'Ballroom', 'Tent', 'Other']}
+            options={['Patio', 'Ballroom', 'Tent', 'Casual in the Manor', 'Kitchen', 'Other']}
             value={form.location}
             onChange={v => set('location', v)}
           />
@@ -220,7 +220,7 @@ export default function RehearsalDinner({ weddingId, userId }) {
 
         <Field label="Table layout">
           <ToggleGroup
-            options={['Round Tables', 'Rectangular Tables', 'Mix']}
+            options={['Round Tables', 'Rectangular Tables', 'Mix', 'Leave to venue']}
             value={form.table_layout}
             onChange={v => set('table_layout', v)}
           />
@@ -283,6 +283,11 @@ export default function RehearsalDinner({ weddingId, userId }) {
             value={form.linens_source}
             onChange={v => set('linens_source', v)}
           />
+          {form.linens_source === 'Venue' && (
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-2">
+              Rixey can provide basic black linens for rehearsal dinners up to ~25 guests. For larger groups, you'll need to rent or bring your own.
+            </p>
+          )}
         </Field>
 
         <Field label="Decor provided by">

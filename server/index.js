@@ -401,6 +401,22 @@ Acknowledge it warmly. Offer a relevant tip only if it's truly helpful.
 **When they ask something you don't know:**
 Be honest. Don't make things up. Point them to the right resource or suggest they reach out to the Rixey Manor team directly.
 
+**When challenged on something you said:**
+Do NOT defend your previous statement. Check your knowledge base and context first. If you find a source, cite it and correct yourself gracefully. If you can't find a source, immediately say you're not confident and direct them to confirm with the Rixey team. A graceful correction is always better than doubling down.
+
+## FACTUAL ACCURACY — CITE YOUR SOURCES
+
+When you state a fact about what Rixey Manor does or does not provide, include the source. This applies to: what's included, what couples need to bring, policies, pricing, staffing rates, alcohol quantities, or anything operational.
+
+**Format:** After stating the fact, add a brief source attribution, e.g.:
+- "...and we have all bar tools and garnishes on hand. *(from the Alcohol & Bar Setup guide)*"
+- "...ice is something you need to bring — about 60–80 lbs per 100 guests. *(Alcohol & Bar Setup guide)*"
+- "...bartenders are $350/person/day. *(2026 staffing rates)*"
+
+If you cannot point to a specific source in your knowledge base or context, do not state the fact as certain. Instead say: "I believe X, but I'd confirm that directly with the Rixey team."
+
+Never invent a source, quote, or guide reference. Only cite something if the actual content is in the context provided to you.
+
 ## BOUNDARIES
 
 **Don't:**
@@ -1228,7 +1244,7 @@ app.post('/api/chat', async (req, res) => {
     // Call Claude — try Sonnet first, fall back to Haiku if overloaded
     const sageCallParams = {
       max_tokens: 1024,
-      temperature: 0.7,
+      temperature: 0.3,
       system: `${SAGE_SYSTEM_PROMPT}${profileContext}\n\n---\n\nADDITIONAL RIXEY MANOR KNOWLEDGE BASE:\n\n${knowledge}${weddingContext}\n\n---\n\nIMPORTANT: After your response, on a new line, add a confidence assessment in this exact format:\n[CONFIDENCE: XX]\nWhere XX is a number from 0-100 representing how confident you are in your answer based on the knowledge base and Rixey Manor information available to you. Use 100 for facts you know for certain, lower numbers for things you're less sure about or had to generalize.`,
       messages: messages
     };
@@ -1257,9 +1273,9 @@ app.post('/api/chat', async (req, res) => {
     // Log usage
     await logUsage(weddingId, userId, 'chat', response);
 
-    // If confidence is below 75%, save as uncertain question for admin review
+    // If confidence is below 85%, save as uncertain question for admin review
     // and add a note to the response letting the client know
-    if (confidence < 75 && weddingId) {
+    if (confidence < 85 && weddingId) {
       try {
         await supabaseAdmin.from('uncertain_questions').insert({
           wedding_id: weddingId,
@@ -1274,6 +1290,39 @@ app.post('/api/chat', async (req, res) => {
         assistantMessage += "\n\n---\n*I want to make sure I'm giving you the right info on this one, so I've flagged it for the human team to double-check. They'll follow up if there's anything to add or clarify!*";
       } catch (err) {
         console.error('Error saving uncertain question:', err);
+      }
+    }
+
+    // If Sage deferred to the team in its response, flag for admin review even if confidence was high
+    const deferralPhrases = [
+      'confirm with the', 'confirm directly with', 'check with the rixey', 'check with isadora',
+      'check with grace', 'reach out to the rixey', 'contact the rixey team', 'ask the team',
+      'double-check with', 'double check with', 'verify with the', 'i\'d confirm that',
+      "i'd check that", 'best to confirm', 'best to check', 'i\'m not confident',
+      "i'm not certain", 'i believe x', 'not 100% sure', 'not 100% certain'
+    ];
+    const lowerResponse = assistantMessage.toLowerCase();
+    const sageDeferred = deferralPhrases.some(phrase => lowerResponse.includes(phrase));
+
+    if (sageDeferred && weddingId && confidence >= 85) {
+      // Only save if not already saved by the low-confidence block above
+      try {
+        await supabaseAdmin.from('uncertain_questions').insert({
+          wedding_id: weddingId,
+          user_id: userId,
+          question: message,
+          sage_response: assistantMessage,
+          confidence_level: confidence
+        });
+        await createNotification(
+          weddingId, 'admin', 'sage_uncertain',
+          'Sage deferred to the team',
+          `A client asked: "${message.substring(0, 120)}${message.length > 120 ? '...' : ''}"`,
+          null
+        );
+        console.log(`Sage deferral detected — flagged for admin review`);
+      } catch (err) {
+        console.error('Error saving Sage deferral flag:', err);
       }
     }
 
@@ -5099,6 +5148,160 @@ app.get('/api/admin/weddings', async (req, res) => {
   }
 });
 
+// Communication pulse — how active is a couple vs what's expected at their planning stage
+// Returns level ('less'|'typical'|'more'), score, expected range, and stage label
+function getPulseStage(weddingDate, createdAt) {
+  const now = new Date();
+  const wedding = new Date(weddingDate);
+  const booked = new Date(createdAt);
+  const monthsToWedding = (wedding - now) / (1000 * 60 * 60 * 24 * 30.5);
+  const weeksPostBooking = (now - booked) / (1000 * 60 * 60 * 24 * 7);
+  const justBooked = weeksPostBooking < 8;
+
+  // Base stage from months to wedding
+  let stage, min, max;
+  if (monthsToWedding >= 12)        { stage = '12+ months out'; min = 0; max = 3; }
+  else if (monthsToWedding >= 6)    { stage = '6–12 months out'; min = 1; max = 5; }
+  else if (monthsToWedding >= 3)    { stage = '3–6 months out'; min = 2; max = 7; }
+  else if (monthsToWedding >= 1)    { stage = '1–3 months out'; min = 4; max = 10; }
+  else                              { stage = 'Final stretch'; min = 7; max = 25; }
+
+  // Just-booked window overrides with a more generous range
+  if (justBooked) { stage = 'Just booked'; min = 5; max = 20; }
+
+  return { stage, min, max };
+}
+
+app.get('/api/communication-pulse/:weddingId', async (req, res) => {
+  try {
+    const { weddingId } = req.params;
+    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    const { data: wedding, error: wErr } = await supabaseAdmin
+      .from('weddings')
+      .select('wedding_date, created_at, user_id')
+      .eq('id', weddingId)
+      .single();
+
+    if (wErr || !wedding) return res.status(404).json({ error: 'Wedding not found' });
+
+    // Count all inbound communication channels in parallel
+    const [emails, texts, zooms, sageMsgs, directMsgs, activity] = await Promise.all([
+      supabaseAdmin.from('processed_emails')
+        .select('id', { count: 'exact', head: true })
+        .eq('wedding_id', weddingId)
+        .gte('created_at', since),
+      supabaseAdmin.from('processed_quo_messages')
+        .select('id', { count: 'exact', head: true })
+        .eq('wedding_id', weddingId)
+        .eq('direction', 'inbound')
+        .gte('created_at', since),
+      supabaseAdmin.from('processed_zoom_meetings')
+        .select('id', { count: 'exact', head: true })
+        .eq('wedding_id', weddingId)
+        .gte('created_at', since),
+      supabaseAdmin.from('messages')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', wedding.user_id)
+        .eq('sender', 'user')
+        .gte('created_at', since),
+      supabaseAdmin.from('direct_messages')
+        .select('id', { count: 'exact', head: true })
+        .eq('wedding_id', weddingId)
+        .eq('sender_type', 'client')
+        .gte('created_at', since),
+      supabaseAdmin.from('activity_log')
+        .select('id', { count: 'exact', head: true })
+        .eq('wedding_id', weddingId)
+        .gte('created_at', since),
+    ]);
+
+    // Weight: direct comms count full, portal activity counts half
+    const score = Math.round(
+      (emails.count || 0) +
+      (texts.count || 0) +
+      (zooms.count || 0) +
+      (sageMsgs.count || 0) +
+      (directMsgs.count || 0) +
+      (activity.count || 0) * 0.5
+    );
+
+    const { stage, min, max } = getPulseStage(wedding.wedding_date, wedding.created_at);
+    const level = score < min ? 'less' : score > max ? 'more' : 'typical';
+
+    res.json({
+      level,
+      score,
+      expected: { min, max },
+      stage,
+      breakdown: {
+        emails: emails.count || 0,
+        texts: texts.count || 0,
+        zooms: zooms.count || 0,
+        sageChat: sageMsgs.count || 0,
+        directMessages: directMsgs.count || 0,
+        portalActivity: activity.count || 0,
+      }
+    });
+  } catch (error) {
+    console.error('Communication pulse error:', error);
+    res.status(500).json({ error: 'Failed to calculate pulse' });
+  }
+});
+
+// Batch pulse for all weddings (used by admin list view)
+app.get('/api/communication-pulse', async (req, res) => {
+  try {
+    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    const { data: weddings } = await supabaseAdmin
+      .from('weddings')
+      .select('id, wedding_date, created_at, user_id');
+
+    if (!weddings?.length) return res.json({ pulses: {} });
+
+    // Fetch all counts in parallel across all weddings
+    const [emails, texts, zooms, sageMsgs, directMsgs, activity] = await Promise.all([
+      supabaseAdmin.from('processed_emails').select('wedding_id').gte('created_at', since),
+      supabaseAdmin.from('processed_quo_messages').select('wedding_id').eq('direction', 'inbound').gte('created_at', since),
+      supabaseAdmin.from('processed_zoom_meetings').select('wedding_id').gte('created_at', since),
+      supabaseAdmin.from('messages').select('user_id').eq('sender', 'user').gte('created_at', since),
+      supabaseAdmin.from('direct_messages').select('wedding_id').eq('sender_type', 'client').gte('created_at', since),
+      supabaseAdmin.from('activity_log').select('wedding_id').gte('created_at', since),
+    ]);
+
+    // Build user_id → wedding_id map
+    const userToWedding = {};
+    weddings.forEach(w => { if (w.user_id) userToWedding[w.user_id] = w.id; });
+
+    // Count per wedding
+    const counts = {};
+    weddings.forEach(w => { counts[w.id] = { emails: 0, texts: 0, zooms: 0, sage: 0, dm: 0, activity: 0 }; });
+    (emails.data || []).forEach(r => { if (counts[r.wedding_id]) counts[r.wedding_id].emails++; });
+    (texts.data || []).forEach(r => { if (counts[r.wedding_id]) counts[r.wedding_id].texts++; });
+    (zooms.data || []).forEach(r => { if (counts[r.wedding_id]) counts[r.wedding_id].zooms++; });
+    (sageMsgs.data || []).forEach(r => {
+      const wid = userToWedding[r.user_id];
+      if (wid && counts[wid]) counts[wid].sage++;
+    });
+    (directMsgs.data || []).forEach(r => { if (counts[r.wedding_id]) counts[r.wedding_id].dm++; });
+    (activity.data || []).forEach(r => { if (counts[r.wedding_id]) counts[r.wedding_id].activity++; });
+
+    const pulses = {};
+    weddings.forEach(w => {
+      const c = counts[w.id];
+      const score = Math.round(c.emails + c.texts + c.zooms + c.sage + c.dm + c.activity * 0.5);
+      const { stage, min, max } = getPulseStage(w.wedding_date, w.created_at);
+      pulses[w.id] = { level: score < min ? 'less' : score > max ? 'more' : 'typical', score, stage };
+    });
+
+    res.json({ pulses });
+  } catch (error) {
+    console.error('Batch pulse error:', error);
+    res.status(500).json({ error: 'Failed to calculate pulses' });
+  }
+});
+
 // Get all couple photos for admin dashboard (bypasses RLS)
 app.get('/api/couple-photos/all', async (req, res) => {
   try {
@@ -5359,6 +5562,45 @@ app.post('/api/sage-messages', async (req, res) => {
   } catch (error) {
     console.error('Save sage message error:', error);
     res.status(500).json({ error: 'Failed to save message' });
+  }
+});
+
+// Admin check-in: sends a warm canned message to a couple's Sage chat + notification
+app.post('/api/checkin/:weddingId', async (req, res) => {
+  try {
+    const { weddingId } = req.params;
+
+    // Get the user_id for this wedding
+    const { data: wedding, error: weddingErr } = await supabaseAdmin
+      .from('weddings')
+      .select('user_id, couple_names')
+      .eq('id', weddingId)
+      .single();
+
+    if (weddingErr || !wedding) return res.status(404).json({ error: 'Wedding not found' });
+
+    const message = "Hey! It's been a minute since we've checked in — how's planning going? Anything you'd like to update in your portal, or questions you've been sitting on? We're here! 💛";
+
+    // Inject into their Sage chat thread
+    const { error: msgErr } = await supabaseAdmin
+      .from('messages')
+      .insert([{ user_id: wedding.user_id, content: message, sender: 'sage', is_team_note: true }]);
+
+    if (msgErr) throw msgErr;
+
+    // Send a client notification
+    await createNotification(
+      weddingId, 'client', 'checkin',
+      'A note from the Rixey team',
+      message,
+      null
+    );
+
+    console.log(`Check-in sent to ${wedding.couple_names} (${weddingId})`);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Check-in error:', error);
+    res.status(500).json({ error: 'Failed to send check-in' });
   }
 });
 
@@ -6216,6 +6458,183 @@ app.post('/api/rehearsal-dinner', async (req, res) => {
     if (error) throw error;
     res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Guest Management ──────────────────────────────────────────────────────────
+
+// GET all guests for a wedding
+app.get('/api/guests/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('wedding_guests')
+      .select('*')
+      .eq('wedding_id', req.params.weddingId)
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+    res.json({ guests: data || [] });
+  } catch (err) {
+    console.error('Get guests error:', err);
+    res.status(500).json({ error: 'Failed to get guests' });
+  }
+});
+
+// GET guest settings (tags, meal options, plated flag)
+app.get('/api/guest-settings/:weddingId', async (req, res) => {
+  try {
+    const { weddingId } = req.params;
+    const [tagsRes, mealsRes, weddingRes] = await Promise.all([
+      supabaseAdmin.from('guest_tag_options').select('*').eq('wedding_id', weddingId).order('display_order'),
+      supabaseAdmin.from('guest_meal_options').select('*').eq('wedding_id', weddingId).order('display_order'),
+      supabaseAdmin.from('weddings').select('plated_meal').eq('id', weddingId).single(),
+    ]);
+    res.json({
+      tagOptions: tagsRes.data || [],
+      mealOptions: mealsRes.data || [],
+      platedMeal: weddingRes.data?.plated_meal || false,
+    });
+  } catch (err) {
+    console.error('Get guest settings error:', err);
+    res.status(500).json({ error: 'Failed to get guest settings' });
+  }
+});
+
+// PUT update plated_meal setting
+app.put('/api/guest-settings/:weddingId', async (req, res) => {
+  try {
+    const { platedMeal } = req.body;
+    const { error } = await supabaseAdmin
+      .from('weddings')
+      .update({ plated_meal: platedMeal })
+      .eq('id', req.params.weddingId);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Update guest settings error:', err);
+    res.status(500).json({ error: 'Failed to update settings' });
+  }
+});
+
+// POST create guest
+app.post('/api/guests', async (req, res) => {
+  try {
+    const {
+      weddingId, first_name, last_name, rsvp, dietary_restrictions,
+      meal_choice, tags, notes, plus_one_name, plus_one_rsvp,
+      plus_one_meal_choice, plus_one_dietary,
+    } = req.body;
+    if (!weddingId || !first_name) return res.status(400).json({ error: 'weddingId and first_name required' });
+    const { data, error } = await supabaseAdmin
+      .from('wedding_guests')
+      .insert({
+        wedding_id: weddingId, first_name, last_name, rsvp: rsvp || 'pending',
+        dietary_restrictions, meal_choice, tags: tags || [],
+        notes, plus_one_name, plus_one_rsvp: plus_one_rsvp || 'pending',
+        plus_one_meal_choice, plus_one_dietary,
+        updated_at: new Date().toISOString(),
+      })
+      .select().single();
+    if (error) throw error;
+    res.json({ guest: data });
+  } catch (err) {
+    console.error('Create guest error:', err);
+    res.status(500).json({ error: 'Failed to create guest' });
+  }
+});
+
+// PUT update guest
+app.put('/api/guests/:id', async (req, res) => {
+  try {
+    const {
+      first_name, last_name, rsvp, dietary_restrictions,
+      meal_choice, tags, notes, plus_one_name, plus_one_rsvp,
+      plus_one_meal_choice, plus_one_dietary,
+    } = req.body;
+    const { data, error } = await supabaseAdmin
+      .from('wedding_guests')
+      .update({
+        first_name, last_name, rsvp, dietary_restrictions,
+        meal_choice, tags: tags || [], notes,
+        plus_one_name, plus_one_rsvp, plus_one_meal_choice, plus_one_dietary,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', req.params.id)
+      .select().single();
+    if (error) throw error;
+    res.json({ guest: data });
+  } catch (err) {
+    console.error('Update guest error:', err);
+    res.status(500).json({ error: 'Failed to update guest' });
+  }
+});
+
+// DELETE guest
+app.delete('/api/guests/:id', async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin.from('wedding_guests').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Delete guest error:', err);
+    res.status(500).json({ error: 'Failed to delete guest' });
+  }
+});
+
+// POST create tag option
+app.post('/api/guest-tags', async (req, res) => {
+  try {
+    const { weddingId, label, color } = req.body;
+    if (!weddingId || !label) return res.status(400).json({ error: 'weddingId and label required' });
+    const { data, error } = await supabaseAdmin
+      .from('guest_tag_options')
+      .insert({ wedding_id: weddingId, label, color: color || '#9CA3AF' })
+      .select().single();
+    if (error) throw error;
+    res.json({ tag: data });
+  } catch (err) {
+    console.error('Create tag error:', err);
+    res.status(500).json({ error: 'Failed to create tag' });
+  }
+});
+
+// DELETE tag option
+app.delete('/api/guest-tags/:id', async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin.from('guest_tag_options').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Delete tag error:', err);
+    res.status(500).json({ error: 'Failed to delete tag' });
+  }
+});
+
+// POST create meal option
+app.post('/api/meal-options', async (req, res) => {
+  try {
+    const { weddingId, label } = req.body;
+    if (!weddingId || !label) return res.status(400).json({ error: 'weddingId and label required' });
+    const { data, error } = await supabaseAdmin
+      .from('guest_meal_options')
+      .insert({ wedding_id: weddingId, label })
+      .select().single();
+    if (error) throw error;
+    res.json({ option: data });
+  } catch (err) {
+    console.error('Create meal option error:', err);
+    res.status(500).json({ error: 'Failed to create meal option' });
+  }
+});
+
+// DELETE meal option
+app.delete('/api/meal-options/:id', async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin.from('guest_meal_options').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Delete meal option error:', err);
+    res.status(500).json({ error: 'Failed to delete meal option' });
+  }
 });
 
 const PORT = process.env.PORT || 3001;

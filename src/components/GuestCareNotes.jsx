@@ -58,6 +58,12 @@ const SECTIONS = [
     placeholder: 'Just let us know so we can make sure the space is set up and ready.',
   },
   {
+    key: 'pet_allergies',
+    icon: '🐾',
+    question: 'Do any overnight guests have pet allergies?',
+    placeholder: 'We\'re a pet-friendly venue and dogs are often present. If any guests staying on-site have pet allergies, let us know so we can do our best to prepare the rooms and flag it for the couple bringing their dog.',
+  },
+  {
     key: 'family_dynamics',
     icon: '👨‍👩‍👧',
     question: 'Any family dynamics we should quietly be aware of?',
