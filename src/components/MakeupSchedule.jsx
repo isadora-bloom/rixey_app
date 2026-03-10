@@ -51,11 +51,26 @@ export default function MakeupSchedule({ weddingId, userId }) {
   const [editingCell, setEditingCell] = useState(null); // { id, field }
   const [editValue, setEditValue] = useState('');
   const [error, setError] = useState(null);
+  const [hairMakeupDoneTime, setHairMakeupDoneTime] = useState(null);
 
   useEffect(() => {
     if (!weddingId) return;
     fetchEntries();
+    fetchTimelineDeadline();
   }, [weddingId]);
+
+  async function fetchTimelineDeadline() {
+    try {
+      const res = await fetch(`${API_URL}/api/timeline/${weddingId}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const events = data.timeline?.timeline_data?.events;
+      const t = events?.['hair-makeup-done']?.time;
+      if (t) setHairMakeupDoneTime(t);
+    } catch {
+      // not critical
+    }
+  }
 
   async function fetchEntries() {
     setLoading(true);
@@ -196,11 +211,17 @@ export default function MakeupSchedule({ weddingId, userId }) {
         </button>
       </div>
 
-      {/* Tip */}
-      <div className="mb-5 flex items-start gap-2 bg-cream-50 border border-cream-200 rounded-lg px-4 py-3">
-        <span className="text-sage-500 mt-0.5">&#9432;</span>
-        <p className="text-sm text-sage-600">
-          Tip: work backwards from when photos start. Allow 45–60 min for the bride.
+      {/* Deadline + tip */}
+      <div className="mb-5 bg-cream-50 border border-cream-200 rounded-lg px-4 py-3 space-y-1.5">
+        {hairMakeupDoneTime && (
+          <p className="text-sm text-sage-700">
+            Everyone must be ready by{' '}
+            <span className="font-bold">{formatTime(hairMakeupDoneTime)}</span>
+            {' '}— this is your Hair &amp; Makeup Complete time from the timeline.
+          </p>
+        )}
+        <p className="text-sm text-sage-500">
+          Allow <strong>45 mins per service</strong> for the bride (hair + makeup = <strong>90 mins total</strong>). Schedule bridesmaids and family around her.
         </p>
       </div>
 
