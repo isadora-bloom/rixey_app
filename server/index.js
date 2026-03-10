@@ -6519,8 +6519,8 @@ app.post('/api/guests', async (req, res) => {
   try {
     const {
       weddingId, first_name, last_name, rsvp, dietary_restrictions,
-      meal_choice, tags, notes, plus_one_name, plus_one_rsvp,
-      plus_one_meal_choice, plus_one_dietary,
+      meal_choice, tags, notes, email, phone, address,
+      plus_one_name, plus_one_rsvp, plus_one_meal_choice, plus_one_dietary,
     } = req.body;
     if (!weddingId || !first_name) return res.status(400).json({ error: 'weddingId and first_name required' });
     const { data, error } = await supabaseAdmin
@@ -6528,7 +6528,8 @@ app.post('/api/guests', async (req, res) => {
       .insert({
         wedding_id: weddingId, first_name, last_name, rsvp: rsvp || 'pending',
         dietary_restrictions, meal_choice, tags: tags || [],
-        notes, plus_one_name, plus_one_rsvp: plus_one_rsvp || 'pending',
+        notes, email, phone, address,
+        plus_one_name, plus_one_rsvp: plus_one_rsvp || 'pending',
         plus_one_meal_choice, plus_one_dietary,
         updated_at: new Date().toISOString(),
       })
@@ -6546,14 +6547,14 @@ app.put('/api/guests/:id', async (req, res) => {
   try {
     const {
       first_name, last_name, rsvp, dietary_restrictions,
-      meal_choice, tags, notes, plus_one_name, plus_one_rsvp,
-      plus_one_meal_choice, plus_one_dietary,
+      meal_choice, tags, notes, email, phone, address,
+      plus_one_name, plus_one_rsvp, plus_one_meal_choice, plus_one_dietary,
     } = req.body;
     const { data, error } = await supabaseAdmin
       .from('wedding_guests')
       .update({
         first_name, last_name, rsvp, dietary_restrictions,
-        meal_choice, tags: tags || [], notes,
+        meal_choice, tags: tags || [], notes, email, phone, address,
         plus_one_name, plus_one_rsvp, plus_one_meal_choice, plus_one_dietary,
         updated_at: new Date().toISOString(),
       })
@@ -6564,6 +6565,37 @@ app.put('/api/guests/:id', async (req, res) => {
   } catch (err) {
     console.error('Update guest error:', err);
     res.status(500).json({ error: 'Failed to update guest' });
+  }
+});
+
+// POST bulk import guests from CSV
+app.post('/api/guests/bulk', async (req, res) => {
+  try {
+    const { weddingId, guests } = req.body;
+    if (!weddingId || !Array.isArray(guests) || guests.length === 0) {
+      return res.status(400).json({ error: 'weddingId and guests array required' });
+    }
+    const rows = guests.map(g => ({
+      wedding_id: weddingId,
+      first_name: g.first_name || g.firstName || '',
+      last_name: g.last_name || g.lastName || null,
+      email: g.email || null,
+      phone: g.phone || null,
+      address: g.address || null,
+      rsvp: g.rsvp || 'pending',
+      dietary_restrictions: g.dietary_restrictions || g.dietary || null,
+      tags: [],
+      updated_at: new Date().toISOString(),
+    })).filter(g => g.first_name.trim());
+    const { data, error } = await supabaseAdmin
+      .from('wedding_guests')
+      .insert(rows)
+      .select();
+    if (error) throw error;
+    res.json({ guests: data, imported: data.length });
+  } catch (err) {
+    console.error('Bulk import error:', err);
+    res.status(500).json({ error: 'Failed to import guests' });
   }
 });
 

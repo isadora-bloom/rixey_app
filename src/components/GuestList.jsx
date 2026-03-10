@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -28,6 +28,9 @@ function GuestModal({ guest, weddingId, tagOptions, mealOptions, platedMeal, onS
   const [form, setForm] = useState({
     first_name: guest?.first_name || '',
     last_name: guest?.last_name || '',
+    email: guest?.email || '',
+    phone: guest?.phone || '',
+    address: guest?.address || '',
     rsvp: guest?.rsvp || 'pending',
     dietary_restrictions: guest?.dietary_restrictions || '',
     meal_choice: guest?.meal_choice || '',
@@ -59,6 +62,9 @@ function GuestModal({ guest, weddingId, tagOptions, mealOptions, platedMeal, onS
       weddingId,
       first_name: form.first_name.trim(),
       last_name: form.last_name.trim() || null,
+      email: form.email.trim() || null,
+      phone: form.phone.trim() || null,
+      address: form.address.trim() || null,
       rsvp: form.rsvp,
       dietary_restrictions: form.dietary_restrictions.trim() || null,
       meal_choice: platedMeal ? (form.meal_choice || null) : null,
@@ -120,6 +126,39 @@ function GuestModal({ guest, weddingId, tagOptions, mealOptions, platedMeal, onS
                 value={form.last_name}
                 onChange={e => setForm({ ...form, last_name: e.target.value })}
                 placeholder="Last name"
+              />
+            </div>
+          </div>
+
+          {/* Contact info */}
+          <div className="mb-4">
+            <label className="block text-xs font-medium text-sage-600 mb-1">Email</label>
+            <input
+              className="w-full border border-cream-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
+              value={form.email}
+              onChange={e => setForm({ ...form, email: e.target.value })}
+              placeholder="email@example.com"
+              type="email"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            <div>
+              <label className="block text-xs font-medium text-sage-600 mb-1">Phone</label>
+              <input
+                className="w-full border border-cream-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
+                value={form.phone}
+                onChange={e => setForm({ ...form, phone: e.target.value })}
+                placeholder="Phone number"
+                type="tel"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-sage-600 mb-1">Address</label>
+              <input
+                className="w-full border border-cream-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
+                value={form.address}
+                onChange={e => setForm({ ...form, address: e.target.value })}
+                placeholder="Street, City, State"
               />
             </div>
           </div>
@@ -473,6 +512,9 @@ export default function GuestList({ weddingId, userId }) {
   const [editingGuest, setEditingGuest] = useState(null)
   const [showSettings, setShowSettings] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState(null)
+  const [csvImporting, setCsvImporting] = useState(false)
+  const [csvResult, setCsvResult] = useState(null)
+  const csvInputRef = useRef(null)
 
   useEffect(() => {
     if (weddingId) loadData()
@@ -515,6 +557,48 @@ export default function GuestList({ weddingId, userId }) {
     await fetch(`${API_URL}/api/guests/${id}`, { method: 'DELETE' })
     setGuests(prev => prev.filter(g => g.id !== id))
     setDeleteConfirm(null)
+  }
+
+  const handleCsvUpload = async (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    setCsvImporting(true)
+    setCsvResult(null)
+    const text = await file.text()
+    const lines = text.trim().split('\n')
+    const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-z_]/g, ''))
+    const guests = lines.slice(1).map(line => {
+      const values = line.split(',').map(v => v.trim().replace(/^"|"$/g, ''))
+      const obj = {}
+      headers.forEach((h, i) => { obj[h] = values[i] || '' })
+      return obj
+    }).filter(g => g.first_name || g.firstname || g.name)
+    // Normalise "name" column into first/last
+    const normalised = guests.map(g => {
+      if (!g.first_name && g.name) {
+        const parts = g.name.split(' ')
+        g.first_name = parts[0]
+        g.last_name = parts.slice(1).join(' ')
+      }
+      if (!g.first_name && g.firstname) g.first_name = g.firstname
+      if (!g.last_name && g.lastname) g.last_name = g.lastname
+      return g
+    })
+    try {
+      const res = await fetch(`${API_URL}/api/guests/bulk`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ weddingId, guests: normalised }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setGuests(prev => [...prev, ...data.guests])
+      setCsvResult({ success: true, count: data.imported })
+    } catch (err) {
+      setCsvResult({ success: false, error: err.message })
+    }
+    setCsvImporting(false)
+    e.target.value = ''
   }
 
   const handleSettingsUpdate = ({ platedMeal: pm, tagOptions: to, mealOptions: mo }) => {
@@ -578,6 +662,17 @@ export default function GuestList({ weddingId, userId }) {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
+            </button>
+            <input ref={csvInputRef} type="file" accept=".csv" className="hidden" onChange={handleCsvUpload} />
+            <button
+              onClick={() => csvInputRef.current?.click()}
+              disabled={csvImporting}
+              className="flex items-center gap-1.5 border border-sage-300 text-sage-600 px-4 py-2 rounded-xl text-sm font-medium hover:bg-sage-50 disabled:opacity-50 transition"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+              </svg>
+              {csvImporting ? 'Importing...' : 'Import CSV'}
             </button>
             <button
               onClick={() => setShowAddModal(true)}
@@ -770,6 +865,17 @@ export default function GuestList({ weddingId, userId }) {
           onUpdate={handleSettingsUpdate}
           onClose={() => setShowSettings(false)}
         />
+      )}
+
+      {csvResult && (
+        <div className={`fixed bottom-6 right-6 z-50 px-5 py-3 rounded-xl shadow-lg text-sm font-medium ${
+          csvResult.success ? 'bg-green-600 text-white' : 'bg-red-500 text-white'
+        }`}>
+          {csvResult.success
+            ? `✓ Imported ${csvResult.count} guest${csvResult.count !== 1 ? 's' : ''}`
+            : `Import failed: ${csvResult.error}`}
+          <button onClick={() => setCsvResult(null)} className="ml-4 opacity-75 hover:opacity-100">×</button>
+        </div>
       )}
 
       {deleteConfirm && (
