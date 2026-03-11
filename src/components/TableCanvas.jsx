@@ -76,7 +76,7 @@ function BlockPrompt({ preset, onConfirm, onCancel }) {
 
 // ─── Single canvas element ─────────────────────────────────────────────────────
 
-function TableEl({ el, isSelected, onSelect, onMove }) {
+function TableEl({ el, isSelected, isAdmin, onSelect, onMove }) {
   const w = ft(el.feetW)
   const h = ft(el.feetH)
   const haloExtra = ft(CHAIR_CLEARANCE_FT)
@@ -90,12 +90,12 @@ function TableEl({ el, isSelected, onSelect, onMove }) {
       x={el.x}
       y={el.y}
       rotation={el.rotation || 0}
-      draggable
-      onClick={() => onSelect(el.id)}
-      onTap={() => onSelect(el.id)}
+      draggable={isAdmin}
+      onClick={() => isAdmin && onSelect(el.id)}
+      onTap={() => isAdmin && onSelect(el.id)}
       onDragEnd={e => {
         e.cancelBubble = true // prevent stage onDragEnd from firing
-        onMove(el.id, e.target.x(), e.target.y())
+        if (isAdmin) onMove(el.id, e.target.x(), e.target.y())
       }}
     >
       {/* Chair clearance halo — tables only */}
@@ -339,60 +339,101 @@ export default function TableCanvas({ weddingId, isAdmin }) {
 
   const selectedEl = elements.find(e => e.id === selectedId)
 
+  // Client view: if no layout saved yet, show placeholder
+  if (!isAdmin && !loading && elements.length === 0) {
+    return (
+      <div className="bg-cream-50 rounded-2xl border border-cream-200 p-12 text-center">
+        <p className="text-sage-500 text-sm">Your seating layout will appear here once your coordinator has set it up.</p>
+      </div>
+    )
+  }
+
   return (
     <div>
-      {/* ── Toolbar ── */}
-      <div className="mb-3 space-y-2">
+      {/* ── Admin-only toolbar ── */}
+      {isAdmin && (
+        <div className="mb-3 space-y-2">
 
-        {/* Round tables */}
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-semibold text-sage-500 uppercase tracking-wide w-20">Round</span>
-          <button onClick={() => addRound(5, '60" Round', 8)}
-            className="text-xs px-3 py-1.5 rounded-lg border border-cream-200 text-sage-600 hover:bg-cream-50 hover:border-sage-300 transition">
-            ◯ 60" (8 seats)
-          </button>
-          <button onClick={() => addRound(6, '72" Round', 10)}
-            className="text-xs px-3 py-1.5 rounded-lg border border-cream-200 text-sage-600 hover:bg-cream-50 hover:border-sage-300 transition">
-            ◯ 72" (10 seats)
-          </button>
-        </div>
-
-        {/* Rect tables */}
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-semibold text-sage-500 uppercase tracking-wide w-20">Rect</span>
-          <button
-            onClick={() => { setShowRectPicker(v => !v); setBlockPrompt(null) }}
-            className={`text-xs px-3 py-1.5 rounded-lg border transition ${showRectPicker ? 'border-sage-400 bg-sage-50 text-sage-700' : 'border-cream-200 text-sage-600 hover:bg-cream-50 hover:border-sage-300'}`}
-          >
-            ▭ Choose size…
-          </button>
-          {showRectPicker && (
-            <div className="flex flex-wrap gap-1">
-              {RECT_SIZES.map(size => (
-                <button key={size} onClick={() => addRect(size)}
-                  className="text-xs px-2 py-1 rounded border border-cream-300 bg-white text-sage-600 hover:bg-cream-50 hover:border-sage-400 transition">
-                  {size}ft
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Blocks */}
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-semibold text-sage-500 uppercase tracking-wide w-20">Blocks</span>
-          {BLOCK_TYPES.map(b => (
-            <button key={b.label}
-              onClick={() => { setBlockPrompt(b); setShowRectPicker(false) }}
-              className={`text-xs px-3 py-1.5 rounded-lg border transition ${blockPrompt?.label === b.label ? 'border-sage-400 bg-sage-50 text-sage-700' : 'border-cream-200 text-sage-600 hover:bg-cream-50 hover:border-sage-300'}`}
-            >
-              ▩ {b.label}
+          {/* Round tables */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold text-sage-500 uppercase tracking-wide w-20">Round</span>
+            <button onClick={() => addRound(5, '60" Round', 8)}
+              className="text-xs px-3 py-1.5 rounded-lg border border-cream-200 text-sage-600 hover:bg-cream-50 hover:border-sage-300 transition">
+              ◯ 60" (8 seats)
             </button>
-          ))}
-        </div>
+            <button onClick={() => addRound(6, '72" Round', 10)}
+              className="text-xs px-3 py-1.5 rounded-lg border border-cream-200 text-sage-600 hover:bg-cream-50 hover:border-sage-300 transition">
+              ◯ 72" (10 seats)
+            </button>
+          </div>
 
-        {/* Canvas controls */}
-        <div className="flex items-center gap-2 pt-1 border-t border-cream-100">
+          {/* Rect tables */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold text-sage-500 uppercase tracking-wide w-20">Rect</span>
+            <button
+              onClick={() => { setShowRectPicker(v => !v); setBlockPrompt(null) }}
+              className={`text-xs px-3 py-1.5 rounded-lg border transition ${showRectPicker ? 'border-sage-400 bg-sage-50 text-sage-700' : 'border-cream-200 text-sage-600 hover:bg-cream-50 hover:border-sage-300'}`}
+            >
+              ▭ Choose size…
+            </button>
+            {showRectPicker && (
+              <div className="flex flex-wrap gap-1">
+                {RECT_SIZES.map(size => (
+                  <button key={size} onClick={() => addRect(size)}
+                    className="text-xs px-2 py-1 rounded border border-cream-300 bg-white text-sage-600 hover:bg-cream-50 hover:border-sage-400 transition">
+                    {size}ft
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Blocks */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold text-sage-500 uppercase tracking-wide w-20">Blocks</span>
+            {BLOCK_TYPES.map(b => (
+              <button key={b.label}
+                onClick={() => { setBlockPrompt(b); setShowRectPicker(false) }}
+                className={`text-xs px-3 py-1.5 rounded-lg border transition ${blockPrompt?.label === b.label ? 'border-sage-400 bg-sage-50 text-sage-700' : 'border-cream-200 text-sage-600 hover:bg-cream-50 hover:border-sage-300'}`}
+              >
+                ▩ {b.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Canvas controls (admin) */}
+          <div className="flex items-center gap-2 pt-1 border-t border-cream-100">
+            <button onClick={fitToScreen} className="text-xs px-3 py-1.5 rounded-lg border border-cream-200 text-sage-500 hover:bg-cream-50 transition">
+              Fit Screen
+            </button>
+            <button onClick={() => setZoom(z => Math.min(fitScale * 10, (z ?? fitScale) * 1.25))} className="text-xs px-3 py-1.5 rounded-lg border border-cream-200 text-sage-500 hover:bg-cream-50 transition">
+              + In
+            </button>
+            <button onClick={() => setZoom(z => Math.max(fitScale * 0.5, (z ?? fitScale) * 0.8))} className="text-xs px-3 py-1.5 rounded-lg border border-cream-200 text-sage-500 hover:bg-cream-50 transition">
+              − Out
+            </button>
+            <span className="text-xs text-sage-400">{Math.round(currentZoom / fitScale * 100)}%</span>
+            <div className="ml-auto flex gap-2">
+              {selectedId && (
+                <button onClick={deleteSelected} className="text-xs px-3 py-1.5 rounded-lg border border-red-200 text-red-500 hover:bg-red-50 transition">
+                  Delete
+                </button>
+              )}
+              <button onClick={exportPng} className="text-xs px-3 py-1.5 rounded-lg border border-cream-200 text-sage-600 hover:bg-cream-50 transition">
+                Export PNG
+              </button>
+              <button onClick={save} disabled={saving}
+                className="text-xs px-4 py-1.5 rounded-lg bg-sage-600 text-white hover:bg-sage-700 disabled:opacity-50 transition">
+                {saving ? 'Saving…' : saved ? '✓ Saved' : 'Save Layout'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Client canvas controls (view only) ── */}
+      {!isAdmin && (
+        <div className="flex items-center gap-2 mb-3">
           <button onClick={fitToScreen} className="text-xs px-3 py-1.5 rounded-lg border border-cream-200 text-sage-500 hover:bg-cream-50 transition">
             Fit Screen
           </button>
@@ -403,25 +444,14 @@ export default function TableCanvas({ weddingId, isAdmin }) {
             − Out
           </button>
           <span className="text-xs text-sage-400">{Math.round(currentZoom / fitScale * 100)}%</span>
-          <div className="ml-auto flex gap-2">
-            {selectedId && (
-              <button onClick={deleteSelected} className="text-xs px-3 py-1.5 rounded-lg border border-red-200 text-red-500 hover:bg-red-50 transition">
-                Delete
-              </button>
-            )}
-            <button onClick={exportPng} className="text-xs px-3 py-1.5 rounded-lg border border-cream-200 text-sage-600 hover:bg-cream-50 transition">
-              Export PNG
-            </button>
-            <button onClick={save} disabled={saving}
-              className="text-xs px-4 py-1.5 rounded-lg bg-sage-600 text-white hover:bg-sage-700 disabled:opacity-50 transition">
-              {saving ? 'Saving…' : saved ? '✓ Saved' : 'Save Layout'}
-            </button>
-          </div>
+          <button onClick={exportPng} className="ml-auto text-xs px-3 py-1.5 rounded-lg border border-cream-200 text-sage-600 hover:bg-cream-50 transition">
+            Export PNG
+          </button>
         </div>
-      </div>
+      )}
 
-      {/* ── Selected element properties ── */}
-      {selectedEl && (
+      {/* ── Selected element properties (admin only) ── */}
+      {isAdmin && selectedEl && (
         <div className="flex flex-wrap items-end gap-3 mb-3 p-3 bg-cream-50 rounded-xl border border-cream-200">
           <div>
             <label className="block text-xs text-sage-500 mb-0.5">Label</label>
@@ -509,6 +539,7 @@ export default function TableCanvas({ weddingId, isAdmin }) {
                   key={el.id}
                   el={el}
                   isSelected={selectedId === el.id}
+                  isAdmin={isAdmin}
                   onSelect={setSelectedId}
                   onMove={moveElement}
                 />
