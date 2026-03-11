@@ -4681,6 +4681,148 @@ app.delete('/api/recommended-vendors/:id', async (req, res) => {
   }
 });
 
+// ── Vendor Portal (token-based, no auth required) ─────────────────────────────
+
+// GET published vendor list for client-facing directory
+app.get('/api/vendor-directory', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('vendors')
+      .select('id, category, name, bio, photos, website, contact, instagram, facebook, pricing_info, special_offer, special_expiry, availability_note, is_budget_friendly, is_local, has_multiple_events, serves_indian, serves_chinese')
+      .eq('is_published', true)
+      .order('category').order('name');
+    if (error) throw error;
+    const categories = [...new Set((data || []).map(v => v.category))].sort();
+    res.json({ vendors: data || [], categories });
+  } catch (err) {
+    console.error('Vendor directory error:', err);
+    res.status(500).json({ error: 'Failed to load vendor directory' });
+  }
+});
+
+// GET vendor by token (vendor self-edit portal)
+app.get('/api/vendor-portal/:token', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('vendors')
+      .select('id, category, name, bio, photos, website, contact, pricing_info, instagram, facebook, special_offer, special_expiry, availability_note, is_published, last_vendor_update')
+      .eq('edit_token', req.params.token)
+      .single();
+    if (error || !data) return res.status(404).json({ error: 'Vendor not found' });
+    res.json({ vendor: data });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load vendor' });
+  }
+});
+
+// PUT update vendor profile via token
+app.put('/api/vendor-portal/:token', async (req, res) => {
+  try {
+    const allowed = ['bio', 'contact', 'website', 'pricing_info', 'instagram', 'facebook', 'special_offer', 'special_expiry', 'availability_note'];
+    const updates = {};
+    allowed.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f] || null; });
+    updates.last_vendor_update = new Date().toISOString();
+    const { data, error } = await supabaseAdmin
+      .from('vendors')
+      .update(updates)
+      .eq('edit_token', req.params.token)
+      .select('id, category, name, bio, photos, website, contact, pricing_info, instagram, facebook, special_offer, special_expiry, availability_note, is_published, last_vendor_update')
+      .single();
+    if (error || !data) return res.status(404).json({ error: 'Vendor not found' });
+    res.json({ vendor: data });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update vendor' });
+  }
+});
+
+// POST upload photo via token
+app.post('/api/vendor-portal/:token/photos', upload.single('photo'), async (req, res) => {
+  try {
+    const { data: vendor, error: vErr } = await supabaseAdmin
+      .from('vendors')
+      .select('id, photos')
+      .eq('edit_token', req.params.token)
+      .single();
+    if (vErr || !vendor) return res.status(404).json({ error: 'Vendor not found' });
+
+    const photos = vendor.photos || [];
+    if (photos.length >= 8) return res.status(400).json({ error: 'Maximum 8 photos allowed' });
+
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+    const ext = req.file.originalname.split('.').pop().toLowerCase();
+    const filename = `${vendor.id}/${Date.now()}.${ext}`;
+    const { error: upErr } = await supabaseAdmin.storage
+      .from('vendor-photos')
+      .upload(filename, req.file.buffer, { contentType: req.file.mimetype, upsert: false });
+    if (upErr) throw upErr;
+
+    const { data: urlData } = supabaseAdmin.storage.from('vendor-photos').getPublicUrl(filename);
+    const newPhotos = [...photos, urlData.publicUrl];
+
+    const { data, error } = await supabaseAdmin
+      .from('vendors')
+      .update({ photos: newPhotos, last_vendor_update: new Date().toISOString() })
+      .eq('id', vendor.id)
+      .select('photos')
+      .single();
+    if (error) throw error;
+    res.json({ photos: data.photos });
+  } catch (err) {
+    console.error('Vendor photo upload error:', err);
+    res.status(500).json({ error: err.message || 'Upload failed' });
+  }
+});
+
+// DELETE remove a photo via token
+app.delete('/api/vendor-portal/:token/photos', async (req, res) => {
+  try {
+    const { url } = req.body;
+    if (!url) return res.status(400).json({ error: 'url required' });
+
+    const { data: vendor, error: vErr } = await supabaseAdmin
+      .from('vendors')
+      .select('id, photos')
+      .eq('edit_token', req.params.token)
+      .single();
+    if (vErr || !vendor) return res.status(404).json({ error: 'Vendor not found' });
+
+    // Remove from storage
+    const parts = url.split('/vendor-photos/');
+    if (parts[1]) {
+      await supabaseAdmin.storage.from('vendor-photos').remove([parts[1]]);
+    }
+
+    const newPhotos = (vendor.photos || []).filter(p => p !== url);
+    const { data, error } = await supabaseAdmin
+      .from('vendors')
+      .update({ photos: newPhotos })
+      .eq('id', vendor.id)
+      .select('photos')
+      .single();
+    if (error) throw error;
+    res.json({ photos: data.photos });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to remove photo' });
+  }
+});
+
+// PUT toggle publish status (admin)
+app.put('/api/recommended-vendors/:id/publish', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('vendors')
+      .update({ is_published: req.body.is_published })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ vendor: data });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update publish status' });
+  }
+});
+
 // ============ ONBOARDING PROGRESS ============
 
 // Get onboarding progress for a wedding

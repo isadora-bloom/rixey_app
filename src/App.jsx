@@ -13,14 +13,16 @@ import GmailCallback from './pages/GmailCallback'
 import ZoomCallback from './pages/ZoomCallback'
 import Preview from './pages/Preview'
 import PrintView from './pages/PrintView'
+import VendorPortal from './pages/VendorPortal'
 
 function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
         <Routes>
-          {/* Public preview / explainer page */}
+          {/* Public routes — no auth */}
           <Route path="/preview" element={<Preview />} />
+          <Route path="/vendor/:token" element={<VendorPortal />} />
 
           {/* Client login */}
           <Route path="/" element={<Login />} />

@@ -23,7 +23,12 @@ export default function RecommendedVendorsAdmin() {
     is_local: false,
     is_budget_friendly: false,
     serves_indian: false,
-    serves_chinese: false
+    serves_chinese: false,
+    bio: '',
+    instagram: '',
+    facebook: '',
+    special_offer: '',
+    availability_note: '',
   }
 
   const [formData, setFormData] = useState(emptyVendor)
@@ -86,10 +91,35 @@ export default function RecommendedVendorsAdmin() {
       is_local: vendor.is_local || false,
       is_budget_friendly: vendor.is_budget_friendly || false,
       serves_indian: vendor.serves_indian || false,
-      serves_chinese: vendor.serves_chinese || false
+      serves_chinese: vendor.serves_chinese || false,
+      bio: vendor.bio || '',
+      instagram: vendor.instagram || '',
+      facebook: vendor.facebook || '',
+      special_offer: vendor.special_offer || '',
+      availability_note: vendor.availability_note || '',
     })
     setEditingVendor(vendor)
     setShowForm(true)
+  }
+
+  const togglePublish = async (vendor) => {
+    try {
+      const res = await fetch(`${API_URL}/api/recommended-vendors/${vendor.id}/publish`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_published: !vendor.is_published }),
+      })
+      if (res.ok) await loadVendors()
+    } catch (err) {
+      console.error('Failed to toggle publish:', err)
+    }
+  }
+
+  const copyPortalLink = (vendor) => {
+    const url = `${window.location.origin}/vendor/${vendor.edit_token}`
+    navigator.clipboard.writeText(url).then(() => alert('Portal link copied!')).catch(() => {
+      prompt('Copy this link:', url)
+    })
   }
 
   const handleDelete = async (id) => {
@@ -252,19 +282,45 @@ export default function RecommendedVendorsAdmin() {
                         </div>
                       </div>
 
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => handleEdit(vendor)}
-                          className="text-sage-600 hover:text-sage-800 text-sm px-3 py-1 border border-sage-200 rounded-lg"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => handleDelete(vendor.id)}
-                          className="text-red-500 hover:text-red-700 text-sm px-3 py-1 border border-red-200 rounded-lg"
-                        >
-                          Delete
-                        </button>
+                      <div className="flex flex-col items-end gap-2">
+                        <div className="flex gap-2 flex-wrap justify-end">
+                          {vendor.edit_token && (
+                            <button
+                              onClick={() => copyPortalLink(vendor)}
+                              className="text-sage-500 hover:text-sage-700 text-xs px-3 py-1 border border-sage-200 rounded-lg"
+                              title="Copy vendor's self-edit link"
+                            >
+                              Copy Portal Link
+                            </button>
+                          )}
+                          <button
+                            onClick={() => togglePublish(vendor)}
+                            className={`text-xs px-3 py-1 rounded-lg border transition ${
+                              vendor.is_published
+                                ? 'bg-green-50 text-green-700 border-green-200 hover:bg-green-100'
+                                : 'text-sage-500 border-sage-200 hover:border-sage-300'
+                            }`}
+                          >
+                            {vendor.is_published ? '● Live' : 'Publish'}
+                          </button>
+                          <button
+                            onClick={() => handleEdit(vendor)}
+                            className="text-sage-600 hover:text-sage-800 text-sm px-3 py-1 border border-sage-200 rounded-lg"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => handleDelete(vendor.id)}
+                            className="text-red-500 hover:text-red-700 text-sm px-3 py-1 border border-red-200 rounded-lg"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                        {vendor.last_vendor_update && (
+                          <p className="text-xs text-sage-400">
+                            Updated {new Date(vendor.last_vendor_update).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                          </p>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -388,6 +444,66 @@ export default function RecommendedVendorsAdmin() {
                     onChange={(e) => setFormData({ ...formData, pricing_info: e.target.value })}
                     className="w-full px-3 py-2 border border-cream-200 rounded-lg"
                     placeholder="e.g., Starting at $X, packages from $X-$X"
+                  />
+                </div>
+
+                {/* Bio */}
+                <div>
+                  <label className="block text-sm font-medium text-sage-700 mb-1">Bio (vendor-editable)</label>
+                  <textarea
+                    value={formData.bio}
+                    onChange={(e) => setFormData({ ...formData, bio: e.target.value })}
+                    rows={3}
+                    className="w-full px-3 py-2 border border-cream-200 rounded-lg resize-none text-sm"
+                    placeholder="Vendor's own description of their business…"
+                  />
+                </div>
+
+                {/* Social */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-sage-700 mb-1">Instagram</label>
+                    <input
+                      type="text"
+                      value={formData.instagram}
+                      onChange={(e) => setFormData({ ...formData, instagram: e.target.value })}
+                      className="w-full px-3 py-2 border border-cream-200 rounded-lg text-sm"
+                      placeholder="@handle"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-sage-700 mb-1">Facebook</label>
+                    <input
+                      type="text"
+                      value={formData.facebook}
+                      onChange={(e) => setFormData({ ...formData, facebook: e.target.value })}
+                      className="w-full px-3 py-2 border border-cream-200 rounded-lg text-sm"
+                      placeholder="facebook.com/…"
+                    />
+                  </div>
+                </div>
+
+                {/* Special Offer */}
+                <div>
+                  <label className="block text-sm font-medium text-sage-700 mb-1">Special Offer</label>
+                  <input
+                    type="text"
+                    value={formData.special_offer}
+                    onChange={(e) => setFormData({ ...formData, special_offer: e.target.value })}
+                    className="w-full px-3 py-2 border border-cream-200 rounded-lg text-sm"
+                    placeholder="e.g. 10% off for Rixey couples"
+                  />
+                </div>
+
+                {/* Availability */}
+                <div>
+                  <label className="block text-sm font-medium text-sage-700 mb-1">Availability Note</label>
+                  <input
+                    type="text"
+                    value={formData.availability_note}
+                    onChange={(e) => setFormData({ ...formData, availability_note: e.target.value })}
+                    className="w-full px-3 py-2 border border-cream-200 rounded-lg text-sm"
+                    placeholder="e.g. Booking Fall 2026"
                   />
                 </div>
 

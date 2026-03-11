@@ -27,6 +27,7 @@ import ShuttleSchedule from '../components/ShuttleSchedule'
 import RehearsalDinner from '../components/RehearsalDinner'
 import GuestList from '../components/GuestList'
 import TableCanvas from '../components/TableCanvas'
+import PreferredVendors from '../components/PreferredVendors'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -807,6 +808,7 @@ export default function Dashboard() {
                   { key: 'tables', label: 'Tables', icon: '/icons/tables.svg', dot: !!tableSummary },
                   { key: 'budget', label: 'Budget', icon: '/icons/budget.svg', dot: !!budgetSummary },
                   { key: 'vendor', label: 'Vendors', icon: '/icons/vendors.svg' },
+                  { key: 'preferred-vendors', label: 'Preferred Vendors', icon: '/icons/vendors.svg' },
                   { key: 'wedding-details', label: 'Wedding Details', icon: '/icons/overview.svg' },
                   { key: 'guests', label: 'Guest List', icon: '/icons/guest-care.svg' },
                   { key: 'table-map', label: 'Table Map', icon: '/icons/tables.svg' },
@@ -1054,6 +1056,13 @@ export default function Dashboard() {
               {activeSection === 'vendor' && profile?.wedding_id && (
                 <div className="p-4 sm:p-6">
                   <VendorChecklist weddingId={profile.wedding_id} />
+                </div>
+              )}
+
+              {/* Preferred Vendors section */}
+              {activeSection === 'preferred-vendors' && (
+                <div className="p-4 sm:p-6">
+                  <PreferredVendors />
                 </div>
               )}
 
