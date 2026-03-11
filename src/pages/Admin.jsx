@@ -320,6 +320,16 @@ export default function Admin() {
     setUnansweredCount(uncertainQuestions.filter(q => !q.admin_answer).length)
   }, [uncertainQuestions])
 
+  const fetchUnreadMessages = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/messages/admin/unread`)
+      const data = await res.json()
+      setUnreadMessages(data.total || 0)
+    } catch (err) {
+      console.error('Failed to fetch unread count:', err)
+    }
+  }
+
   useEffect(() => {
     loadData()
     checkGmailStatus()
@@ -327,6 +337,9 @@ export default function Admin() {
     checkZoomStatus()
     loadUncertainQuestions()
     loadAllCouplePhotos()
+    fetchUnreadMessages()
+    const interval = setInterval(fetchUnreadMessages, 60000)
+    return () => clearInterval(interval)
   }, [])
 
   const checkGmailStatus = async () => {
@@ -2703,7 +2716,7 @@ export default function Admin() {
             ].map(tab => (
               <button
                 key={tab.id}
-                onClick={() => setMainView(tab.id)}
+                onClick={() => { setMainView(tab.id); if (tab.id === 'messages') setTimeout(fetchUnreadMessages, 2000) }}
                 className={`px-3 sm:px-4 py-2.5 text-sm font-medium border-b-2 transition relative whitespace-nowrap ${
                   mainView === tab.id
                     ? 'border-sage-600 text-sage-700'
