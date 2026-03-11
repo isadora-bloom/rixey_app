@@ -529,6 +529,9 @@ export default function GuestList({ weddingId, userId }) {
   const [filterRsvp, setFilterRsvp] = useState('all')
   const [filterTag, setFilterTag] = useState('all')
   const [filterTable, setFilterTable] = useState('all')
+  const [filterDietary, setFilterDietary] = useState('all') // 'all' | 'yes' | 'no'
+  const [sortField, setSortField] = useState('name')
+  const [sortDir, setSortDir] = useState('asc')
   const [showAddModal, setShowAddModal] = useState(false)
   const [editingGuest, setEditingGuest] = useState(null)
   const [showSettings, setShowSettings] = useState(false)
@@ -718,15 +721,64 @@ export default function GuestList({ weddingId, userId }) {
   // Filtering
   const filtered = guests.filter(g => {
     if (searchTerm) {
-      const haystack = `${g.first_name} ${g.last_name || ''} ${g.plus_one_name || ''}`.toLowerCase()
+      const haystack = `${g.first_name} ${g.last_name || ''} ${g.plus_one_name || ''} ${g.email || ''} ${g.dietary_restrictions || ''}`.toLowerCase()
       if (!haystack.includes(searchTerm.toLowerCase())) return false
     }
     if (filterRsvp !== 'all' && g.rsvp !== filterRsvp) return false
     if (filterTag !== 'all' && !(g.tags || []).includes(filterTag)) return false
     if (filterTable === 'unassigned' && g.table_assignment) return false
     if (filterTable !== 'all' && filterTable !== 'unassigned' && g.table_assignment !== filterTable) return false
+    if (filterDietary === 'yes' && !g.dietary_restrictions) return false
+    if (filterDietary === 'no' && g.dietary_restrictions) return false
     return true
   })
+
+  // Sorting
+  const RSVP_ORDER = { yes: 0, maybe: 1, pending: 2, no: 3 }
+  const sorted = [...filtered].sort((a, b) => {
+    let av, bv
+    switch (sortField) {
+      case 'name':
+        av = `${a.last_name || ''} ${a.first_name}`.toLowerCase()
+        bv = `${b.last_name || ''} ${b.first_name}`.toLowerCase()
+        break
+      case 'rsvp':
+        av = RSVP_ORDER[a.rsvp] ?? 9
+        bv = RSVP_ORDER[b.rsvp] ?? 9
+        break
+      case 'table':
+        av = a.table_assignment || 'zzz'
+        bv = b.table_assignment || 'zzz'
+        break
+      case 'dietary':
+        av = a.dietary_restrictions ? 0 : 1
+        bv = b.dietary_restrictions ? 0 : 1
+        break
+      case 'plus_one':
+        av = a.plus_one_name ? 0 : 1
+        bv = b.plus_one_name ? 0 : 1
+        break
+      case 'meal':
+        av = (a.meal_choice || '').toLowerCase()
+        bv = (b.meal_choice || '').toLowerCase()
+        break
+      default:
+        return 0
+    }
+    if (av < bv) return sortDir === 'asc' ? -1 : 1
+    if (av > bv) return sortDir === 'asc' ? 1 : -1
+    return 0
+  })
+
+  const toggleSort = (field) => {
+    if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    else { setSortField(field); setSortDir('asc') }
+  }
+
+  const SortIcon = ({ field }) => {
+    if (sortField !== field) return <span className="ml-1 opacity-30">↕</span>
+    return <span className="ml-1">{sortDir === 'asc' ? '↑' : '↓'}</span>
+  }
 
   // Seat usage per table: count guest + plus_one per assignment
   const tableCounts = guests.reduce((acc, g) => {
@@ -881,12 +933,21 @@ export default function GuestList({ weddingId, userId }) {
               })}
             </select>
           )}
+          <select
+            className="border border-cream-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 bg-white"
+            value={filterDietary}
+            onChange={e => setFilterDietary(e.target.value)}
+          >
+            <option value="all">All Dietary</option>
+            <option value="yes">Has restrictions</option>
+            <option value="no">No restrictions</option>
+          </select>
         </div>
       </div>
 
       {/* Guest table */}
       <div className="bg-white rounded-2xl shadow-sm border border-cream-200 overflow-hidden">
-        {filtered.length === 0 ? (
+        {sorted.length === 0 ? (
           <div className="p-14 text-center">
             <p className="text-sage-400 text-sm">
               {guests.length === 0
@@ -899,22 +960,28 @@ export default function GuestList({ weddingId, userId }) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-cream-200 bg-cream-50">
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-sage-500 uppercase tracking-wide">Name</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-sage-500 uppercase tracking-wide">RSVP</th>
-                  {tableOptions.length > 0 && (
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-sage-500 uppercase tracking-wide">Table</th>
-                  )}
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-sage-500 uppercase tracking-wide">Tags</th>
-                  {platedMeal && (
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-sage-500 uppercase tracking-wide">Meal</th>
-                  )}
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-sage-500 uppercase tracking-wide">Dietary</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-sage-500 uppercase tracking-wide">Plus One</th>
+                  {[
+                    { label: 'Name', field: 'name' },
+                    { label: 'RSVP', field: 'rsvp' },
+                    ...(tableOptions.length > 0 ? [{ label: 'Table', field: 'table' }] : []),
+                    { label: 'Tags', field: null },
+                    ...(platedMeal ? [{ label: 'Meal', field: 'meal' }] : []),
+                    { label: 'Dietary', field: 'dietary' },
+                    { label: 'Plus One', field: 'plus_one' },
+                  ].map(col => (
+                    <th
+                      key={col.label}
+                      className={`text-left px-4 py-3 text-xs font-semibold text-sage-500 uppercase tracking-wide ${col.field ? 'cursor-pointer select-none hover:text-sage-700' : ''}`}
+                      onClick={() => col.field && toggleSort(col.field)}
+                    >
+                      {col.label}{col.field && <SortIcon field={col.field} />}
+                    </th>
+                  ))}
                   <th className="px-4 py-3 w-20"></th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.map(guest => (
+                {sorted.map(guest => (
                   <tr key={guest.id} className="border-b border-cream-100 hover:bg-cream-50/60 transition">
                     <td className="px-4 py-3">
                       <p className="font-medium text-sage-800">{guest.first_name} {guest.last_name}</p>
