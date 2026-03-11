@@ -234,15 +234,18 @@ export default function TableCanvas({ weddingId, isAdmin }) {
   const save = async () => {
     setSaving(true)
     try {
-      await fetch(`${API_URL}/api/table-layout`, {
+      const res = await fetch(`${API_URL}/api/table-layout`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ weddingId, elements }),
       })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || `Server error ${res.status}`)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (err) {
       console.error('Save failed:', err)
+      alert(`Save failed: ${err.message}`)
     }
     setSaving(false)
   }
