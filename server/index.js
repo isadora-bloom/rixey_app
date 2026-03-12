@@ -4085,31 +4085,51 @@ app.delete('/api/couple-photo/:weddingId', async (req, res) => {
 
 // Default checklist tasks
 const DEFAULT_CHECKLIST_TASKS = [
-  { task_text: 'Book venue', category: 'Venue', display_order: 1 },
-  { task_text: 'Schedule venue walkthrough', category: 'Venue', display_order: 2 },
-  { task_text: 'Book photographer', category: 'Vendors', display_order: 3 },
-  { task_text: 'Book videographer', category: 'Vendors', display_order: 4 },
-  { task_text: 'Book caterer', category: 'Vendors', display_order: 5 },
-  { task_text: 'Book florist', category: 'Vendors', display_order: 6 },
+  // Early Planning
+  { task_text: 'Set your budget', category: 'Other', display_order: 1 },
+  { task_text: 'Complete all alignment worksheets', category: 'Other', display_order: 2 },
+  { task_text: 'Draft your guest list', category: 'Guests', display_order: 3 },
+  { task_text: 'Select your wedding party', category: 'Other', display_order: 4 },
+  { task_text: 'Book photographer', category: 'Vendors', display_order: 5 },
+  { task_text: 'Book videographer', category: 'Vendors', display_order: 6 },
   { task_text: 'Book DJ or band', category: 'Vendors', display_order: 7 },
-  { task_text: 'Book officiant', category: 'Vendors', display_order: 8 },
-  { task_text: 'Book hair stylist', category: 'Attire & Beauty', display_order: 9 },
-  { task_text: 'Book makeup artist', category: 'Attire & Beauty', display_order: 10 },
-  { task_text: 'Order wedding dress/attire', category: 'Attire & Beauty', display_order: 11 },
-  { task_text: 'Order wedding rings', category: 'Attire & Beauty', display_order: 12 },
-  { task_text: 'Choose ceremony music', category: 'Timeline', display_order: 13 },
-  { task_text: 'Create day-of timeline', category: 'Timeline', display_order: 14 },
-  { task_text: 'Finalize seating chart', category: 'Guests', display_order: 15 },
-  { task_text: 'Send invitations', category: 'Guests', display_order: 16 },
-  { task_text: 'Collect RSVPs', category: 'Guests', display_order: 17 },
-  { task_text: 'Plan rehearsal dinner', category: 'Timeline', display_order: 18 },
-  { task_text: 'Book transportation', category: 'Vendors', display_order: 19 },
-  { task_text: 'Order cake/desserts', category: 'Vendors', display_order: 20 },
-  { task_text: 'Choose table linens', category: 'Decor', display_order: 21 },
-  { task_text: 'Select centerpieces', category: 'Decor', display_order: 22 },
-  { task_text: 'Plan ceremony decor', category: 'Decor', display_order: 23 },
-  { task_text: 'Get marriage license', category: 'Other', display_order: 24 },
-  { task_text: 'Write vows', category: 'Other', display_order: 25 },
+  { task_text: 'Book hair & makeup', category: 'Attire & Beauty', display_order: 8 },
+  { task_text: 'Book officiant', category: 'Vendors', display_order: 9 },
+  { task_text: 'Hire florist', category: 'Vendors', display_order: 10 },
+  { task_text: 'Choose caterer and menu', category: 'Vendors', display_order: 11 },
+  { task_text: 'Schedule engagement photos', category: 'Vendors', display_order: 12 },
+  { task_text: 'Reserve hotel room block for guests', category: 'Guests', display_order: 13 },
+  { task_text: 'Find wedding dress/attire', category: 'Attire & Beauty', display_order: 14 },
+  { task_text: 'Schedule alterations appointments', category: 'Attire & Beauty', display_order: 15 },
+  { task_text: 'Coordinate wedding party attire', category: 'Attire & Beauty', display_order: 16 },
+  { task_text: 'Buy wedding rings', category: 'Attire & Beauty', display_order: 17 },
+  // Guest & Communication
+  { task_text: 'Send save-the-dates', category: 'Guests', display_order: 18 },
+  { task_text: 'Create wedding website', category: 'Guests', display_order: 19 },
+  { task_text: 'Design invitations', category: 'Guests', display_order: 20 },
+  { task_text: 'Send invitations (2 months before)', category: 'Guests', display_order: 21 },
+  { task_text: 'Track RSVPs', category: 'Guests', display_order: 22 },
+  { task_text: 'Chase non-responders', category: 'Guests', display_order: 23 },
+  { task_text: 'Finalize guest count for caterer', category: 'Guests', display_order: 24 },
+  { task_text: 'Create seating chart', category: 'Guests', display_order: 25 },
+  // Logistics
+  { task_text: 'Arrange transportation/shuttles', category: 'Vendors', display_order: 26 },
+  { task_text: 'Plan big rentals (tent, specialty items)', category: 'Decor', display_order: 27 },
+  { task_text: 'Arrange smaller rentals and décor', category: 'Decor', display_order: 28 },
+  { task_text: 'Plan rehearsal dinner', category: 'Timeline', display_order: 29 },
+  { task_text: 'Confirm with all vendors (times, locations)', category: 'Vendors', display_order: 30 },
+  { task_text: 'Finalize detailed timeline with Rixey team', category: 'Timeline', display_order: 31 },
+  { task_text: 'Final dress fitting', category: 'Attire & Beauty', display_order: 32 },
+  { task_text: 'Obtain marriage license (within 60 days of wedding)', category: 'Other', display_order: 33 },
+  { task_text: 'Prepare tips and final payment envelopes', category: 'Other', display_order: 34 },
+  // Final Week
+  { task_text: 'Final vendor confirmations', category: 'Vendors', display_order: 35 },
+  { task_text: 'Pack all décor items (labeled by area)', category: 'Decor', display_order: 36 },
+  { task_text: 'Prepare day-of emergency kit', category: 'Other', display_order: 37 },
+  { task_text: 'Gather ceremony items (rings, license, unity items)', category: 'Other', display_order: 38 },
+  { task_text: 'Plan day-of meals for wedding party', category: 'Other', display_order: 39 },
+  { task_text: 'Write vows', category: 'Other', display_order: 40 },
+  { task_text: 'Get marriage license', category: 'Other', display_order: 41 },
 ];
 
 // Get checklist for a wedding
@@ -6850,6 +6870,54 @@ app.delete('/api/meal-options/:id', async (req, res) => {
   } catch (err) {
     console.error('Delete meal option error:', err);
     res.status(500).json({ error: 'Failed to delete meal option' });
+  }
+});
+
+// ============ WORKSHEETS ============
+
+app.get('/api/worksheets/:weddingId', async (req, res) => {
+  try {
+    const { weddingId } = req.params;
+    const { data, error } = await supabaseAdmin
+      .from('weddings')
+      .select('worksheet_priorities, worksheet_guest_rules, worksheet_budget_alignment')
+      .eq('id', weddingId)
+      .single();
+    if (error) throw error;
+    res.json({ worksheets: data || {} });
+  } catch (err) {
+    console.error('Get worksheets error:', err);
+    res.status(500).json({ error: 'Failed to get worksheets' });
+  }
+});
+
+app.put('/api/worksheets/:weddingId', async (req, res) => {
+  try {
+    const { weddingId } = req.params;
+    const { section, data: sectionData, notify } = req.body;
+
+    const allowed = ['worksheet_priorities', 'worksheet_guest_rules', 'worksheet_budget_alignment'];
+    if (!allowed.includes(section)) return res.status(400).json({ error: 'Invalid section' });
+
+    const { data, error } = await supabaseAdmin
+      .from('weddings')
+      .update({ [section]: sectionData })
+      .eq('id', weddingId)
+      .select()
+      .single();
+    if (error) throw error;
+
+    // If values statement submitted, log activity
+    if (notify && sectionData.values_statement_submitted) {
+      const statement = sectionData.values?.statement_summary || '';
+      await logActivity(weddingId, null, 'values_statement_submitted',
+        `Submitted their Wedding Values Statement: "${statement.substring(0, 150)}"`);
+    }
+
+    res.json({ success: true, wedding: data });
+  } catch (err) {
+    console.error('Save worksheet error:', err);
+    res.status(500).json({ error: 'Failed to save worksheet' });
   }
 });
 

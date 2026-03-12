@@ -28,6 +28,7 @@ import RehearsalDinner from '../components/RehearsalDinner'
 import GuestList from '../components/GuestList'
 import TableCanvas from '../components/TableCanvas'
 import PreferredVendors from '../components/PreferredVendors'
+import WeddingWorksheets from '../components/WeddingWorksheets'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -807,6 +808,7 @@ export default function Dashboard() {
                   { key: 'timeline', label: 'Timeline', icon: '/icons/timeline.svg', dot: !!timelineSummary },
                   { key: 'tables', label: 'Tables', icon: '/icons/tables.svg', dot: !!tableSummary },
                   { key: 'budget', label: 'Budget', icon: '/icons/budget.svg', dot: !!budgetSummary },
+                  { key: 'worksheets', label: 'Worksheets', icon: '/icons/checklist.svg' },
                   { key: 'vendor', label: 'Vendors', icon: '/icons/vendors.svg' },
                   { key: 'preferred-vendors', label: 'Preferred Vendors', icon: '/icons/vendors.svg' },
                   { key: 'wedding-details', label: 'Wedding Details', icon: '/icons/overview.svg' },
@@ -1049,6 +1051,13 @@ export default function Dashboard() {
               {activeSection === 'budget' && profile?.wedding_id && (
                 <div className="p-4 sm:p-6">
                   <BudgetTracker weddingId={profile.wedding_id} userId={user?.id} />
+                </div>
+              )}
+
+              {/* Worksheets section */}
+              {activeSection === 'worksheets' && profile?.wedding_id && (
+                <div className="p-4 sm:p-6">
+                  <WeddingWorksheets weddingId={profile.wedding_id} userId={user?.id} />
                 </div>
               )}
 
