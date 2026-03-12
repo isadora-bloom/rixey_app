@@ -610,7 +610,7 @@ export default function Admin() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           answer: adminAnswer,
-          addToKb,
+          addToKnowledgeBase: addToKb,
           kbCategory: addToKb ? kbCategory : null,
           kbSubcategory: addToKb ? kbSubcategory : null
         })

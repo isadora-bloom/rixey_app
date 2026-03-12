@@ -803,8 +803,8 @@ export default function Dashboard() {
         {/* Main Layout */}
         <div className="grid lg:grid-cols-[220px_1fr] gap-4 sm:gap-6">
 
-          {/* Compact Nav Sidebar */}
-          <div className="order-2 lg:order-1">
+          {/* Compact Nav Sidebar — desktop only */}
+          <div className="hidden lg:block lg:order-1">
             <div className="bg-white rounded-2xl shadow-sm border border-cream-200 overflow-hidden lg:sticky lg:top-24">
               <div className="px-4 pt-5 pb-3 flex justify-center border-b border-cream-200">
                 <img src="/rixey-manor-logo.png" alt="Rixey Manor" className="h-16 w-auto" />
