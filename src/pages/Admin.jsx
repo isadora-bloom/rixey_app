@@ -798,7 +798,7 @@ export default function Admin() {
     setSearchQuery('')
     setNotesSearchQuery('')
     setNotesHighlights('')
-    setActiveTab('notes')
+    setActiveTab('overview')
 
     // Refresh couple photo for this wedding
     try {
