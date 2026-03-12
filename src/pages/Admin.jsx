@@ -2702,8 +2702,28 @@ export default function Admin() {
               </button>
             </div>
           </div>
-          {/* Navigation Tabs in Header */}
-          <div className="flex gap-1 -mb-px overflow-x-auto scrollbar-hide">
+          {/* Navigation — mobile select / desktop tabs */}
+          <div className="pb-px">
+            {/* Mobile select */}
+            <div className="sm:hidden py-2">
+              <select
+                value={mainView}
+                onChange={e => { setMainView(e.target.value); if (e.target.value === 'messages') setTimeout(fetchUnreadMessages, 2000) }}
+                className="w-full px-3 py-2 border border-cream-200 rounded-lg bg-white text-sage-700 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-sage-300"
+              >
+                <option value="weddings">Weddings {stats.active > 0 ? `(${stats.active})` : ''}</option>
+                <option value="messages">Messages {unreadMessages > 0 ? `(${unreadMessages} unread)` : ''}</option>
+                <option value="vendors">Vendors</option>
+                <option value="meetings">Meetings</option>
+                <option value="borrow-catalog">Borrow Catalog</option>
+                <option value="picks">Picks</option>
+                <option value="knowledge-base">Knowledge Base</option>
+                <option value="usage">Usage</option>
+              </select>
+            </div>
+          </div>
+          {/* Desktop tabs */}
+          <div className="hidden sm:flex gap-1 -mb-px overflow-x-auto scrollbar-hide">
             {[
               { id: 'weddings', label: 'Weddings', count: stats.active },
               { id: 'messages', label: 'Messages', count: unreadMessages, alert: unreadMessages > 0 },

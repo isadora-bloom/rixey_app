@@ -133,6 +133,8 @@ export default function Dashboard() {
   const [retryState, setRetryState] = useState(null) // { userMessage, baseMessages, secondsLeft }
   const fileInputRef = useRef(null)
   const messagesEndRef = useRef(null)
+  const chatContainerRef = useRef(null)
+  const contentRef = useRef(null)
   const prevSectionRef = useRef('chat')
 
   useEffect(() => {
@@ -140,6 +142,10 @@ export default function Dashboard() {
       refreshSummaries()
     }
     prevSectionRef.current = activeSection
+    // On mobile, scroll the content area into view when switching sections
+    if (window.innerWidth < 1024) {
+      setTimeout(() => contentRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
+    }
   }, [activeSection]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -302,7 +308,9 @@ export default function Dashboard() {
   }, [loadingMessages, welcomeSent, user, messages.length])
 
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight
+    }
   }
 
   // Countdown tick — when it hits 0 auto-retry
@@ -866,30 +874,52 @@ export default function Dashboard() {
           </div>
 
           {/* Main Content */}
-          <div className="order-1 lg:order-2">
+          <div ref={contentRef} className="order-1 lg:order-2">
             {/* Mobile: section dropdown */}
             <div className="lg:hidden mb-3">
               <select
                 value={activeSection}
                 onChange={e => setActiveSection(e.target.value)}
-                className="w-full p-3 border border-cream-200 rounded-xl bg-cream-50 text-sage-700 font-medium focus:outline-none focus:ring-2 focus:ring-sage-300"
+                className="w-full p-3 border border-cream-200 rounded-xl bg-white text-sage-700 font-medium focus:outline-none focus:ring-2 focus:ring-sage-300"
               >
                 <option value="chat">💬 Chat with Sage</option>
-                <option value="timeline">📅 Timeline</option>
-                <option value="tables">🪑 Tables</option>
-                <option value="budget">💰 Budget</option>
-                <option value="vendor">👥 Vendors</option>
-                <option value="guests">👨‍👩‍👧‍👦 Guest List</option>
-                <option value="table-map">🗺 Table Map</option>
-                <option value="checklist">✅ Checklist</option>
-                <option value="staffing">🙋 Staffing Guide</option>
-                <option value="inspo">💡 Inspiration</option>
-                <option value="borrow">📋 Borrow Brochure</option>
-                <option value="picks">🛍 Rixey Picks</option>
-                <option value="guestcare">💝 Guest Care</option>
-                <option value="inbox">📬 Inbox</option>
-                <option value="booking">📞 Book a Meeting</option>
-                <option value="resources">🔗 Resources</option>
+                <optgroup label="Get Started">
+                  <option value="worksheets">📋 Worksheets</option>
+                  <option value="wedding-details">💍 Wedding Details</option>
+                  <option value="checklist">✅ Checklist</option>
+                </optgroup>
+                <optgroup label="Plan">
+                  <option value="budget">💰 Budget</option>
+                  <option value="guests">👥 Guest List</option>
+                  <option value="vendor">📎 Vendors</option>
+                  <option value="timeline">📅 Timeline</option>
+                  <option value="tables">🪑 Tables</option>
+                </optgroup>
+                <optgroup label="Day Of">
+                  <option value="ceremony-order">🎶 Ceremony Order</option>
+                  <option value="table-map">🗺 Table Map</option>
+                  <option value="staffing">🙋 Staffing Guide</option>
+                  <option value="makeup">💄 Hair &amp; Makeup</option>
+                  <option value="shuttle">🚌 Shuttle Schedule</option>
+                  <option value="rehearsal">🍽 Rehearsal Dinner</option>
+                  <option value="bedrooms">🛏 Bedroom Assignments</option>
+                  <option value="decor">🌿 Decor Inventory</option>
+                </optgroup>
+                <optgroup label="Your Guests">
+                  <option value="allergies">⚕️ Allergy Registry</option>
+                  <option value="guestcare">💝 Guest Care Notes</option>
+                </optgroup>
+                <optgroup label="Rixey">
+                  <option value="preferred-vendors">⭐ Preferred Vendors</option>
+                  <option value="inspo">💡 Inspiration</option>
+                  <option value="borrow">📦 Borrow Brochure</option>
+                  <option value="picks">🛍 Rixey Picks</option>
+                </optgroup>
+                <optgroup label="Connect">
+                  <option value="inbox">📬 Inbox</option>
+                  <option value="booking">📞 Book a Meeting</option>
+                  <option value="resources">🔗 Resources</option>
+                </optgroup>
               </select>
             </div>
 
@@ -912,7 +942,7 @@ export default function Dashboard() {
                   </div>
 
               {/* Messages */}
-              <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+              <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
                 {loadingMessages ? (
                   <div className="space-y-4">
                     {[1, 2, 3].map(i => (
