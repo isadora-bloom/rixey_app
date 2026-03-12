@@ -31,19 +31,6 @@ const SKIP_OPTIONS = [
   'Full wedding party processional',
 ]
 
-const DOWNLOAD_WORKSHEETS = [
-  'Your First Week: Getting Set Up',
-  'Building Your Guest List',
-  'Who Does What: Dividing the Work',
-  'What Actually Matters to You',
-  'Budget Alignment: The Money Conversation',
-  'Choosing Your Wedding Party',
-  'Wedding Vision Alignment',
-  'Handling Family Expectations',
-]
-
-// TODO: upload PDF to Supabase Storage and update URL
-const PDF_URL = '/worksheets/work-sheets.pdf'
 
 function SectionCard({ title, isOpen, onToggle, hasData, children }) {
   return (
@@ -668,38 +655,6 @@ export default function WeddingWorksheets({ weddingId, userId }) {
         </div>
       </SectionCard>
 
-      {/* Section 4: Download Worksheets */}
-      <SectionCard
-        title="Download Worksheets"
-        isOpen={openSection === 'downloads'}
-        onToggle={() => setOpenSection(openSection === 'downloads' ? null : 'downloads')}
-        hasData={false}
-      >
-        <div className="mt-4 space-y-4">
-          <div>
-            <p className="text-base font-semibold text-sage-800 mb-1">Print &amp; Work Together</p>
-            <p className="text-sm text-sage-500">These worksheets are designed to be filled out as a couple. Some conversations are easier on paper.</p>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
-            {DOWNLOAD_WORKSHEETS.map((name, i) => (
-              <a
-                key={name}
-                href={PDF_URL}
-                download={`worksheet-${i + 1}.pdf`}
-                className="flex items-center gap-3 p-3 rounded-xl border border-cream-200 hover:border-sage-300 hover:bg-cream-50 transition-colors group"
-              >
-                <div className="w-9 h-9 rounded-lg bg-sage-100 flex items-center justify-center flex-shrink-0 group-hover:bg-sage-200 transition-colors">
-                  <svg className="w-5 h-5 text-sage-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
-                  </svg>
-                </div>
-                <span className="text-sm text-sage-700 group-hover:text-sage-900 font-medium leading-tight">{name}</span>
-              </a>
-            ))}
-          </div>
-        </div>
-      </SectionCard>
     </div>
   )
 }
