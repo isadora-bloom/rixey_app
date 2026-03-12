@@ -2707,11 +2707,11 @@ export default function Admin() {
             {[
               { id: 'weddings', label: 'Weddings', count: stats.active },
               { id: 'messages', label: 'Messages', count: unreadMessages, alert: unreadMessages > 0 },
-              { id: 'meetings', label: 'Meetings' },
               { id: 'vendors', label: 'Vendors' },
+              { id: 'meetings', label: 'Meetings' },
               { id: 'borrow-catalog', label: 'Borrow Catalog' },
-              { id: 'picks', label: '🛍 Picks' },
-              { id: 'knowledge-base', label: 'KB' },
+              { id: 'picks', label: 'Picks' },
+              { id: 'knowledge-base', label: 'Knowledge Base' },
               { id: 'usage', label: 'Usage' },
             ].map(tab => (
               <button
