@@ -38,7 +38,7 @@ function WeddingCountdown({ weddingDate }) {
 
   useEffect(() => {
     const calculateTimeLeft = () => {
-      const wedding = new Date(weddingDate)
+      const wedding = new Date(weddingDate + 'T00:00:00')
       const now = new Date()
       const difference = wedding - now
 
@@ -58,7 +58,7 @@ function WeddingCountdown({ weddingDate }) {
 
   if (!weddingDate) return null
 
-  const weddingPassed = new Date(weddingDate) < new Date()
+  const weddingPassed = new Date(weddingDate + 'T00:00:00') < new Date()
   if (weddingPassed) {
     return (
       <div className="bg-gradient-to-r from-sage-500 to-sage-600 rounded-2xl p-6 text-white text-center">
@@ -757,7 +757,7 @@ export default function Dashboard() {
               </h2>
               {wedding?.wedding_date && (
                 <p className="text-sage-500 text-sm mt-1">
-                  {new Date(wedding.wedding_date).toLocaleDateString('en-US', {
+                  {new Date(wedding.wedding_date + 'T00:00:00').toLocaleDateString('en-US', {
                     weekday: 'long',
                     year: 'numeric',
                     month: 'long',
