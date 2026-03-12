@@ -6,7 +6,8 @@ export default function UpcomingMeetings({ weddings = [], filterWedding = null, 
   const [events, setEvents] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [filter, setFilter] = useState('all') // 'all', 'today', 'week'
+  const [filter, setFilter] = useState('all')
+  const [expandedEvent, setExpandedEvent] = useState(null)
 
   useEffect(() => {
     loadEvents()
@@ -47,10 +48,15 @@ export default function UpcomingMeetings({ weddings = [], filterWedding = null, 
     })
   }
 
-  const getEventTypeName = (event) => {
-    // Extract event type from the name
-    return event.name || 'Meeting'
+  const getDuration = (start, end) => {
+    const mins = Math.round((new Date(end) - new Date(start)) / 60000)
+    if (mins < 60) return `${mins}min`
+    const h = Math.floor(mins / 60)
+    const m = mins % 60
+    return m ? `${h}h ${m}min` : `${h}hr`
   }
+
+  const getEventTypeName = (event) => event.name || 'Meeting'
 
   const getEventIcon = (eventName) => {
     const name = eventName.toLowerCase()
@@ -62,6 +68,22 @@ export default function UpcomingMeetings({ weddings = [], filterWedding = null, 
     if (name.includes('onboarding') || name.includes('initial')) return '🎉'
     if (name.includes('planning')) return '🏛️'
     return '📅'
+  }
+
+  const getLocationLabel = (location) => {
+    if (!location) return null
+    if (location.type === 'physical' || location.type === 'in_person_meeting') return { label: 'In-person', icon: '📍' }
+    if (location.type === 'outbound_call' || location.type === 'phone_call') return { label: 'Phone call', icon: '📞' }
+    if (location.join_url || (location.location && location.location.includes('zoom'))) {
+      return { label: 'Zoom', icon: '💻', url: location.join_url || location.location }
+    }
+    if (location.type === 'custom' && location.location) {
+      return { label: location.location, icon: '🔗' }
+    }
+    if (location.type === 'google_conference' || location.type === 'microsoft_teams_conference') {
+      return { label: 'Video call', icon: '💻', url: location.join_url }
+    }
+    return null
   }
 
   const isToday = (dateStr) => {
@@ -77,67 +99,52 @@ export default function UpcomingMeetings({ weddings = [], filterWedding = null, 
     return eventDate >= today && eventDate <= weekFromNow
   }
 
-  // Match event invitee to a wedding
   const matchWedding = (invitees) => {
     if (!invitees || invitees.length === 0) return null
-
     const inviteeEmail = invitees[0]?.email?.toLowerCase()
     const inviteeName = invitees[0]?.name?.toLowerCase()
-
-    // Try to match by email or name
     for (const wedding of weddings) {
       const coupleName = wedding.couple_names?.toLowerCase() || ''
       const email = wedding.email?.toLowerCase() || ''
-
-      if (inviteeEmail && email && inviteeEmail === email) {
-        return wedding
-      }
+      if (inviteeEmail && email && inviteeEmail === email) return wedding
       if (inviteeName && coupleName && (
         inviteeName.includes(coupleName.split(' ')[0]) ||
         coupleName.includes(inviteeName.split(' ')[0])
-      )) {
-        return wedding
-      }
+      )) return wedding
     }
     return null
   }
 
-  // Check if event matches a specific wedding
   const eventMatchesWedding = (event, wedding) => {
     if (!event.invitees || event.invitees.length === 0) return false
-
     const inviteeEmail = event.invitees[0]?.email?.toLowerCase()
     const inviteeName = event.invitees[0]?.name?.toLowerCase()
     const coupleName = wedding.couple_names?.toLowerCase() || ''
     const weddingEmail = wedding.email?.toLowerCase() || ''
-
-    // Match by email
-    if (inviteeEmail && weddingEmail && inviteeEmail === weddingEmail) {
-      return true
-    }
-    // Match by name (partial)
+    if (inviteeEmail && weddingEmail && inviteeEmail === weddingEmail) return true
     if (inviteeName && coupleName) {
       const coupleFirstName = coupleName.split(' ')[0]
       const inviteeFirstName = inviteeName.split(' ')[0]
-      if (inviteeName.includes(coupleFirstName) || coupleName.includes(inviteeFirstName)) {
-        return true
-      }
+      if (inviteeName.includes(coupleFirstName) || coupleName.includes(inviteeFirstName)) return true
     }
     return false
   }
 
-  // Filter events
+  // Pull meaningful Q&A answers — skip blanks and boilerplate
+  const getUsefulQA = (questionsAndAnswers) => {
+    if (!questionsAndAnswers || questionsAndAnswers.length === 0) return []
+    return questionsAndAnswers
+      .filter(qa => qa.answer && qa.answer.trim() && qa.answer.trim() !== 'N/A')
+      .sort((a, b) => (a.position || 0) - (b.position || 0))
+  }
+
   const filteredEvents = events.filter(event => {
-    // Filter by specific wedding if provided
-    if (filterWedding && !eventMatchesWedding(event, filterWedding)) {
-      return false
-    }
+    if (filterWedding && !eventMatchesWedding(event, filterWedding)) return false
     if (filter === 'today') return isToday(event.start_time)
     if (filter === 'week') return isThisWeek(event.start_time)
     return true
   })
 
-  // Group by date
   const groupedEvents = filteredEvents.reduce((groups, event) => {
     const date = new Date(event.start_time).toDateString()
     if (!groups[date]) groups[date] = []
@@ -253,48 +260,124 @@ export default function UpcomingMeetings({ weddings = [], filterWedding = null, 
                     .map(event => {
                       const matchedWedding = matchWedding(event.invitees)
                       const invitee = event.invitees?.[0]
+                      const qa = getUsefulQA(invitee?.questions_and_answers)
+                      const location = getLocationLabel(event.location)
+                      const duration = event.end_time ? getDuration(event.start_time, event.end_time) : null
+                      const isExpanded = expandedEvent === event.uri
 
                       return (
                         <div
                           key={event.uri}
-                          className="flex items-start gap-3 p-3 bg-cream-50 rounded-lg border border-cream-200 hover:border-sage-300 transition"
+                          className="border border-cream-200 rounded-lg overflow-hidden hover:border-sage-300 transition"
                         >
-                          <span className="text-2xl">{getEventIcon(event.name)}</span>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-start justify-between gap-2">
-                              <div>
-                                <p className="font-medium text-sage-800 text-sm">
-                                  {getEventTypeName(event)}
-                                </p>
-                                {invitee && (
-                                  <p className="text-sage-600 text-sm">
-                                    {invitee.name}
-                                    {matchedWedding && (
-                                      <span className="ml-2 text-xs bg-sage-100 text-sage-600 px-1.5 py-0.5 rounded">
-                                        {matchedWedding.couple_names}
+                          {/* Main row */}
+                          <button
+                            type="button"
+                            onClick={() => setExpandedEvent(isExpanded ? null : event.uri)}
+                            className="w-full flex items-start gap-3 p-3 bg-cream-50 text-left"
+                          >
+                            <span className="text-2xl mt-0.5">{getEventIcon(event.name)}</span>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <p className="font-medium text-sage-800 text-sm">{getEventTypeName(event)}</p>
+                                  {invitee && (
+                                    <p className="text-sage-600 text-sm">
+                                      {invitee.name}
+                                      {matchedWedding && (
+                                        <span className="ml-2 text-xs bg-sage-100 text-sage-600 px-1.5 py-0.5 rounded">
+                                          {matchedWedding.couple_names}
+                                        </span>
+                                      )}
+                                    </p>
+                                  )}
+                                  {invitee?.email && (
+                                    <p className="text-sage-400 text-xs">{invitee.email}</p>
+                                  )}
+                                  {/* Location + duration inline */}
+                                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                                    {location && (
+                                      <span className="text-xs text-sage-500">
+                                        {location.icon} {location.label}
                                       </span>
                                     )}
+                                    {duration && (
+                                      <span className="text-xs text-sage-400">· {duration}</span>
+                                    )}
+                                    {qa.length > 0 && (
+                                      <span className="text-xs text-sage-400">· {qa.length} response{qa.length !== 1 ? 's' : ''}</span>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="text-right shrink-0 flex items-center gap-2">
+                                  <p className="text-sage-700 font-medium text-sm">
+                                    {formatTime(event.start_time)}
                                   </p>
-                                )}
-                                {invitee?.email && (
-                                  <p className="text-sage-400 text-xs">{invitee.email}</p>
-                                )}
-                              </div>
-                              <div className="text-right shrink-0">
-                                <p className="text-sage-700 font-medium text-sm">
-                                  {formatTime(event.start_time)}
-                                </p>
-                                {event.location?.type === 'physical' && (
-                                  <p className="text-sage-400 text-xs">In-person</p>
-                                )}
-                                {event.location?.type === 'custom' && event.location?.location && (
-                                  <p className="text-sage-400 text-xs truncate max-w-[100px]">
-                                    {event.location.location.includes('zoom') ? 'Zoom' : 'Virtual'}
-                                  </p>
-                                )}
+                                  <svg className={`w-4 h-4 text-sage-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                  </svg>
+                                </div>
                               </div>
                             </div>
-                          </div>
+                          </button>
+
+                          {/* Expanded detail panel */}
+                          {isExpanded && (
+                            <div className="border-t border-cream-200 bg-white p-4 space-y-4">
+                              {/* Booking form answers */}
+                              {qa.length > 0 && (
+                                <div>
+                                  <h4 className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-2">Booking Form Responses</h4>
+                                  <div className="space-y-2">
+                                    {qa.map((item, i) => (
+                                      <div key={i} className="grid grid-cols-[1fr_1.5fr] gap-2 text-sm">
+                                        <span className="text-sage-500">{item.question}</span>
+                                        <span className="text-sage-800 font-medium">{item.answer}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Location with join link */}
+                              {location && (
+                                <div>
+                                  <h4 className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1">Location</h4>
+                                  {location.url ? (
+                                    <a href={location.url} target="_blank" rel="noopener noreferrer"
+                                      className="text-sage-600 hover:text-sage-800 text-sm underline">
+                                      {location.icon} {location.label} — Join link →
+                                    </a>
+                                  ) : (
+                                    <p className="text-sm text-sage-700">{location.icon} {location.label}</p>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Invitee timezone */}
+                              {invitee?.timezone && (
+                                <p className="text-xs text-sage-400">Invitee timezone: {invitee.timezone}</p>
+                              )}
+
+                              {/* Cancel / reschedule links */}
+                              {(invitee?.cancel_url || invitee?.reschedule_url) && (
+                                <div className="flex gap-3 pt-1 border-t border-cream-100">
+                                  {invitee?.reschedule_url && (
+                                    <a href={invitee.reschedule_url} target="_blank" rel="noopener noreferrer"
+                                      className="text-xs text-sage-500 hover:text-sage-700 underline">
+                                      Reschedule
+                                    </a>
+                                  )}
+                                  {invitee?.cancel_url && (
+                                    <a href={invitee.cancel_url} target="_blank" rel="noopener noreferrer"
+                                      className="text-xs text-red-400 hover:text-red-600 underline">
+                                      Cancel meeting
+                                    </a>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       )
                     })}
