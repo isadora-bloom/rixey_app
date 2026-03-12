@@ -1,6 +1,35 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+
+// Splits text and wraps matched parts in a highlight span
+function Highlight({ text, query }) {
+  if (!query.trim()) return text
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const parts = text.split(new RegExp(`(${escaped})`, 'gi'))
+  return parts.map((part, i) =>
+    part.toLowerCase() === query.toLowerCase()
+      ? <mark key={i} className="bg-amber-200 text-amber-900 rounded-sm px-0.5 not-italic font-medium">{part}</mark>
+      : part
+  )
+}
+
+// Returns a short snippet of text centred around the first match
+function getSnippet(text, query, radius = 140) {
+  if (!query.trim()) return text
+  const idx = text.toLowerCase().indexOf(query.toLowerCase())
+  if (idx === -1) return text
+  const start = Math.max(0, idx - radius)
+  const end = Math.min(text.length, idx + query.length + radius)
+  return (start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '')
+}
+
+// Count occurrences of query in text
+function countMatches(text, query) {
+  if (!query.trim()) return 0
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return (text.match(new RegExp(escaped, 'gi')) || []).length
+}
 
 export default function KnowledgeBaseAdmin() {
   const [entries, setEntries] = useState([])
@@ -262,8 +291,10 @@ export default function KnowledgeBaseAdmin() {
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <h4 className="font-medium text-sage-800">{entry.title}</h4>
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
+                    <h4 className="font-medium text-sage-800">
+                      <Highlight text={entry.title} query={searchQuery} />
+                    </h4>
                     <span className="text-xs bg-sage-100 text-sage-600 px-2 py-0.5 rounded">
                       {entry.category}
                     </span>
@@ -277,8 +308,18 @@ export default function KnowledgeBaseAdmin() {
                         Inactive
                       </span>
                     )}
+                    {searchQuery && countMatches(entry.title + ' ' + entry.content, searchQuery) > 0 && (
+                      <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded">
+                        {countMatches(entry.title + ' ' + entry.content, searchQuery)} match{countMatches(entry.title + ' ' + entry.content, searchQuery) !== 1 ? 'es' : ''}
+                      </span>
+                    )}
                   </div>
-                  <p className="text-sage-600 text-sm line-clamp-2">{entry.content}</p>
+                  <p className="text-sage-600 text-sm">
+                    {searchQuery
+                      ? <Highlight text={getSnippet(entry.content, searchQuery)} query={searchQuery} />
+                      : <span className="line-clamp-2">{entry.content}</span>
+                    }
+                  </p>
                 </div>
                 <div className="flex items-center gap-1">
                   <button
