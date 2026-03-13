@@ -14,6 +14,7 @@ import ZoomCallback from './pages/ZoomCallback'
 import Preview from './pages/Preview'
 import PrintView from './pages/PrintView'
 import VendorPortal from './pages/VendorPortal'
+import WeddingWebsite from './pages/WeddingWebsite'
 
 function App() {
   return (
@@ -23,6 +24,7 @@ function App() {
           {/* Public routes — no auth */}
           <Route path="/preview" element={<Preview />} />
           <Route path="/vendor/:token" element={<VendorPortal />} />
+          <Route path="/w/:slug" element={<WeddingWebsite />} />
 
           {/* Client login */}
           <Route path="/" element={<Login />} />

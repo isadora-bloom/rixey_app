@@ -7123,6 +7123,44 @@ app.put('/api/wedding-website/:weddingId', async (req, res) => {
   }
 });
 
+// ── Public wedding website endpoint ──────────────────────────────────────────
+app.get('/api/w/:slug', async (req, res) => {
+  try {
+    const { data: settings, error } = await supabaseAdmin
+      .from('wedding_website_settings')
+      .select('*')
+      .eq('slug', req.params.slug)
+      .eq('published', true)
+      .single();
+
+    if (error || !settings) return res.status(404).json({ error: 'Wedding website not found' });
+
+    const weddingId = settings.wedding_id;
+
+    const [weddingRes, photosRes, partyRes, shuttleRes, accomRes, detailsRes] = await Promise.all([
+      supabaseAdmin.from('weddings').select('couple_names,wedding_date,partner1_name,partner2_name').eq('id', weddingId).single(),
+      supabaseAdmin.from('wedding_photos').select('*').eq('wedding_id', weddingId).contains('tags', ['website']).order('sort_order'),
+      supabaseAdmin.from('wedding_party').select('*').eq('wedding_id', weddingId).eq('include_on_website', true).order('sort_order'),
+      supabaseAdmin.from('shuttle_schedule').select('*').eq('wedding_id', weddingId).order('sort_order'),
+      supabaseAdmin.from('accommodations').select('*').order('distance'),
+      supabaseAdmin.from('wedding_details').select('ceremony_location,send_off_type,wedding_colors').eq('wedding_id', weddingId).single(),
+    ]);
+
+    res.json({
+      settings,
+      wedding: weddingRes.data || {},
+      photos: photosRes.data || [],
+      party: partyRes.data || [],
+      shuttle: shuttleRes.data || [],
+      accommodations: accomRes.data || [],
+      wedding_details: detailsRes.data || {},
+    });
+  } catch (err) {
+    console.error('Public website error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 3001;
 const server = app.listen(PORT, () => {
   console.log(`Sage backend running on port ${PORT}`);

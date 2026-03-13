@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd:*)",
+      "Bash(head:*)",
+      "Bash(python3 --version 2>/dev/null || python --version 2>/dev/null || py --version 2>/dev/null2)",
+      "Bash(cmd.exe:*)",
+      "Bash(cd /c/Users/Ismar/rixey-portal && node --check server/index.js 2>&1)",
+      "Bash(grep:*)",
+      "Bash(find:*)"
+    ]
+  }
+}

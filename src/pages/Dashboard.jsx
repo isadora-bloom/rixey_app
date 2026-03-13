@@ -31,6 +31,7 @@ import PreferredVendors from '../components/PreferredVendors'
 import WeddingWorksheets from '../components/WeddingWorksheets'
 import PhotoBucket from '../components/PhotoBucket'
 import WeddingParty from '../components/WeddingParty'
+import WebsiteBuilder from '../components/WebsiteBuilder'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -837,6 +838,7 @@ export default function Dashboard() {
                   { key: 'allergies', label: 'Allergy Registry', icon: '/icons/guest-care.svg' },
                   { key: 'guestcare', label: 'Guest Care Notes', icon: '/icons/guest-care.svg' },
                   { section: 'Your Website' },
+                  { key: 'website-builder', label: 'Build Your Website', icon: '/icons/resources.svg' },
                   { key: 'photos', label: 'Photo Library', icon: '/icons/inspiration.svg' },
                   { key: 'wedding-party', label: 'Wedding Party', icon: '/icons/vendors.svg' },
                   { section: 'Rixey' },
@@ -915,6 +917,7 @@ export default function Dashboard() {
                   <option value="guestcare">💝 Guest Care Notes</option>
                 </optgroup>
                 <optgroup label="Your Website">
+                  <option value="website-builder">🌐 Build Your Website</option>
                   <option value="photos">📷 Photo Library</option>
                   <option value="wedding-party">💐 Wedding Party</option>
                 </optgroup>
@@ -1114,6 +1117,13 @@ export default function Dashboard() {
               {activeSection === 'photos' && (
                 <div className="p-4 sm:p-6">
                   <PhotoBucket weddingId={wedding?.id} />
+                </div>
+              )}
+
+              {/* Website Builder */}
+              {activeSection === 'website-builder' && (
+                <div className="p-4 sm:p-6">
+                  <WebsiteBuilder weddingId={wedding?.id} coupleNames={wedding?.couple_names} />
                 </div>
               )}
 
