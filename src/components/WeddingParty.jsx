@@ -531,6 +531,11 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
   return (
     <div className="space-y-5">
 
+      {/* Testing banner */}
+      <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">
+        <strong>In testing.</strong> This feature is still being refined — let us know if anything feels off.
+      </div>
+
       {/* Partner names — needed for group label suggestions */}
       {(!partner1 && !partner2) || editingPartners ? (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">

@@ -17,6 +17,7 @@ const SECTION_TOGGLES = [
   { key: 'show_registry',       label: 'Registry',         note: 'Links set below' },
   { key: 'show_faq',            label: 'FAQ',              note: 'Questions set below' },
   { key: 'show_gallery',        label: 'Photo Gallery',    note: 'Photos tagged "website"' },
+  { key: 'show_rsvp',           label: 'RSVP',             note: 'Lets guests confirm attendance on your site' },
 ]
 
 const DRESS_CODE_OPTIONS = [
@@ -74,6 +75,8 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
   const [signatureCocktail, setSignatureCocktail] = useState('')
   const [registryLinks, setRegistryLinks]     = useState([{ label: '', url: '' }])
   const [faqItems, setFaqItems]               = useState([{ question: '', answer: '' }])
+  const [rsvpDeadline, setRsvpDeadline]       = useState('')
+  const [rsvpNote, setRsvpNote]               = useState('')
   const [sections, setSections]               = useState(
     Object.fromEntries(SECTION_TOGGLES.map(s => [s.key, true]))
   )
@@ -101,6 +104,8 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
         setSignatureCocktail(data.signature_cocktail || '')
         setRegistryLinks(data.registry_links?.length ? data.registry_links : [{ label: '', url: '' }])
         setFaqItems(data.faq_items?.length ? data.faq_items : [{ question: '', answer: '' }])
+        setRsvpDeadline(data.rsvp_deadline || '')
+        setRsvpNote(data.rsvp_note || '')
         const s = {}
         SECTION_TOGGLES.forEach(t => { s[t.key] = data[t.key] !== false })
         setSections(s)
@@ -126,6 +131,8 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
       plus_one_policy: plusOnePolicy, signature_cocktail: signatureCocktail,
       registry_links: registryLinks.filter(r => r.url.trim()),
       faq_items: faqItems.filter(f => f.question.trim()),
+      rsvp_deadline: rsvpDeadline || null,
+      rsvp_note: rsvpNote || null,
       ...sections,
     }
     try {
@@ -155,6 +162,11 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
 
   return (
     <div className="space-y-5 max-w-2xl">
+
+      {/* Testing banner */}
+      <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">
+        <strong>In testing.</strong> This feature is still being refined — let us know if anything feels off or doesn't behave as expected.
+      </div>
 
       {/* Header */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -464,6 +476,35 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
             + Add question
           </button>
         </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection title="RSVP" hint="Let guests confirm online — writes directly to your guest list">
+        <p className="text-xs text-sage-500 bg-sage-50 rounded-lg px-3 py-2">
+          Guests search for their name on your website and confirm attendance. Their response updates your guest list automatically — no manual chasing.
+        </p>
+        <div>
+          <label className="block text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1">RSVP deadline</label>
+          <input
+            type="date"
+            value={rsvpDeadline}
+            onChange={e => setRsvpDeadline(e.target.value)}
+            className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
+          />
+          <p className="text-xs text-sage-400 mt-1">The form automatically closes after this date. Leave blank to always show.</p>
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1">Note to guests</label>
+          <textarea
+            value={rsvpNote}
+            onChange={e => setRsvpNote(e.target.value)}
+            rows={2}
+            placeholder="e.g. Please RSVP by June 1st. If you have trouble finding your name, reach out to us directly."
+            className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 resize-none"
+          />
+        </div>
+        <p className="text-xs text-sage-400">
+          Meal choices come from your guest list settings (if plated meals are enabled for this wedding).
+        </p>
       </CollapsibleSection>
 
       {/* Section visibility */}

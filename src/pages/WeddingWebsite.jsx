@@ -108,6 +108,300 @@ function SectionHeading({ t, label, title }) {
   )
 }
 
+// ── RSVP Section ──────────────────────────────────────────────────────────────
+
+function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
+  const [query, setQuery]         = useState('')
+  const [results, setResults]     = useState([])
+  const [searching, setSearching] = useState(false)
+  const [selected, setSelected]   = useState(null)   // { id, name, rsvp, plus_one_name, plus_one_rsvp }
+  const [form, setForm]           = useState({
+    rsvp: '', meal_choice: '', dietary_restrictions: '',
+    plus_one_rsvp: '', plus_one_meal_choice: '', plus_one_dietary: '',
+  })
+  const [submitting, setSubmitting] = useState(false)
+  const [done, setDone]           = useState(false)
+  const [error, setError]         = useState('')
+
+  // Deadline check
+  const deadlinePassed = settings.rsvp_deadline
+    ? new Date(settings.rsvp_deadline + 'T23:59:59') < new Date()
+    : false
+
+  // Debounced name search
+  useEffect(() => {
+    if (query.length < 2) { setResults([]); return }
+    const timer = setTimeout(async () => {
+      setSearching(true)
+      try {
+        const res = await fetch(`${API_URL}/api/rsvp/${slug}/search?q=${encodeURIComponent(query)}`)
+        const data = await res.json()
+        setResults(Array.isArray(data) ? data : [])
+      } catch {}
+      setSearching(false)
+    }, 350)
+    return () => clearTimeout(timer)
+  }, [query, slug])
+
+  const selectGuest = (guest) => {
+    setSelected(guest)
+    setResults([])
+    setQuery('')
+    setForm({
+      rsvp: guest.rsvp !== 'pending' ? guest.rsvp : '',
+      meal_choice: '', dietary_restrictions: '',
+      plus_one_rsvp: guest.plus_one_rsvp !== 'pending' ? guest.plus_one_rsvp || '' : '',
+      plus_one_meal_choice: '', plus_one_dietary: '',
+    })
+  }
+
+  const handleSubmit = async () => {
+    if (!form.rsvp) return setError('Please select attending or not attending.')
+    setError('')
+    setSubmitting(true)
+    try {
+      const payload = {
+        guest_id: selected.id,
+        rsvp: form.rsvp,
+        dietary_restrictions: form.dietary_restrictions || null,
+      }
+      if (platedMeal && form.rsvp === 'yes') payload.meal_choice = form.meal_choice
+      if (selected.plus_one_name) {
+        payload.plus_one_rsvp = form.plus_one_rsvp || 'pending'
+        if (platedMeal && form.plus_one_rsvp === 'yes') payload.plus_one_meal_choice = form.plus_one_meal_choice
+        payload.plus_one_dietary = form.plus_one_dietary || null
+      }
+      const res = await fetch(`${API_URL}/api/rsvp/${slug}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      if (!res.ok) throw new Error()
+      setDone(true)
+    } catch {
+      setError('Something went wrong. Please try again or contact us directly.')
+    }
+    setSubmitting(false)
+  }
+
+  const inputClass = `w-full border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 ${
+    t === THEMES.warm
+      ? 'border-cream-300 focus:ring-sage-300 bg-white'
+      : 'border-gray-300 focus:ring-gray-400 bg-white'
+  }`
+  const selectClass = inputClass
+
+  if (deadlinePassed) {
+    return (
+      <Section t={t} alt id="rsvp">
+        <SectionHeading t={t} label="RSVP" title="RSVP has closed" />
+        <p className={`text-center ${t.body}`}>
+          The RSVP deadline has passed. Please reach out to the couple directly if you need to make a change.
+        </p>
+      </Section>
+    )
+  }
+
+  if (done) {
+    return (
+      <Section t={t} alt id="rsvp">
+        <div className="text-center max-w-md mx-auto py-4">
+          <div className="text-4xl mb-4">{form.rsvp === 'yes' ? '🎉' : '💌'}</div>
+          <h2 className={`${t.heading} text-2xl mb-3`}>
+            {form.rsvp === 'yes' ? 'See you there!' : 'We\'ll miss you'}
+          </h2>
+          <p className={`${t.body}`}>
+            {form.rsvp === 'yes'
+              ? `Thanks for confirming, ${selected.name}. We can't wait to celebrate with you.`
+              : `Thanks for letting us know, ${selected.name}. You'll be missed.`}
+          </p>
+        </div>
+      </Section>
+    )
+  }
+
+  return (
+    <Section t={t} alt id="rsvp">
+      <SectionHeading t={t} label="Will you be joining us?" title="RSVP" />
+
+      {settings.rsvp_note && (
+        <p className={`text-center ${t.body} mb-8 max-w-md mx-auto`}>{settings.rsvp_note}</p>
+      )}
+
+      {settings.rsvp_deadline && !deadlinePassed && (
+        <p className={`text-center text-sm ${t.body} opacity-70 mb-8`}>
+          Please RSVP by {new Date(settings.rsvp_deadline + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+        </p>
+      )}
+
+      <div className="max-w-md mx-auto space-y-6">
+
+        {/* Name search */}
+        {!selected && (
+          <div>
+            <label className={`block text-sm font-medium mb-2 ${t.accent}`}>
+              Search for your name
+            </label>
+            <div className="relative">
+              <input
+                type="text"
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                placeholder="Your first or last name…"
+                className={inputClass}
+                autoComplete="off"
+              />
+              {searching && (
+                <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                  <div className="w-4 h-4 border-2 border-sage-300 border-t-sage-600 rounded-full animate-spin" />
+                </div>
+              )}
+            </div>
+
+            {results.length > 0 && (
+              <div className={`mt-1 border rounded-xl overflow-hidden shadow-lg ${t === THEMES.warm ? 'border-cream-200' : 'border-gray-200'}`}>
+                {results.map(guest => (
+                  <button
+                    key={guest.id}
+                    type="button"
+                    onClick={() => selectGuest(guest)}
+                    className={`w-full text-left px-4 py-3 text-sm flex items-center justify-between gap-3 hover:bg-sage-50 transition border-b last:border-0 ${t === THEMES.warm ? 'border-cream-100' : 'border-gray-100'}`}
+                  >
+                    <span className={`font-medium ${t.accent}`}>{guest.name}</span>
+                    {guest.rsvp !== 'pending' && (
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${guest.rsvp === 'yes' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                        {guest.rsvp === 'yes' ? 'Attending' : 'Not attending'}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {query.length >= 2 && !searching && results.length === 0 && (
+              <p className={`mt-2 text-sm ${t.body} opacity-70`}>
+                No one found with that name. Try a different spelling or contact the couple directly.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* RSVP form */}
+        {selected && (
+          <div className="space-y-5">
+            <div className={`flex items-center justify-between gap-3 p-3 rounded-xl ${t === THEMES.warm ? 'bg-sage-50' : 'bg-gray-50'}`}>
+              <p className={`font-medium ${t.accent}`}>{selected.name}</p>
+              <button
+                type="button"
+                onClick={() => { setSelected(null); setForm({ rsvp:'', meal_choice:'', dietary_restrictions:'', plus_one_rsvp:'', plus_one_meal_choice:'', plus_one_dietary:'' }) }}
+                className={`text-xs ${t.body} opacity-60 hover:opacity-100`}
+              >
+                Not me →
+              </button>
+            </div>
+
+            {/* Attending */}
+            <div>
+              <p className={`text-sm font-medium mb-2 ${t.accent}`}>Will you be attending?</p>
+              <div className="grid grid-cols-2 gap-3">
+                {['yes', 'no'].map(val => (
+                  <button
+                    key={val}
+                    type="button"
+                    onClick={() => setForm(f => ({ ...f, rsvp: val }))}
+                    className={`py-2.5 rounded-lg text-sm font-medium border-2 transition ${
+                      form.rsvp === val
+                        ? (t === THEMES.warm ? 'border-sage-500 bg-sage-500 text-white' : 'border-gray-900 bg-gray-900 text-white')
+                        : (t === THEMES.warm ? 'border-cream-300 text-sage-600 hover:border-sage-300' : 'border-gray-200 text-gray-600 hover:border-gray-400')
+                    }`}
+                  >
+                    {val === 'yes' ? 'Attending' : 'Not attending'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {form.rsvp === 'yes' && (
+              <>
+                {platedMeal && mealOptions.length > 0 && (
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${t.accent}`}>Meal choice</label>
+                    <select value={form.meal_choice} onChange={e => setForm(f => ({ ...f, meal_choice: e.target.value }))} className={selectClass}>
+                      <option value="">Select a meal…</option>
+                      {mealOptions.map(o => <option key={o.id} value={o.label}>{o.label}</option>)}
+                    </select>
+                  </div>
+                )}
+                <div>
+                  <label className={`block text-sm font-medium mb-2 ${t.accent}`}>Dietary restrictions or allergies</label>
+                  <input
+                    type="text"
+                    value={form.dietary_restrictions}
+                    onChange={e => setForm(f => ({ ...f, dietary_restrictions: e.target.value }))}
+                    placeholder="None, vegetarian, nut allergy…"
+                    className={inputClass}
+                  />
+                </div>
+              </>
+            )}
+
+            {/* Plus one */}
+            {selected.plus_one_name && (
+              <div className={`border rounded-xl p-4 space-y-4 ${t === THEMES.warm ? 'border-cream-200' : 'border-gray-200'}`}>
+                <p className={`text-sm font-medium ${t.accent}`}>
+                  And {selected.plus_one_name}?
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  {['yes', 'no'].map(val => (
+                    <button
+                      key={val}
+                      type="button"
+                      onClick={() => setForm(f => ({ ...f, plus_one_rsvp: val }))}
+                      className={`py-2.5 rounded-lg text-sm font-medium border-2 transition ${
+                        form.plus_one_rsvp === val
+                          ? (t === THEMES.warm ? 'border-sage-500 bg-sage-500 text-white' : 'border-gray-900 bg-gray-900 text-white')
+                          : (t === THEMES.warm ? 'border-cream-300 text-sage-600 hover:border-sage-300' : 'border-gray-200 text-gray-600 hover:border-gray-400')
+                      }`}
+                    >
+                      {val === 'yes' ? 'Attending' : 'Not attending'}
+                    </button>
+                  ))}
+                </div>
+                {form.plus_one_rsvp === 'yes' && platedMeal && mealOptions.length > 0 && (
+                  <select value={form.plus_one_meal_choice} onChange={e => setForm(f => ({ ...f, plus_one_meal_choice: e.target.value }))} className={selectClass}>
+                    <option value="">{selected.plus_one_name}'s meal…</option>
+                    {mealOptions.map(o => <option key={o.id} value={o.label}>{o.label}</option>)}
+                  </select>
+                )}
+                {form.plus_one_rsvp === 'yes' && (
+                  <input
+                    type="text"
+                    value={form.plus_one_dietary}
+                    onChange={e => setForm(f => ({ ...f, plus_one_dietary: e.target.value }))}
+                    placeholder={`${selected.plus_one_name}'s dietary needs…`}
+                    className={inputClass}
+                  />
+                )}
+              </div>
+            )}
+
+            {error && <p className="text-red-500 text-sm">{error}</p>}
+
+            <button
+              type="button"
+              onClick={handleSubmit}
+              disabled={submitting}
+              className={`w-full py-3 ${t.btn} disabled:opacity-50`}
+            >
+              {submitting ? 'Sending…' : 'Confirm RSVP'}
+            </button>
+          </div>
+        )}
+      </div>
+    </Section>
+  )
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function WeddingWebsite() {
@@ -142,7 +436,7 @@ export default function WeddingWebsite() {
     )
   }
 
-  const { settings, wedding, photos, party, shuttle, accommodations, wedding_details, venue } = data
+  const { settings, wedding, photos, party, shuttle, accommodations, wedding_details, venue, meal_options } = data
   const t = THEMES[settings.theme || 'warm']
   const days = daysUntil(wedding.wedding_date)
   const heroPhoto = photos.find(p => p.tags?.includes('hero')) || photos[0]
@@ -521,6 +815,17 @@ export default function WeddingWebsite() {
             ))}
           </div>
         </Section>
+      )}
+
+      {/* ── RSVP ────────────────────────────────────────────────────────── */}
+      {settings.show_rsvp !== false && (
+        <RsvpSection
+          t={t}
+          slug={slug}
+          settings={settings}
+          platedMeal={wedding.plated_meal}
+          mealOptions={meal_options || []}
+        />
       )}
 
       {/* ── Gallery ─────────────────────────────────────────────────────── */}

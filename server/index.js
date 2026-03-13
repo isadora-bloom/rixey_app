@@ -7176,14 +7176,15 @@ app.get('/api/w/:slug', async (req, res) => {
 
     const weddingId = settings.wedding_id;
 
-    const [weddingRes, photosRes, partyRes, shuttleRes, accomRes, detailsRes, venueRes] = await Promise.all([
-      supabaseAdmin.from('weddings').select('couple_names,wedding_date,partner1_name,partner2_name').eq('id', weddingId).single(),
+    const [weddingRes, photosRes, partyRes, shuttleRes, accomRes, detailsRes, venueRes, mealOptionsRes] = await Promise.all([
+      supabaseAdmin.from('weddings').select('couple_names,wedding_date,partner1_name,partner2_name,plated_meal').eq('id', weddingId).single(),
       supabaseAdmin.from('wedding_photos').select('*').eq('wedding_id', weddingId).contains('tags', ['website']).order('sort_order'),
       supabaseAdmin.from('wedding_party').select('*').eq('wedding_id', weddingId).eq('include_on_website', true).order('sort_order'),
       supabaseAdmin.from('shuttle_schedule').select('*').eq('wedding_id', weddingId).order('sort_order'),
       supabaseAdmin.from('accommodations').select('*').order('distance'),
       supabaseAdmin.from('wedding_details').select('ceremony_location,send_off_type,wedding_colors').eq('wedding_id', weddingId).single(),
       supabaseAdmin.from('venue_settings').select('*').order('created_at').limit(1).single(),
+      supabaseAdmin.from('guest_meal_options').select('id, label').eq('wedding_id', weddingId).order('created_at'),
     ]);
 
     res.json({
@@ -7195,9 +7196,96 @@ app.get('/api/w/:slug', async (req, res) => {
       accommodations: accomRes.data || [],
       wedding_details: detailsRes.data || {},
       venue: venueRes.data || {},
+      meal_options: mealOptionsRes.data || [],
     });
   } catch (err) {
     console.error('Public website error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Public RSVP endpoints ─────────────────────────────────────────────────────
+
+// Search guests by name (for the RSVP form on the public website)
+app.get('/api/rsvp/:slug/search', async (req, res) => {
+  try {
+    const q = (req.query.q || '').trim();
+    if (!q || q.length < 2) return res.json([]);
+
+    const { data: settings, error: se } = await supabaseAdmin
+      .from('wedding_website_settings')
+      .select('wedding_id')
+      .eq('slug', req.params.slug)
+      .eq('published', true)
+      .single();
+    if (se || !settings) return res.status(404).json({ error: 'Not found' });
+
+    const { data: guests, error: ge } = await supabaseAdmin
+      .from('wedding_guests')
+      .select('id, first_name, last_name, rsvp, plus_one_name, plus_one_rsvp')
+      .eq('wedding_id', settings.wedding_id)
+      .or(`first_name.ilike.%${q}%,last_name.ilike.%${q}%`);
+    if (ge) throw ge;
+
+    const results = (guests || [])
+      .filter(g => `${g.first_name} ${g.last_name || ''}`.toLowerCase().includes(q.toLowerCase()))
+      .slice(0, 8)
+      .map(g => ({
+        id: g.id,
+        name: [g.first_name, g.last_name].filter(Boolean).join(' '),
+        rsvp: g.rsvp,
+        plus_one_name: g.plus_one_name,
+        plus_one_rsvp: g.plus_one_rsvp,
+      }));
+    res.json(results);
+  } catch (err) {
+    console.error('RSVP search error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Submit RSVP — writes back to wedding_guests
+app.post('/api/rsvp/:slug', async (req, res) => {
+  try {
+    const { guest_id, rsvp, meal_choice, dietary_restrictions, plus_one_rsvp, plus_one_meal_choice, plus_one_dietary } = req.body;
+    if (!guest_id || !rsvp) return res.status(400).json({ error: 'guest_id and rsvp required' });
+
+    // Verify guest belongs to this wedding via slug
+    const { data: settings, error: se } = await supabaseAdmin
+      .from('wedding_website_settings')
+      .select('wedding_id')
+      .eq('slug', req.params.slug)
+      .eq('published', true)
+      .single();
+    if (se || !settings) return res.status(404).json({ error: 'Not found' });
+
+    const { data: guest, error: ge } = await supabaseAdmin
+      .from('wedding_guests')
+      .select('id, wedding_id')
+      .eq('id', guest_id)
+      .eq('wedding_id', settings.wedding_id)
+      .single();
+    if (ge || !guest) return res.status(404).json({ error: 'Guest not found' });
+
+    const update = {
+      rsvp,
+      dietary_restrictions: dietary_restrictions || null,
+      updated_at: new Date().toISOString(),
+    };
+    if (meal_choice !== undefined) update.meal_choice = meal_choice;
+    if (plus_one_rsvp !== undefined) update.plus_one_rsvp = plus_one_rsvp;
+    if (plus_one_meal_choice !== undefined) update.plus_one_meal_choice = plus_one_meal_choice;
+    if (plus_one_dietary !== undefined) update.plus_one_dietary = plus_one_dietary;
+
+    const { error: ue } = await supabaseAdmin
+      .from('wedding_guests')
+      .update(update)
+      .eq('id', guest_id);
+    if (ue) throw ue;
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('RSVP submit error:', err);
     res.status(500).json({ error: err.message });
   }
 });

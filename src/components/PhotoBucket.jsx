@@ -352,6 +352,11 @@ export default function PhotoBucket({ weddingId, readOnly = false }) {
       {/* Main panel */}
       <div className={`flex-1 min-w-0 flex flex-col transition-all ${selectedPhoto ? 'mr-0' : ''}`}>
 
+        {/* Testing banner */}
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800 mb-4">
+          <strong>In testing.</strong> This feature is still being refined — let us know if anything feels off.
+        </div>
+
         {/* Header */}
         <div className="flex items-center justify-between gap-4 mb-4">
           <div>
