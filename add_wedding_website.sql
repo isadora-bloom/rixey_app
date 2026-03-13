@@ -26,7 +26,7 @@ CREATE POLICY "service_role_all" ON public.wedding_photos FOR ALL TO service_rol
 CREATE TABLE IF NOT EXISTS public.wedding_party (
   id                 UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   wedding_id         UUID REFERENCES public.weddings(id) ON DELETE CASCADE,
-  guest_id           UUID REFERENCES public.guests(id) ON DELETE SET NULL,
+  guest_id           UUID REFERENCES public.wedding_guests(id) ON DELETE SET NULL,
   name               TEXT NOT NULL,
   role               TEXT NOT NULL,
   group_label        TEXT,
