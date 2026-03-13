@@ -78,7 +78,7 @@ function PersonAvatar({ name, photos, size = 'md' }) {
 // ── Add / Edit form ───────────────────────────────────────────────────────────
 
 function PersonForm({ initial, guests, partner1, partner2, onSave, onCancel }) {
-  const [name, setName]     = useState(initial?.name || '')
+  const [name, setName]     = useState(initial?.member_name || '')
   const [role, setRole]     = useState(initial?.role || '')
   const [custom, setCustom] = useState('')
   const [group, setGroup]   = useState(initial?.group_label || '')
@@ -106,7 +106,7 @@ function PersonForm({ initial, guests, partner1, partner2, onSave, onCancel }) {
     if (!name.trim() || !activeRole.trim()) return
     setSaving(true)
     await onSave({
-      name: name.trim(),
+      member_name: name.trim(),
       role: activeRole.trim(),
       group_label: group.trim() || null,
       blurb: blurb.trim() || null,
@@ -251,7 +251,7 @@ function CeremonySyncPanel({ members, existingEntries, onSync, onClose }) {
     if (!mapping) return false
     // Don't add if already in ceremony order (match by name, case-insensitive)
     return !existingEntries.some(e =>
-      e.participant_name?.toLowerCase() === m.name.toLowerCase()
+      e.participant_name?.toLowerCase() === m.member_name.toLowerCase()
     )
   })
 
@@ -259,7 +259,7 @@ function CeremonySyncPanel({ members, existingEntries, onSync, onClose }) {
     const mapping = getCeremonyMapping(m.role)
     if (!mapping) return false
     return existingEntries.some(e =>
-      e.participant_name?.toLowerCase() === m.name.toLowerCase()
+      e.participant_name?.toLowerCase() === m.member_name.toLowerCase()
     )
   })
 
@@ -287,7 +287,7 @@ function CeremonySyncPanel({ members, existingEntries, onSync, onClose }) {
                   return (
                     <div key={m.id} className="flex items-center gap-3 bg-sage-50 rounded-lg px-3 py-2.5">
                       <div className="flex-1">
-                        <p className="text-sm font-medium text-sage-800">{m.name}</p>
+                        <p className="text-sm font-medium text-sage-800">{m.member_name}</p>
                         <p className="text-xs text-sage-500">{m.role}</p>
                       </div>
                       <div className="text-right">
@@ -314,7 +314,7 @@ function CeremonySyncPanel({ members, existingEntries, onSync, onClose }) {
                     <svg className="w-4 h-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
                       <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                     </svg>
-                    {m.name} — {m.role}
+                    {m.member_name} — {m.role}
                   </div>
                 ))}
               </div>
@@ -328,7 +328,7 @@ function CeremonySyncPanel({ members, existingEntries, onSync, onClose }) {
                 {noWalk.map(m => (
                   <div key={m.id} className="flex items-center gap-2 px-3 py-2 text-sm text-sage-400">
                     <span className="text-sage-300">—</span>
-                    {m.name} — {m.role}
+                    {m.member_name} — {m.role}
                   </div>
                 ))}
               </div>
@@ -491,7 +491,7 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
           body: JSON.stringify({
             wedding_id: weddingId,
             section: mapping.section,
-            participant_name: m.name,
+            participant_name: m.member_name,
             role: m.role,
             side: m.group_label || null,
             sort_order: 99,
@@ -523,7 +523,7 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
   const syncableCount = members.filter(m => {
     const mapping = getCeremonyMapping(m.role)
     if (!mapping) return false
-    return !existingCeremony.some(e => e.participant_name?.toLowerCase() === m.name.toLowerCase())
+    return !existingCeremony.some(e => e.participant_name?.toLowerCase() === m.member_name.toLowerCase())
   }).length
 
   if (loading) return <p className="text-sage-400 text-center py-8">Loading wedding party…</p>
@@ -658,10 +658,10 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
                   />
                 ) : (
                   <div className="flex items-start gap-3 bg-white border border-cream-200 rounded-xl p-3 hover:border-sage-300 transition group">
-                    <PersonAvatar name={member.name} photos={photos} />
+                    <PersonAvatar name={member.member_name} photos={photos} />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <p className="font-medium text-sage-800 text-sm">{member.name}</p>
+                        <p className="font-medium text-sage-800 text-sm">{member.member_name}</p>
                         <span className="text-xs bg-sage-100 text-sage-600 px-2 py-0.5 rounded">{member.role}</span>
                         {member.group_label && (
                           <span className="text-xs bg-cream-100 text-sage-500 px-2 py-0.5 rounded">{member.group_label}</span>
@@ -676,9 +676,9 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
                       {member.blurb && (
                         <p className="text-sage-500 text-xs mt-1 line-clamp-2">{member.blurb}</p>
                       )}
-                      {!photos.some(p => p.tags?.some(t => t.toLowerCase() === member.name.toLowerCase())) && (
+                      {!photos.some(p => p.tags?.some(t => t.toLowerCase() === member.member_name.toLowerCase())) && (
                         <p className="text-xs text-amber-600 mt-1">
-                          No photo yet — tag a photo with "{member.name}" in the photo library
+                          No photo yet — tag a photo with "{member.member_name}" in the photo library
                         </p>
                       )}
                     </div>

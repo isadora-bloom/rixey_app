@@ -22,12 +22,12 @@ CREATE TABLE IF NOT EXISTS public.wedding_photos (
 ALTER TABLE public.wedding_photos ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "service_role_all" ON public.wedding_photos FOR ALL TO service_role USING (true);
 
--- 3. Wedding party — free-text roles, no gender assumptions
+-- 3. Wedding party
 CREATE TABLE IF NOT EXISTS public.wedding_party (
   id                 UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   wedding_id         UUID REFERENCES public.weddings(id) ON DELETE CASCADE,
   guest_id           UUID REFERENCES public.wedding_guests(id) ON DELETE SET NULL,
-  name               TEXT NOT NULL,
+  member_name        TEXT NOT NULL,
   role               TEXT NOT NULL,
   group_label        TEXT,
   blurb              TEXT,
