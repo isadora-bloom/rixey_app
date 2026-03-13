@@ -7123,6 +7123,45 @@ app.put('/api/wedding-website/:weddingId', async (req, res) => {
   }
 });
 
+// ── Venue settings ────────────────────────────────────────────────────────────
+app.get('/api/venue-settings', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('venue_settings')
+      .select('*')
+      .order('created_at')
+      .limit(1)
+      .single();
+    if (error && error.code !== 'PGRST116') throw error;
+    res.json(data || {});
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/venue-settings', async (req, res) => {
+  try {
+    const { data: existing } = await supabaseAdmin
+      .from('venue_settings')
+      .select('id')
+      .order('created_at')
+      .limit(1)
+      .single();
+
+    const payload = { ...req.body, updated_at: new Date().toISOString() };
+    delete payload.id;
+    delete payload.created_at;
+
+    const { data, error } = existing
+      ? await supabaseAdmin.from('venue_settings').update(payload).eq('id', existing.id).select().single()
+      : await supabaseAdmin.from('venue_settings').insert(payload).select().single();
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Public wedding website endpoint ──────────────────────────────────────────
 app.get('/api/w/:slug', async (req, res) => {
   try {
@@ -7137,13 +7176,14 @@ app.get('/api/w/:slug', async (req, res) => {
 
     const weddingId = settings.wedding_id;
 
-    const [weddingRes, photosRes, partyRes, shuttleRes, accomRes, detailsRes] = await Promise.all([
+    const [weddingRes, photosRes, partyRes, shuttleRes, accomRes, detailsRes, venueRes] = await Promise.all([
       supabaseAdmin.from('weddings').select('couple_names,wedding_date,partner1_name,partner2_name').eq('id', weddingId).single(),
       supabaseAdmin.from('wedding_photos').select('*').eq('wedding_id', weddingId).contains('tags', ['website']).order('sort_order'),
       supabaseAdmin.from('wedding_party').select('*').eq('wedding_id', weddingId).eq('include_on_website', true).order('sort_order'),
       supabaseAdmin.from('shuttle_schedule').select('*').eq('wedding_id', weddingId).order('sort_order'),
       supabaseAdmin.from('accommodations').select('*').order('distance'),
       supabaseAdmin.from('wedding_details').select('ceremony_location,send_off_type,wedding_colors').eq('wedding_id', weddingId).single(),
+      supabaseAdmin.from('venue_settings').select('*').order('created_at').limit(1).single(),
     ]);
 
     res.json({
@@ -7154,6 +7194,7 @@ app.get('/api/w/:slug', async (req, res) => {
       shuttle: shuttleRes.data || [],
       accommodations: accomRes.data || [],
       wedding_details: detailsRes.data || {},
+      venue: venueRes.data || {},
     });
   } catch (err) {
     console.error('Public website error:', err);

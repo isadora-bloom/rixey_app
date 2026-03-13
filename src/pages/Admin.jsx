@@ -8,6 +8,7 @@ import InspoGallery from '../components/InspoGallery'
 import PlanningChecklist from '../components/PlanningChecklist'
 import CouplePhoto from '../components/CouplePhoto'
 import KnowledgeBaseAdmin from '../components/KnowledgeBaseAdmin'
+import VenueSettings from '../components/VenueSettings'
 import CommunicationPulse, { PulsePill } from '../components/CommunicationPulse'
 import RecommendedVendorsAdmin from '../components/RecommendedVendorsAdmin'
 import UsageStats from '../components/UsageStats'
@@ -2718,6 +2719,7 @@ export default function Admin() {
                 <option value="borrow-catalog">Borrow Catalog</option>
                 <option value="picks">Picks</option>
                 <option value="knowledge-base">Knowledge Base</option>
+                <option value="venue-settings">Venue Settings</option>
                 <option value="usage">Usage</option>
               </select>
             </div>
@@ -2732,6 +2734,7 @@ export default function Admin() {
               { id: 'borrow-catalog', label: 'Borrow Catalog' },
               { id: 'picks', label: 'Picks' },
               { id: 'knowledge-base', label: 'Knowledge Base' },
+              { id: 'venue-settings', label: 'Venue Settings' },
               { id: 'usage', label: 'Usage' },
             ].map(tab => (
               <button
@@ -2902,6 +2905,13 @@ export default function Admin() {
         {mainView === 'knowledge-base' && (
           <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
             <KnowledgeBaseAdmin />
+          </div>
+        )}
+
+        {/* Venue Settings View */}
+        {mainView === 'venue-settings' && (
+          <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
+            <VenueSettings />
           </div>
         )}
 

@@ -142,7 +142,7 @@ export default function WeddingWebsite() {
     )
   }
 
-  const { settings, wedding, photos, party, shuttle, accommodations, wedding_details } = data
+  const { settings, wedding, photos, party, shuttle, accommodations, wedding_details, venue } = data
   const t = THEMES[settings.theme || 'warm']
   const days = daysUntil(wedding.wedding_date)
   const heroPhoto = photos.find(p => p.tags?.includes('hero')) || photos[0]
@@ -191,7 +191,7 @@ export default function WeddingWebsite() {
             {formatDate(wedding.wedding_date)}
           </p>
           <p className={`text-sm mb-6 ${settings.theme === 'warm' ? 'text-white/60' : 'text-white/50 tracking-widest uppercase text-xs'}`}>
-            Rixey Manor · Rapidan, Virginia
+            {venue.venue_name || 'The Venue'}{venue.address_line2 ? ` · ${venue.address_line2}` : ''}
           </p>
 
           {days !== null && days > 0 && (
@@ -248,7 +248,9 @@ export default function WeddingWebsite() {
                 <p className={t.label}>Ceremony</p>
                 <p className={`${t.heading} text-2xl mt-2`}>{formatTime(settings.ceremony_time)}</p>
                 <p className={`${t.body} text-sm mt-1`}>
-                  {wedding_details.ceremony_location === 'Outside' ? 'Outside at Rixey Manor' : 'Inside the Manor'}
+                  {wedding_details.ceremony_location === 'Outside'
+                    ? `Outside at ${venue.venue_name || 'the venue'}`
+                    : `Inside ${venue.venue_name || 'the venue'}`}
                 </p>
               </div>
             )}
@@ -256,7 +258,7 @@ export default function WeddingWebsite() {
               <div className={`${t.card} p-6 text-center`}>
                 <p className={t.label}>Reception</p>
                 <p className={`${t.heading} text-2xl mt-2`}>{formatTime(settings.reception_time)}</p>
-                <p className={`${t.body} text-sm mt-1`}>Rixey Manor</p>
+                <p className={`${t.body} text-sm mt-1`}>{venue.venue_name || 'The venue'}</p>
               </div>
             )}
           </div>
@@ -342,40 +344,54 @@ export default function WeddingWebsite() {
 
       {/* ── Getting There ────────────────────────────────────────────────── */}
       <Section t={t} id="venue">
-        <SectionHeading t={t} label="Rixey Manor" title="Getting There" />
+        <SectionHeading t={t} label={venue.venue_name || 'The Venue'} title="Getting There" />
         <div className={`${t.card} p-6 sm:p-8 max-w-lg mx-auto text-center`}>
-          <p className={`${t.heading} text-xl mb-1`}>Rixey Manor</p>
-          <p className={`${t.body} mb-4`}>6359 Rapidan Rd, Leon, VA 22725</p>
-          <a
-            href="https://maps.google.com/?q=6359+Rapidan+Rd+Leon+VA+22725"
-            target="_blank"
-            rel="noopener noreferrer"
-            className={`inline-block ${t.btn} mb-6`}
-          >
-            Open in Maps
-          </a>
+          <p className={`${t.heading} text-xl mb-1`}>{venue.venue_name || 'The Venue'}</p>
+          {venue.tagline && <p className={`${t.body} text-sm mb-3 italic`}>{venue.tagline}</p>}
+          {(venue.address_line1 || venue.address_line2) && (
+            <p className={`${t.body} mb-4`}>
+              {[venue.address_line1, venue.address_line2].filter(Boolean).join(', ')}
+            </p>
+          )}
+          {venue.google_maps_url && (
+            <a
+              href={venue.google_maps_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`inline-block ${t.btn} mb-6`}
+            >
+              Open in Maps
+            </a>
+          )}
           <div className={`border-t ${t.divider} pt-5 space-y-3 text-left`}>
-            <div className="flex gap-3">
-              <span className="text-lg">🚗</span>
-              <div>
-                <p className={`text-sm font-medium ${t.accent}`}>Parking</p>
-                <p className={`${t.body} text-sm`}>Free parking on site. Follow signs from the entrance.</p>
+            {venue.parking_note && (
+              <div className="flex gap-3">
+                <span className="text-lg">🚗</span>
+                <div>
+                  <p className={`text-sm font-medium ${t.accent}`}>Parking</p>
+                  <p className={`${t.body} text-sm`}>{venue.parking_note}</p>
+                </div>
               </div>
-            </div>
-            <div className="flex gap-3">
-              <span className="text-lg">🌿</span>
-              <div>
-                <p className={`text-sm font-medium ${t.accent}`}>The venue</p>
-                <p className={`${t.body} text-sm`}>Rixey Manor sits on 38 acres in the Blue Ridge foothills. The roads leading in are country roads — allow a little extra time.</p>
+            )}
+            {(venue.venue_description || venue.arrival_note) && (
+              <div className="flex gap-3">
+                <span className="text-lg">🌿</span>
+                <div>
+                  <p className={`text-sm font-medium ${t.accent}`}>The venue</p>
+                  {venue.venue_description && <p className={`${t.body} text-sm`}>{venue.venue_description}</p>}
+                  {venue.arrival_note && <p className={`${t.body} text-sm mt-1`}>{venue.arrival_note}</p>}
+                </div>
               </div>
-            </div>
-            <div className="flex gap-3">
-              <span className="text-lg">📶</span>
-              <div>
-                <p className={`text-sm font-medium ${t.accent}`}>Cell service</p>
-                <p className={`${t.body} text-sm`}>Signal can be patchy. Download offline maps before you arrive.</p>
+            )}
+            {venue.cell_service_note && (
+              <div className="flex gap-3">
+                <span className="text-lg">📶</span>
+                <div>
+                  <p className={`text-sm font-medium ${t.accent}`}>Cell service</p>
+                  <p className={`${t.body} text-sm`}>{venue.cell_service_note}</p>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
       </Section>
@@ -533,10 +549,15 @@ export default function WeddingWebsite() {
       {/* ── Footer ──────────────────────────────────────────────────────── */}
       <footer className={`py-10 px-6 text-center border-t ${t.divider}`}>
         <p className={`font-serif text-2xl ${t.heading} mb-1`}>{displayNames}</p>
-        <p className={`${t.body} text-sm`}>{formatDate(wedding.wedding_date)} · Rixey Manor</p>
-        <p className={`text-xs mt-6 ${t.body} opacity-40`}>
-          Hosted by <a href="https://rixeymanor.com" target="_blank" rel="noopener noreferrer" className="hover:opacity-70">Rixey Manor</a>
-        </p>
+        <p className={`${t.body} text-sm`}>{formatDate(wedding.wedding_date)} · {venue.venue_name || 'The Venue'}</p>
+        {venue.footer_credit && (
+          <p className={`text-xs mt-6 ${t.body} opacity-40`}>
+            {venue.website_url
+              ? <a href={venue.website_url} target="_blank" rel="noopener noreferrer" className="hover:opacity-70">{venue.footer_credit}</a>
+              : venue.footer_credit
+            }
+          </p>
+        )}
       </footer>
 
     </div>
