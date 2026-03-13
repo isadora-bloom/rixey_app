@@ -9,6 +9,9 @@ import PlanningChecklist from '../components/PlanningChecklist'
 import CouplePhoto from '../components/CouplePhoto'
 import KnowledgeBaseAdmin from '../components/KnowledgeBaseAdmin'
 import VenueSettings from '../components/VenueSettings'
+import WebsiteBuilder from '../components/WebsiteBuilder'
+import PhotoBucket from '../components/PhotoBucket'
+import WeddingParty from '../components/WeddingParty'
 import CommunicationPulse, { PulsePill } from '../components/CommunicationPulse'
 import RecommendedVendorsAdmin from '../components/RecommendedVendorsAdmin'
 import UsageStats from '../components/UsageStats'
@@ -1485,6 +1488,10 @@ export default function Admin() {
                     { tab: 'guests', label: 'Guest List', icon: '/icons/guest-care.svg' },
                     { tab: 'borrow', label: 'Borrow Brochure', icon: '/icons/borrow-brochure.svg', badge: borrowSelections.length },
                     { tab: 'guest-care', label: 'Guest Care', icon: '/icons/guest-care.svg' },
+                    { section: 'Website' },
+                    { tab: 'website-builder', label: 'Website Builder', icon: '/icons/overview.svg' },
+                    { tab: 'photo-library', label: 'Photo Library', icon: '/icons/inspiration.svg' },
+                    { tab: 'wedding-party', label: 'Wedding Party', icon: '/icons/guest-care.svg' },
                     { tab: 'activity', label: 'Recent Activity', icon: '/icons/recent-activity.svg', badge: activities.length },
                     { section: 'Admin' },
                     { tab: 'contract-upload', label: 'Upload Contract', icon: '/icons/upload-contract.svg' },
@@ -1561,6 +1568,9 @@ export default function Admin() {
                     <option value="guests">Guest List</option>
                     <option value="borrow">Borrow Brochure</option>
                     <option value="guest-care">Guest Care</option>
+                    <option value="website-builder">Website Builder</option>
+                    <option value="photo-library">Photo Library</option>
+                    <option value="wedding-party">Wedding Party</option>
                     <option value="activity">
                       Recent Activity {activities.length > 0 ? `(${activities.length})` : ''}
                     </option>
@@ -2566,6 +2576,28 @@ export default function Admin() {
                 {/* Guest Care Tab */}
                 {activeTab === 'guest-care' && (
                   <GuestCareNotes weddingId={viewingWedding.id} />
+                )}
+
+                {/* Website Builder Tab */}
+                {activeTab === 'website-builder' && (
+                  <WebsiteBuilder
+                    weddingId={viewingWedding.id}
+                    coupleNames={viewingWedding.couple_names}
+                  />
+                )}
+
+                {/* Photo Library Tab */}
+                {activeTab === 'photo-library' && (
+                  <PhotoBucket weddingId={viewingWedding.id} />
+                )}
+
+                {/* Wedding Party Tab */}
+                {activeTab === 'wedding-party' && (
+                  <WeddingParty
+                    weddingId={viewingWedding.id}
+                    partner1={viewingWedding.partner1_name}
+                    partner2={viewingWedding.partner2_name}
+                  />
                 )}
 
                 {/* Contract Upload Tab */}
