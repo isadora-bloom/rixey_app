@@ -29,6 +29,7 @@ import GuestList from '../components/GuestList'
 import TableCanvas from '../components/TableCanvas'
 import PreferredVendors from '../components/PreferredVendors'
 import WeddingWorksheets from '../components/WeddingWorksheets'
+import PhotoBucket from '../components/PhotoBucket'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -834,6 +835,8 @@ export default function Dashboard() {
                   { section: 'Your Guests' },
                   { key: 'allergies', label: 'Allergy Registry', icon: '/icons/guest-care.svg' },
                   { key: 'guestcare', label: 'Guest Care Notes', icon: '/icons/guest-care.svg' },
+                  { section: 'Your Website' },
+                  { key: 'photos', label: 'Photo Library', icon: '/icons/inspiration.svg' },
                   { section: 'Rixey' },
                   { key: 'preferred-vendors', label: 'Preferred Vendors', icon: '/icons/vendors.svg' },
                   { key: 'inspo', label: 'Inspiration', icon: '/icons/inspiration.svg' },
@@ -908,6 +911,9 @@ export default function Dashboard() {
                 <optgroup label="Your Guests">
                   <option value="allergies">⚕️ Allergy Registry</option>
                   <option value="guestcare">💝 Guest Care Notes</option>
+                </optgroup>
+                <optgroup label="Your Website">
+                  <option value="photos">📷 Photo Library</option>
                 </optgroup>
                 <optgroup label="Rixey">
                   <option value="preferred-vendors">⭐ Preferred Vendors</option>
@@ -1098,6 +1104,13 @@ export default function Dashboard() {
               {activeSection === 'vendor' && profile?.wedding_id && (
                 <div className="p-4 sm:p-6">
                   <VendorChecklist weddingId={profile.wedding_id} />
+                </div>
+              )}
+
+              {/* Photo Library */}
+              {activeSection === 'photos' && (
+                <div className="p-4 sm:p-6">
+                  <PhotoBucket weddingId={wedding?.id} />
                 </div>
               )}
 

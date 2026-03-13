@@ -6921,6 +6921,208 @@ app.put('/api/worksheets/:weddingId', async (req, res) => {
   }
 });
 
+// ============ WEDDING WEBSITE FEATURE ============
+
+// --- Partner names ---
+app.put('/api/weddings/:id/partners', async (req, res) => {
+  try {
+    const { partner1_name, partner2_name } = req.body;
+    const { data, error } = await supabaseAdmin
+      .from('weddings')
+      .update({ partner1_name, partner2_name })
+      .eq('id', req.params.id)
+      .select('id, partner1_name, partner2_name')
+      .single();
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Photo library ---
+app.get('/api/wedding-photos/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('wedding_photos')
+      .select('*')
+      .eq('wedding_id', req.params.weddingId)
+      .order('sort_order')
+      .order('created_at');
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/wedding-photos/:weddingId/upload', upload.single('photo'), async (req, res) => {
+  try {
+    const { weddingId } = req.params;
+    const { tags, caption } = req.body;
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: 'No file provided' });
+
+    const ext = file.mimetype === 'image/webp' ? 'webp' : file.mimetype === 'image/png' ? 'png' : 'jpg';
+    const path = `${weddingId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+
+    const { error: uploadError } = await supabaseAdmin.storage
+      .from('wedding-photos')
+      .upload(path, file.buffer, { contentType: file.mimetype, upsert: false });
+    if (uploadError) throw uploadError;
+
+    const { data: { publicUrl } } = supabaseAdmin.storage
+      .from('wedding-photos')
+      .getPublicUrl(path);
+
+    const parsedTags = tags ? (Array.isArray(tags) ? tags : JSON.parse(tags)) : [];
+
+    const { data, error } = await supabaseAdmin
+      .from('wedding_photos')
+      .insert({ wedding_id: weddingId, url: publicUrl, storage_path: path, tags: parsedTags, caption: caption || null })
+      .select()
+      .single();
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    console.error('Photo upload error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/wedding-photos/:photoId', async (req, res) => {
+  try {
+    const { tags, caption, sort_order } = req.body;
+    const updates = {};
+    if (tags !== undefined) updates.tags = tags;
+    if (caption !== undefined) updates.caption = caption;
+    if (sort_order !== undefined) updates.sort_order = sort_order;
+    const { data, error } = await supabaseAdmin
+      .from('wedding_photos')
+      .update(updates)
+      .eq('id', req.params.photoId)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/wedding-photos/:photoId', async (req, res) => {
+  try {
+    const { data: photo } = await supabaseAdmin
+      .from('wedding_photos')
+      .select('storage_path')
+      .eq('id', req.params.photoId)
+      .single();
+
+    if (photo?.storage_path) {
+      await supabaseAdmin.storage.from('wedding-photos').remove([photo.storage_path]);
+    }
+
+    const { error } = await supabaseAdmin
+      .from('wedding_photos')
+      .delete()
+      .eq('id', req.params.photoId);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Wedding party ---
+app.get('/api/wedding-party/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('wedding_party')
+      .select('*')
+      .eq('wedding_id', req.params.weddingId)
+      .order('sort_order')
+      .order('created_at');
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/wedding-party/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('wedding_party')
+      .insert({ ...req.body, wedding_id: req.params.weddingId })
+      .select()
+      .single();
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/wedding-party/:id', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('wedding_party')
+      .update(req.body)
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/wedding-party/:id', async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin.from('wedding_party').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Website settings ---
+app.get('/api/wedding-website/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('wedding_website_settings')
+      .select('*')
+      .eq('wedding_id', req.params.weddingId)
+      .single();
+    if (error && error.code !== 'PGRST116') throw error;
+    res.json(data || {});
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/wedding-website/:weddingId', async (req, res) => {
+  try {
+    const { data: existing } = await supabaseAdmin
+      .from('wedding_website_settings')
+      .select('id')
+      .eq('wedding_id', req.params.weddingId)
+      .single();
+
+    const payload = { ...req.body, wedding_id: req.params.weddingId, updated_at: new Date().toISOString() };
+
+    const { data, error } = existing
+      ? await supabaseAdmin.from('wedding_website_settings').update(payload).eq('wedding_id', req.params.weddingId).select().single()
+      : await supabaseAdmin.from('wedding_website_settings').insert(payload).select().single();
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 3001;
 const server = app.listen(PORT, () => {
   console.log(`Sage backend running on port ${PORT}`);
