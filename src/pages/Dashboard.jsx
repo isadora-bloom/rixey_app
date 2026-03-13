@@ -30,6 +30,7 @@ import TableCanvas from '../components/TableCanvas'
 import PreferredVendors from '../components/PreferredVendors'
 import WeddingWorksheets from '../components/WeddingWorksheets'
 import PhotoBucket from '../components/PhotoBucket'
+import WeddingParty from '../components/WeddingParty'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -837,6 +838,7 @@ export default function Dashboard() {
                   { key: 'guestcare', label: 'Guest Care Notes', icon: '/icons/guest-care.svg' },
                   { section: 'Your Website' },
                   { key: 'photos', label: 'Photo Library', icon: '/icons/inspiration.svg' },
+                  { key: 'wedding-party', label: 'Wedding Party', icon: '/icons/vendors.svg' },
                   { section: 'Rixey' },
                   { key: 'preferred-vendors', label: 'Preferred Vendors', icon: '/icons/vendors.svg' },
                   { key: 'inspo', label: 'Inspiration', icon: '/icons/inspiration.svg' },
@@ -914,6 +916,7 @@ export default function Dashboard() {
                 </optgroup>
                 <optgroup label="Your Website">
                   <option value="photos">📷 Photo Library</option>
+                  <option value="wedding-party">💐 Wedding Party</option>
                 </optgroup>
                 <optgroup label="Rixey">
                   <option value="preferred-vendors">⭐ Preferred Vendors</option>
@@ -1111,6 +1114,13 @@ export default function Dashboard() {
               {activeSection === 'photos' && (
                 <div className="p-4 sm:p-6">
                   <PhotoBucket weddingId={wedding?.id} />
+                </div>
+              )}
+
+              {/* Wedding Party */}
+              {activeSection === 'wedding-party' && (
+                <div className="p-4 sm:p-6">
+                  <WeddingParty weddingId={wedding?.id} />
                 </div>
               )}
 

@@ -1,5 +1,6 @@
 -- Wedding website feature migration
 -- Run this in Supabase SQL editor
+SET search_path TO public;
 
 -- 1. Partner names on the weddings table (core identity, not website-only)
 ALTER TABLE weddings
