@@ -6969,8 +6969,9 @@ app.get('/api/bar-recipes/:weddingId', async (req, res) => {
 
 app.post('/api/bar-recipes/:weddingId', async (req, res) => {
   try {
+    const { name, source_type, source_url, ingredients, servings_basis, notes } = req.body;
     const { data, error } = await supabaseAdmin.from('bar_recipes')
-      .insert({ ...req.body, wedding_id: req.params.weddingId })
+      .insert({ wedding_id: req.params.weddingId, name, source_type, source_url, ingredients, servings_basis, notes })
       .select().single();
     if (error) throw error;
     res.json(data);
