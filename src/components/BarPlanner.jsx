@@ -363,7 +363,8 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
         ingredients, servings_basis: 1,
       }),
     })
-    setRecipes(prev => [...prev, await res.json()])
+    const saved = await res.json()
+    setRecipes(prev => [...prev, saved])
     setAddingRecipe(false)
     setRecipeName(''); setRecipeUrl(''); setRecipeFile(null); setEditableIngredients(null)
   }
