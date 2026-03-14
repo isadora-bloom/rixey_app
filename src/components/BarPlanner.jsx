@@ -20,7 +20,7 @@ const BAR_TYPES = [
 // ── Quantity calculator ───────────────────────────────────────────────────────
 // Handbook baseline: 120 guests × 8 hrs. Sliders scale from those defaults.
 
-function calcQuantities({ guests, hours, barType, season, beerPct, winePct, spiritsPct, nonAlcPct }) {
+function calcQuantities({ guests, hours, barType, season, beerPct, winePct, spiritsPct, nonAlcPct, champagneToast, tableWine }) {
   const bt = BAR_TYPES.find(b => b.key === barType) || BAR_TYPES[0]
 
   // Scale factors: slider vs bar-type default. If default is 0, use 1 as fallback.
@@ -94,6 +94,15 @@ function calcQuantities({ guests, hours, barType, season, beerPct, winePct, spir
   r.push({ item_name: 'Ice',              quantity: iceLbs,                unit: 'lbs', category: 'other' })
   r.push({ item_name: 'Cups / glasses',   quantity: Math.ceil(guests * 2), unit: '',    category: 'other' })
   r.push({ item_name: 'Cocktail napkins', quantity: Math.ceil(guests * 4), unit: '',    category: 'other' })
+
+  // ── Optional extras ──
+  if (champagneToast) {
+    r.push({ item_name: 'Champagne / prosecco (toast)', quantity: Math.ceil(guests / 8), unit: 'bottles', category: 'wine' })
+  }
+  if (tableWine) {
+    r.push({ item_name: 'Red wine — poured at table',   quantity: Math.ceil(guests / 12), unit: 'bottles', category: 'wine' })
+    r.push({ item_name: 'White wine — poured at table', quantity: Math.ceil(guests / 12), unit: 'bottles', category: 'wine' })
+  }
 
   return r
 }
@@ -208,7 +217,9 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
   const [beerPct, setBeerPct]       = useState(35)
   const [winePct, setWinePct]       = useState(65)
   const [spiritsPct, setSpiritsPct] = useState(0)
-  const [nonAlcPct, setNonAlcPct]   = useState(15)
+  const [nonAlcPct, setNonAlcPct]       = useState(15)
+  const [champagneToast, setChampagneToast] = useState(false)
+  const [tableWine, setTableWine]           = useState(false)
   const [calcPreview, setCalcPreview] = useState([])
 
   // Add item form
@@ -228,8 +239,8 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
   useEffect(() => { load() }, [weddingId])
 
   useEffect(() => {
-    setCalcPreview(calcQuantities({ guests, hours, barType, season, beerPct, winePct, spiritsPct, nonAlcPct }))
-  }, [guests, hours, barType, season, beerPct, winePct, spiritsPct, nonAlcPct])
+    setCalcPreview(calcQuantities({ guests, hours, barType, season, beerPct, winePct, spiritsPct, nonAlcPct, champagneToast, tableWine }))
+  }, [guests, hours, barType, season, beerPct, winePct, spiritsPct, nonAlcPct, champagneToast, tableWine])
 
   // Sync season if wedding date prop changes
   useEffect(() => {
@@ -468,6 +479,29 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
                   <p className={`font-medium ${season === s.key ? 'text-sage-700' : 'text-sage-500'}`}>{s.label}</p>
                   <p className="text-xs text-sage-400 mt-0.5">{s.note}</p>
                 </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Extras */}
+          <div>
+            <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">Extras</p>
+            <div className="space-y-3">
+              {[
+                { state: champagneToast, set: setChampagneToast, label: '🥂 Champagne toast', note: `+${Math.ceil((guests||1) / 8)} bottles (1 per 8 guests)` },
+                { state: tableWine,      set: setTableWine,      label: '🍷 Wine poured at the table', note: `+${Math.ceil((guests||1) / 12)} red + ${Math.ceil((guests||1) / 12)} white (1 bottle per 12 guests each)` },
+              ].map(({ state, set, label, note }) => (
+                <label key={label} className="flex items-start gap-3 cursor-pointer">
+                  <button type="button" onClick={() => set(v => !v)}
+                    className={`mt-0.5 w-10 h-5 rounded-full flex-shrink-0 transition-colors relative ${state ? 'bg-sage-500' : 'bg-cream-300'}`}
+                  >
+                    <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${state ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                  </button>
+                  <div>
+                    <p className={`text-sm font-medium ${state ? 'text-sage-700' : 'text-sage-500'}`}>{label}</p>
+                    <p className="text-xs text-sage-400">{note}</p>
+                  </div>
+                </label>
               ))}
             </div>
           </div>
