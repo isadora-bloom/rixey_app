@@ -1154,7 +1154,7 @@ export default function Dashboard() {
               {/* Bar Planner section */}
               {activeSection === 'bar' && profile?.wedding_id && (
                 <div className="p-4 sm:p-6">
-                  <BarPlanner weddingId={profile.wedding_id} guestCount={profile.guest_count} />
+                  <BarPlanner weddingId={profile.wedding_id} guestCount={profile.guest_count} weddingDate={profile.wedding_date} coupleNames={profile.couple_names} />
                 </div>
               )}
 

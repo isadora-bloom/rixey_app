@@ -3,87 +3,134 @@ import { useState, useEffect, useRef } from 'react'
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 const CATEGORIES = [
-  { key: 'beer',    label: 'Beer',     emoji: '🍺' },
-  { key: 'wine',    label: 'Wine',     emoji: '🍷' },
-  { key: 'spirits', label: 'Spirits',  emoji: '🥃' },
-  { key: 'mixers',  label: 'Mixers',   emoji: '🥤' },
-  { key: 'garnish', label: 'Garnish',  emoji: '🍋' },
-  { key: 'other',   label: 'Other',    emoji: '📦' },
+  { key: 'beer',    label: 'Beer',    emoji: '🍺' },
+  { key: 'wine',    label: 'Wine',    emoji: '🍷' },
+  { key: 'spirits', label: 'Spirits', emoji: '🥃' },
+  { key: 'mixers',  label: 'Mixers',  emoji: '🥤' },
+  { key: 'garnish', label: 'Garnish', emoji: '🍋' },
+  { key: 'other',   label: 'Other',   emoji: '📦' },
 ]
-
-// ── Quantity calculator logic ─────────────────────────────────────────────────
-// Based on Rixey Manor Handbook 2026 recommendations.
-// Base reference: 120 guests × 8 hours.
 
 const BAR_TYPES = [
-  { key: 'beer-wine',  label: 'Beer & Wine',                       beerPct: 35, winePct: 65, spiritsPct: 0  },
-  { key: 'specialty',  label: 'Beer, Wine & Signature Cocktails',  beerPct: 25, winePct: 50, spiritsPct: 25 },
-  { key: 'full',       label: 'Modified Full Bar',                 beerPct: 25, winePct: 40, spiritsPct: 35 },
+  { key: 'beer-wine',  label: 'Beer & Wine',                      beerPct: 35, winePct: 65, spiritsPct: 0  },
+  { key: 'specialty',  label: 'Beer, Wine & Signature Cocktails', beerPct: 25, winePct: 50, spiritsPct: 25 },
+  { key: 'full',       label: 'Modified Full Bar',                beerPct: 25, winePct: 40, spiritsPct: 35 },
 ]
 
-function calcQuantities({ guests, hours, barType, season }) {
-  const s = guests / 120       // guest scale relative to handbook base
-  const h = hours / 8          // hour scale relative to handbook base
-  const r = [ ]                // results
+// ── Quantity calculator ───────────────────────────────────────────────────────
+// Handbook baseline: 120 guests × 8 hrs. Sliders scale from those defaults.
 
-  // ── Beer (kegs — NO half kegs, unsafe on Rixey staircase) ──
-  const sixths   = Math.max(1, Math.ceil(2 * s * h))
-  const quarters = Math.max(1, Math.ceil(2 * s * h))
-  r.push({ item_name: '1/6th barrel keg (~55 beers each)',  quantity: sixths,   unit: 'kegs', category: 'beer' })
-  r.push({ item_name: '1/4 barrel keg (~82 beers each)',    quantity: quarters, unit: 'kegs', category: 'beer' })
+function calcQuantities({ guests, hours, barType, season, beerPct, winePct, spiritsPct, nonAlcPct }) {
+  const bt = BAR_TYPES.find(b => b.key === barType) || BAR_TYPES[0]
 
-  // ── Wine ──
-  // Handbook: 8 cases for 120 guests × 8 hrs. 1 sparkling, rest split seasonally.
-  const totalCases    = Math.max(2, Math.ceil(8 * s * h))
-  const sparklingCases = Math.max(1, Math.round(totalCases / 8))
-  const remaining      = totalCases - sparklingCases
-  const isWinter       = season === 'winter'
-  // Summer: 4 white/rosé : 3 red. Winter: 3 white/rosé : 4 red (handbook exact)
-  const whiteCases = isWinter ? Math.ceil(remaining * 3 / 7) : Math.ceil(remaining * 4 / 7)
-  const redCases   = remaining - whiteCases
-  r.push({ item_name: 'Sparkling wine / prosecco (for toasts + mimosas)', quantity: sparklingCases, unit: 'cases of 12', category: 'wine' })
-  r.push({ item_name: `White wine & rosé${isWinter ? ' (winter — less white)' : ' (summer — more white)'}`, quantity: whiteCases, unit: 'cases of 12', category: 'wine' })
-  r.push({ item_name: `Red wine${isWinter ? ' (winter — more red)' : ' (summer — less red)'}`, quantity: redCases, unit: 'cases of 12', category: 'wine' })
+  // Scale factors: slider vs bar-type default. If default is 0, use 1 as fallback.
+  const beerScale    = bt.beerPct    > 0 ? beerPct    / bt.beerPct    : (beerPct    > 0 ? 1 : 0)
+  const wineScale    = bt.winePct    > 0 ? winePct    / bt.winePct    : (winePct    > 0 ? 1 : 0)
+  const spiritsScale = bt.spiritsPct > 0 ? spiritsPct / bt.spiritsPct : (spiritsPct > 0 ? 1 : 0)
+  const nonAlcScale  = nonAlcPct / 15  // 15% is the baseline
 
-  // ── Spirits (Modified Full Bar only) ──
-  // Handbook: 1–2 handles each of rum/gin/vodka/fireball, 2–3 handles Jack Daniel's
-  if (barType === 'full') {
-    r.push({ item_name: 'Vodka (1.75L handles)',         quantity: Math.max(1, Math.ceil(2   * s * h)), unit: 'handles', category: 'spirits' })
-    r.push({ item_name: 'Rum (1.75L handles)',           quantity: Math.max(1, Math.ceil(1.5 * s * h)), unit: 'handles', category: 'spirits' })
-    r.push({ item_name: 'Gin (1.75L handles)',           quantity: Math.max(1, Math.ceil(1.5 * s * h)), unit: 'handles', category: 'spirits' })
-    r.push({ item_name: "Jack Daniel's (1.75L handles)", quantity: Math.max(2, Math.ceil(2.5 * s * h)), unit: 'handles', category: 'spirits' })
-    r.push({ item_name: 'Fireball (1.75L handles)',      quantity: Math.max(1, Math.ceil(1   * s * h)), unit: 'handles', category: 'spirits' })
+  const s        = guests / 120
+  const h        = hours  / 8
+  const isWinter = season === 'winter'
+  const r        = []
+
+  // ── Beer (kegs — no half kegs at Rixey) ──
+  if (beerPct > 0) {
+    r.push({ item_name: '1/6th barrel keg (~55 beers each)', quantity: Math.max(1, Math.ceil(2 * s * h * beerScale)),    unit: 'kegs', category: 'beer' })
+    r.push({ item_name: '1/4 barrel keg (~82 beers each)',   quantity: Math.max(1, Math.ceil(2 * s * h * beerScale)),    unit: 'kegs', category: 'beer' })
   }
-  // Specialty cocktail bar: quantities come from the Cocktail Recipes tool
+
+  // ── Wine — base: 8 cases for beer+wine/specialty, 6 for full bar (handbook) ──
+  if (winePct > 0) {
+    const baseCases      = barType === 'full' ? 6 : 8
+    const totalCases     = Math.max(2, Math.ceil(baseCases * s * h * wineScale))
+    const sparklingCases = Math.max(1, Math.round(totalCases / 8))
+    const remaining      = totalCases - sparklingCases
+    const whiteCases     = isWinter ? Math.ceil(remaining * 3 / 7) : Math.ceil(remaining * 4 / 7)
+    const redCases       = remaining - whiteCases
+    r.push({ item_name: 'Sparkling wine / prosecco (toasts + mimosas)',                                                quantity: sparklingCases, unit: 'cases of 12', category: 'wine' })
+    r.push({ item_name: `White wine & rosé${isWinter ? ' (winter — less white)' : ' (summer — more white)'}`,        quantity: whiteCases,     unit: 'cases of 12', category: 'wine' })
+    r.push({ item_name: `Red wine${isWinter ? ' (winter — more red)' : ' (summer — less red)'}`,                     quantity: redCases,       unit: 'cases of 12', category: 'wine' })
+  }
+
+  // ── Spirits — full bar only (handbook: handles by type) ──
+  if (barType === 'full' && spiritsPct > 0) {
+    r.push({ item_name: 'Vodka (1.75L handles)',         quantity: Math.max(1, Math.ceil(2   * s * h * spiritsScale)), unit: 'handles', category: 'spirits' })
+    r.push({ item_name: 'Rum (1.75L handles)',           quantity: Math.max(1, Math.ceil(1.5 * s * h * spiritsScale)), unit: 'handles', category: 'spirits' })
+    r.push({ item_name: 'Gin (1.75L handles)',           quantity: Math.max(1, Math.ceil(1.5 * s * h * spiritsScale)), unit: 'handles', category: 'spirits' })
+    r.push({ item_name: "Jack Daniel's (1.75L handles)", quantity: Math.max(2, Math.ceil(2.5 * s * h * spiritsScale)), unit: 'handles', category: 'spirits' })
+    r.push({ item_name: 'Fireball (1.75L handles)',      quantity: Math.max(1, Math.ceil(1   * s * h * spiritsScale)), unit: 'handles', category: 'spirits' })
+  }
 
   // ── Mixers ──
-  // Handbook specifics: Coke (4 cases 12-packs), Sprite, Diet Coke, Tonic, Soda Water (2 cases each)
-  r.push({ item_name: 'Coke (12-packs)',         quantity: Math.max(2, Math.ceil(4 * s * h)), unit: 'cases', category: 'mixers' })
-  r.push({ item_name: 'Sprite (12-packs)',        quantity: Math.max(1, Math.ceil(2 * s * h)), unit: 'cases', category: 'mixers' })
-  r.push({ item_name: 'Diet Coke (12-packs)',     quantity: Math.max(1, Math.ceil(2 * s * h)), unit: 'cases', category: 'mixers' })
-  r.push({ item_name: 'Ginger Ale (12-packs)',    quantity: Math.max(1, Math.ceil(1 * s * h)), unit: 'cases', category: 'mixers' })
-  r.push({ item_name: 'Tonic Water (12-packs)',   quantity: Math.max(1, Math.ceil(2 * s * h)), unit: 'cases', category: 'mixers' })
-  r.push({ item_name: 'Soda Water (12-packs)',    quantity: Math.max(1, Math.ceil(2 * s * h)), unit: 'cases', category: 'mixers' })
-  r.push({ item_name: 'Orange juice (for mimosas, breakfast, mixing)', quantity: Math.max(1, Math.ceil(guests / 15)), unit: 'gallons', category: 'mixers' })
-  r.push({ item_name: 'Cranberry juice',          quantity: Math.max(1, Math.ceil(guests / 20)), unit: 'gallons', category: 'mixers' })
-  r.push({ item_name: 'Pineapple juice',          quantity: Math.max(1, Math.ceil(guests / 20)), unit: 'large cans', category: 'mixers' })
-  r.push({ item_name: 'Sour mix',                 quantity: Math.max(1, Math.ceil(guests / 30)), unit: 'bottles', category: 'mixers' })
-  r.push({ item_name: 'Water (small bottles)',     quantity: Math.max(6, Math.ceil(guests / 20)), unit: 'cases', category: 'mixers' })
+  r.push({ item_name: 'Coke (12-packs)',       quantity: Math.max(2, Math.ceil(4 * s * h * nonAlcScale)), unit: 'cases',   category: 'mixers' })
+  r.push({ item_name: 'Sprite (12-packs)',     quantity: Math.max(1, Math.ceil(2 * s * h * nonAlcScale)), unit: 'cases',   category: 'mixers' })
+  r.push({ item_name: 'Diet Coke (12-packs)',  quantity: Math.max(1, Math.ceil(2 * s * h * nonAlcScale)), unit: 'cases',   category: 'mixers' })
+  r.push({ item_name: 'Ginger Ale (12-packs)', quantity: Math.max(1, Math.ceil(1 * s * h * nonAlcScale)), unit: 'cases',   category: 'mixers' })
+  // Tonic + soda water — spirits bars need more; beer+wine just soda water
+  if (barType !== 'beer-wine') {
+    r.push({ item_name: 'Tonic Water (12-packs)', quantity: Math.max(1, Math.ceil(2 * s * h * spiritsScale)), unit: 'cases',   category: 'mixers' })
+    r.push({ item_name: 'Soda Water (12-packs)',  quantity: Math.max(1, Math.ceil(2 * s * h * spiritsScale)), unit: 'cases',   category: 'mixers' })
+    r.push({ item_name: 'Sour mix',               quantity: Math.max(1, Math.ceil(guests / 30)),              unit: 'bottles', category: 'mixers' })
+  } else {
+    r.push({ item_name: 'Soda Water (12-packs)',  quantity: Math.max(1, Math.ceil(1 * s * h)),               unit: 'cases',   category: 'mixers' })
+  }
+  r.push({ item_name: 'Orange juice (mimosas, breakfast, mixing)', quantity: Math.max(1, Math.ceil(guests / 15)), unit: 'gallons',    category: 'mixers' })
+  r.push({ item_name: 'Cranberry juice',                           quantity: Math.max(1, Math.ceil(guests / 20)), unit: 'gallons',    category: 'mixers' })
+  r.push({ item_name: 'Pineapple juice',                           quantity: Math.max(1, Math.ceil(guests / 20)), unit: 'large cans', category: 'mixers' })
+  r.push({ item_name: 'Water (small bottles)',                     quantity: Math.max(6, Math.ceil(guests / 20)), unit: 'cases',      category: 'mixers' })
 
-  // ── Garnishes ── (handbook: olives, cherries, oranges, lemons, limes)
-  r.push({ item_name: 'Lemons',              quantity: Math.ceil(guests / 8),   unit: '',      category: 'garnish' })
-  r.push({ item_name: 'Limes',               quantity: Math.ceil(guests / 8),   unit: '',      category: 'garnish' })
-  r.push({ item_name: 'Oranges',             quantity: Math.ceil(guests / 12),  unit: '',      category: 'garnish' })
-  r.push({ item_name: 'Olives',              quantity: Math.max(1, Math.ceil(guests / 30)), unit: 'jars', category: 'garnish' })
-  r.push({ item_name: 'Maraschino cherries', quantity: Math.max(1, Math.ceil(guests / 30)), unit: 'jars', category: 'garnish' })
+  // ── Garnishes — olives/cherries only for spirits bars ──
+  r.push({ item_name: 'Lemons',  quantity: Math.ceil(guests / 8),  unit: '', category: 'garnish' })
+  r.push({ item_name: 'Limes',   quantity: Math.ceil(guests / 8),  unit: '', category: 'garnish' })
+  r.push({ item_name: 'Oranges', quantity: Math.ceil(guests / 12), unit: '', category: 'garnish' })
+  if (barType !== 'beer-wine') {
+    r.push({ item_name: 'Olives',              quantity: Math.max(1, Math.ceil(guests / 30)), unit: 'jars', category: 'garnish' })
+    r.push({ item_name: 'Maraschino cherries', quantity: Math.max(1, Math.ceil(guests / 30)), unit: 'jars', category: 'garnish' })
+  }
 
-  // ── Ice & other ── (handbook: 60–80 lbs for 120 guests, i.e. ~0.6 lbs/person)
+  // ── Ice + other (handbook: 60–80 lbs for 120 guests) ──
   const iceLbs = Math.max(60, Math.round(guests * 0.65 / 10) * 10)
-  r.push({ item_name: 'Ice',               quantity: iceLbs,                  unit: 'lbs',   category: 'other' })
-  r.push({ item_name: 'Cups / glasses',    quantity: Math.ceil(guests * 2),   unit: '',      category: 'other' })
-  r.push({ item_name: 'Cocktail napkins',  quantity: Math.ceil(guests * 4),   unit: '',      category: 'other' })
+  r.push({ item_name: 'Ice',              quantity: iceLbs,                unit: 'lbs', category: 'other' })
+  r.push({ item_name: 'Cups / glasses',   quantity: Math.ceil(guests * 2), unit: '',    category: 'other' })
+  r.push({ item_name: 'Cocktail napkins', quantity: Math.ceil(guests * 4), unit: '',    category: 'other' })
 
   return r
+}
+
+function bartenderCount(guests) {
+  // Handbook: 1 per 50 guests, Saturday minimum 2
+  return Math.max(2, Math.ceil(guests / 50))
+}
+
+function seasonFromDate(dateStr) {
+  if (!dateStr) return null
+  const m = new Date(dateStr + 'T00:00:00').getMonth() // 0-indexed
+  return (m >= 4 && m <= 9) ? 'summer' : 'winter'
+}
+
+// ── Print helper ──────────────────────────────────────────────────────────────
+
+function printList(items, coupleNames) {
+  const grouped = {}
+  CATEGORIES.forEach(c => { grouped[c.key] = [] })
+  items.filter(i => !i.checked).forEach(i => {
+    if (grouped[i.category]) grouped[i.category].push(i)
+  })
+  const lines = [`Bar Shopping List${coupleNames ? ` — ${coupleNames}` : ''}`, '']
+  CATEGORIES.forEach(cat => {
+    if (!grouped[cat.key]?.length) return
+    lines.push(`${cat.emoji} ${cat.label.toUpperCase()}`)
+    grouped[cat.key].forEach(i => {
+      lines.push(`  ☐  ${i.item_name}${i.quantity ? `  —  ${i.quantity} ${i.unit || ''}`.trim() : ''}${i.notes ? `  (${i.notes})` : ''}`)
+    })
+    lines.push('')
+  })
+  lines.push('Call Rixey on Monday before your wedding — we almost always have leftover soda and mixers!')
+  const w = window.open('', '_blank')
+  w.document.write(`<pre style="font-family:monospace;font-size:13px;padding:24px;white-space:pre-wrap">${lines.join('\n')}</pre>`)
+  w.document.close()
+  w.print()
 }
 
 // ── Shopping list row ─────────────────────────────────────────────────────────
@@ -92,24 +139,21 @@ function ShoppingRow({ item, onToggle, onDelete, onUpdate }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft]     = useState({ item_name: item.item_name, quantity: item.quantity || '', unit: item.unit || '', notes: item.notes || '' })
 
-  const save = () => {
-    onUpdate(item.id, draft)
-    setEditing(false)
-  }
+  const save = () => { onUpdate(item.id, draft); setEditing(false) }
 
   return (
-    <div className={`flex items-start gap-3 py-2.5 border-b border-cream-100 last:border-0 group ${item.checked ? 'opacity-50' : ''}`}>
+    <div className={`flex items-start gap-3 py-2.5 border-b border-cream-100 last:border-0 ${item.checked ? 'opacity-50' : ''}`}>
       <button onClick={() => onToggle(item.id, !item.checked)} className="mt-0.5 flex-shrink-0">
-        <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition ${item.checked ? 'bg-sage-500 border-sage-500' : 'border-cream-300 group-hover:border-sage-300'}`}>
+        <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition ${item.checked ? 'bg-sage-500 border-sage-500' : 'border-cream-300 hover:border-sage-300'}`}>
           {item.checked && <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7"/></svg>}
         </div>
       </button>
 
       {editing ? (
         <div className="flex-1 space-y-2">
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <input value={draft.item_name} onChange={e => setDraft(d => ({...d, item_name: e.target.value}))}
-              className="flex-1 border border-cream-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-sage-300" />
+              className="flex-1 min-w-0 border border-cream-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-sage-300" />
             <input value={draft.quantity} onChange={e => setDraft(d => ({...d, quantity: e.target.value}))} placeholder="Qty"
               className="w-16 border border-cream-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-sage-300" />
             <input value={draft.unit} onChange={e => setDraft(d => ({...d, unit: e.target.value}))} placeholder="Unit"
@@ -123,26 +167,26 @@ function ShoppingRow({ item, onToggle, onDelete, onUpdate }) {
           </div>
         </div>
       ) : (
-        <div className="flex-1 min-w-0">
-          <div className="flex items-baseline gap-2">
-            <span className={`text-sm font-medium text-sage-700 ${item.checked ? 'line-through' : ''}`}>{item.item_name}</span>
-            {(item.quantity || item.unit) && (
-              <span className="text-xs text-sage-400">{item.quantity} {item.unit}</span>
-            )}
+        <>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-baseline gap-2 flex-wrap">
+              <span className={`text-sm font-medium text-sage-700 ${item.checked ? 'line-through' : ''}`}>{item.item_name}</span>
+              {(item.quantity || item.unit) && (
+                <span className="text-xs text-sage-400">{item.quantity} {item.unit}</span>
+              )}
+            </div>
+            {item.notes && <p className="text-xs text-sage-400 mt-0.5">{item.notes}</p>}
           </div>
-          {item.notes && <p className="text-xs text-sage-400 mt-0.5">{item.notes}</p>}
-        </div>
-      )}
-
-      {!editing && (
-        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition flex-shrink-0">
-          <button onClick={() => setEditing(true)} className="text-sage-400 hover:text-sage-600 p-1">
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 012.828 2.828L11.828 15.828a4 4 0 01-2.828 1.172H7v-2a4 4 0 011.172-2.828z"/></svg>
-          </button>
-          <button onClick={() => onDelete(item.id)} className="text-red-300 hover:text-red-500 p-1">
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
-          </button>
-        </div>
+          {/* Always visible on mobile */}
+          <div className="flex gap-1 flex-shrink-0">
+            <button onClick={() => setEditing(true)} className="text-sage-300 hover:text-sage-600 p-1">
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 012.828 2.828L11.828 15.828a4 4 0 01-2.828 1.172H7v-2a4 4 0 011.172-2.828z"/></svg>
+            </button>
+            <button onClick={() => onDelete(item.id)} className="text-red-200 hover:text-red-500 p-1">
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+          </div>
+        </>
       )}
     </div>
   )
@@ -150,45 +194,48 @@ function ShoppingRow({ item, onToggle, onDelete, onUpdate }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function BarPlanner({ weddingId, guestCount: guestCountProp }) {
-  const [tab, setTab]                 = useState('list')
-  const [items, setItems]             = useState([])
-  const [recipes, setRecipes]         = useState([])
-  const [loading, setLoading]         = useState(true)
+export default function BarPlanner({ weddingId, guestCount: guestCountProp, weddingDate, coupleNames }) {
+  const [tab, setTab]     = useState('calculator')
+  const [items, setItems] = useState([])
+  const [recipes, setRecipes] = useState([])
+  const [loading, setLoading] = useState(true)
 
   // Calculator state
-  const [guests, setGuests]           = useState(guestCountProp || 80)
-  const [hours, setHours]             = useState(8)
-  const [barType, setBarType]         = useState('beer-wine')
-  const [season, setSeason]           = useState(() => {
-    const m = new Date().getMonth() // 0-indexed
-    return (m >= 4 && m <= 9) ? 'summer' : 'winter' // May–Oct = summer
-  })
-  const [beerPct, setBeerPct]         = useState(35)
-  const [winePct, setWinePct]         = useState(65)
-  const [spiritsPct, setSpiritsPct]   = useState(0)
-  const [nonAlcPct, setNonAlcPct]     = useState(15)
+  const [guests, setGuests]         = useState(guestCountProp || 80)
+  const [hours, setHours]           = useState(8)
+  const [barType, setBarType]       = useState('beer-wine')
+  const [season, setSeason]         = useState(() => seasonFromDate(weddingDate) || (new Date().getMonth() >= 4 && new Date().getMonth() <= 9 ? 'summer' : 'winter'))
+  const [beerPct, setBeerPct]       = useState(35)
+  const [winePct, setWinePct]       = useState(65)
+  const [spiritsPct, setSpiritsPct] = useState(0)
+  const [nonAlcPct, setNonAlcPct]   = useState(15)
   const [calcPreview, setCalcPreview] = useState([])
 
   // Add item form
-  const [addingItem, setAddingItem]   = useState(false)
-  const [newItem, setNewItem]         = useState({ item_name: '', quantity: '', unit: '', category: 'other', notes: '' })
+  const [addingItem, setAddingItem] = useState(false)
+  const [newItem, setNewItem]       = useState({ item_name: '', quantity: '', unit: '', category: 'other', notes: '' })
 
   // Recipe form
-  const [addingRecipe, setAddingRecipe] = useState(false)
-  const [recipeMode, setRecipeMode]     = useState('url') // url | upload
-  const [recipeUrl, setRecipeUrl]       = useState('')
-  const [recipeName, setRecipeName]     = useState('')
-  const [recipeFile, setRecipeFile]     = useState(null)
-  const [extracting, setExtracting]     = useState(false)
-  const [extractedIngredients, setExtractedIngredients] = useState(null)
+  const [addingRecipe, setAddingRecipe]               = useState(false)
+  const [recipeMode, setRecipeMode]                   = useState('url')
+  const [recipeUrl, setRecipeUrl]                     = useState('')
+  const [recipeName, setRecipeName]                   = useState('')
+  const [recipeFile, setRecipeFile]                   = useState(null)
+  const [extracting, setExtracting]                   = useState(false)
+  const [editableIngredients, setEditableIngredients] = useState(null) // editable before saving
   const fileRef = useRef()
 
   useEffect(() => { load() }, [weddingId])
 
   useEffect(() => {
-    setCalcPreview(calcQuantities({ guests, hours, barType, season }))
-  }, [guests, hours, barType, season])
+    setCalcPreview(calcQuantities({ guests, hours, barType, season, beerPct, winePct, spiritsPct, nonAlcPct }))
+  }, [guests, hours, barType, season, beerPct, winePct, spiritsPct, nonAlcPct])
+
+  // Sync season if wedding date prop changes
+  useEffect(() => {
+    const s = seasonFromDate(weddingDate)
+    if (s) setSeason(s)
+  }, [weddingDate])
 
   const selectBarType = (key) => {
     const bt = BAR_TYPES.find(b => b.key === key)
@@ -206,34 +253,27 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp }) {
       ])
       setItems(await itemsRes.json() || [])
       setRecipes(await recipesRes.json() || [])
-    } catch (err) {
-      console.error('Failed to load bar planner:', err)
-    }
+    } catch (err) { console.error('Failed to load bar planner:', err) }
     setLoading(false)
   }
 
-  // ── Shopping list actions ──
+  // ── Shopping list ──
 
   const addItem = async () => {
     if (!newItem.item_name.trim()) return
-    try {
-      const res  = await fetch(`${API_URL}/api/bar-shopping/${weddingId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...newItem, sort_order: items.length }),
-      })
-      const data = await res.json()
-      setItems(prev => [...prev, data])
-      setNewItem({ item_name: '', quantity: '', unit: '', category: 'other', notes: '' })
-      setAddingItem(false)
-    } catch (err) { console.error(err) }
+    const res  = await fetch(`${API_URL}/api/bar-shopping/${weddingId}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...newItem, sort_order: items.length }),
+    })
+    setItems(prev => [...prev, await res.json()])
+    setNewItem({ item_name: '', quantity: '', unit: '', category: 'other', notes: '' })
+    setAddingItem(false)
   }
 
   const toggleItem = async (id, checked) => {
     setItems(prev => prev.map(i => i.id === id ? { ...i, checked } : i))
     await fetch(`${API_URL}/api/bar-shopping/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ checked }),
     })
   }
@@ -241,8 +281,7 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp }) {
   const updateItem = async (id, fields) => {
     setItems(prev => prev.map(i => i.id === id ? { ...i, ...fields } : i))
     await fetch(`${API_URL}/api/bar-shopping/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(fields),
     })
   }
@@ -253,18 +292,15 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp }) {
   }
 
   const importFromCalculator = async () => {
-    const existing = new Set(items.filter(i => i.from_calculator).map(i => i.item_name))
-    // Remove old calculator items first
+    // Replace only calculator-generated items; keep anything manually added
     const toRemove = items.filter(i => i.from_calculator)
     for (const item of toRemove) {
       await fetch(`${API_URL}/api/bar-shopping/${item.id}`, { method: 'DELETE' })
     }
-    // Insert new ones
     const added = []
     for (const item of calcPreview) {
-      const res  = await fetch(`${API_URL}/api/bar-shopping/${weddingId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const res = await fetch(`${API_URL}/api/bar-shopping/${weddingId}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...item, from_calculator: true, sort_order: items.length + added.length }),
       })
       added.push(await res.json())
@@ -273,20 +309,19 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp }) {
     setTab('list')
   }
 
-  // ── Recipe actions ──
+  // ── Recipes ──
 
   const extractRecipe = async () => {
     if (!recipeName.trim()) return alert('Give this cocktail a name first.')
     if (recipeMode === 'url' && !recipeUrl.trim()) return alert('Paste a URL.')
     if (recipeMode === 'upload' && !recipeFile) return alert('Choose a file.')
     setExtracting(true)
-    setExtractedIngredients(null)
+    setEditableIngredients(null)
     try {
       let res
       if (recipeMode === 'url') {
         res = await fetch(`${API_URL}/api/bar-recipes/extract-url`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ url: recipeUrl, name: recipeName }),
         })
       } else {
@@ -296,36 +331,40 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp }) {
         res = await fetch(`${API_URL}/api/bar-recipes/extract-upload`, { method: 'POST', body: form })
       }
       const data = await res.json()
-      if (data.ingredients) setExtractedIngredients(data.ingredients)
+      if (data.ingredients) setEditableIngredients(data.ingredients)
       else alert(data.error || 'Could not extract ingredients.')
     } catch (err) {
       console.error(err)
-      alert('Extraction failed. Try entering ingredients manually.')
+      alert('Extraction failed.')
     }
     setExtracting(false)
   }
 
-  const saveRecipe = async (ingredients) => {
-    try {
-      const res = await fetch(`${API_URL}/api/bar-recipes/${weddingId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: recipeName,
-          source_type: recipeMode,
-          source_url: recipeMode === 'url' ? recipeUrl : null,
-          ingredients,
-          servings_basis: 1,
-        }),
-      })
-      const saved = await res.json()
-      setRecipes(prev => [...prev, saved])
-      setAddingRecipe(false)
-      setRecipeName('')
-      setRecipeUrl('')
-      setRecipeFile(null)
-      setExtractedIngredients(null)
-    } catch (err) { console.error(err) }
+  const updateIngredient = (i, field, val) => {
+    setEditableIngredients(prev => prev.map((ing, idx) => idx === i ? { ...ing, [field]: val } : ing))
+  }
+
+  const removeIngredient = (i) => {
+    setEditableIngredients(prev => prev.filter((_, idx) => idx !== i))
+  }
+
+  const addIngredientRow = () => {
+    setEditableIngredients(prev => [...prev, { name: '', quantity: '', unit: '', per_serving: true, category: 'other' }])
+  }
+
+  const saveRecipe = async () => {
+    const ingredients = (editableIngredients || []).filter(i => i.name.trim())
+    const res = await fetch(`${API_URL}/api/bar-recipes/${weddingId}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: recipeName, source_type: recipeMode,
+        source_url: recipeMode === 'url' ? recipeUrl : null,
+        ingredients, servings_basis: 1,
+      }),
+    })
+    setRecipes(prev => [...prev, await res.json()])
+    setAddingRecipe(false)
+    setRecipeName(''); setRecipeUrl(''); setRecipeFile(null); setEditableIngredients(null)
   }
 
   const deleteRecipe = async (id) => {
@@ -334,19 +373,15 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp }) {
   }
 
   const addRecipeToList = async (recipe) => {
-    const scale = guests // scale ingredients to guest count (1 per person)
     const added = []
     for (const ing of recipe.ingredients) {
-      const scaledQty = ing.per_serving ? Math.ceil(ing.quantity * scale) : ing.quantity
+      const scaledQty = ing.per_serving ? Math.ceil(ing.quantity * guests) : ing.quantity
       const res = await fetch(`${API_URL}/api/bar-shopping/${weddingId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          item_name: ing.name,
-          quantity: scaledQty,
-          unit: ing.unit,
+          item_name: ing.name, quantity: scaledQty, unit: ing.unit,
           category: ing.category || 'other',
-          notes: `For ${recipe.name} (scaled to ${scale} guests)`,
+          notes: `For ${recipe.name} (scaled to ${guests} guests)`,
           sort_order: items.length + added.length,
         }),
       })
@@ -360,134 +395,40 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp }) {
 
   if (loading) return <p className="text-sage-400 text-center py-8">Loading bar planner…</p>
 
-  const checked   = items.filter(i => i.checked).length
-  const total     = items.length
+  const checkedCount = items.filter(i => i.checked).length
+  const totalCount   = items.length
+  const unchecked    = items.filter(i => !i.checked)
 
   return (
     <div className="space-y-5 max-w-2xl">
 
-      <div>
-        <h3 className="font-serif text-lg text-sage-700">Bar Planner</h3>
-        <p className="text-sage-500 text-sm mt-0.5">
-          Calculate quantities, build a shopping list, and add your signature cocktail recipes.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h3 className="font-serif text-lg text-sage-700">Bar Planner</h3>
+          <p className="text-sage-500 text-sm mt-0.5">Calculate quantities, build a shopping list, and add cocktail recipes.</p>
+        </div>
       </div>
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-cream-200">
         {[
-          { id: 'list',       label: `Shopping List${total ? ` (${checked}/${total})` : ''}` },
           { id: 'calculator', label: 'Quantity Guide' },
+          { id: 'list',       label: `Shopping List${totalCount ? ` · ${checkedCount}/${totalCount}` : ''}` },
           { id: 'recipes',    label: `Cocktail Recipes${recipes.length ? ` (${recipes.length})` : ''}` },
         ].map(t => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
+          <button key={t.id} onClick={() => setTab(t.id)}
             className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition ${
-              tab === t.id
-                ? 'border-sage-600 text-sage-700'
-                : 'border-transparent text-sage-400 hover:text-sage-600'
+              tab === t.id ? 'border-sage-600 text-sage-700' : 'border-transparent text-sage-400 hover:text-sage-600'
             }`}
-          >
-            {t.label}
-          </button>
+          >{t.label}</button>
         ))}
       </div>
 
-      {/* ── Shopping List ── */}
-      {tab === 'list' && (
-        <div>
-          {items.length === 0 ? (
-            <div className="text-center py-10 text-sage-400">
-              <p className="text-3xl mb-3">🛒</p>
-              <p className="text-sm">No items yet. Use the Quantity Guide to generate a list, or add items manually.</p>
-            </div>
-          ) : (
-            <div className="space-y-6">
-              {CATEGORIES.filter(cat => items.some(i => i.category === cat.key)).map(cat => (
-                <div key={cat.key}>
-                  <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-2">
-                    {cat.emoji} {cat.label}
-                  </p>
-                  <div className="bg-white border border-cream-200 rounded-xl px-4">
-                    {items
-                      .filter(i => i.category === cat.key)
-                      .map(item => (
-                        <ShoppingRow
-                          key={item.id}
-                          item={item}
-                          onToggle={toggleItem}
-                          onDelete={deleteItem}
-                          onUpdate={updateItem}
-                        />
-                      ))
-                    }
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Add item */}
-          {addingItem ? (
-            <div className="mt-4 bg-cream-50 border border-cream-200 rounded-xl p-4 space-y-3">
-              <div className="flex gap-2">
-                <input
-                  value={newItem.item_name}
-                  onChange={e => setNewItem(p => ({...p, item_name: e.target.value}))}
-                  placeholder="Item name"
-                  autoFocus
-                  className="flex-1 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
-                />
-                <input
-                  value={newItem.quantity}
-                  onChange={e => setNewItem(p => ({...p, quantity: e.target.value}))}
-                  placeholder="Qty"
-                  className="w-16 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
-                />
-                <input
-                  value={newItem.unit}
-                  onChange={e => setNewItem(p => ({...p, unit: e.target.value}))}
-                  placeholder="Unit"
-                  className="w-20 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
-                />
-              </div>
-              <div className="flex gap-2">
-                <select
-                  value={newItem.category}
-                  onChange={e => setNewItem(p => ({...p, category: e.target.value}))}
-                  className="border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
-                >
-                  {CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.emoji} {c.label}</option>)}
-                </select>
-                <input
-                  value={newItem.notes}
-                  onChange={e => setNewItem(p => ({...p, notes: e.target.value}))}
-                  placeholder="Notes (optional)"
-                  className="flex-1 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
-                />
-              </div>
-              <div className="flex gap-2">
-                <button onClick={addItem} className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700">Add item</button>
-                <button onClick={() => setAddingItem(false)} className="px-4 py-2 text-sage-500 text-sm hover:text-sage-700">Cancel</button>
-              </div>
-            </div>
-          ) : (
-            <button
-              onClick={() => setAddingItem(true)}
-              className="mt-4 text-sage-500 hover:text-sage-700 text-sm font-medium"
-            >
-              + Add item manually
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* ── Calculator ── */}
+      {/* ── Quantity Guide ── */}
       {tab === 'calculator' && (
         <div className="space-y-6">
           <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">
-            Based on Rixey's handbook recommendations (~1 drink/person/hour). Adjust sliders to match your crowd — the quantities table updates live.
+            Based on Rixey's handbook (~1 drink/person/hour). The handbook quantities are the starting point — sliders adjust everything proportionally from there.
           </div>
 
           {/* Bar type */}
@@ -495,16 +436,13 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp }) {
             <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">Bar type</p>
             <div className="space-y-2">
               {BAR_TYPES.map(bt => (
-                <label key={bt.key} className="flex items-start gap-3 cursor-pointer group">
-                  <input
-                    type="radio" name="barType" value={bt.key} checked={barType === bt.key}
-                    onChange={() => selectBarType(bt.key)}
-                    className="mt-0.5 accent-sage-600"
-                  />
+                <label key={bt.key} className="flex items-start gap-3 cursor-pointer">
+                  <input type="radio" name="barType" value={bt.key} checked={barType === bt.key}
+                    onChange={() => selectBarType(bt.key)} className="mt-0.5 accent-sage-600" />
                   <div>
                     <p className={`text-sm font-medium ${barType === bt.key ? 'text-sage-700' : 'text-sage-500'}`}>{bt.label}</p>
-                    {bt.key === 'specialty' && <p className="text-xs text-sage-400">Add your recipes in the Cocktail Recipes tab — they'll scale to your guest count</p>}
-                    {bt.key === 'full' && <p className="text-xs text-sage-400">Vodka, rum, gin, Jack Daniel's, Fireball — limit shots-only liquors (go easy on tequila)</p>}
+                    {bt.key === 'specialty' && <p className="text-xs text-sage-400">Add recipes in the Cocktail Recipes tab — they'll scale to your guest count</p>}
+                    {bt.key === 'full' && <p className="text-xs text-sage-400">Vodka, rum, gin, Jack Daniel's, Fireball — go easy on tequila (shots-only liquors slow service)</p>}
                   </div>
                 </label>
               ))}
@@ -513,19 +451,17 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp }) {
 
           {/* Season */}
           <div>
-            <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">Season <span className="font-normal normal-case text-sage-400">(affects red vs white wine split)</span></p>
+            <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">
+              Season <span className="font-normal normal-case text-sage-400">— affects red vs white wine split</span>
+              {weddingDate && <span className="font-normal normal-case text-sage-400"> (auto-detected from your wedding date)</span>}
+            </p>
             <div className="flex gap-3">
               {[
                 { key: 'summer', label: '☀️ Spring / Summer', note: 'More white & rosé' },
                 { key: 'winter', label: '🍂 Autumn / Winter',  note: 'More red' },
               ].map(s => (
-                <button
-                  key={s.key}
-                  type="button"
-                  onClick={() => setSeason(s.key)}
-                  className={`flex-1 py-2.5 px-3 rounded-xl border-2 text-sm text-left transition ${
-                    season === s.key ? 'border-sage-500 bg-sage-50' : 'border-cream-200 hover:border-sage-300'
-                  }`}
+                <button key={s.key} type="button" onClick={() => setSeason(s.key)}
+                  className={`flex-1 py-2.5 px-3 rounded-xl border-2 text-sm text-left transition ${season === s.key ? 'border-sage-500 bg-sage-50' : 'border-cream-200 hover:border-sage-300'}`}
                 >
                   <p className={`font-medium ${season === s.key ? 'text-sage-700' : 'text-sage-500'}`}>{s.label}</p>
                   <p className="text-xs text-sage-400 mt-0.5">{s.note}</p>
@@ -534,24 +470,19 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp }) {
             </div>
           </div>
 
-          {/* Guest count slider */}
+          {/* Guest count */}
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-xs font-semibold text-sage-500 uppercase tracking-wide">Guest count</label>
-              <input
-                type="number" value={guests}
-                onChange={e => setGuests(Math.max(1, Number(e.target.value)))}
-                className="w-20 border border-cream-300 rounded-lg px-2 py-1 text-sm text-center font-medium text-sage-700 focus:outline-none focus:ring-2 focus:ring-sage-300"
-              />
+              <input type="number" value={guests} onChange={e => setGuests(Math.max(1, Number(e.target.value)))}
+                className="w-20 border border-cream-300 rounded-lg px-2 py-1 text-sm text-center font-medium text-sage-700 focus:outline-none focus:ring-2 focus:ring-sage-300" />
             </div>
             <input type="range" min={10} max={400} step={5} value={guests}
               onChange={e => setGuests(Number(e.target.value))} className="w-full accent-sage-600" />
-            <div className="flex justify-between text-xs text-sage-300 mt-1">
-              <span>10</span><span>100</span><span>200</span><span>300</span><span>400</span>
-            </div>
+            <div className="flex justify-between text-xs text-sage-300 mt-1"><span>10</span><span>100</span><span>200</span><span>300</span><span>400</span></div>
           </div>
 
-          {/* Hours slider */}
+          {/* Hours */}
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-xs font-semibold text-sage-500 uppercase tracking-wide">Bar open for</label>
@@ -559,21 +490,19 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp }) {
             </div>
             <input type="range" min={1} max={12} step={0.5} value={hours}
               onChange={e => setHours(Number(e.target.value))} className="w-full accent-sage-600" />
-            <div className="flex justify-between text-xs text-sage-300 mt-1">
-              <span>1 hr</span><span>3</span><span>5</span><span>8</span><span>12 hrs</span>
-            </div>
+            <div className="flex justify-between text-xs text-sage-300 mt-1"><span>1 hr</span><span>3</span><span>5</span><span>8</span><span>12 hrs</span></div>
           </div>
 
-          {/* Drink split sliders — drive the per-guest summary */}
+          {/* Drink split — drives both summary AND quantities */}
           <div>
             <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1">Adjust for your crowd</p>
-            <p className="text-xs text-sage-400 mb-4">These sliders don't change the quantities table — they tune the per-guest summary below.</p>
+            <p className="text-xs text-sage-400 mb-4">Moving these updates the quantities below in real time.</p>
             <div className="space-y-4">
               {[
-                { label: '🍺 Beer',               val: beerPct,    set: setBeerPct,    color: 'accent-amber-500', disabled: false },
-                { label: '🍷 Wine',               val: winePct,    set: setWinePct,    color: 'accent-rose-500',  disabled: false },
+                { label: '🍺 Beer',                val: beerPct,    set: setBeerPct,    color: 'accent-amber-500', disabled: false },
+                { label: '🍷 Wine',                val: winePct,    set: setWinePct,    color: 'accent-rose-500',  disabled: false },
                 { label: '🥃 Spirits / cocktails', val: spiritsPct, set: setSpiritsPct, color: 'accent-sage-600',  disabled: barType === 'beer-wine' },
-                { label: '🥤 Non-alcoholic',       val: nonAlcPct,  set: setNonAlcPct,  color: 'accent-blue-400',  disabled: false },
+                { label: '🥤 Non-alcoholic',        val: nonAlcPct,  set: setNonAlcPct,  color: 'accent-blue-400',  disabled: false },
               ].map(({ label, val, set, color, disabled }) => (
                 <div key={label} className={disabled ? 'opacity-30 pointer-events-none' : ''}>
                   <div className="flex items-center justify-between mb-1.5">
@@ -590,22 +519,20 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp }) {
             )}
           </div>
 
-          {/* Per-guest running summary */}
+          {/* Per-guest summary */}
           <div className="bg-sage-50 border border-sage-200 rounded-xl px-5 py-4">
-            <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">What this means per guest</p>
+            <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-2">What this means per guest</p>
             <p className="text-sage-700 text-sm leading-relaxed">
               Over <strong>{hours} {hours === 1 ? 'hour' : 'hours'}</strong>, each guest could have around{' '}
-              {winePct > 0 && <><strong>{(hours * winePct / 100).toFixed(1)} {hours * winePct / 100 === 1 ? 'glass' : 'glasses'} of wine</strong>{beerPct > 0 || spiritsPct > 0 ? ', ' : ''}</>}
+              {winePct > 0 && <><strong>{(hours * winePct / 100).toFixed(1)} {hours * winePct / 100 === 1 ? 'glass' : 'glasses'} of wine</strong>{(beerPct > 0 || spiritsPct > 0) ? ', ' : ''}</>}
               {beerPct > 0 && <><strong>{(hours * beerPct / 100).toFixed(1)} {hours * beerPct / 100 === 1 ? 'beer' : 'beers'}</strong>{spiritsPct > 0 ? ', and ' : ''}</>}
               {spiritsPct > 0 && <><strong>{(hours * spiritsPct / 100).toFixed(1)} {hours * spiritsPct / 100 === 1 ? 'mixed drink' : 'mixed drinks'}</strong></>}
               {nonAlcPct > 0 && <> — plus <strong>{(hours * nonAlcPct / 100).toFixed(1)} non-alcoholic {hours * nonAlcPct / 100 === 1 ? 'drink' : 'drinks'}</strong></>}.
             </p>
-            <p className="text-xs text-sage-400 mt-2">
-              Total estimated drinks: <strong>{(hours * guests).toLocaleString()}</strong> across all {guests} guests.
-            </p>
+            <p className="text-xs text-sage-400 mt-1">Total estimated: <strong>{(hours * guests).toLocaleString()}</strong> drinks across {guests} guests.</p>
           </div>
 
-          {/* Quantities table by category */}
+          {/* Quantities table */}
           <div>
             <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">Suggested quantities to buy</p>
             {CATEGORIES.filter(cat => calcPreview.some(i => i.category === cat.key)).map(cat => (
@@ -622,21 +549,107 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp }) {
               </div>
             ))}
             {barType === 'specialty' && (
-              <p className="text-xs text-sage-400 italic mt-2">
-                Signature cocktail ingredients aren't listed here — add your recipes in the Cocktail Recipes tab and they'll scale to {guests} guests automatically.
-              </p>
+              <p className="text-xs text-sage-400 italic mt-1">Signature cocktail ingredients aren't listed — add recipes in the Cocktail Recipes tab.</p>
             )}
-            <p className="text-xs text-sage-400 mt-3">
-              ⚠️ No half kegs (1/2 barrel) — they can't safely be moved down the Rixey staircase.
-            </p>
+            <p className="text-xs text-sage-400 mt-2">⚠️ No half kegs (1/2 barrel) — can't safely come down the Rixey staircase.</p>
           </div>
 
-          <button
-            onClick={importFromCalculator}
+          {/* Bartender count */}
+          <div className="bg-cream-50 border border-cream-200 rounded-xl px-4 py-3 text-sm text-sage-700">
+            <p className="font-medium mb-1">🙋 Bartenders</p>
+            <p>Based on {guests} guests you'll need at least <strong>{bartenderCount(guests)} bartenders</strong>. Add one more for each of: champagne welcome drink, rooftop bar, satellite bar, or table wine service.</p>
+            <p className="text-xs text-sage-400 mt-1">Saturday minimum is always 2. Bartenders are $350 each.</p>
+          </div>
+
+          <button onClick={importFromCalculator}
             className="w-full py-3 bg-sage-600 text-white rounded-xl text-sm font-medium hover:bg-sage-700"
           >
-            Import to shopping list (replaces any previous calculator items)
+            Add to shopping list
           </button>
+        </div>
+      )}
+
+      {/* ── Shopping List ── */}
+      {tab === 'list' && (
+        <div>
+          {/* Header row */}
+          <div className="flex items-center justify-between mb-4">
+            <p className="text-xs text-sage-400">
+              {totalCount === 0 ? 'No items yet' : `${checkedCount} of ${totalCount} items ticked off`}
+            </p>
+            {unchecked.length > 0 && (
+              <button onClick={() => printList(items, coupleNames)}
+                className="flex items-center gap-1.5 text-xs text-sage-500 hover:text-sage-700 border border-cream-200 rounded-lg px-3 py-1.5"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
+                Print list
+              </button>
+            )}
+          </div>
+
+          {totalCount === 0 ? (
+            <div className="text-center py-10 text-sage-400">
+              <p className="text-3xl mb-3">🛒</p>
+              <p className="text-sm mb-4">No items yet.</p>
+              <button onClick={() => setTab('calculator')}
+                className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700"
+              >
+                Go to Quantity Guide →
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {CATEGORIES.filter(cat => items.some(i => i.category === cat.key)).map(cat => (
+                <div key={cat.key}>
+                  <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-2">{cat.emoji} {cat.label}</p>
+                  <div className="bg-white border border-cream-200 rounded-xl px-4">
+                    {items.filter(i => i.category === cat.key).map(item => (
+                      <ShoppingRow key={item.id} item={item} onToggle={toggleItem} onDelete={deleteItem} onUpdate={updateItem} />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Monday tip */}
+          {totalCount > 0 && (
+            <div className="mt-6 bg-sage-50 border border-sage-200 rounded-xl px-4 py-3 text-sm text-sage-600">
+              💡 <strong>Call Rixey on the Monday before your wedding</strong> — we almost always have leftover soda and mixers from the weekend before. Could save you a trip.
+            </div>
+          )}
+
+          {/* Add item */}
+          {addingItem ? (
+            <div className="mt-4 bg-cream-50 border border-cream-200 rounded-xl p-4 space-y-3">
+              <div className="flex gap-2 flex-wrap">
+                <input value={newItem.item_name} onChange={e => setNewItem(p => ({...p, item_name: e.target.value}))}
+                  placeholder="Item name" autoFocus
+                  className="flex-1 min-w-0 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+                <input value={newItem.quantity} onChange={e => setNewItem(p => ({...p, quantity: e.target.value}))}
+                  placeholder="Qty" className="w-16 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+                <input value={newItem.unit} onChange={e => setNewItem(p => ({...p, unit: e.target.value}))}
+                  placeholder="Unit" className="w-20 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+              </div>
+              <div className="flex gap-2 flex-wrap">
+                <select value={newItem.category} onChange={e => setNewItem(p => ({...p, category: e.target.value}))}
+                  className="border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300">
+                  {CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.emoji} {c.label}</option>)}
+                </select>
+                <input value={newItem.notes} onChange={e => setNewItem(p => ({...p, notes: e.target.value}))}
+                  placeholder="Notes (optional)"
+                  className="flex-1 min-w-0 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+              </div>
+              <div className="flex gap-2">
+                <button onClick={addItem} className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700">Add item</button>
+                <button onClick={() => setAddingItem(false)} className="px-4 py-2 text-sage-500 text-sm hover:text-sage-700">Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <button onClick={() => setAddingItem(true)} className="mt-4 text-sage-500 hover:text-sage-700 text-sm font-medium">
+              + Add item manually
+            </button>
+          )}
         </div>
       )}
 
@@ -650,23 +663,19 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp }) {
             </div>
           )}
 
-          {/* Existing recipes */}
           {recipes.map(recipe => (
             <div key={recipe.id} className="bg-white border border-cream-200 rounded-xl p-5">
               <div className="flex items-start justify-between gap-3 mb-3">
                 <div>
                   <p className="font-medium text-sage-700">{recipe.name}</p>
                   {recipe.source_url && (
-                    <a href={recipe.source_url} target="_blank" rel="noopener noreferrer" className="text-xs text-sage-400 hover:text-sage-600 underline">
-                      View source →
-                    </a>
+                    <a href={recipe.source_url} target="_blank" rel="noopener noreferrer" className="text-xs text-sage-400 hover:text-sage-600 underline">View source →</a>
                   )}
                 </div>
                 <button onClick={() => deleteRecipe(recipe.id)} className="text-red-300 hover:text-red-500 flex-shrink-0 p-1">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
                 </button>
               </div>
-
               {recipe.ingredients?.length > 0 ? (
                 <>
                   <div className="space-y-1 mb-4">
@@ -681,113 +690,83 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp }) {
                       </div>
                     ))}
                   </div>
-                  <button
-                    onClick={() => addRecipeToList(recipe)}
-                    className="text-sm text-sage-600 hover:text-sage-800 font-medium"
-                  >
+                  <button onClick={() => addRecipeToList(recipe)} className="text-sm text-sage-600 hover:text-sage-800 font-medium">
                     + Add scaled quantities to shopping list
                   </button>
                 </>
               ) : (
-                <p className="text-sm text-sage-400 italic">No ingredients extracted.</p>
+                <p className="text-sm text-sage-400 italic">No ingredients saved.</p>
               )}
             </div>
           ))}
 
-          {/* Add recipe form */}
           {addingRecipe ? (
             <div className="bg-cream-50 border border-cream-200 rounded-xl p-5 space-y-4">
               <p className="font-medium text-sage-700">Add a cocktail recipe</p>
-
               <div>
                 <label className="block text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1">Cocktail name</label>
-                <input
-                  value={recipeName}
-                  onChange={e => setRecipeName(e.target.value)}
+                <input value={recipeName} onChange={e => setRecipeName(e.target.value)}
                   placeholder="e.g. Aperol Spritz, Lavender Martini…"
-                  className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
-                />
+                  className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
               </div>
-
               <div className="flex gap-2">
-                <button
-                  onClick={() => setRecipeMode('url')}
-                  className={`flex-1 py-2 rounded-lg text-sm border-2 transition ${recipeMode === 'url' ? 'border-sage-500 bg-sage-50 text-sage-700' : 'border-cream-300 text-sage-500'}`}
-                >
-                  🔗 Paste a link
-                </button>
-                <button
-                  onClick={() => setRecipeMode('upload')}
-                  className={`flex-1 py-2 rounded-lg text-sm border-2 transition ${recipeMode === 'upload' ? 'border-sage-500 bg-sage-50 text-sage-700' : 'border-cream-300 text-sage-500'}`}
-                >
-                  📷 Upload recipe card
-                </button>
+                {[['url', '🔗 Paste a link'], ['upload', '📷 Upload recipe card']].map(([mode, label]) => (
+                  <button key={mode} onClick={() => setRecipeMode(mode)}
+                    className={`flex-1 py-2 rounded-lg text-sm border-2 transition ${recipeMode === mode ? 'border-sage-500 bg-sage-50 text-sage-700' : 'border-cream-300 text-sage-500'}`}
+                  >{label}</button>
+                ))}
               </div>
-
               {recipeMode === 'url' && (
-                <input
-                  value={recipeUrl}
-                  onChange={e => setRecipeUrl(e.target.value)}
-                  placeholder="https://…"
-                  className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
-                />
+                <input value={recipeUrl} onChange={e => setRecipeUrl(e.target.value)} placeholder="https://…"
+                  className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
               )}
-
               {recipeMode === 'upload' && (
                 <div>
                   <input ref={fileRef} type="file" accept="image/*,.pdf" className="hidden" onChange={e => setRecipeFile(e.target.files[0])} />
-                  <button
-                    onClick={() => fileRef.current.click()}
+                  <button onClick={() => fileRef.current.click()}
                     className="w-full py-3 border-2 border-dashed border-cream-300 rounded-lg text-sm text-sage-500 hover:border-sage-400 hover:text-sage-600 transition"
-                  >
-                    {recipeFile ? recipeFile.name : 'Choose image or PDF…'}
-                  </button>
+                  >{recipeFile ? recipeFile.name : 'Choose image or PDF…'}</button>
                 </div>
               )}
 
-              {/* Extracted ingredients preview */}
-              {extractedIngredients && (
-                <div className="bg-white border border-cream-200 rounded-xl p-4 space-y-2">
-                  <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide">Extracted ingredients</p>
-                  {extractedIngredients.map((ing, i) => (
-                    <div key={i} className="flex items-center justify-between text-sm">
-                      <span className="text-sage-700">{ing.name}</span>
-                      <span className="text-sage-400">{ing.quantity} {ing.unit} per serving</span>
+              {/* Editable extracted ingredients */}
+              {editableIngredients && (
+                <div className="bg-white border border-cream-200 rounded-xl p-4 space-y-3">
+                  <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide">Extracted ingredients — edit before saving</p>
+                  {editableIngredients.map((ing, i) => (
+                    <div key={i} className="flex gap-2 items-center">
+                      <input value={ing.name} onChange={e => updateIngredient(i, 'name', e.target.value)}
+                        placeholder="Ingredient"
+                        className="flex-1 border border-cream-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-sage-300" />
+                      <input value={ing.quantity} onChange={e => updateIngredient(i, 'quantity', e.target.value)}
+                        placeholder="Qty" className="w-16 border border-cream-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-sage-300" />
+                      <input value={ing.unit} onChange={e => updateIngredient(i, 'unit', e.target.value)}
+                        placeholder="Unit" className="w-16 border border-cream-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-sage-300" />
+                      <button onClick={() => removeIngredient(i)} className="text-red-300 hover:text-red-500 px-1 text-sm">×</button>
                     </div>
                   ))}
-                  <p className="text-xs text-sage-400 mt-2">
-                    These will be scaled to {guests} guests when added to your shopping list.
-                  </p>
+                  <button onClick={addIngredientRow} className="text-xs text-sage-500 hover:text-sage-700">+ Add row</button>
+                  <p className="text-xs text-sage-400">Quantities will be scaled to {guests} guests when added to the shopping list.</p>
                 </div>
               )}
 
               <div className="flex gap-2">
-                {!extractedIngredients ? (
-                  <button
-                    onClick={extractRecipe}
-                    disabled={extracting}
-                    className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
-                  >
+                {!editableIngredients ? (
+                  <button onClick={extractRecipe} disabled={extracting}
+                    className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50">
                     {extracting ? 'Extracting with AI…' : 'Extract ingredients'}
                   </button>
                 ) : (
-                  <button
-                    onClick={() => saveRecipe(extractedIngredients)}
-                    className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700"
-                  >
+                  <button onClick={saveRecipe} className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700">
                     Save recipe
                   </button>
                 )}
-                <button onClick={() => { setAddingRecipe(false); setExtractedIngredients(null) }} className="px-4 py-2 text-sage-500 text-sm hover:text-sage-700">
-                  Cancel
-                </button>
+                <button onClick={() => { setAddingRecipe(false); setEditableIngredients(null) }}
+                  className="px-4 py-2 text-sage-500 text-sm hover:text-sage-700">Cancel</button>
               </div>
             </div>
           ) : (
-            <button
-              onClick={() => setAddingRecipe(true)}
-              className="text-sage-500 hover:text-sage-700 text-sm font-medium"
-            >
+            <button onClick={() => setAddingRecipe(true)} className="text-sage-500 hover:text-sage-700 text-sm font-medium">
               + Add cocktail recipe
             </button>
           )}

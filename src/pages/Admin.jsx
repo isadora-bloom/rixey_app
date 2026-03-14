@@ -2481,7 +2481,7 @@ export default function Admin() {
                 )}
 
                 {activeTab === 'bar' && (
-                  <BarPlanner weddingId={viewingWedding.id} guestCount={viewingWedding.guest_count} />
+                  <BarPlanner weddingId={viewingWedding.id} guestCount={viewingWedding.guest_count} weddingDate={viewingWedding.wedding_date} coupleNames={viewingWedding.couple_names} />
                 )}
 
                 {activeTab === 'budget' && (
