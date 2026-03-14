@@ -428,7 +428,7 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
       {tab === 'calculator' && (
         <div className="space-y-6">
           <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">
-            Based on Rixey's handbook (~1 drink/person/hour). The handbook quantities are the starting point — sliders adjust everything proportionally from there.
+            Based on Rixey's handbook (~1 drink/person/hour). Adjust the sliders — quantities update live on the right.
           </div>
 
           {/* Bar type */}
@@ -493,65 +493,70 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
             <div className="flex justify-between text-xs text-sage-300 mt-1"><span>1 hr</span><span>3</span><span>5</span><span>8</span><span>12 hrs</span></div>
           </div>
 
-          {/* Drink split — drives both summary AND quantities */}
-          <div>
-            <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1">Adjust for your crowd</p>
-            <p className="text-xs text-sage-400 mb-4">Moving these updates the quantities below in real time.</p>
-            <div className="space-y-4">
-              {[
-                { label: '🍺 Beer',                val: beerPct,    set: setBeerPct,    color: 'accent-amber-500', disabled: false },
-                { label: '🍷 Wine',                val: winePct,    set: setWinePct,    color: 'accent-rose-500',  disabled: false },
-                { label: '🥃 Spirits / cocktails', val: spiritsPct, set: setSpiritsPct, color: 'accent-sage-600',  disabled: barType === 'beer-wine' },
-                { label: '🥤 Non-alcoholic',        val: nonAlcPct,  set: setNonAlcPct,  color: 'accent-blue-400',  disabled: false },
-              ].map(({ label, val, set, color, disabled }) => (
-                <div key={label} className={disabled ? 'opacity-30 pointer-events-none' : ''}>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-sm text-sage-700">{label}</span>
-                    <span className="text-sm font-semibold text-sage-700 w-10 text-right">{val}%</span>
-                  </div>
-                  <input type="range" min={0} max={100} step={5} value={val}
-                    onChange={e => set(Number(e.target.value))} className={`w-full ${color}`} />
-                </div>
-              ))}
-            </div>
-            {(beerPct + winePct + spiritsPct) !== 100 && (
-              <p className="text-xs text-amber-600 mt-2">Beer + wine + spirits = {beerPct + winePct + spiritsPct}%</p>
-            )}
-          </div>
+          {/* Sliders + Live quantities table — side by side */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 items-start">
 
-          {/* Per-guest summary */}
-          <div className="bg-sage-50 border border-sage-200 rounded-xl px-5 py-4">
-            <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-2">What this means per guest</p>
-            <p className="text-sage-700 text-sm leading-relaxed">
-              Over <strong>{hours} {hours === 1 ? 'hour' : 'hours'}</strong>, each guest could have around{' '}
-              {winePct > 0 && <><strong>{(hours * winePct / 100).toFixed(1)} {hours * winePct / 100 === 1 ? 'glass' : 'glasses'} of wine</strong>{(beerPct > 0 || spiritsPct > 0) ? ', ' : ''}</>}
-              {beerPct > 0 && <><strong>{(hours * beerPct / 100).toFixed(1)} {hours * beerPct / 100 === 1 ? 'beer' : 'beers'}</strong>{spiritsPct > 0 ? ', and ' : ''}</>}
-              {spiritsPct > 0 && <><strong>{(hours * spiritsPct / 100).toFixed(1)} {hours * spiritsPct / 100 === 1 ? 'mixed drink' : 'mixed drinks'}</strong></>}
-              {nonAlcPct > 0 && <> — plus <strong>{(hours * nonAlcPct / 100).toFixed(1)} non-alcoholic {hours * nonAlcPct / 100 === 1 ? 'drink' : 'drinks'}</strong></>}.
-            </p>
-            <p className="text-xs text-sage-400 mt-1">Total estimated: <strong>{(hours * guests).toLocaleString()}</strong> drinks across {guests} guests.</p>
-          </div>
-
-          {/* Quantities table */}
-          <div>
-            <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">Suggested quantities to buy</p>
-            {CATEGORIES.filter(cat => calcPreview.some(i => i.category === cat.key)).map(cat => (
-              <div key={cat.key} className="mb-4">
-                <p className="text-xs font-semibold text-sage-400 uppercase tracking-wide mb-1 px-1">{cat.emoji} {cat.label}</p>
-                <div className="bg-white border border-cream-200 rounded-xl divide-y divide-cream-100">
-                  {calcPreview.filter(i => i.category === cat.key).map((item, i) => (
-                    <div key={i} className="flex items-center justify-between px-4 py-2.5">
-                      <span className="text-sm text-sage-700">{item.item_name}</span>
-                      <span className="text-sm font-semibold text-sage-600 flex-shrink-0 ml-4">{item.quantity} {item.unit}</span>
+            {/* Left: sliders */}
+            <div>
+              <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1">Adjust for your crowd</p>
+              <p className="text-xs text-sage-400 mb-4">Quantities update live as you move these.</p>
+              <div className="space-y-5">
+                {[
+                  { label: '🍺 Beer',                val: beerPct,    set: setBeerPct,    color: 'accent-amber-500', disabled: false },
+                  { label: '🍷 Wine',                val: winePct,    set: setWinePct,    color: 'accent-rose-500',  disabled: false },
+                  { label: '🥃 Spirits / cocktails', val: spiritsPct, set: setSpiritsPct, color: 'accent-sage-600',  disabled: barType === 'beer-wine' },
+                  { label: '🥤 Non-alcoholic',        val: nonAlcPct,  set: setNonAlcPct,  color: 'accent-blue-400',  disabled: false },
+                ].map(({ label, val, set, color, disabled }) => (
+                  <div key={label} className={disabled ? 'opacity-30 pointer-events-none' : ''}>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-sm text-sage-700">{label}</span>
+                      <span className="text-sm font-semibold text-sage-700 w-10 text-right">{val}%</span>
                     </div>
-                  ))}
-                </div>
+                    <input type="range" min={0} max={100} step={5} value={val}
+                      onChange={e => set(Number(e.target.value))} className={`w-full ${color}`} />
+                  </div>
+                ))}
               </div>
-            ))}
-            {barType === 'specialty' && (
-              <p className="text-xs text-sage-400 italic mt-1">Signature cocktail ingredients aren't listed — add recipes in the Cocktail Recipes tab.</p>
-            )}
-            <p className="text-xs text-sage-400 mt-2">⚠️ No half kegs (1/2 barrel) — can't safely come down the Rixey staircase.</p>
+              {(beerPct + winePct + spiritsPct) !== 100 && (
+                <p className="text-xs text-amber-600 mt-3">Beer + wine + spirits = {beerPct + winePct + spiritsPct}%</p>
+              )}
+
+              {/* Per-guest summary — under the sliders */}
+              <div className="bg-sage-50 border border-sage-200 rounded-xl px-4 py-3 mt-5">
+                <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-2">Per guest over {hours}h</p>
+                <p className="text-sage-700 text-sm leading-relaxed">
+                  {winePct > 0 && <><strong>{(hours * winePct / 100).toFixed(1)} {hours * winePct / 100 === 1 ? 'glass wine' : 'glasses wine'}</strong>{(beerPct > 0 || spiritsPct > 0) ? ', ' : ''}</>}
+                  {beerPct > 0 && <><strong>{(hours * beerPct / 100).toFixed(1)} {hours * beerPct / 100 === 1 ? 'beer' : 'beers'}</strong>{spiritsPct > 0 ? ', ' : ''}</>}
+                  {spiritsPct > 0 && <><strong>{(hours * spiritsPct / 100).toFixed(1)} {hours * spiritsPct / 100 === 1 ? 'cocktail' : 'cocktails'}</strong></>}
+                  {nonAlcPct > 0 && <>, <strong>{(hours * nonAlcPct / 100).toFixed(1)} non-alc</strong></>}
+                </p>
+                <p className="text-xs text-sage-400 mt-1"><strong>{(hours * guests).toLocaleString()}</strong> drinks total across {guests} guests</p>
+              </div>
+            </div>
+
+            {/* Right: live quantities table */}
+            <div>
+              <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">What to buy</p>
+              <div className="space-y-3">
+                {CATEGORIES.filter(cat => calcPreview.some(i => i.category === cat.key)).map(cat => (
+                  <div key={cat.key}>
+                    <p className="text-xs font-semibold text-sage-400 uppercase tracking-wide mb-1 px-0.5">{cat.emoji} {cat.label}</p>
+                    <div className="bg-white border border-cream-200 rounded-xl divide-y divide-cream-100">
+                      {calcPreview.filter(i => i.category === cat.key).map((item, i) => (
+                        <div key={i} className="flex items-center justify-between px-3 py-2">
+                          <span className="text-xs text-sage-600 leading-snug">{item.item_name}</span>
+                          <span className="text-sm font-bold text-sage-700 flex-shrink-0 ml-3 tabular-nums">{item.quantity} <span className="font-normal text-xs text-sage-400">{item.unit}</span></span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                {barType === 'specialty' && (
+                  <p className="text-xs text-sage-400 italic">Cocktail ingredients not listed — add recipes in the Cocktail Recipes tab.</p>
+                )}
+                <p className="text-xs text-sage-400">⚠️ No half kegs — can't safely come down the Rixey staircase.</p>
+              </div>
+            </div>
           </div>
 
           {/* Bartender count */}
