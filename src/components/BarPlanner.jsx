@@ -565,6 +565,9 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
               <div className="bg-sage-50 border border-sage-200 rounded-xl px-4 py-3 mt-5 space-y-3">
                 <div>
                   <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1">Average guest over {hours}h</p>
+                  {(champagneToast || tableWine) && (
+                    <p className="text-xs text-amber-600 mb-1.5">Bar drinks only — champagne toast{tableWine ? ' and table wine' : ''} not included in these numbers.</p>
+                  )}
                   <p className="text-sage-700 text-sm leading-relaxed">
                     {winePct > 0 && <><strong>{(hours * winePct / 100).toFixed(1)} {hours * winePct / 100 === 1 ? 'glass wine' : 'glasses wine'}</strong>{(beerPct > 0 || spiritsPct > 0) ? ', ' : ''}</>}
                     {beerPct > 0 && <><strong>{(hours * beerPct / 100).toFixed(1)} {hours * beerPct / 100 === 1 ? 'beer' : 'beers'}</strong>{spiritsPct > 0 ? ', ' : ''}</>}
