@@ -12,27 +12,78 @@ const CATEGORIES = [
 ]
 
 // ── Quantity calculator logic ─────────────────────────────────────────────────
+// Based on Rixey Manor Handbook 2026 recommendations.
+// Base reference: 120 guests × 8 hours.
 
-function calcQuantities({ guests, hours, beerPct, winePct, spiritsPct, nonAlcPct }) {
-  const totalDrinks = Math.round(guests * hours * 1)
+const BAR_TYPES = [
+  { key: 'beer-wine',  label: 'Beer & Wine',                       beerPct: 35, winePct: 65, spiritsPct: 0  },
+  { key: 'specialty',  label: 'Beer, Wine & Signature Cocktails',  beerPct: 25, winePct: 50, spiritsPct: 25 },
+  { key: 'full',       label: 'Modified Full Bar',                 beerPct: 25, winePct: 40, spiritsPct: 35 },
+]
 
-  const beerDrinks    = Math.round(totalDrinks * (beerPct / 100))
-  const wineDrinks    = Math.round(totalDrinks * (winePct / 100))
-  const spiritDrinks  = Math.round(totalDrinks * (spiritsPct / 100))
-  const nonAlcDrinks  = Math.round(guests * hours * (nonAlcPct / 100))
+function calcQuantities({ guests, hours, barType, season }) {
+  const s = guests / 120       // guest scale relative to handbook base
+  const h = hours / 8          // hour scale relative to handbook base
+  const r = [ ]                // results
 
-  return [
-    { item_name: 'Beer (cases of 24)',        quantity: Math.ceil(beerDrinks / 24),       unit: 'cases',   category: 'beer' },
-    { item_name: 'White wine (bottles)',       quantity: Math.ceil(wineDrinks * 0.5 / 5),  unit: 'bottles', category: 'wine' },
-    { item_name: 'Red wine (bottles)',         quantity: Math.ceil(wineDrinks * 0.5 / 5),  unit: 'bottles', category: 'wine' },
-    { item_name: 'Spirits / liquor (750ml)',   quantity: Math.ceil(spiritDrinks / 17),     unit: 'bottles', category: 'spirits' },
-    { item_name: 'Soda water (1L)',            quantity: Math.ceil(guests / 8),            unit: 'bottles', category: 'mixers' },
-    { item_name: 'Tonic water (1L)',           quantity: Math.ceil(guests / 10),           unit: 'bottles', category: 'mixers' },
-    { item_name: 'Juice / soft drinks',        quantity: Math.ceil(nonAlcDrinks / 6),      unit: 'packs',   category: 'mixers' },
-    { item_name: 'Ice',                        quantity: Math.ceil(guests * 1.25),         unit: 'lbs',     category: 'other' },
-    { item_name: 'Cups / glasses',             quantity: Math.ceil(guests * 2),            unit: '',        category: 'other' },
-    { item_name: 'Cocktail napkins',           quantity: Math.ceil(guests * 4),            unit: '',        category: 'other' },
-  ].filter(i => i.quantity > 0)
+  // ── Beer (kegs — NO half kegs, unsafe on Rixey staircase) ──
+  const sixths   = Math.max(1, Math.ceil(2 * s * h))
+  const quarters = Math.max(1, Math.ceil(2 * s * h))
+  r.push({ item_name: '1/6th barrel keg (~55 beers each)',  quantity: sixths,   unit: 'kegs', category: 'beer' })
+  r.push({ item_name: '1/4 barrel keg (~82 beers each)',    quantity: quarters, unit: 'kegs', category: 'beer' })
+
+  // ── Wine ──
+  // Handbook: 8 cases for 120 guests × 8 hrs. 1 sparkling, rest split seasonally.
+  const totalCases    = Math.max(2, Math.ceil(8 * s * h))
+  const sparklingCases = Math.max(1, Math.round(totalCases / 8))
+  const remaining      = totalCases - sparklingCases
+  const isWinter       = season === 'winter'
+  // Summer: 4 white/rosé : 3 red. Winter: 3 white/rosé : 4 red (handbook exact)
+  const whiteCases = isWinter ? Math.ceil(remaining * 3 / 7) : Math.ceil(remaining * 4 / 7)
+  const redCases   = remaining - whiteCases
+  r.push({ item_name: 'Sparkling wine / prosecco (for toasts + mimosas)', quantity: sparklingCases, unit: 'cases of 12', category: 'wine' })
+  r.push({ item_name: `White wine & rosé${isWinter ? ' (winter — less white)' : ' (summer — more white)'}`, quantity: whiteCases, unit: 'cases of 12', category: 'wine' })
+  r.push({ item_name: `Red wine${isWinter ? ' (winter — more red)' : ' (summer — less red)'}`, quantity: redCases, unit: 'cases of 12', category: 'wine' })
+
+  // ── Spirits (Modified Full Bar only) ──
+  // Handbook: 1–2 handles each of rum/gin/vodka/fireball, 2–3 handles Jack Daniel's
+  if (barType === 'full') {
+    r.push({ item_name: 'Vodka (1.75L handles)',         quantity: Math.max(1, Math.ceil(2   * s * h)), unit: 'handles', category: 'spirits' })
+    r.push({ item_name: 'Rum (1.75L handles)',           quantity: Math.max(1, Math.ceil(1.5 * s * h)), unit: 'handles', category: 'spirits' })
+    r.push({ item_name: 'Gin (1.75L handles)',           quantity: Math.max(1, Math.ceil(1.5 * s * h)), unit: 'handles', category: 'spirits' })
+    r.push({ item_name: "Jack Daniel's (1.75L handles)", quantity: Math.max(2, Math.ceil(2.5 * s * h)), unit: 'handles', category: 'spirits' })
+    r.push({ item_name: 'Fireball (1.75L handles)',      quantity: Math.max(1, Math.ceil(1   * s * h)), unit: 'handles', category: 'spirits' })
+  }
+  // Specialty cocktail bar: quantities come from the Cocktail Recipes tool
+
+  // ── Mixers ──
+  // Handbook specifics: Coke (4 cases 12-packs), Sprite, Diet Coke, Tonic, Soda Water (2 cases each)
+  r.push({ item_name: 'Coke (12-packs)',         quantity: Math.max(2, Math.ceil(4 * s * h)), unit: 'cases', category: 'mixers' })
+  r.push({ item_name: 'Sprite (12-packs)',        quantity: Math.max(1, Math.ceil(2 * s * h)), unit: 'cases', category: 'mixers' })
+  r.push({ item_name: 'Diet Coke (12-packs)',     quantity: Math.max(1, Math.ceil(2 * s * h)), unit: 'cases', category: 'mixers' })
+  r.push({ item_name: 'Ginger Ale (12-packs)',    quantity: Math.max(1, Math.ceil(1 * s * h)), unit: 'cases', category: 'mixers' })
+  r.push({ item_name: 'Tonic Water (12-packs)',   quantity: Math.max(1, Math.ceil(2 * s * h)), unit: 'cases', category: 'mixers' })
+  r.push({ item_name: 'Soda Water (12-packs)',    quantity: Math.max(1, Math.ceil(2 * s * h)), unit: 'cases', category: 'mixers' })
+  r.push({ item_name: 'Orange juice (for mimosas, breakfast, mixing)', quantity: Math.max(1, Math.ceil(guests / 15)), unit: 'gallons', category: 'mixers' })
+  r.push({ item_name: 'Cranberry juice',          quantity: Math.max(1, Math.ceil(guests / 20)), unit: 'gallons', category: 'mixers' })
+  r.push({ item_name: 'Pineapple juice',          quantity: Math.max(1, Math.ceil(guests / 20)), unit: 'large cans', category: 'mixers' })
+  r.push({ item_name: 'Sour mix',                 quantity: Math.max(1, Math.ceil(guests / 30)), unit: 'bottles', category: 'mixers' })
+  r.push({ item_name: 'Water (small bottles)',     quantity: Math.max(6, Math.ceil(guests / 20)), unit: 'cases', category: 'mixers' })
+
+  // ── Garnishes ── (handbook: olives, cherries, oranges, lemons, limes)
+  r.push({ item_name: 'Lemons',              quantity: Math.ceil(guests / 8),   unit: '',      category: 'garnish' })
+  r.push({ item_name: 'Limes',               quantity: Math.ceil(guests / 8),   unit: '',      category: 'garnish' })
+  r.push({ item_name: 'Oranges',             quantity: Math.ceil(guests / 12),  unit: '',      category: 'garnish' })
+  r.push({ item_name: 'Olives',              quantity: Math.max(1, Math.ceil(guests / 30)), unit: 'jars', category: 'garnish' })
+  r.push({ item_name: 'Maraschino cherries', quantity: Math.max(1, Math.ceil(guests / 30)), unit: 'jars', category: 'garnish' })
+
+  // ── Ice & other ── (handbook: 60–80 lbs for 120 guests, i.e. ~0.6 lbs/person)
+  const iceLbs = Math.max(60, Math.round(guests * 0.65 / 10) * 10)
+  r.push({ item_name: 'Ice',               quantity: iceLbs,                  unit: 'lbs',   category: 'other' })
+  r.push({ item_name: 'Cups / glasses',    quantity: Math.ceil(guests * 2),   unit: '',      category: 'other' })
+  r.push({ item_name: 'Cocktail napkins',  quantity: Math.ceil(guests * 4),   unit: '',      category: 'other' })
+
+  return r
 }
 
 // ── Shopping list row ─────────────────────────────────────────────────────────
@@ -107,10 +158,15 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp }) {
 
   // Calculator state
   const [guests, setGuests]           = useState(guestCountProp || 80)
-  const [hours, setHours]             = useState(5)
-  const [beerPct, setBeerPct]         = useState(30)
-  const [winePct, setWinePct]         = useState(50)
-  const [spiritsPct, setSpiritsPct]   = useState(20)
+  const [hours, setHours]             = useState(8)
+  const [barType, setBarType]         = useState('beer-wine')
+  const [season, setSeason]           = useState(() => {
+    const m = new Date().getMonth() // 0-indexed
+    return (m >= 4 && m <= 9) ? 'summer' : 'winter' // May–Oct = summer
+  })
+  const [beerPct, setBeerPct]         = useState(35)
+  const [winePct, setWinePct]         = useState(65)
+  const [spiritsPct, setSpiritsPct]   = useState(0)
   const [nonAlcPct, setNonAlcPct]     = useState(15)
   const [calcPreview, setCalcPreview] = useState([])
 
@@ -131,8 +187,16 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp }) {
   useEffect(() => { load() }, [weddingId])
 
   useEffect(() => {
-    setCalcPreview(calcQuantities({ guests, hours, beerPct, winePct, spiritsPct, nonAlcPct }))
-  }, [guests, hours, beerPct, winePct, spiritsPct, nonAlcPct])
+    setCalcPreview(calcQuantities({ guests, hours, barType, season }))
+  }, [guests, hours, barType, season])
+
+  const selectBarType = (key) => {
+    const bt = BAR_TYPES.find(b => b.key === key)
+    setBarType(key)
+    setBeerPct(bt.beerPct)
+    setWinePct(bt.winePct)
+    setSpiritsPct(bt.spiritsPct)
+  }
 
   const load = async () => {
     try {
@@ -423,7 +487,51 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp }) {
       {tab === 'calculator' && (
         <div className="space-y-6">
           <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">
-            These are guidelines based on ~1 drink/person/hour. Adjust the sliders to match your crowd and bar style.
+            Based on Rixey's handbook recommendations (~1 drink/person/hour). Adjust sliders to match your crowd — the quantities table updates live.
+          </div>
+
+          {/* Bar type */}
+          <div>
+            <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">Bar type</p>
+            <div className="space-y-2">
+              {BAR_TYPES.map(bt => (
+                <label key={bt.key} className="flex items-start gap-3 cursor-pointer group">
+                  <input
+                    type="radio" name="barType" value={bt.key} checked={barType === bt.key}
+                    onChange={() => selectBarType(bt.key)}
+                    className="mt-0.5 accent-sage-600"
+                  />
+                  <div>
+                    <p className={`text-sm font-medium ${barType === bt.key ? 'text-sage-700' : 'text-sage-500'}`}>{bt.label}</p>
+                    {bt.key === 'specialty' && <p className="text-xs text-sage-400">Add your recipes in the Cocktail Recipes tab — they'll scale to your guest count</p>}
+                    {bt.key === 'full' && <p className="text-xs text-sage-400">Vodka, rum, gin, Jack Daniel's, Fireball — limit shots-only liquors (go easy on tequila)</p>}
+                  </div>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Season */}
+          <div>
+            <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">Season <span className="font-normal normal-case text-sage-400">(affects red vs white wine split)</span></p>
+            <div className="flex gap-3">
+              {[
+                { key: 'summer', label: '☀️ Spring / Summer', note: 'More white & rosé' },
+                { key: 'winter', label: '🍂 Autumn / Winter',  note: 'More red' },
+              ].map(s => (
+                <button
+                  key={s.key}
+                  type="button"
+                  onClick={() => setSeason(s.key)}
+                  className={`flex-1 py-2.5 px-3 rounded-xl border-2 text-sm text-left transition ${
+                    season === s.key ? 'border-sage-500 bg-sage-50' : 'border-cream-200 hover:border-sage-300'
+                  }`}
+                >
+                  <p className={`font-medium ${season === s.key ? 'text-sage-700' : 'text-sage-500'}`}>{s.label}</p>
+                  <p className="text-xs text-sage-400 mt-0.5">{s.note}</p>
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Guest count slider */}
@@ -431,17 +539,13 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp }) {
             <div className="flex items-center justify-between mb-2">
               <label className="text-xs font-semibold text-sage-500 uppercase tracking-wide">Guest count</label>
               <input
-                type="number"
-                value={guests}
+                type="number" value={guests}
                 onChange={e => setGuests(Math.max(1, Number(e.target.value)))}
                 className="w-20 border border-cream-300 rounded-lg px-2 py-1 text-sm text-center font-medium text-sage-700 focus:outline-none focus:ring-2 focus:ring-sage-300"
               />
             </div>
-            <input
-              type="range" min={10} max={400} step={5} value={guests}
-              onChange={e => setGuests(Number(e.target.value))}
-              className="w-full accent-sage-600"
-            />
+            <input type="range" min={10} max={400} step={5} value={guests}
+              onChange={e => setGuests(Number(e.target.value))} className="w-full accent-sage-600" />
             <div className="flex justify-between text-xs text-sage-300 mt-1">
               <span>10</span><span>100</span><span>200</span><span>300</span><span>400</span>
             </div>
@@ -453,43 +557,36 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp }) {
               <label className="text-xs font-semibold text-sage-500 uppercase tracking-wide">Bar open for</label>
               <span className="text-sm font-medium text-sage-700">{hours} {hours === 1 ? 'hour' : 'hours'}</span>
             </div>
-            <input
-              type="range" min={1} max={12} step={0.5} value={hours}
-              onChange={e => setHours(Number(e.target.value))}
-              className="w-full accent-sage-600"
-            />
+            <input type="range" min={1} max={12} step={0.5} value={hours}
+              onChange={e => setHours(Number(e.target.value))} className="w-full accent-sage-600" />
             <div className="flex justify-between text-xs text-sage-300 mt-1">
               <span>1 hr</span><span>3</span><span>5</span><span>8</span><span>12 hrs</span>
             </div>
           </div>
 
-          {/* Drink split sliders */}
+          {/* Drink split sliders — drive the per-guest summary */}
           <div>
-            <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-4">Drink split</p>
+            <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1">Adjust for your crowd</p>
+            <p className="text-xs text-sage-400 mb-4">These sliders don't change the quantities table — they tune the per-guest summary below.</p>
             <div className="space-y-4">
               {[
-                { label: '🍺 Beer',         val: beerPct,    set: setBeerPct,    color: 'accent-amber-500' },
-                { label: '🍷 Wine',         val: winePct,    set: setWinePct,    color: 'accent-rose-500' },
-                { label: '🥃 Spirits / cocktails', val: spiritsPct, set: setSpiritsPct, color: 'accent-sage-600' },
-                { label: '🥤 Non-alcoholic', val: nonAlcPct, set: setNonAlcPct,  color: 'accent-blue-400' },
-              ].map(({ label, val, set, color }) => (
-                <div key={label}>
+                { label: '🍺 Beer',               val: beerPct,    set: setBeerPct,    color: 'accent-amber-500', disabled: false },
+                { label: '🍷 Wine',               val: winePct,    set: setWinePct,    color: 'accent-rose-500',  disabled: false },
+                { label: '🥃 Spirits / cocktails', val: spiritsPct, set: setSpiritsPct, color: 'accent-sage-600',  disabled: barType === 'beer-wine' },
+                { label: '🥤 Non-alcoholic',       val: nonAlcPct,  set: setNonAlcPct,  color: 'accent-blue-400',  disabled: false },
+              ].map(({ label, val, set, color, disabled }) => (
+                <div key={label} className={disabled ? 'opacity-30 pointer-events-none' : ''}>
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="text-sm text-sage-700">{label}</span>
                     <span className="text-sm font-semibold text-sage-700 w-10 text-right">{val}%</span>
                   </div>
-                  <input
-                    type="range" min={0} max={100} step={5} value={val}
-                    onChange={e => set(Number(e.target.value))}
-                    className={`w-full ${color}`}
-                  />
+                  <input type="range" min={0} max={100} step={5} value={val}
+                    onChange={e => set(Number(e.target.value))} className={`w-full ${color}`} />
                 </div>
               ))}
             </div>
             {(beerPct + winePct + spiritsPct) !== 100 && (
-              <p className="text-xs text-amber-600 mt-2">
-                Beer + wine + spirits = {beerPct + winePct + spiritsPct}% — adjust to reach 100% for accurate quantities.
-              </p>
+              <p className="text-xs text-amber-600 mt-2">Beer + wine + spirits = {beerPct + winePct + spiritsPct}%</p>
             )}
           </div>
 
@@ -498,40 +595,40 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp }) {
             <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">What this means per guest</p>
             <p className="text-sage-700 text-sm leading-relaxed">
               Over <strong>{hours} {hours === 1 ? 'hour' : 'hours'}</strong>, each guest could have around{' '}
-              {winePct > 0 && (
-                <><strong>{(hours * winePct / 100).toFixed(1)} {(hours * winePct / 100) === 1 ? 'glass' : 'glasses'} of wine</strong>{beerPct > 0 || spiritsPct > 0 ? ', ' : ''}</>
-              )}
-              {beerPct > 0 && (
-                <><strong>{(hours * beerPct / 100).toFixed(1)} {(hours * beerPct / 100) === 1 ? 'beer' : 'beers'}</strong>{spiritsPct > 0 ? ', and ' : ''}</>
-              )}
-              {spiritsPct > 0 && (
-                <><strong>{(hours * spiritsPct / 100).toFixed(1)} {(hours * spiritsPct / 100) === 1 ? 'mixed drink' : 'mixed drinks'}</strong></>
-              )}
-              {nonAlcPct > 0 && (
-                <> — plus <strong>{(hours * nonAlcPct / 100).toFixed(1)} non-alcoholic {(hours * nonAlcPct / 100) === 1 ? 'drink' : 'drinks'}</strong></>
-              )}.
+              {winePct > 0 && <><strong>{(hours * winePct / 100).toFixed(1)} {hours * winePct / 100 === 1 ? 'glass' : 'glasses'} of wine</strong>{beerPct > 0 || spiritsPct > 0 ? ', ' : ''}</>}
+              {beerPct > 0 && <><strong>{(hours * beerPct / 100).toFixed(1)} {hours * beerPct / 100 === 1 ? 'beer' : 'beers'}</strong>{spiritsPct > 0 ? ', and ' : ''}</>}
+              {spiritsPct > 0 && <><strong>{(hours * spiritsPct / 100).toFixed(1)} {hours * spiritsPct / 100 === 1 ? 'mixed drink' : 'mixed drinks'}</strong></>}
+              {nonAlcPct > 0 && <> — plus <strong>{(hours * nonAlcPct / 100).toFixed(1)} non-alcoholic {hours * nonAlcPct / 100 === 1 ? 'drink' : 'drinks'}</strong></>}.
             </p>
             <p className="text-xs text-sage-400 mt-2">
               Total estimated drinks: <strong>{(hours * guests).toLocaleString()}</strong> across all {guests} guests.
             </p>
           </div>
 
-          {/* Quantities table */}
+          {/* Quantities table by category */}
           <div>
-            <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">
-              Suggested quantities to buy
+            <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">Suggested quantities to buy</p>
+            {CATEGORIES.filter(cat => calcPreview.some(i => i.category === cat.key)).map(cat => (
+              <div key={cat.key} className="mb-4">
+                <p className="text-xs font-semibold text-sage-400 uppercase tracking-wide mb-1 px-1">{cat.emoji} {cat.label}</p>
+                <div className="bg-white border border-cream-200 rounded-xl divide-y divide-cream-100">
+                  {calcPreview.filter(i => i.category === cat.key).map((item, i) => (
+                    <div key={i} className="flex items-center justify-between px-4 py-2.5">
+                      <span className="text-sm text-sage-700">{item.item_name}</span>
+                      <span className="text-sm font-semibold text-sage-600 flex-shrink-0 ml-4">{item.quantity} {item.unit}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {barType === 'specialty' && (
+              <p className="text-xs text-sage-400 italic mt-2">
+                Signature cocktail ingredients aren't listed here — add your recipes in the Cocktail Recipes tab and they'll scale to {guests} guests automatically.
+              </p>
+            )}
+            <p className="text-xs text-sage-400 mt-3">
+              ⚠️ No half kegs (1/2 barrel) — they can't safely be moved down the Rixey staircase.
             </p>
-            <div className="bg-white border border-cream-200 rounded-xl divide-y divide-cream-100">
-              {calcPreview.map((item, i) => {
-                const cat = CATEGORIES.find(c => c.key === item.category)
-                return (
-                  <div key={i} className="flex items-center justify-between px-4 py-2.5">
-                    <span className="text-sm text-sage-700">{cat?.emoji} {item.item_name}</span>
-                    <span className="text-sm font-semibold text-sage-600">{item.quantity} {item.unit}</span>
-                  </div>
-                )
-              })}
-            </div>
           </div>
 
           <button
