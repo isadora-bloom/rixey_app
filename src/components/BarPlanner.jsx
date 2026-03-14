@@ -202,7 +202,7 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
 
   // Calculator state
   const [guests, setGuests]         = useState(guestCountProp || 80)
-  const [hours, setHours]           = useState(8)
+  const [hours, setHours]           = useState(5)
   const [barType, setBarType]       = useState('beer-wine')
   const [season, setSeason]         = useState(() => seasonFromDate(weddingDate) || (new Date().getMonth() >= 4 && new Date().getMonth() <= 9 ? 'summer' : 'winter'))
   const [beerPct, setBeerPct]       = useState(35)
@@ -488,9 +488,9 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
               <label className="text-xs font-semibold text-sage-500 uppercase tracking-wide">Bar open for</label>
               <span className="text-sm font-medium text-sage-700">{hours} {hours === 1 ? 'hour' : 'hours'}</span>
             </div>
-            <input type="range" min={1} max={12} step={0.5} value={hours}
+            <input type="range" min={1} max={8} step={0.5} value={hours}
               onChange={e => setHours(Number(e.target.value))} className="w-full accent-sage-600" />
-            <div className="flex justify-between text-xs text-sage-300 mt-1"><span>1 hr</span><span>3</span><span>5</span><span>8</span><span>12 hrs</span></div>
+            <div className="flex justify-between text-xs text-sage-300 mt-1"><span>1 hr</span><span>3</span><span>5</span><span>8 hrs</span></div>
           </div>
 
           {/* Sliders + Live quantities table — side by side */}
