@@ -42,15 +42,15 @@ function calcQuantities({ guests, hours, barType, season, beerPct, winePct, spir
 
   // ── Wine — base: 8 cases for beer+wine/specialty, 6 for full bar (handbook) ──
   if (winePct > 0) {
-    const baseCases      = barType === 'full' ? 6 : 8
-    const totalCases     = Math.max(2, Math.ceil(baseCases * s * h * wineScale))
-    const sparklingCases = Math.max(1, Math.round(totalCases / 8))
-    const remaining      = totalCases - sparklingCases
-    const whiteCases     = isWinter ? Math.ceil(remaining * 3 / 7) : Math.ceil(remaining * 4 / 7)
-    const redCases       = remaining - whiteCases
-    r.push({ item_name: 'Sparkling wine / prosecco (toasts + mimosas)',                                                quantity: sparklingCases, unit: 'cases of 12', category: 'wine' })
-    r.push({ item_name: `White wine & rosé${isWinter ? ' (winter — less white)' : ' (summer — more white)'}`,        quantity: whiteCases,     unit: 'cases of 12', category: 'wine' })
-    r.push({ item_name: `Red wine${isWinter ? ' (winter — more red)' : ' (summer — less red)'}`,                     quantity: redCases,       unit: 'cases of 12', category: 'wine' })
+    const baseCases        = barType === 'full' ? 6 : 8
+    const totalCases       = Math.max(2, Math.ceil(baseCases * s * h * wineScale))
+    const sparklingCases   = Math.max(1, Math.round(totalCases / 8))
+    const remaining        = totalCases - sparklingCases
+    const whiteCases       = isWinter ? Math.ceil(remaining * 3 / 7) : Math.ceil(remaining * 4 / 7)
+    const redCases         = remaining - whiteCases
+    r.push({ item_name: 'Sparkling wine / prosecco (toasts + mimosas)',                                         quantity: sparklingCases * 12, unit: 'bottles', category: 'wine' })
+    r.push({ item_name: `White wine & rosé${isWinter ? ' (winter — less white)' : ' (summer — more white)'}`,  quantity: whiteCases * 12,     unit: 'bottles', category: 'wine' })
+    r.push({ item_name: `Red wine${isWinter ? ' (winter — more red)' : ' (summer — less red)'}`,               quantity: redCases * 12,       unit: 'bottles', category: 'wine' })
   }
 
   // ── Spirits — full bar only (handbook: handles by type) ──
@@ -311,9 +311,13 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
     }
     const added = []
     for (const item of calcPreview) {
+      // Wine: show bottles in the calculator, save as cases on the shopping list
+      const listItem = (item.category === 'wine' && item.unit === 'bottles')
+        ? { ...item, quantity: Math.ceil(item.quantity / 12), unit: 'cases of 12' }
+        : item
       const res = await fetch(`${API_URL}/api/bar-shopping/${weddingId}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...item, from_calculator: true, sort_order: items.length + added.length }),
+        body: JSON.stringify({ ...listItem, from_calculator: true, sort_order: items.length + added.length }),
       })
       added.push(await res.json())
     }
