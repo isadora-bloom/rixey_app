@@ -265,7 +265,8 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...newItem, sort_order: items.length }),
     })
-    setItems(prev => [...prev, await res.json()])
+    const saved = await res.json()
+    setItems(prev => [...prev, saved])
     setNewItem({ item_name: '', quantity: '', unit: '', category: 'other', notes: '' })
     setAddingItem(false)
   }
