@@ -423,68 +423,103 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp }) {
       {tab === 'calculator' && (
         <div className="space-y-6">
           <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">
-            These are guidelines based on industry standards (~1 drink/person/hour). Adjust the split to match your crowd.
+            These are guidelines based on ~1 drink/person/hour. Adjust the sliders to match your crowd and bar style.
           </div>
 
-          <div className="grid sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1">Guest count</label>
+          {/* Guest count slider */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-semibold text-sage-500 uppercase tracking-wide">Guest count</label>
               <input
                 type="number"
                 value={guests}
-                onChange={e => setGuests(Number(e.target.value))}
-                className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
+                onChange={e => setGuests(Math.max(1, Number(e.target.value)))}
+                className="w-20 border border-cream-300 rounded-lg px-2 py-1 text-sm text-center font-medium text-sage-700 focus:outline-none focus:ring-2 focus:ring-sage-300"
               />
             </div>
-            <div>
-              <label className="block text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1">Event duration (hours)</label>
-              <input
-                type="number"
-                step="0.5"
-                value={hours}
-                onChange={e => setHours(Number(e.target.value))}
-                className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
-              />
+            <input
+              type="range" min={10} max={400} step={5} value={guests}
+              onChange={e => setGuests(Number(e.target.value))}
+              className="w-full accent-sage-600"
+            />
+            <div className="flex justify-between text-xs text-sage-300 mt-1">
+              <span>10</span><span>100</span><span>200</span><span>300</span><span>400</span>
             </div>
           </div>
 
+          {/* Hours slider */}
           <div>
-            <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">Drink split (must add to 100%)</p>
-            <div className="space-y-3">
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-semibold text-sage-500 uppercase tracking-wide">Bar open for</label>
+              <span className="text-sm font-medium text-sage-700">{hours} {hours === 1 ? 'hour' : 'hours'}</span>
+            </div>
+            <input
+              type="range" min={1} max={12} step={0.5} value={hours}
+              onChange={e => setHours(Number(e.target.value))}
+              className="w-full accent-sage-600"
+            />
+            <div className="flex justify-between text-xs text-sage-300 mt-1">
+              <span>1 hr</span><span>3</span><span>5</span><span>8</span><span>12 hrs</span>
+            </div>
+          </div>
+
+          {/* Drink split sliders */}
+          <div>
+            <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-4">Drink split</p>
+            <div className="space-y-4">
               {[
-                { label: '🍺 Beer',    val: beerPct,    set: setBeerPct },
-                { label: '🍷 Wine',    val: winePct,    set: setWinePct },
-                { label: '🥃 Spirits', val: spiritsPct, set: setSpiritsPct },
-              ].map(({ label, val, set }) => (
-                <div key={label} className="flex items-center gap-3">
-                  <span className="text-sm text-sage-600 w-20">{label}</span>
+                { label: '🍺 Beer',         val: beerPct,    set: setBeerPct,    color: 'accent-amber-500' },
+                { label: '🍷 Wine',         val: winePct,    set: setWinePct,    color: 'accent-rose-500' },
+                { label: '🥃 Spirits / cocktails', val: spiritsPct, set: setSpiritsPct, color: 'accent-sage-600' },
+                { label: '🥤 Non-alcoholic', val: nonAlcPct, set: setNonAlcPct,  color: 'accent-blue-400' },
+              ].map(({ label, val, set, color }) => (
+                <div key={label}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-sm text-sage-700">{label}</span>
+                    <span className="text-sm font-semibold text-sage-700 w-10 text-right">{val}%</span>
+                  </div>
                   <input
-                    type="range" min={0} max={100} value={val}
+                    type="range" min={0} max={100} step={5} value={val}
                     onChange={e => set(Number(e.target.value))}
-                    className="flex-1 accent-sage-600"
+                    className={`w-full ${color}`}
                   />
-                  <span className="text-sm font-medium text-sage-700 w-10 text-right">{val}%</span>
                 </div>
               ))}
-              <div className="flex items-center gap-3">
-                <span className="text-sm text-sage-600 w-20">🥤 Non-alc</span>
-                <input
-                  type="range" min={0} max={50} value={nonAlcPct}
-                  onChange={e => setNonAlcPct(Number(e.target.value))}
-                  className="flex-1 accent-sage-600"
-                />
-                <span className="text-sm font-medium text-sage-700 w-10 text-right">{nonAlcPct}%</span>
-              </div>
-              {(beerPct + winePct + spiritsPct) !== 100 && (
-                <p className="text-xs text-amber-600">Beer + wine + spirits = {beerPct + winePct + spiritsPct}% (should be 100%)</p>
-              )}
             </div>
+            {(beerPct + winePct + spiritsPct) !== 100 && (
+              <p className="text-xs text-amber-600 mt-2">
+                Beer + wine + spirits = {beerPct + winePct + spiritsPct}% — adjust to reach 100% for accurate quantities.
+              </p>
+            )}
           </div>
 
-          {/* Preview */}
+          {/* Per-guest running summary */}
+          <div className="bg-sage-50 border border-sage-200 rounded-xl px-5 py-4">
+            <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">What this means per guest</p>
+            <p className="text-sage-700 text-sm leading-relaxed">
+              Over <strong>{hours} {hours === 1 ? 'hour' : 'hours'}</strong>, each guest could have around{' '}
+              {winePct > 0 && (
+                <><strong>{(hours * winePct / 100).toFixed(1)} {(hours * winePct / 100) === 1 ? 'glass' : 'glasses'} of wine</strong>{beerPct > 0 || spiritsPct > 0 ? ', ' : ''}</>
+              )}
+              {beerPct > 0 && (
+                <><strong>{(hours * beerPct / 100).toFixed(1)} {(hours * beerPct / 100) === 1 ? 'beer' : 'beers'}</strong>{spiritsPct > 0 ? ', and ' : ''}</>
+              )}
+              {spiritsPct > 0 && (
+                <><strong>{(hours * spiritsPct / 100).toFixed(1)} {(hours * spiritsPct / 100) === 1 ? 'mixed drink' : 'mixed drinks'}</strong></>
+              )}
+              {nonAlcPct > 0 && (
+                <> — plus <strong>{(hours * nonAlcPct / 100).toFixed(1)} non-alcoholic {(hours * nonAlcPct / 100) === 1 ? 'drink' : 'drinks'}</strong></>
+              )}.
+            </p>
+            <p className="text-xs text-sage-400 mt-2">
+              Total estimated drinks: <strong>{(hours * guests).toLocaleString()}</strong> across all {guests} guests.
+            </p>
+          </div>
+
+          {/* Quantities table */}
           <div>
             <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">
-              Suggested quantities for {guests} guests × {hours} hours
+              Suggested quantities to buy
             </p>
             <div className="bg-white border border-cream-200 rounded-xl divide-y divide-cream-100">
               {calcPreview.map((item, i) => {
@@ -492,7 +527,7 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp }) {
                 return (
                   <div key={i} className="flex items-center justify-between px-4 py-2.5">
                     <span className="text-sm text-sage-700">{cat?.emoji} {item.item_name}</span>
-                    <span className="text-sm font-medium text-sage-600">{item.quantity} {item.unit}</span>
+                    <span className="text-sm font-semibold text-sage-600">{item.quantity} {item.unit}</span>
                   </div>
                 )
               })}
