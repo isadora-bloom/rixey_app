@@ -6921,6 +6921,140 @@ app.put('/api/worksheets/:weddingId', async (req, res) => {
   }
 });
 
+// ============ BAR PLANNER ============
+
+// Shopping list
+app.get('/api/bar-shopping/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('bar_shopping_list').select('*').eq('wedding_id', req.params.weddingId).order('category').order('sort_order');
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/bar-shopping/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('bar_shopping_list')
+      .insert({ ...req.body, wedding_id: req.params.weddingId })
+      .select().single();
+    if (error) throw error;
+    res.json(data);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/bar-shopping/:id', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('bar_shopping_list').update(req.body).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    res.json(data);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/bar-shopping/:id', async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin.from('bar_shopping_list').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Recipes
+app.get('/api/bar-recipes/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('bar_recipes').select('*').eq('wedding_id', req.params.weddingId).order('created_at');
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/bar-recipes/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('bar_recipes')
+      .insert({ ...req.body, wedding_id: req.params.weddingId })
+      .select().single();
+    if (error) throw error;
+    res.json(data);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/bar-recipes/:id', async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin.from('bar_recipes').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Extract ingredients from a URL using Claude
+app.post('/api/bar-recipes/extract-url', async (req, res) => {
+  try {
+    const { url, name } = req.body;
+    if (!url) return res.status(400).json({ error: 'url required' });
+
+    // Fetch the page content
+    const pageRes = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    const html    = await pageRes.text();
+    // Strip HTML tags for a clean text blob
+    const text    = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 8000);
+
+    const message = await anthropic.messages.create({
+      model: 'claude-opus-4-6',
+      max_tokens: 800,
+      messages: [{
+        role: 'user',
+        content: `Extract the ingredients from this cocktail recipe for "${name}". Return ONLY a JSON array — no other text. Each element: { "name": string, "quantity": number, "unit": string, "per_serving": true, "category": "spirits"|"mixers"|"garnish"|"other" }. If a quantity is ambiguous use a reasonable default for 1 serving.\n\nPage content:\n${text}`,
+      }],
+    });
+
+    const raw = message.content[0].text.trim();
+    const match = raw.match(/\[[\s\S]*\]/);
+    if (!match) return res.status(422).json({ error: 'Could not parse ingredients from that page.' });
+    res.json({ ingredients: JSON.parse(match[0]) });
+  } catch (err) {
+    console.error('Recipe URL extract error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Extract ingredients from an uploaded image/PDF using Claude Vision
+app.post('/api/bar-recipes/extract-upload', upload.single('file'), async (req, res) => {
+  try {
+    const { name } = req.body;
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: 'No file provided' });
+
+    const base64   = file.buffer.toString('base64');
+    const isPdf    = file.mimetype === 'application/pdf';
+    const mediaType = isPdf ? 'application/pdf' : file.mimetype;
+
+    const message = await anthropic.messages.create({
+      model: 'claude-opus-4-6',
+      max_tokens: 800,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: isPdf ? 'document' : 'image',
+            source: { type: 'base64', media_type: mediaType, data: base64 },
+          },
+          {
+            type: 'text',
+            text: `Extract the ingredients from this cocktail recipe for "${name}". Return ONLY a JSON array — no other text. Each element: { "name": string, "quantity": number, "unit": string, "per_serving": true, "category": "spirits"|"mixers"|"garnish"|"other" }. If a quantity is ambiguous use a reasonable default for 1 serving.`,
+          },
+        ],
+      }],
+    });
+
+    const raw = message.content[0].text.trim();
+    const match = raw.match(/\[[\s\S]*\]/);
+    if (!match) return res.status(422).json({ error: 'Could not parse ingredients from that image.' });
+    res.json({ ingredients: JSON.parse(match[0]) });
+  } catch (err) {
+    console.error('Recipe upload extract error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ============ WEDDING WEBSITE FEATURE ============
 
 // --- Partner names ---

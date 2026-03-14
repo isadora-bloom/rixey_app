@@ -12,6 +12,7 @@ import VenueSettings from '../components/VenueSettings'
 import WebsiteBuilder from '../components/WebsiteBuilder'
 import PhotoBucket from '../components/PhotoBucket'
 import WeddingParty from '../components/WeddingParty'
+import BarPlanner from '../components/BarPlanner'
 import CommunicationPulse, { PulsePill } from '../components/CommunicationPulse'
 import RecommendedVendorsAdmin from '../components/RecommendedVendorsAdmin'
 import UsageStats from '../components/UsageStats'
@@ -1484,6 +1485,7 @@ export default function Admin() {
                     { tab: 'timeline', label: 'Timeline', icon: '/icons/timeline.svg' },
                     { tab: 'tables', label: 'Tables', icon: '/icons/tables.svg' },
                     { tab: 'staffing', label: 'Staffing Guide', icon: '/icons/staffing-guide.svg' },
+                    { tab: 'bar', label: 'Bar Planner', icon: '/icons/staffing-guide.svg' },
                     { tab: 'budget', label: 'Budget', icon: '/icons/budget.svg' },
                     { tab: 'guests', label: 'Guest List', icon: '/icons/guest-care.svg' },
                     { tab: 'borrow', label: 'Borrow Brochure', icon: '/icons/borrow-brochure.svg', badge: borrowSelections.length },
@@ -1564,6 +1566,7 @@ export default function Admin() {
                     <option value="timeline">Timeline</option>
                     <option value="tables">Tables</option>
                     <option value="staffing">Staffing Guide</option>
+                    <option value="bar">Bar Planner</option>
                     <option value="budget">Budget</option>
                     <option value="guests">Guest List</option>
                     <option value="borrow">Borrow Brochure</option>
@@ -2475,6 +2478,10 @@ export default function Admin() {
 
                 {activeTab === 'staffing' && (
                   <StaffingCalculator weddingId={viewingWedding.id} userId={null} isAdmin />
+                )}
+
+                {activeTab === 'bar' && (
+                  <BarPlanner weddingId={viewingWedding.id} guestCount={viewingWedding.guest_count} />
                 )}
 
                 {activeTab === 'budget' && (

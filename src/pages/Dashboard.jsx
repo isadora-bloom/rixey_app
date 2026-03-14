@@ -32,6 +32,7 @@ import WeddingWorksheets from '../components/WeddingWorksheets'
 import PhotoBucket from '../components/PhotoBucket'
 import WeddingParty from '../components/WeddingParty'
 import WebsiteBuilder from '../components/WebsiteBuilder'
+import BarPlanner from '../components/BarPlanner'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -829,6 +830,7 @@ export default function Dashboard() {
                   { key: 'ceremony-order', label: 'Ceremony Order', icon: '/icons/timeline.svg' },
                   { key: 'table-map', label: 'Table Map', icon: '/icons/tables.svg' },
                   { key: 'staffing', label: 'Staffing Guide', icon: '/icons/staffing-guide.svg' },
+                  { key: 'bar', label: 'Bar Planner', icon: '/icons/staffing-guide.svg' },
                   { key: 'makeup', label: 'Hair & Makeup', icon: '/icons/upload-photo-of-you-two.svg' },
                   { key: 'shuttle', label: 'Shuttle Schedule', icon: '/icons/book-a-meeting.svg' },
                   { key: 'rehearsal', label: 'Rehearsal Dinner', icon: '/icons/meetings.svg' },
@@ -906,6 +908,7 @@ export default function Dashboard() {
                   <option value="ceremony-order">🎶 Ceremony Order</option>
                   <option value="table-map">🗺 Table Map</option>
                   <option value="staffing">🙋 Staffing Guide</option>
+                  <option value="bar">🍹 Bar Planner</option>
                   <option value="makeup">💄 Hair &amp; Makeup</option>
                   <option value="shuttle">🚌 Shuttle Schedule</option>
                   <option value="rehearsal">🍽 Rehearsal Dinner</option>
@@ -1145,6 +1148,13 @@ export default function Dashboard() {
               {activeSection === 'checklist' && profile?.wedding_id && (
                 <div className="p-4 sm:p-6">
                   <PlanningChecklist weddingId={profile.wedding_id} userId={user?.id} />
+                </div>
+              )}
+
+              {/* Bar Planner section */}
+              {activeSection === 'bar' && profile?.wedding_id && (
+                <div className="p-4 sm:p-6">
+                  <BarPlanner weddingId={profile.wedding_id} guestCount={profile.guest_count} />
                 </div>
               )}
 
