@@ -524,15 +524,34 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
               )}
 
               {/* Per-guest summary — under the sliders */}
-              <div className="bg-sage-50 border border-sage-200 rounded-xl px-4 py-3 mt-5">
-                <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-2">Per guest over {hours}h</p>
-                <p className="text-sage-700 text-sm leading-relaxed">
-                  {winePct > 0 && <><strong>{(hours * winePct / 100).toFixed(1)} {hours * winePct / 100 === 1 ? 'glass wine' : 'glasses wine'}</strong>{(beerPct > 0 || spiritsPct > 0) ? ', ' : ''}</>}
-                  {beerPct > 0 && <><strong>{(hours * beerPct / 100).toFixed(1)} {hours * beerPct / 100 === 1 ? 'beer' : 'beers'}</strong>{spiritsPct > 0 ? ', ' : ''}</>}
-                  {spiritsPct > 0 && <><strong>{(hours * spiritsPct / 100).toFixed(1)} {hours * spiritsPct / 100 === 1 ? 'cocktail' : 'cocktails'}</strong></>}
-                  {nonAlcPct > 0 && <>, <strong>{(hours * nonAlcPct / 100).toFixed(1)} non-alc</strong></>}
-                </p>
-                <p className="text-xs text-sage-400 mt-1"><strong>{(hours * guests).toLocaleString()}</strong> drinks total across {guests} guests</p>
+              <div className="bg-sage-50 border border-sage-200 rounded-xl px-4 py-3 mt-5 space-y-3">
+                <div>
+                  <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1">Average guest over {hours}h</p>
+                  <p className="text-sage-700 text-sm leading-relaxed">
+                    {winePct > 0 && <><strong>{(hours * winePct / 100).toFixed(1)} {hours * winePct / 100 === 1 ? 'glass wine' : 'glasses wine'}</strong>{(beerPct > 0 || spiritsPct > 0) ? ', ' : ''}</>}
+                    {beerPct > 0 && <><strong>{(hours * beerPct / 100).toFixed(1)} {hours * beerPct / 100 === 1 ? 'beer' : 'beers'}</strong>{spiritsPct > 0 ? ', ' : ''}</>}
+                    {spiritsPct > 0 && <><strong>{(hours * spiritsPct / 100).toFixed(1)} {hours * spiritsPct / 100 === 1 ? 'cocktail' : 'cocktails'}</strong></>}
+                    {nonAlcPct > 0 && <>, <strong>{(hours * nonAlcPct / 100).toFixed(1)} non-alc</strong></>}
+                  </p>
+                  <p className="text-xs text-sage-400 mt-0.5"><strong>{(hours * guests).toLocaleString()}</strong> drinks total across {guests} guests</p>
+                </div>
+                <div className="border-t border-sage-200 pt-3">
+                  <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1.5">If a guest drinks only their preferred type</p>
+                  <div className="space-y-1">
+                    {winePct > 0 && (
+                      <p className="text-sm text-sage-700">🍷 A wine drinker: <strong>{hours} {hours === 1 ? 'glass' : 'glasses'} of wine</strong></p>
+                    )}
+                    {beerPct > 0 && (
+                      <p className="text-sm text-sage-700">🍺 A beer drinker: <strong>{hours} {hours === 1 ? 'beer' : 'beers'}</strong></p>
+                    )}
+                    {spiritsPct > 0 && (
+                      <p className="text-sm text-sage-700">🥃 A cocktail drinker: <strong>{hours} {hours === 1 ? 'cocktail' : 'cocktails'}</strong></p>
+                    )}
+                    {nonAlcPct > 0 && (
+                      <p className="text-sm text-sage-700">🥤 A non-drinker: <strong>{hours} {hours === 1 ? 'soft drink' : 'soft drinks'}</strong></p>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
 
