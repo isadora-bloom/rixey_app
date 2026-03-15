@@ -24,6 +24,7 @@ import BorrowCatalog from '../components/BorrowCatalog'
 import NotificationBell from '../components/NotificationBell'
 import GuestCareNotes from '../components/GuestCareNotes'
 import StorefrontAdmin from '../components/StorefrontAdmin'
+import ManorDownloads from '../components/ManorDownloads'
 import WeddingDetails from '../components/WeddingDetails'
 import AllergyRegistry from '../components/AllergyRegistry'
 import BedroomAssignments from '../components/BedroomAssignments'
@@ -2772,6 +2773,7 @@ export default function Admin() {
               { id: 'meetings', label: 'Meetings' },
               { id: 'borrow-catalog', label: 'Borrow Catalog' },
               { id: 'picks', label: 'Picks' },
+              { id: 'manor-downloads', label: 'Manor Downloads' },
               { id: 'knowledge-base', label: 'Knowledge Base' },
               { id: 'venue-settings', label: 'Venue Settings' },
               { id: 'usage', label: 'Usage' },
@@ -2833,6 +2835,13 @@ export default function Admin() {
         {mainView === 'picks' && (
           <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
             <StorefrontAdmin />
+          </div>
+        )}
+
+        {/* Manor Downloads admin */}
+        {mainView === 'manor-downloads' && (
+          <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
+            <ManorDownloads isAdmin={true} />
           </div>
         )}
 

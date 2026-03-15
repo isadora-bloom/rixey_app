@@ -14,6 +14,7 @@ import TableLayoutPlanner from '../components/TableLayoutPlanner'
 import StaffingCalculator from '../components/StaffingCalculator'
 import BudgetTracker from '../components/BudgetTracker'
 import BorrowCatalog from '../components/BorrowCatalog'
+import ManorDownloads from '../components/ManorDownloads'
 import NotificationBell from '../components/NotificationBell'
 import GuestCareNotes from '../components/GuestCareNotes'
 import StorefrontBrowser from '../components/StorefrontBrowser'
@@ -848,6 +849,7 @@ export default function Dashboard() {
                   { key: 'inspo', label: 'Inspiration', icon: '/icons/inspiration.svg' },
                   { key: 'borrow', label: 'Borrow Brochure', icon: '/icons/borrow-brochure.svg' },
                   { key: 'picks', label: 'Rixey Picks', icon: '/icons/rixey-picks.svg' },
+                  { key: 'downloads', label: 'Manor Downloads', icon: '/icons/resources.svg' },
                   { section: 'Connect' },
                   { key: 'inbox', label: 'Inbox', icon: '/icons/inbox.svg' },
                   { key: 'booking', label: 'Book a Meeting', icon: '/icons/book-a-meeting.svg' },
@@ -1176,6 +1178,13 @@ export default function Dashboard() {
               {activeSection === 'borrow' && profile?.wedding_id && (
                 <div className="p-4 sm:p-6">
                   <BorrowCatalog weddingId={profile.wedding_id} />
+                </div>
+              )}
+
+              {/* Manor Downloads section */}
+              {activeSection === 'downloads' && (
+                <div className="p-4 sm:p-6">
+                  <ManorDownloads isAdmin={false} />
                 </div>
               )}
 

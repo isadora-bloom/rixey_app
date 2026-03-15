@@ -6062,6 +6062,103 @@ app.post('/api/tables', async (req, res) => {
   }
 });
 
+// ── Manor Assets (brand downloads) ───────────────────────────────────────────
+
+// List all assets (public)
+app.get('/api/manor-assets', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('manor_assets')
+      .select('*')
+      .order('sort_order', { ascending: true });
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err) {
+    console.error('Get manor assets error:', err);
+    res.status(500).json({ error: 'Failed to fetch assets' });
+  }
+});
+
+// Upload new asset (admin only — multipart/form-data)
+app.post('/api/manor-assets', upload.single('file'), async (req, res) => {
+  try {
+    const { title, description, sort_order } = req.body;
+    const file = req.file;
+    if (!file || !title) return res.status(400).json({ error: 'file and title required' });
+
+    const ext          = file.originalname.split('.').pop();
+    const storagePath  = `${Date.now()}-${file.originalname.replace(/\s+/g, '-')}`;
+
+    const { error: upErr } = await supabaseAdmin.storage
+      .from('manor-assets')
+      .upload(storagePath, file.buffer, { contentType: file.mimetype, upsert: false });
+    if (upErr) throw upErr;
+
+    const { data: { publicUrl } } = supabaseAdmin.storage.from('manor-assets').getPublicUrl(storagePath);
+
+    const { data, error } = await supabaseAdmin
+      .from('manor_assets')
+      .insert({
+        title,
+        description: description || null,
+        storage_path: storagePath,
+        file_name: file.originalname,
+        mime_type: file.mimetype,
+        sort_order: Number(sort_order) || 0,
+      })
+      .select()
+      .single();
+    if (error) throw error;
+
+    res.json({ ...data, publicUrl });
+  } catch (err) {
+    console.error('Upload manor asset error:', err);
+    res.status(500).json({ error: 'Failed to upload asset' });
+  }
+});
+
+// Update asset title / description / sort order (admin)
+app.put('/api/manor-assets/:id', async (req, res) => {
+  try {
+    const { title, description, sort_order } = req.body;
+    const { data, error } = await supabaseAdmin
+      .from('manor_assets')
+      .update({ title, description, sort_order })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    console.error('Update manor asset error:', err);
+    res.status(500).json({ error: 'Failed to update asset' });
+  }
+});
+
+// Delete asset (admin)
+app.delete('/api/manor-assets/:id', async (req, res) => {
+  try {
+    const { data: asset, error: fetchErr } = await supabaseAdmin
+      .from('manor_assets')
+      .select('storage_path')
+      .eq('id', req.params.id)
+      .single();
+    if (fetchErr) throw fetchErr;
+
+    // Remove from storage
+    await supabaseAdmin.storage.from('manor-assets').remove([asset.storage_path]);
+
+    const { error } = await supabaseAdmin.from('manor_assets').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Delete manor asset error:', err);
+    res.status(500).json({ error: 'Failed to delete asset' });
+  }
+});
+
+// ── Staffing ──────────────────────────────────────────────────────────────────
+
 // Get staffing estimate
 app.get('/api/staffing/:weddingId', async (req, res) => {
   try {
