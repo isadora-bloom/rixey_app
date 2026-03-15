@@ -169,14 +169,15 @@ async function sendNotificationEmail(to, subject, bodyText, recipientType = 'adm
 // ============ NOTIFICATIONS ============
 
 const ACTIVITY_LABELS = {
-  timeline_updated: 'updated their wedding timeline',
-  tables_updated: 'updated their table layout',
-  staffing_updated: 'updated their staffing plan',
-  vendor_added: 'added a new vendor',
-  vendor_updated: 'updated a vendor',
-  contract_uploaded: 'uploaded a vendor contract',
-  checklist_completed: 'completed a checklist item',
-  inspo_uploaded: 'added inspiration photos',
+  timeline_updated:   'updated their wedding timeline',
+  tables_updated:     'updated their table layout',
+  floor_plan_needed:  'saved table setup — floor plan needed',
+  staffing_updated:   'updated their staffing plan',
+  vendor_added:       'added a new vendor',
+  vendor_updated:     'updated a vendor',
+  contract_uploaded:  'uploaded a vendor contract',
+  checklist_completed:'completed a checklist item',
+  inspo_uploaded:     'added inspiration photos',
 };
 
 async function createNotification(weddingId, recipientType, type, title, body, emailTo = null) {
@@ -5996,44 +5997,41 @@ app.post('/api/tables', async (req, res) => {
   try {
     const {
       weddingId, userId, guestCount, tableShape, guestsPerTable,
-      headTable, headTableSize, sweetheartTable,
+      headTable, headTableSize, headTableSided, sweetheartTable,
       cocktailTables, kidsTable, kidsCount,
       layoutNotes, linenColor, napkinColor,
-      tableNumbersStyle, centerpieceNotes, extraTables,
-      linenDrop, linenVenueChoice, runnerStyle,
-      chairSash, chairSashColor,
-      danceFloorSize, loungeArea, headTablePlacement, linenNotes
+      centerpieceNotes, extraTables,
+      linenVenueChoice, runnerStyle,
+      chargersOn, checkeredDanceFloor,
+      loungeArea, linenNotes
     } = req.body;
 
     const { data, error } = await supabaseAdmin
       .from('wedding_tables')
       .upsert({
-        wedding_id: weddingId,
-        guest_count: guestCount,
-        table_shape: tableShape,
-        guests_per_table: guestsPerTable,
-        head_table: headTable,
-        head_table_size: headTableSize,
-        sweetheart_table: sweetheartTable,
-        cocktail_tables: cocktailTables,
-        kids_table: kidsTable,
-        kids_count: kidsCount,
-        layout_notes: layoutNotes,
-        linen_color: linenColor,
-        napkin_color: napkinColor,
-        table_numbers_style: tableNumbersStyle,
-        centerpiece_notes: centerpieceNotes,
-        extra_tables: extraTables || {},
-        linen_drop: linenDrop,
-        linen_venue_choice: linenVenueChoice,
-        runner_style: runnerStyle,
-        chair_sash: chairSash,
-        chair_sash_color: chairSashColor,
-        dance_floor_size: danceFloorSize,
-        lounge_area: loungeArea,
-        head_table_placement: headTablePlacement,
-        linen_notes: linenNotes,
-        updated_at: new Date().toISOString()
+        wedding_id:           weddingId,
+        guest_count:          guestCount,
+        table_shape:          tableShape,
+        guests_per_table:     guestsPerTable,
+        head_table:           headTable,
+        head_table_size:      headTableSize,      // # people at head table
+        head_table_placement: headTableSided,     // 'one' or 'two' (repurposed field)
+        sweetheart_table:     sweetheartTable,
+        cocktail_tables:      cocktailTables,
+        kids_table:           kidsTable,
+        kids_count:           kidsCount,
+        layout_notes:         layoutNotes,
+        linen_color:          linenColor,
+        napkin_color:         napkinColor,
+        centerpiece_notes:    centerpieceNotes,
+        extra_tables:         extraTables || {},
+        linen_venue_choice:   linenVenueChoice,
+        runner_style:         runnerStyle,
+        chair_sash:           chargersOn,         // repurposed for chargers
+        dance_floor_size:     checkeredDanceFloor ? 'checkered' : 'none',
+        lounge_area:          loungeArea,
+        linen_notes:          linenNotes,
+        updated_at:           new Date().toISOString()
       }, { onConflict: 'wedding_id' })
       .select()
       .single();
@@ -6043,6 +6041,19 @@ app.post('/api/tables', async (req, res) => {
     // Log activity
     await logActivity(weddingId, userId, 'tables_updated', `${guestCount} guests, ${tableShape} tables`);
     notifyAdminOfActivity(weddingId, 'tables_updated', `${guestCount} guests, ${tableShape} tables`);
+
+    // Floor plan alert — not rate-limited, always fires on save
+    try {
+      const { data: wedding } = await supabaseAdmin.from('weddings').select('couple_names').eq('id', weddingId).single();
+      const couple = wedding?.couple_names || 'Your couple';
+      await createNotification(
+        weddingId, 'admin', 'floor_plan_needed',
+        `📐 Floor plan needed — ${couple}`,
+        `${couple} saved their table setup (${guestCount} guests, ${tableShape} tables). Build their floor plan.`
+      );
+    } catch (notifErr) {
+      console.error('[Tables] Floor plan notification error:', notifErr.message);
+    }
 
     res.json({ tables: data });
   } catch (error) {

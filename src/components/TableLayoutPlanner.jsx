@@ -3,87 +3,77 @@ import { useState, useEffect } from 'react'
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 const TABLE_SHAPES = [
-  { id: 'round', name: 'Round Tables', icon: '⭕', description: '60" rounds, great for conversation', defaultSeats: 8 },
-  { id: 'rectangular', name: 'Rectangular', icon: '▭', description: '6ft or 8ft banquet tables', defaultSeats: 8 },
-  { id: 'farm', name: 'Farm Tables', icon: '🪵', description: 'Long rustic wood tables', defaultSeats: 10 },
-  { id: 'mixed', name: 'Mixed', icon: '🔀', description: 'Combination of styles', defaultSeats: 8 },
+  { id: 'round',       name: 'Round Tables',  icon: '⭕', description: '60" rounds, great for conversation', defaultSeats: 8 },
+  { id: 'rectangular', name: 'Rectangular',   icon: '▭',  description: '6ft banquet tables',                defaultSeats: 8 },
+  { id: 'farm',        name: 'Farm Tables',   icon: '🪵', description: 'Long rustic wood tables',           defaultSeats: 10 },
+  { id: 'mixed',       name: 'Mixed',         icon: '🔀', description: 'Combination of styles',             defaultSeats: 8 },
 ]
 
 const LINEN_COLORS = [
-  { id: 'venue', name: 'Leave to Rixey', color: '#f0f0f0', border: '#aaa' },
-  { id: 'white', name: 'White', color: '#ffffff', border: '#e5e5e5' },
-  { id: 'ivory', name: 'Ivory', color: '#fffff0' },
-  { id: 'champagne', name: 'Champagne', color: '#f7e7ce' },
-  { id: 'blush', name: 'Blush', color: '#ffc0cb' },
-  { id: 'dusty-rose', name: 'Dusty Rose', color: '#dcae96' },
-  { id: 'sage', name: 'Sage', color: '#9caf88' },
-  { id: 'dusty-blue', name: 'Dusty Blue', color: '#6699cc' },
-  { id: 'navy', name: 'Navy', color: '#000080' },
-  { id: 'burgundy', name: 'Burgundy', color: '#722f37' },
-  { id: 'black', name: 'Black', color: '#000000' },
-]
-
-// How far the cloth hangs below the table edge
-const LINEN_DROPS = [
-  { key: 'floor',  label: 'Floor length',  desc: '~30" drop — formal, drapes to the ground', drop: 30 },
-  { key: 'mid',    label: 'Mid-length',     desc: '~15" drop — contemporary, shows chair legs', drop: 15 },
-  { key: 'lap',    label: 'Lap length',     desc: '~10" drop — casual/modern, barely past the edge', drop: 10 },
+  { id: 'venue',      name: 'Leave to Rixey', color: '#f0f0f0', border: '#aaa' },
+  { id: 'white',      name: 'White',          color: '#ffffff', border: '#e5e5e5' },
+  { id: 'ivory',      name: 'Ivory',          color: '#fffff0' },
+  { id: 'champagne',  name: 'Champagne',      color: '#f7e7ce' },
+  { id: 'blush',      name: 'Blush',          color: '#ffc0cb' },
+  { id: 'dusty-rose', name: 'Dusty Rose',     color: '#dcae96' },
+  { id: 'sage',       name: 'Sage',           color: '#9caf88' },
+  { id: 'dusty-blue', name: 'Dusty Blue',     color: '#6699cc' },
+  { id: 'navy',       name: 'Navy',           color: '#000080' },
+  { id: 'burgundy',   name: 'Burgundy',       color: '#722f37' },
+  { id: 'black',      name: 'Black',          color: '#000000' },
 ]
 
 const RUNNER_STYLES = [
-  { key: 'none',      label: 'No runner',         desc: 'Cloth only' },
-  { key: 'greenery',  label: 'Greenery / florals', desc: 'Down the centre of each table' },
-  { key: 'lace',      label: 'Lace runner',        desc: 'Over the tablecloth' },
-  { key: 'burlap',    label: 'Burlap / hessian',   desc: 'Rustic look, often on farm tables' },
-  { key: 'satin',     label: 'Satin overlay',      desc: 'Sheer or satin over a base cloth' },
-  { key: 'custom',    label: 'Other / custom',      desc: '' },
+  { key: 'none',     label: 'No runner',       desc: 'Cloth only' },
+  { key: 'runner',   label: 'Runner',          desc: 'Fabric runner down the centre of each table' },
+  { key: 'overlay',  label: 'Overlay',         desc: 'Sheer or satin layer over the base cloth' },
+  { key: 'greenery', label: 'Greenery runner', desc: 'Florals or greenery down the centre' },
 ]
 
-const DANCE_FLOOR_OPTIONS = [
-  { key: 'none',   label: 'No dance floor' },
-  { key: 'small',  label: 'Small — 12×12 ft (~20–30 dancers)' },
-  { key: 'medium', label: 'Medium — 16×16 ft (~40–60 dancers)' },
-  { key: 'large',  label: 'Large — 20×20 ft (~80+ dancers)' },
-]
+// Head table: 6ft rectangular tables pushed together
+// One-sided:  ceil((people + 2) / 6) tables
+// Two-sided:  ceil((people + 4) / 12) tables
+function headTableCount(people, sided) {
+  if (!people || people < 1) return 1
+  return sided === 'two'
+    ? Math.ceil((people + 4) / 12)
+    : Math.ceil((people + 2) / 6)
+}
 
-// Rixey table inventory: 5ft rounds (60"), 6ft rounds (72"), 6ft rect, 8ft rect
-// All round dining tables → 132" round cloth
+// Rixey inventory: all round dining tables → 132" round
 // 6ft rectangle → 90"×132"
-// 8ft rectangle → 90"×156"
-// Auxiliary tables (except cake) → 6ft rectangle = 90"×132"
-function getLinenSizes({ tableShape, tablesNeeded, rectTableCount, cocktailTables, headTable, headTableSize, sweetheartTable, extraTablesLinenCount }) {
+// Cocktail high-tops → 120" round
+function getLinenSizes({ tableShape, tablesNeeded, rectTableCount, cocktailTables,
+                         headTable, headTablePeople, headTableSided,
+                         sweetheartTable, extraTablesLinenCount }) {
   const sizes = []
 
   if (tableShape === 'round') {
-    sizes.push({ label: '132" round', qty: tablesNeeded, note: 'Round dining tables' })
+    sizes.push({ label: '132" round',  qty: tablesNeeded, note: 'Round dining tables' })
   } else if (tableShape === 'rectangular') {
-    const isEight = headTableSize >= 8 // use guestsPerTable as proxy — actually just show both options
-    sizes.push({ label: '90"×132"', qty: tablesNeeded, note: '6ft rectangular dining tables' })
-    // Note: if any are 8ft, add a note
+    sizes.push({ label: '90"×132"',   qty: tablesNeeded, note: '6ft rectangular dining tables' })
   } else if (tableShape === 'farm') {
     sizes.push({ label: '14"×108" runner', qty: tablesNeeded, note: 'Farm tables — runner over bare wood' })
   } else if (tableShape === 'mixed') {
     const roundCount = tablesNeeded - (rectTableCount || 0)
-    if (roundCount > 0) sizes.push({ label: '132" round', qty: roundCount, note: 'Round dining tables' })
-    if (rectTableCount > 0) sizes.push({ label: '90"×132"', qty: rectTableCount, note: '6ft rectangular dining tables' })
+    if (roundCount > 0)    sizes.push({ label: '132" round', qty: roundCount,          note: 'Round dining tables' })
+    if (rectTableCount > 0) sizes.push({ label: '90"×132"',  qty: rectTableCount,      note: '6ft rectangular dining tables' })
   }
 
-  // Head table — 8ft rectangle
   if (headTable) {
-    sizes.push({ label: '90"×156"', qty: 1, note: `Head table (8ft rectangle, ${headTableSize} seats)` })
+    const n = headTableCount(headTablePeople, headTableSided)
+    sizes.push({ label: '90"×132"', qty: n,
+      note: `Head table — ${n} × 6ft rect (${headTablePeople} people, ${headTableSided === 'two' ? 'seated both sides' : 'one side only'})` })
   }
 
-  // Sweetheart — 5ft round
   if (sweetheartTable) {
     sizes.push({ label: '132" round', qty: 1, note: 'Sweetheart table (5ft round)' })
   }
 
-  // Cocktail high-tops
   if (cocktailTables > 0) {
-    sizes.push({ label: '120" round', qty: cocktailTables, note: 'Cocktail high-tops (to floor)' })
+    sizes.push({ label: '120" round', qty: cocktailTables, note: 'Cocktail high-tops (floor length)' })
   }
 
-  // Auxiliary tables (all 6ft rectangles except cake table — that's confirmed separately)
   if (extraTablesLinenCount > 0) {
     sizes.push({ label: '90"×132"', qty: extraTablesLinenCount, note: 'Auxiliary tables (6ft rectangles) — excluding cake table' })
   }
@@ -94,86 +84,113 @@ function getLinenSizes({ tableShape, tablesNeeded, rectTableCount, cocktailTable
 const EXTRA_TABLES = [
   {
     category: 'Food & Beverage',
-    note: 'Some of these may be included in your catering quote - check with your caterer',
+    note: 'Some of these may be included in your catering quote — check with your caterer',
     tables: [
-      { id: 'cake', name: 'Cake / Dessert Table', icon: '🎂', needsLinen: true },
-      { id: 'candy-bar', name: 'Candy Bar / Sweets Table', icon: '🍬', needsLinen: true },
-      { id: 'late-night', name: 'Late Night Snack Station', icon: '🌙', needsLinen: true },
-      { id: 'coffee-tea', name: 'Coffee & Tea Station', icon: '☕', needsLinen: true },
-      { id: 'cigar-bar', name: 'Cigar Bar', icon: '🚬', needsLinen: true },
-      { id: 'smores', name: "S'mores Station", icon: '🔥', needsLinen: false },
-      { id: 'buffet', name: 'Buffet Tables', icon: '🍽️', needsLinen: true, hasCount: true },
-      { id: 'welcome-drinks', name: 'Welcome Drinks / Specialty Tasting Bar', icon: '🥂', needsLinen: true },
+      { id: 'cake',          name: 'Cake / Dessert Table',              icon: '🎂', needsLinen: true },
+      { id: 'candy-bar',     name: 'Candy Bar / Sweets Table',          icon: '🍬', needsLinen: true },
+      { id: 'late-night',    name: 'Late Night Snack Station',          icon: '🌙', needsLinen: true },
+      { id: 'coffee-tea',    name: 'Coffee & Tea Station',              icon: '☕', needsLinen: true },
+      { id: 'cigar-bar',     name: 'Cigar Bar',                         icon: '🚬', needsLinen: true },
+      { id: 'smores',        name: "S'mores Station",                   icon: '🔥', needsLinen: false },
+      { id: 'buffet',        name: 'Buffet Tables',                     icon: '🍽️', needsLinen: true, hasCount: true },
+      { id: 'welcome-drinks',name: 'Welcome Drinks / Specialty Tasting', icon: '🥂', needsLinen: true },
     ]
   },
   {
     category: 'Guest Experience',
     note: 'Guest book, programs, and gift tables may be combined into one table depending on your decor choices',
     tables: [
-      { id: 'guest-book', name: 'Guest Book / Sign-In Table', icon: '📖', needsLinen: true },
+      { id: 'guest-book',  name: 'Guest Book / Sign-In Table',    icon: '📖', needsLinen: true },
       { id: 'place-cards', name: 'Place Card / Escort Card Table', icon: '💌', needsLinen: true },
-      { id: 'gifts', name: 'Gift Table', icon: '🎁', needsLinen: true },
-      { id: 'card-box', name: 'Card Box Table', icon: '💳', needsLinen: true },
-      { id: 'favors', name: 'Favor Table', icon: '🎀', needsLinen: true },
-      { id: 'photo-booth', name: 'Photo Booth Props Table', icon: '📸', needsLinen: true },
-      { id: 'polaroid', name: 'Polaroid / Guest Photo Station', icon: '🖼️', needsLinen: true },
-      { id: 'programs', name: 'Programs Table', icon: '📜', needsLinen: true },
+      { id: 'gifts',       name: 'Gift Table',                     icon: '🎁', needsLinen: true },
+      { id: 'card-box',    name: 'Card Box Table',                 icon: '💳', needsLinen: true },
+      { id: 'favors',      name: 'Favor Table',                    icon: '🎀', needsLinen: true },
+      { id: 'photo-booth', name: 'Photo Booth Props Table',        icon: '📸', needsLinen: true },
+      { id: 'polaroid',    name: 'Polaroid / Guest Photo Station', icon: '🖼️', needsLinen: true },
+      { id: 'programs',    name: 'Programs Table',                 icon: '📜', needsLinen: true },
     ]
   },
   {
     category: 'Memory & Tribute',
     tables: [
-      { id: 'memorial', name: 'Memorial Table', icon: '🕯️', needsLinen: true, description: 'Honoring deceased loved ones' },
-      { id: 'family-photos', name: 'Family Photo Display', icon: '👨‍👩‍👧‍👦', needsLinen: true },
+      { id: 'memorial',     name: 'Memorial Table',       icon: '🕯️', needsLinen: true, description: 'Honoring deceased loved ones' },
+      { id: 'family-photos',name: 'Family Photo Display', icon: '👨‍👩‍👧‍👦', needsLinen: true },
     ]
   },
   {
     category: 'Ceremony',
-    note: 'Ceremony tables rarely require linens - decorative options are typically used instead',
+    note: 'Ceremony tables rarely require linens — decorative options are typically used instead',
     tables: [
-      { id: 'unity', name: 'Unity Candle / Sand Ceremony Table', icon: '🕯️', needsLinen: false },
-      { id: 'ring-bearer', name: 'Ring Bearer Stand / Table', icon: '💍', needsLinen: false },
+      { id: 'unity',       name: 'Unity Candle / Sand Ceremony Table', icon: '🕯️', needsLinen: false },
+      { id: 'ring-bearer', name: 'Ring Bearer Stand / Table',          icon: '💍', needsLinen: false },
     ]
   },
   {
     category: 'Reception Extras',
     tables: [
-      { id: 'dj', name: 'DJ / Band Table', icon: '🎧', needsLinen: true },
-      { id: 'seating-chart', name: 'Seating Chart Display', icon: '📋', needsLinen: false },
-      { id: 'lawn-games', name: 'Lawn Games Station', icon: '🎯', needsLinen: false },
-      { id: 'kids-activity', name: 'Kids Activity Table', icon: '🖍️', needsLinen: true },
+      { id: 'dj',            name: 'DJ / Band Table',         icon: '🎧', needsLinen: true },
+      { id: 'seating-chart', name: 'Seating Chart Display',   icon: '📋', needsLinen: false },
+      { id: 'lawn-games',    name: 'Lawn Games Station',      icon: '🎯', needsLinen: false },
+      { id: 'kids-activity', name: 'Kids Activity Table',     icon: '🖍️', needsLinen: true },
     ]
   },
 ]
 
+// ── Toggle helper ──────────────────────────────────────────────────────────────
+function Toggle({ on, onToggle, label, sublabel }) {
+  return (
+    <label className="flex items-center gap-3 cursor-pointer">
+      <button type="button" onClick={onToggle}
+        className={`w-10 h-5 rounded-full flex-shrink-0 transition-colors relative ${on ? 'bg-sage-500' : 'bg-cream-300'}`}>
+        <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${on ? 'translate-x-5' : 'translate-x-0.5'}`} />
+      </button>
+      <div>
+        <p className={`text-sm ${on ? 'text-sage-700 font-medium' : 'text-sage-500'}`}>{label}</p>
+        {sublabel && <p className="text-xs text-sage-400">{sublabel}</p>}
+      </div>
+    </label>
+  )
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
+
 export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false }) {
-  const [guestCount, setGuestCount] = useState(100)
-  const [tableShape, setTableShape] = useState('round')
+  const [guestCount, setGuestCount]         = useState(100)
+  const [tableShape, setTableShape]         = useState('round')
   const [guestsPerTable, setGuestsPerTable] = useState(8)
   const [rectTableCount, setRectTableCount] = useState(0)
-  const [headTable, setHeadTable] = useState(false)
-  const [headTableSize, setHeadTableSize] = useState(8)
+
+  // Special tables
   const [sweetheartTable, setSweetheartTable] = useState(true)
-  const [cocktailTables, setCocktailTables] = useState(0)
-  const [kidsTable, setKidsTable] = useState(false)
-  const [kidsCount, setKidsCount] = useState(0)
-  const [linenColor, setLinenColor] = useState('white')
-  const [napkinColor, setNapkinColor] = useState('sage')
-  const [linenDrop, setLinenDrop] = useState('floor')
+  const [headTable, setHeadTable]             = useState(false)
+  const [headTablePeople, setHeadTablePeople] = useState(10)
+  const [headTableSided, setHeadTableSided]   = useState('one')  // 'one' | 'two'
+  const [kidsTable, setKidsTable]             = useState(false)
+  const [kidsCount, setKidsCount]             = useState(0)
+  const [cocktailTables, setCocktailTables]   = useState(0)
+
+  // Linens
+  const [linenColor, setLinenColor]         = useState('white')
+  const [napkinColor, setNapkinColor]       = useState('sage')
   const [linenVenueChoice, setLinenVenueChoice] = useState(false)
-  const [runnerStyle, setRunnerStyle] = useState('none')
-  const [chairSash, setChairSash] = useState(false)
-  const [chairSashColor, setChairSashColor] = useState('white')
+  const [runnerStyle, setRunnerStyle]       = useState('none')
+  const [chargersOn, setChargersOn]         = useState(false)
+
+  // Layout
+  const [checkeredDanceFloor, setCheckeredDanceFloor] = useState(false)
+  const [loungeArea, setLoungeArea]                   = useState(false)
+
+  // Notes
   const [centerpieceNotes, setCenterpieceNotes] = useState('')
-  const [layoutNotes, setLayoutNotes] = useState('')
-  const [linenNotes, setLinenNotes] = useState('')
-  const [danceFloorSize, setDanceFloorSize] = useState('medium')
-  const [loungeArea, setLoungeArea] = useState(false)
-  const [headTablePlacement, setHeadTablePlacement] = useState('')
-  const [extraTables, setExtraTables] = useState({}) // { tableId: { selected: bool, count: number, notes: string } }
+  const [layoutNotes, setLayoutNotes]           = useState('')
+  const [linenNotes, setLinenNotes]             = useState('')
+
+  // Extra tables
+  const [extraTables, setExtraTables] = useState({})
+
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
+  const [saving, setSaving]   = useState(false)
+  const [saved, setSaved]     = useState(false)
 
   useEffect(() => {
     if (weddingId) loadTableSetup()
@@ -183,31 +200,32 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
     try {
       const response = await fetch(`${API_URL}/api/tables/${weddingId}`)
       const data = await response.json()
-
       if (data.tables) {
-        setGuestCount(data.tables.guest_count || 100)
-        setTableShape(data.tables.table_shape || 'round')
-        setGuestsPerTable(data.tables.guests_per_table || 8)
-        setHeadTable(data.tables.head_table || false)
-        setHeadTableSize(data.tables.head_table_size || 8)
-        setSweetheartTable(data.tables.sweetheart_table ?? true)
-        setCocktailTables(data.tables.cocktail_tables || 0)
-        setKidsTable(data.tables.kids_table || false)
-        setKidsCount(data.tables.kids_count || 0)
-        setLinenColor(data.tables.linen_color || 'white')
-        setNapkinColor(data.tables.napkin_color || 'sage')
-        setLinenDrop(data.tables.linen_drop || 'floor')
-        setLinenVenueChoice(data.tables.linen_venue_choice || false)
-        setRunnerStyle(data.tables.runner_style || 'none')
-        setChairSash(data.tables.chair_sash || false)
-        setChairSashColor(data.tables.chair_sash_color || 'white')
-        setCenterpieceNotes(data.tables.centerpiece_notes || '')
-        setLayoutNotes(data.tables.layout_notes || '')
-        setLinenNotes(data.tables.linen_notes || '')
-        setDanceFloorSize(data.tables.dance_floor_size || 'medium')
-        setLoungeArea(data.tables.lounge_area || false)
-        setHeadTablePlacement(data.tables.head_table_placement || '')
-        setExtraTables(data.tables.extra_tables || {})
+        const t = data.tables
+        setGuestCount(t.guest_count || 100)
+        setTableShape(t.table_shape || 'round')
+        setGuestsPerTable(t.guests_per_table || 8)
+        setSweetheartTable(t.sweetheart_table ?? true)
+        setHeadTable(t.head_table || false)
+        setHeadTablePeople(t.head_table_size || 10)
+        // head_table_placement is repurposed to store sided-ness
+        setHeadTableSided(t.head_table_placement === 'two' ? 'two' : 'one')
+        setCocktailTables(t.cocktail_tables || 0)
+        setKidsTable(t.kids_table || false)
+        setKidsCount(t.kids_count || 0)
+        setLinenColor(t.linen_color || 'white')
+        setNapkinColor(t.napkin_color || 'sage')
+        setLinenVenueChoice(t.linen_venue_choice || false)
+        setRunnerStyle(t.runner_style || 'none')
+        // chair_sash is repurposed to store chargersOn
+        setChargersOn(t.chair_sash || false)
+        setCheckeredDanceFloor(t.dance_floor_size === 'checkered')
+        setLoungeArea(t.lounge_area || false)
+        setCenterpieceNotes(t.centerpiece_notes || '')
+        setLayoutNotes(t.layout_notes || '')
+        setLinenNotes(t.linen_notes || '')
+        setExtraTables(t.extra_tables || {})
+        if (t.table_shape === 'mixed') setRectTableCount(0)
       }
     } catch (err) {
       console.error('Failed to load table setup:', err)
@@ -228,83 +246,71 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
           tableShape,
           guestsPerTable,
           headTable,
-          headTableSize,
+          headTableSize: headTablePeople,    // stored as head_table_size
+          headTableSided,                    // stored as head_table_placement (repurposed)
           sweetheartTable,
           cocktailTables,
           kidsTable,
           kidsCount,
           linenColor,
           napkinColor,
-          linenDrop,
           linenVenueChoice,
           runnerStyle,
-          chairSash,
-          chairSashColor,
+          chargersOn,                        // stored as chair_sash (repurposed)
+          checkeredDanceFloor,               // stored as dance_floor_size = 'checkered'/'none'
+          loungeArea,
           centerpieceNotes,
           layoutNotes,
           linenNotes,
-          danceFloorSize,
-          loungeArea,
-          headTablePlacement,
-          extraTables
+          extraTables,
         })
       })
       setSaved(true)
-      setTimeout(() => setSaved(false), 2000)
+      setTimeout(() => setSaved(false), 3000)
     } catch (err) {
       console.error('Failed to save table setup:', err)
     }
     setSaving(false)
   }
 
-  // Calculate tables needed
-  const seatedGuests = guestCount - (sweetheartTable ? 2 : 0) - (headTable ? headTableSize : 0) - (kidsTable ? kidsCount : 0)
-  const tablesNeeded = Math.ceil(seatedGuests / guestsPerTable)
-  const totalTables = tablesNeeded + (sweetheartTable ? 1 : 0) + (headTable ? 1 : 0) + (kidsTable ? 1 : 0)
+  // ── Calculations ──────────────────────────────────────────────────────────
 
-  // Calculate extra tables that need linens
+  const htCount = headTable ? headTableCount(headTablePeople, headTableSided) : 0
+  const seatedGuests = guestCount
+    - (sweetheartTable ? 2 : 0)
+    - (headTable ? headTablePeople : 0)
+    - (kidsTable ? kidsCount : 0)
+  const tablesNeeded = Math.ceil(Math.max(0, seatedGuests) / guestsPerTable)
+  const totalTables  = tablesNeeded + (sweetheartTable ? 1 : 0) + htCount + (kidsTable ? 1 : 0)
+
   const extraTablesLinenCount = EXTRA_TABLES.flatMap(cat => cat.tables).reduce((count, table) => {
-    const tableState = extraTables[table.id]
-    if (tableState?.selected && table.needsLinen) {
-      // If it has a count (like buffet tables), use that count
-      return count + (table.hasCount ? (tableState.count || 1) : 1)
-    }
+    const ts = extraTables[table.id]
+    if (ts?.selected && table.needsLinen) return count + (table.hasCount ? (ts.count || 1) : 1)
     return count
   }, 0)
-
   const extraTablesCount = EXTRA_TABLES.flatMap(cat => cat.tables).reduce((count, table) => {
-    const tableState = extraTables[table.id]
-    if (tableState?.selected) {
-      return count + (table.hasCount ? (tableState.count || 1) : 1)
-    }
+    const ts = extraTables[table.id]
+    if (ts?.selected) return count + (table.hasCount ? (ts.count || 1) : 1)
     return count
   }, 0)
 
-  const linensNeeded = totalTables + cocktailTables + extraTablesLinenCount
-  const napkinsNeeded = guestCount + 10 // extra for vendors
+  const linensNeeded  = totalTables + cocktailTables + extraTablesLinenCount
+  const napkinsNeeded = guestCount + 10
 
-  if (loading) {
-    return <div className="text-sage-400 text-center py-8">Loading table setup...</div>
-  }
+  if (loading) return <div className="text-sage-400 text-center py-8">Loading table setup…</div>
 
   return (
     <div className="space-y-6">
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h2 className="font-serif text-xl text-sage-700">Table & Seating Planner</h2>
           <p className="text-sage-500 text-sm">Calculate tables, linens, and layout</p>
         </div>
-        <button
-          onClick={saveTableSetup}
-          disabled={saving}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
-            saved
-              ? 'bg-green-500 text-white'
-              : 'bg-sage-600 text-white hover:bg-sage-700'
-          } disabled:opacity-50`}
-        >
-          {saved ? '✓ Saved!' : saving ? 'Saving...' : 'Save Setup'}
+        <button onClick={saveTableSetup} disabled={saving}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition ${saved ? 'bg-green-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'} disabled:opacity-50`}>
+          {saved ? '✓ Saved!' : saving ? 'Saving…' : 'Save Setup'}
         </button>
       </div>
 
@@ -312,43 +318,24 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
       <div className="bg-sage-50 rounded-xl p-4">
         <label className="block text-sage-700 font-medium mb-2">Total Guest Count</label>
         <div className="flex items-center gap-4">
-          <input
-            type="range"
-            min="20"
-            max="300"
-            value={guestCount}
-            onChange={(e) => setGuestCount(Number(e.target.value))}
-            className="flex-1 h-2 bg-sage-200 rounded-lg appearance-none cursor-pointer"
-          />
-          <input
-            type="number"
-            min="1"
-            max="500"
-            value={guestCount}
-            onChange={(e) => setGuestCount(Number(e.target.value))}
-            className="w-20 px-3 py-2 border border-sage-200 rounded-lg text-center font-medium"
-          />
+          <input type="range" min="20" max="300" value={guestCount}
+            onChange={e => setGuestCount(Number(e.target.value))}
+            className="flex-1 h-2 bg-sage-200 rounded-lg appearance-none cursor-pointer" />
+          <input type="number" min="1" max="500" value={guestCount}
+            onChange={e => setGuestCount(Number(e.target.value))}
+            className="w-20 px-3 py-2 border border-sage-200 rounded-lg text-center font-medium" />
           <span className="text-sage-500">guests</span>
         </div>
       </div>
 
-      {/* Table Shape Selection */}
+      {/* Table Style */}
       <div>
         <label className="block text-sage-700 font-medium mb-3">Table Style</label>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {TABLE_SHAPES.map(shape => (
-            <button
-              key={shape.id}
-              onClick={() => {
-                setTableShape(shape.id)
-                setGuestsPerTable(shape.defaultSeats)
-              }}
-              className={`p-4 rounded-xl border-2 text-center transition ${
-                tableShape === shape.id
-                  ? 'border-sage-600 bg-sage-50'
-                  : 'border-cream-200 bg-white hover:border-sage-300'
-              }`}
-            >
+            <button key={shape.id}
+              onClick={() => { setTableShape(shape.id); setGuestsPerTable(shape.defaultSeats) }}
+              className={`p-4 rounded-xl border-2 text-center transition ${tableShape === shape.id ? 'border-sage-600 bg-sage-50' : 'border-cream-200 bg-white hover:border-sage-300'}`}>
               <span className="text-3xl block mb-1">{shape.icon}</span>
               <span className="font-medium text-sage-800 text-sm">{shape.name}</span>
               <p className="text-sage-400 text-xs mt-1">{shape.description}</p>
@@ -358,20 +345,18 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
       </div>
 
       {/* Guests per table */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-4 flex-wrap">
         <label className="text-sage-700 font-medium">Guests per table:</label>
-        <select
-          value={guestsPerTable}
-          onChange={(e) => setGuestsPerTable(Number(e.target.value))}
-          className="px-3 py-2 border border-cream-300 rounded-lg"
-        >
-          {[6, 8, 10, 12].map(n => (
-            <option key={n} value={n}>{n} guests</option>
-          ))}
+        <select value={guestsPerTable} onChange={e => setGuestsPerTable(Number(e.target.value))}
+          className="px-3 py-2 border border-cream-300 rounded-lg">
+          {[6, 8, 10, 12].map(n => <option key={n} value={n}>{n} guests</option>)}
         </select>
+        {(tableShape === 'rectangular' || tableShape === 'mixed') && (
+          <p className="text-xs text-sage-400 italic">We assume 6 guests per rectangular table.</p>
+        )}
       </div>
 
-      {/* Mixed table split */}
+      {/* Mixed split */}
       {tableShape === 'mixed' && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
           <p className="text-sm font-medium text-amber-800 mb-2">How many of your dining tables will be rectangular?</p>
@@ -385,17 +370,13 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
       )}
 
       {/* Special Tables */}
-      <div className="bg-cream-50 rounded-xl p-4 space-y-4">
+      <div className="bg-cream-50 rounded-xl p-4 space-y-5">
         <h3 className="font-medium text-sage-700">Special Tables</h3>
 
-        {/* Sweetheart Table */}
+        {/* Sweetheart */}
         <label className="flex items-center gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={sweetheartTable}
-            onChange={(e) => setSweetheartTable(e.target.checked)}
-            className="w-5 h-5 rounded border-sage-300 text-sage-600"
-          />
+          <input type="checkbox" checked={sweetheartTable} onChange={e => setSweetheartTable(e.target.checked)}
+            className="w-5 h-5 rounded border-sage-300 text-sage-600" />
           <span className="text-2xl">💕</span>
           <div>
             <p className="font-medium text-sage-800">Sweetheart Table</p>
@@ -404,53 +385,60 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
         </label>
 
         {/* Head Table */}
-        <label className="flex items-center gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={headTable}
-            onChange={(e) => setHeadTable(e.target.checked)}
-            className="w-5 h-5 rounded border-sage-300 text-sage-600"
-          />
-          <span className="text-2xl">👑</span>
-          <div className="flex-1">
-            <p className="font-medium text-sage-800">Head Table</p>
-            <p className="text-sage-500 text-sm">Long table for wedding party</p>
-          </div>
+        <div>
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input type="checkbox" checked={headTable} onChange={e => setHeadTable(e.target.checked)}
+              className="w-5 h-5 rounded border-sage-300 text-sage-600" />
+            <span className="text-2xl">👑</span>
+            <div>
+              <p className="font-medium text-sage-800">Head Table</p>
+              <p className="text-sage-500 text-sm">Long table for wedding party</p>
+            </div>
+          </label>
+
           {headTable && (
-            <input
-              type="number"
-              min="4"
-              max="20"
-              value={headTableSize}
-              onChange={(e) => setHeadTableSize(Number(e.target.value))}
-              className="w-16 px-2 py-1 border border-cream-300 rounded text-center"
-            />
+            <div className="mt-3 ml-8 space-y-3 bg-white border border-cream-200 rounded-xl p-4">
+              <div className="flex items-center gap-4 flex-wrap">
+                <label className="text-sm text-sage-600 font-medium">How many people at the head table?</label>
+                <input type="number" min={2} max={30} value={headTablePeople}
+                  onChange={e => setHeadTablePeople(Math.max(2, Number(e.target.value)))}
+                  className="w-20 px-3 py-2 border border-cream-300 rounded-lg text-center font-medium" />
+              </div>
+              <div>
+                <p className="text-sm text-sage-600 font-medium mb-2">Seated one side or both?</p>
+                <div className="flex gap-3">
+                  {[
+                    { key: 'one', label: 'One side only', desc: 'All facing guests' },
+                    { key: 'two', label: 'Both sides',    desc: 'Like a dinner party' },
+                  ].map(opt => (
+                    <button key={opt.key} onClick={() => setHeadTableSided(opt.key)}
+                      className={`flex-1 px-3 py-2 rounded-xl border-2 text-left transition ${headTableSided === opt.key ? 'border-sage-500 bg-sage-50' : 'border-cream-200 hover:border-sage-300'}`}>
+                      <p className={`text-sm font-medium ${headTableSided === opt.key ? 'text-sage-700' : 'text-sage-500'}`}>{opt.label}</p>
+                      <p className="text-xs text-sage-400">{opt.desc}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <p className="text-xs text-sage-400">
+                That's <strong>{htCount} × 6ft table{htCount !== 1 ? 's' : ''}</strong> pushed together for your head table.
+              </p>
+            </div>
           )}
-        </label>
+        </div>
 
         {/* Kids Table */}
         <label className="flex items-center gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={kidsTable}
-            onChange={(e) => setKidsTable(e.target.checked)}
-            className="w-5 h-5 rounded border-sage-300 text-sage-600"
-          />
+          <input type="checkbox" checked={kidsTable} onChange={e => setKidsTable(e.target.checked)}
+            className="w-5 h-5 rounded border-sage-300 text-sage-600" />
           <span className="text-2xl">👶</span>
           <div className="flex-1">
             <p className="font-medium text-sage-800">Kids Table</p>
             <p className="text-sage-500 text-sm">Separate table for children</p>
           </div>
           {kidsTable && (
-            <input
-              type="number"
-              min="1"
-              max="20"
-              value={kidsCount}
-              onChange={(e) => setKidsCount(Number(e.target.value))}
-              className="w-16 px-2 py-1 border border-cream-300 rounded text-center"
-              placeholder="# kids"
-            />
+            <input type="number" min={1} max={20} value={kidsCount}
+              onChange={e => setKidsCount(Number(e.target.value))}
+              className="w-16 px-2 py-1 border border-cream-300 rounded text-center" placeholder="# kids" />
           )}
         </label>
 
@@ -459,71 +447,47 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
           <span className="text-2xl">🍸</span>
           <div className="flex-1">
             <p className="font-medium text-sage-800">Cocktail Tables</p>
-            <p className="text-sage-500 text-sm">High-top tables for mingling</p>
+            <p className="text-sage-500 text-sm">High-tops for mingling — Rixey has 5</p>
           </div>
-          <input
-            type="number"
-            min="0"
-            max="20"
-            value={cocktailTables}
-            onChange={(e) => setCocktailTables(Number(e.target.value))}
-            className="w-16 px-2 py-1 border border-cream-300 rounded text-center"
-          />
+          <input type="number" min={0} max={5} value={Math.min(5, cocktailTables)}
+            onChange={e => setCocktailTables(Math.min(5, Math.max(0, Number(e.target.value))))}
+            className="w-16 px-2 py-1 border border-cream-300 rounded text-center" />
         </div>
+        {cocktailTables > 5 && (
+          <p className="text-xs text-amber-600 ml-11">Rixey has 5 cocktail tables — additional tables would need to be rented.</p>
+        )}
       </div>
 
       {/* Linens */}
       <div>
         <h3 className="font-medium text-sage-700 mb-3">Linen Colors</h3>
         <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sage-600 text-sm mb-2">Tablecloth</label>
-            <div className="flex flex-wrap gap-2">
-              {LINEN_COLORS.map(color => (
-                <button
-                  key={color.id}
-                  onClick={() => setLinenColor(color.id)}
-                  className={`w-8 h-8 rounded-full border-2 transition ${
-                    linenColor === color.id ? 'border-sage-600 scale-110' : 'border-gray-200'
-                  }`}
-                  style={{ backgroundColor: color.color, borderColor: color.border || (linenColor === color.id ? '#4a7c59' : '#e5e5e5') }}
-                  title={color.name}
-                />
-              ))}
+          {[
+            { label: 'Tablecloth', color: linenColor, set: setLinenColor },
+            { label: 'Napkins',    color: napkinColor, set: setNapkinColor },
+          ].map(({ label, color, set }) => (
+            <div key={label}>
+              <label className="block text-sage-600 text-sm mb-2">{label}</label>
+              <div className="flex flex-wrap gap-2">
+                {LINEN_COLORS.map(c => (
+                  <button key={c.id} onClick={() => set(c.id)}
+                    className={`w-8 h-8 rounded-full border-2 transition ${color === c.id ? 'scale-110' : ''}`}
+                    style={{ backgroundColor: c.color, borderColor: c.border || (color === c.id ? '#4a7c59' : '#e5e5e5') }}
+                    title={c.name} />
+                ))}
+              </div>
+              <p className="text-sage-500 text-xs mt-1">Selected: {LINEN_COLORS.find(c => c.id === color)?.name}</p>
             </div>
-            <p className="text-sage-500 text-xs mt-1">
-              Selected: {LINEN_COLORS.find(c => c.id === linenColor)?.name}
-            </p>
-          </div>
-
-          <div>
-            <label className="block text-sage-600 text-sm mb-2">Napkins</label>
-            <div className="flex flex-wrap gap-2">
-              {LINEN_COLORS.map(color => (
-                <button
-                  key={color.id}
-                  onClick={() => setNapkinColor(color.id)}
-                  className={`w-8 h-8 rounded-full border-2 transition ${
-                    napkinColor === color.id ? 'border-sage-600 scale-110' : 'border-gray-200'
-                  }`}
-                  style={{ backgroundColor: color.color, borderColor: color.border || (napkinColor === color.id ? '#4a7c59' : '#e5e5e5') }}
-                  title={color.name}
-                />
-              ))}
-            </div>
-            <p className="text-sage-500 text-xs mt-1">
-              Selected: {LINEN_COLORS.find(c => c.id === napkinColor)?.name}
-            </p>
-          </div>
+          ))}
         </div>
       </div>
 
-      {/* Linen sizes + drop */}
+      {/* Tablecloth Sizes */}
       <div className="border border-cream-200 rounded-xl overflow-hidden">
         <div className="bg-cream-50 px-4 py-3 border-b border-cream-200 flex items-center justify-between">
           <div>
             <h3 className="font-medium text-sage-700">Tablecloth Sizes</h3>
-            <p className="text-sage-500 text-xs mt-0.5">What length cloth do you need and exactly what size to order</p>
+            <p className="text-sage-500 text-xs mt-0.5">All linens are floor length</p>
           </div>
           <label className="flex items-center gap-2 text-xs text-sage-500 cursor-pointer">
             <input type="checkbox" checked={linenVenueChoice} onChange={e => setLinenVenueChoice(e.target.checked)}
@@ -532,29 +496,15 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
           </label>
         </div>
 
-        {!linenVenueChoice && (
+        {!linenVenueChoice ? (
           <div className="p-4 space-y-5">
-            {/* Drop selector */}
-            <div>
-              <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">Drop length</p>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                {LINEN_DROPS.map(d => (
-                  <button key={d.key} onClick={() => setLinenDrop(d.key)}
-                    className={`p-3 rounded-xl border-2 text-left transition ${linenDrop === d.key ? 'border-sage-500 bg-sage-50' : 'border-cream-200 hover:border-sage-300'}`}>
-                    <p className={`text-sm font-medium ${linenDrop === d.key ? 'text-sage-700' : 'text-sage-500'}`}>{d.label}</p>
-                    <p className="text-xs text-sage-400 mt-0.5">{d.desc}</p>
-                  </button>
-                ))}
-              </div>
-            </div>
-
             {/* Size guide */}
             <div>
               <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">What to order</p>
               <div className="bg-white border border-cream-200 rounded-xl divide-y divide-cream-100">
-                {getLinenSizes({
-                  tableShape, tablesNeeded, rectTableCount,
-                  cocktailTables, headTable, headTableSize, sweetheartTable, extraTablesLinenCount
+                {getLinenSizes({ tableShape, tablesNeeded, rectTableCount,
+                  cocktailTables, headTable, headTablePeople, headTableSided,
+                  sweetheartTable, extraTablesLinenCount
                 }).map((row, i) => (
                   <div key={i} className="flex items-center justify-between px-4 py-3">
                     <div>
@@ -564,7 +514,6 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
                     <span className="text-lg font-bold text-sage-600 ml-4 flex-shrink-0">×{row.qty}</span>
                   </div>
                 ))}
-                {/* Extra table linens */}
                 {extraTablesLinenCount > 0 && (
                   <div className="flex items-center justify-between px-4 py-3">
                     <div>
@@ -581,7 +530,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
             {/* Runner */}
             <div>
               <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">Table runner / overlay</p>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 {RUNNER_STYLES.map(r => (
                   <button key={r.key} onClick={() => setRunnerStyle(r.key)}
                     className={`p-3 rounded-xl border-2 text-left transition ${runnerStyle === r.key ? 'border-sage-500 bg-sage-50' : 'border-cream-200 hover:border-sage-300'}`}>
@@ -592,112 +541,63 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
               </div>
             </div>
 
-            {/* Chair sashes */}
+            {/* Chargers */}
             <div>
-              <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">Chair sashes</p>
-              <label className="flex items-center gap-3 cursor-pointer mb-3">
-                <button type="button" onClick={() => setChairSash(v => !v)}
-                  className={`w-10 h-5 rounded-full flex-shrink-0 transition-colors relative ${chairSash ? 'bg-sage-500' : 'bg-cream-300'}`}>
-                  <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${chairSash ? 'translate-x-5' : 'translate-x-0.5'}`} />
-                </button>
-                <span className={`text-sm ${chairSash ? 'text-sage-700 font-medium' : 'text-sage-400'}`}>
-                  Add chair sashes {chairSash && `— ${guestCount} sashes needed`}
-                </span>
-              </label>
-              {chairSash && (
-                <div>
-                  <p className="text-xs text-sage-500 mb-2">Sash colour</p>
-                  <div className="flex flex-wrap gap-2">
-                    {LINEN_COLORS.filter(c => c.id !== 'venue').map(color => (
-                      <button key={color.id} onClick={() => setChairSashColor(color.id)}
-                        className={`w-8 h-8 rounded-full border-2 transition ${chairSashColor === color.id ? 'scale-110' : ''}`}
-                        style={{ backgroundColor: color.color, borderColor: color.border || (chairSashColor === color.id ? '#4a7c59' : '#e5e5e5') }}
-                        title={color.name} />
-                    ))}
-                  </div>
-                  <p className="text-xs text-sage-400 mt-1">{LINEN_COLORS.find(c => c.id === chairSashColor)?.name}</p>
-                </div>
-              )}
+              <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">Charger plates</p>
+              <Toggle on={chargersOn} onToggle={() => setChargersOn(v => !v)}
+                label="Add charger plates"
+                sublabel={chargersOn ? `${guestCount} chargers needed` : 'Decorative base plates under the dinner plate'} />
             </div>
 
             {/* Linen notes */}
             <div>
               <label className="block text-xs font-semibold text-sage-500 uppercase tracking-wide mb-2">Linen notes</label>
               <textarea value={linenNotes} onChange={e => setLinenNotes(e.target.value)}
-                placeholder="Specific linen requests, supplier, rental company, any constraints…"
+                placeholder="Specific linen requests, rental company, any constraints…"
                 rows={2} className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 resize-none" />
             </div>
           </div>
-        )}
-
-        {linenVenueChoice && (
+        ) : (
           <p className="px-4 py-3 text-sm text-sage-400 italic">Rixey will select appropriate linens for your table style and colour scheme.</p>
         )}
       </div>
 
-      {/* Layout preferences (feeds into floor plan) */}
+      {/* Layout Preferences */}
       <div className="bg-cream-50 rounded-xl p-4 space-y-4">
         <h3 className="font-medium text-sage-700">Layout Preferences</h3>
         <p className="text-sage-400 text-xs -mt-2">This helps us build your floor plan — the more detail the better.</p>
 
-        {/* Dance floor */}
+        {/* Checkered dance floor */}
         <div>
           <label className="block text-sage-600 text-sm font-medium mb-2">Dance floor</label>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {DANCE_FLOOR_OPTIONS.map(opt => (
-              <button key={opt.key} onClick={() => setDanceFloorSize(opt.key)}
-                className={`px-3 py-2 rounded-lg border-2 text-xs text-left transition ${danceFloorSize === opt.key ? 'border-sage-500 bg-sage-50 text-sage-700 font-medium' : 'border-cream-200 text-sage-500 hover:border-sage-300'}`}>
-                {opt.label}
-              </button>
-            ))}
-          </div>
+          <Toggle on={checkeredDanceFloor} onToggle={() => setCheckeredDanceFloor(v => !v)}
+            label="We'd like to rent a chequered dance floor"
+            sublabel={checkeredDanceFloor ? 'We recommend 12×12 or 12×16 ft — we\'ll confirm the size with you' : undefined} />
+          {checkeredDanceFloor && (
+            <p className="text-xs text-sage-400 mt-2 ml-13 pl-0.5">Popular sizes at Rixey are 12×12 ft and 12×16 ft.</p>
+          )}
         </div>
 
         {/* Lounge area */}
-        <label className="flex items-center gap-3 cursor-pointer">
-          <button type="button" onClick={() => setLoungeArea(v => !v)}
-            className={`w-10 h-5 rounded-full flex-shrink-0 transition-colors relative ${loungeArea ? 'bg-sage-500' : 'bg-cream-300'}`}>
-            <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${loungeArea ? 'translate-x-5' : 'translate-x-0.5'}`} />
-          </button>
-          <div>
-            <p className={`text-sm ${loungeArea ? 'text-sage-700 font-medium' : 'text-sage-500'}`}>Lounge seating area</p>
-            <p className="text-xs text-sage-400">Sofas / armchairs — takes up roughly 10×12 ft of floor space</p>
-          </div>
-        </label>
-
-        {/* Head table placement */}
-        {(headTable || sweetheartTable) && (
-          <div>
-            <label className="block text-sage-600 text-sm font-medium mb-2">
-              {sweetheartTable ? 'Sweetheart' : 'Head'} table placement
-            </label>
-            <input value={headTablePlacement} onChange={e => setHeadTablePlacement(e.target.value)}
-              placeholder="e.g. Facing guests on the north wall, in front of the fireplace…"
-              className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
-          </div>
-        )}
+        <Toggle on={loungeArea} onToggle={() => setLoungeArea(v => !v)}
+          label="Lounge seating area"
+          sublabel="Sofas / armchairs — takes up roughly 10×12 ft of floor space" />
       </div>
 
       {/* Centerpieces */}
       <div>
         <label className="block text-sage-700 font-medium mb-2">Centerpiece Ideas</label>
-        <textarea
-          value={centerpieceNotes}
-          onChange={(e) => setCenterpieceNotes(e.target.value)}
-          placeholder="Describe your centerpiece vision... (flowers, candles, greenery, height, etc.)"
-          className="w-full px-4 py-3 border border-cream-300 rounded-lg text-sm min-h-[80px] focus:outline-none focus:ring-2 focus:ring-sage-300"
-        />
+        <textarea value={centerpieceNotes} onChange={e => setCenterpieceNotes(e.target.value)}
+          placeholder="Describe your centerpiece vision… (flowers, candles, greenery, height, etc.)"
+          className="w-full px-4 py-3 border border-cream-300 rounded-lg text-sm min-h-[80px] focus:outline-none focus:ring-2 focus:ring-sage-300" />
       </div>
 
       {/* Layout Notes */}
       <div>
         <label className="block text-sage-700 font-medium mb-2">Layout Notes</label>
-        <textarea
-          value={layoutNotes}
-          onChange={(e) => setLayoutNotes(e.target.value)}
-          placeholder="Any special seating requests, table placement preferences, accessibility needs..."
-          className="w-full px-4 py-3 border border-cream-300 rounded-lg text-sm min-h-[80px] focus:outline-none focus:ring-2 focus:ring-sage-300"
-        />
+        <textarea value={layoutNotes} onChange={e => setLayoutNotes(e.target.value)}
+          placeholder="Any special seating requests, table placement preferences, accessibility needs…"
+          className="w-full px-4 py-3 border border-cream-300 rounded-lg text-sm min-h-[80px] focus:outline-none focus:ring-2 focus:ring-sage-300" />
       </div>
 
       {/* Extra Tables */}
@@ -706,74 +606,38 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
           <h3 className="font-medium text-sage-700">Additional Tables</h3>
           <p className="text-sage-500 text-sm">Select any specialty tables you'll need</p>
         </div>
-
         <div className="divide-y divide-cream-100">
           {EXTRA_TABLES.map(category => (
             <div key={category.category} className="p-4">
               <h4 className="font-medium text-sage-700 mb-1">{category.category}</h4>
-              {category.note && (
-                <p className="text-sage-400 text-xs mb-3 italic">{category.note}</p>
-              )}
+              {category.note && <p className="text-sage-400 text-xs mb-3 italic">{category.note}</p>}
               <div className="space-y-2">
                 {category.tables.map(table => {
-                  const tableState = extraTables[table.id] || { selected: false, count: 1, notes: '' }
-                  const toggleTable = () => {
-                    setExtraTables(prev => ({
-                      ...prev,
-                      [table.id]: {
-                        ...prev[table.id],
-                        selected: !tableState.selected,
-                        count: prev[table.id]?.count || 1,
-                        notes: prev[table.id]?.notes || ''
-                      }
-                    }))
-                  }
-                  const updateCount = (count) => {
-                    setExtraTables(prev => ({
-                      ...prev,
-                      [table.id]: { ...prev[table.id], count: Number(count) }
-                    }))
-                  }
-                  const updateNotes = (notes) => {
-                    setExtraTables(prev => ({
-                      ...prev,
-                      [table.id]: { ...prev[table.id], notes }
-                    }))
-                  }
-
+                  const ts = extraTables[table.id] || { selected: false, count: 1, notes: '' }
+                  const toggle = () => setExtraTables(prev => ({
+                    ...prev,
+                    [table.id]: { ...prev[table.id], selected: !ts.selected, count: prev[table.id]?.count || 1 }
+                  }))
+                  const updateCount = count => setExtraTables(prev => ({
+                    ...prev, [table.id]: { ...prev[table.id], count: Number(count) }
+                  }))
                   return (
-                    <div key={table.id} className={`rounded-lg p-3 transition ${tableState.selected ? 'bg-sage-50 border border-sage-200' : 'bg-white border border-cream-100'}`}>
+                    <div key={table.id} className={`rounded-lg p-3 transition ${ts.selected ? 'bg-sage-50 border border-sage-200' : 'bg-white border border-cream-100'}`}>
                       <label className="flex items-center gap-3 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={tableState.selected}
-                          onChange={toggleTable}
-                          className="w-4 h-4 rounded border-sage-300 text-sage-600"
-                        />
+                        <input type="checkbox" checked={ts.selected} onChange={toggle}
+                          className="w-4 h-4 rounded border-sage-300 text-sage-600" />
                         <span className="text-xl">{table.icon}</span>
                         <div className="flex-1">
-                          <p className={`text-sm ${tableState.selected ? 'font-medium text-sage-800' : 'text-sage-600'}`}>
-                            {table.name}
-                          </p>
-                          {table.description && (
-                            <p className="text-sage-400 text-xs">{table.description}</p>
-                          )}
+                          <p className={`text-sm ${ts.selected ? 'font-medium text-sage-800' : 'text-sage-600'}`}>{table.name}</p>
+                          {table.description && <p className="text-sage-400 text-xs">{table.description}</p>}
                         </div>
-                        {table.hasCount && tableState.selected && (
-                          <input
-                            type="number"
-                            min="1"
-                            max="10"
-                            value={tableState.count || 1}
-                            onChange={(e) => updateCount(e.target.value)}
-                            onClick={(e) => e.stopPropagation()}
-                            className="w-14 px-2 py-1 border border-sage-200 rounded text-center text-sm"
-                          />
+                        {table.hasCount && ts.selected && (
+                          <input type="number" min="1" max="10" value={ts.count || 1}
+                            onChange={e => updateCount(e.target.value)} onClick={e => e.stopPropagation()}
+                            className="w-14 px-2 py-1 border border-sage-200 rounded text-center text-sm" />
                         )}
-                        {table.needsLinen && tableState.selected && (
-                          <span className="text-xs text-sage-400 bg-sage-100 px-2 py-0.5 rounded">
-                            + linen
-                          </span>
+                        {table.needsLinen && ts.selected && (
+                          <span className="text-xs text-sage-400 bg-sage-100 px-2 py-0.5 rounded">+ linen</span>
                         )}
                       </label>
                     </div>
@@ -782,54 +646,6 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
               </div>
             </div>
           ))}
-        </div>
-      </div>
-
-      {/* Visual Layout */}
-      <div className="bg-gradient-to-br from-sage-50 to-cream-50 rounded-xl p-4 sm:p-6 border border-sage-100">
-        <h3 className="font-medium text-sage-700 mb-4 text-center">Your Layout Preview</h3>
-        <div className="flex flex-wrap justify-center gap-3">
-          {sweetheartTable && (
-            <div className="flex flex-col items-center">
-              <div className="w-12 h-8 bg-pink-200 rounded-lg border-2 border-pink-300 flex items-center justify-center">
-                💕
-              </div>
-              <span className="text-xs text-sage-500 mt-1">Sweetheart</span>
-            </div>
-          )}
-          {headTable && (
-            <div className="flex flex-col items-center">
-              <div className="w-24 h-8 bg-amber-200 rounded-lg border-2 border-amber-300 flex items-center justify-center">
-                👑 Head
-              </div>
-              <span className="text-xs text-sage-500 mt-1">{headTableSize} seats</span>
-            </div>
-          )}
-          {Array.from({ length: Math.min(tablesNeeded, 12) }).map((_, i) => (
-            <div key={i} className="flex flex-col items-center">
-              <div className={`${
-                tableShape === 'round' ? 'w-10 h-10 rounded-full' :
-                tableShape === 'farm' ? 'w-16 h-8 rounded' :
-                'w-12 h-8 rounded'
-              } bg-sage-200 border-2 border-sage-300 flex items-center justify-center text-sage-600 text-xs font-medium`}>
-                {i + 1}
-              </div>
-              <span className="text-xs text-sage-400 mt-1">{guestsPerTable}</span>
-            </div>
-          ))}
-          {tablesNeeded > 12 && (
-            <div className="flex items-center text-sage-500 text-sm">
-              +{tablesNeeded - 12} more
-            </div>
-          )}
-          {kidsTable && (
-            <div className="flex flex-col items-center">
-              <div className="w-10 h-10 rounded-full bg-blue-200 border-2 border-blue-300 flex items-center justify-center">
-                👶
-              </div>
-              <span className="text-xs text-sage-500 mt-1">Kids</span>
-            </div>
-          )}
         </div>
       </div>
 
@@ -857,21 +673,18 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
             <p className="text-sage-200 text-sm">Napkins</p>
           </div>
         </div>
+
         <div className="mt-4 pt-4 border-t border-sage-500 space-y-2 text-center text-sage-200 text-sm">
           {linenVenueChoice ? (
             <p>Linens: leaving colour choice to Rixey</p>
           ) : (
-            <p>{LINEN_COLORS.find(c => c.id === linenColor)?.name} tablecloths · {LINEN_COLORS.find(c => c.id === napkinColor)?.name} napkins · {LINEN_DROPS.find(d => d.key === linenDrop)?.label.toLowerCase()} drop</p>
+            <p>{LINEN_COLORS.find(c => c.id === linenColor)?.name} tablecloths · {LINEN_COLORS.find(c => c.id === napkinColor)?.name} napkins · floor length</p>
           )}
           {!linenVenueChoice && runnerStyle !== 'none' && (
             <p>{RUNNER_STYLES.find(r => r.key === runnerStyle)?.label} on dining tables</p>
           )}
-          {chairSash && (
-            <p>Chair sashes: {LINEN_COLORS.find(c => c.id === chairSashColor)?.name} · {guestCount} needed</p>
-          )}
-          {danceFloorSize !== 'none' && (
-            <p>Dance floor: {DANCE_FLOOR_OPTIONS.find(d => d.key === danceFloorSize)?.label}</p>
-          )}
+          {chargersOn && <p>Charger plates: {guestCount} needed</p>}
+          {checkeredDanceFloor && <p>Chequered dance floor (12×12 or 12×16 ft)</p>}
           {loungeArea && <p>Lounge seating area included</p>}
         </div>
 
@@ -880,9 +693,9 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
           <div className="mt-4 pt-4 border-t border-sage-500">
             <p className="text-sage-200 text-sm mb-2">Tablecloth sizes to order:</p>
             <div className="space-y-1">
-              {getLinenSizes({
-                tableShape, tablesNeeded, rectTableCount,
-                cocktailTables, headTable, headTableSize, sweetheartTable, extraTablesLinenCount
+              {getLinenSizes({ tableShape, tablesNeeded, rectTableCount,
+                cocktailTables, headTable, headTablePeople, headTableSided,
+                sweetheartTable, extraTablesLinenCount
               }).map((row, i) => (
                 <div key={i} className="flex justify-between text-sm text-sage-100">
                   <span>{row.note}</span>
@@ -899,7 +712,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
           </div>
         )}
 
-        {/* List selected extra tables */}
+        {/* Selected extra tables */}
         {extraTablesCount > 0 && (
           <div className="mt-4 pt-4 border-t border-sage-500">
             <p className="text-sage-200 text-sm mb-2">Additional tables selected:</p>
@@ -915,16 +728,22 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
         )}
       </div>
 
+      {/* Floor plan note + save */}
+      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
+        <div className="flex items-start gap-3">
+          <span className="text-xl mt-0.5">📐</span>
+          <div>
+            <p className="text-sm font-medium text-amber-800">We'll build your floor plan</p>
+            <p className="text-sm text-amber-700">Once you save, we'll be alerted and will build your custom floor plan. We'll still customise it with you — this just gives us everything we need to get started.</p>
+          </div>
+        </div>
+      </div>
+
       {/* Bottom Save Button */}
       <div className="sticky bottom-0 bg-gradient-to-t from-white via-white to-transparent pt-4 pb-2">
-        <button
-          onClick={saveTableSetup}
-          disabled={saving}
-          className={`w-full px-5 py-3 rounded-lg font-medium transition text-lg ${
-            saved ? 'bg-green-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'
-          } disabled:opacity-50 shadow-lg`}
-        >
-          {saved ? '✓ Table Setup Saved!' : saving ? 'Saving...' : 'Save Table Setup'}
+        <button onClick={saveTableSetup} disabled={saving}
+          className={`w-full px-5 py-3 rounded-lg font-medium transition text-lg ${saved ? 'bg-green-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'} disabled:opacity-50 shadow-lg`}>
+          {saved ? '✓ Table Setup Saved!' : saving ? 'Saving…' : 'Save Table Setup'}
         </button>
       </div>
     </div>
