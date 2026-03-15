@@ -179,6 +179,48 @@ function calcQuantities({ guests, hours, barType, season, beerPct, winePct, spir
   return r
 }
 
+// ── Per-dedicated-drinker stats ───────────────────────────────────────────────
+// Reads from calcPreview to get real totals; excludes toast/table wine extras.
+
+function perDedicatedDrinkerStats(calcPreview, guests, beerPct, winePct, spiritsPct, nonAlcPct) {
+  const result = {}
+
+  // Wine: 5 glasses per bottle; exclude rows added by champagne toast / table wine toggles
+  if (winePct > 0 && guests > 0) {
+    const wineBottles = calcPreview
+      .filter(i => i.category === 'wine' && i.unit === 'bottles' &&
+        !i.item_name.toLowerCase().includes('toast') &&
+        !i.item_name.toLowerCase().includes('at table'))
+      .reduce((sum, i) => sum + (i.quantity || 0), 0)
+    const totalGlasses = wineBottles * 5
+    const drinkers     = Math.round(guests * winePct / 100)
+    result.wine = drinkers > 0 ? { drinkers, total: totalGlasses, each: Math.round(totalGlasses / drinkers) } : null
+  }
+
+  // Beer: 1/6th = ~55 beers, 1/4 = ~82 beers
+  if (beerPct > 0 && guests > 0) {
+    let totalBeers = 0
+    calcPreview.filter(i => i.category === 'beer' && i.unit === 'kegs').forEach(i => {
+      const beersPerKeg = i.item_name.includes('1/4') ? 82 : 55
+      totalBeers += (i.quantity || 0) * beersPerKeg
+    })
+    const drinkers = Math.round(guests * beerPct / 100)
+    result.beer = drinkers > 0 ? { drinkers, total: totalBeers, each: Math.round(totalBeers / drinkers) } : null
+  }
+
+  // Spirits: 39 cocktails per handle (1.75L, ~1.5oz pours)
+  if (spiritsPct > 0 && guests > 0) {
+    const handles    = calcPreview
+      .filter(i => i.category === 'spirits' && i.unit === 'handles')
+      .reduce((sum, i) => sum + (i.quantity || 0), 0)
+    const totalCocktails = handles * 39
+    const drinkers       = Math.round(guests * spiritsPct / 100)
+    result.spirits = drinkers > 0 ? { drinkers, total: totalCocktails, each: Math.round(totalCocktails / drinkers) } : null
+  }
+
+  return result
+}
+
 function bartenderCount(guests) {
   // Handbook: 1 per 50 guests, Saturday minimum 2
   return Math.max(2, Math.ceil(guests / 50))
@@ -687,20 +729,25 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
                 </div>
                 <div className="border-t border-sage-200 pt-3">
                   <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1.5">If a guest drinks only their preferred type</p>
-                  <div className="space-y-1">
-                    {winePct > 0 && (
-                      <p className="text-sm text-sage-700">🍷 A wine drinker: <strong>{hours} {hours === 1 ? 'glass' : 'glasses'} of wine</strong></p>
-                    )}
-                    {beerPct > 0 && (
-                      <p className="text-sm text-sage-700">🍺 A beer drinker: <strong>{hours} {hours === 1 ? 'beer' : 'beers'}</strong></p>
-                    )}
-                    {spiritsPct > 0 && (
-                      <p className="text-sm text-sage-700">🥃 A cocktail drinker: <strong>{hours} {hours === 1 ? 'cocktail' : 'cocktails'}</strong></p>
-                    )}
-                    {nonAlcPct > 0 && (
-                      <p className="text-sm text-sage-700">🥤 A non-drinker: <strong>{hours} {hours === 1 ? 'soft drink' : 'soft drinks'}</strong></p>
-                    )}
-                  </div>
+                  {(() => {
+                    const stats = perDedicatedDrinkerStats(calcPreview, guests, beerPct, winePct, spiritsPct, nonAlcPct)
+                    return (
+                      <div className="space-y-1.5">
+                        {stats.wine && (
+                          <p className="text-sm text-sage-700">🍷 ~{stats.wine.drinkers} wine drinkers, {stats.wine.total} glasses available — <strong>{stats.wine.each} glasses each</strong> over {hours}h</p>
+                        )}
+                        {stats.beer && (
+                          <p className="text-sm text-sage-700">🍺 ~{stats.beer.drinkers} beer drinkers, {stats.beer.total} beers available — <strong>{stats.beer.each} beers each</strong> over {hours}h</p>
+                        )}
+                        {stats.spirits && (
+                          <p className="text-sm text-sage-700">🥃 ~{stats.spirits.drinkers} cocktail drinkers, {stats.spirits.total} cocktails available — <strong>{stats.spirits.each} cocktails each</strong> over {hours}h</p>
+                        )}
+                        {nonAlcPct > 0 && (
+                          <p className="text-sm text-sage-700">🥤 ~{Math.round(guests * nonAlcPct / 100)} non-drinkers — soft drinks + water provided</p>
+                        )}
+                      </div>
+                    )
+                  })()}
                 </div>
               </div>
             </div>
