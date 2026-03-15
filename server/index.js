@@ -6995,10 +6995,18 @@ app.post('/api/bar-recipes/extract-url', async (req, res) => {
     if (!url) return res.status(400).json({ error: 'url required' });
 
     // Fetch the page content
-    const pageRes = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-    const html    = await pageRes.text();
-    // Strip HTML tags for a clean text blob
-    const text    = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 8000);
+    const pageRes = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
+    });
+    const html = await pageRes.text();
+    // Strip script/style blocks first (their text content is noise), then tags
+    const text = html
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 20000); // take much more — recipe content is rarely at the very start
 
     const message = await anthropic.messages.create({
       model: 'claude-opus-4-6',

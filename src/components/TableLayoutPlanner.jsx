@@ -46,51 +46,46 @@ const DANCE_FLOOR_OPTIONS = [
   { key: 'large',  label: 'Large — 20×20 ft (~80+ dancers)' },
 ]
 
-// Returns per-table-type cloth sizes based on table shape + drop
-function getLinenSizes({ tableShape, guestsPerTable, drop, tablesNeeded, cocktailTables, headTable, headTableSize, sweetheartTable }) {
+// Rixey table inventory: 5ft rounds (60"), 6ft rounds (72"), 6ft rect, 8ft rect
+// All round dining tables → 132" round cloth
+// 6ft rectangle → 90"×132"
+// 8ft rectangle → 90"×156"
+// Auxiliary tables (except cake) → 6ft rectangle = 90"×132"
+function getLinenSizes({ tableShape, tablesNeeded, rectTableCount, cocktailTables, headTable, headTableSize, sweetheartTable, extraTablesLinenCount }) {
   const sizes = []
-  const d = drop
 
-  if (tableShape === 'round' || tableShape === 'mixed') {
-    const tableD  = guestsPerTable >= 10 ? 72 : 60
-    const clothD  = tableD + d * 2
-    sizes.push({ label: `${clothD}" round`, qty: tablesNeeded, note: `${tableD}" dining tables (${guestsPerTable} guests each)` })
-    if (tableShape === 'mixed') {
-      // estimate ~40% banquet
-      const banqCount = Math.floor(tablesNeeded * 0.4)
-      const roundCount = tablesNeeded - banqCount
-      sizes[0].qty = roundCount
-      sizes[0].note = `round dining tables (est. ${guestsPerTable} guests)`
-      sizes.push({ label: `90"×132"`, qty: banqCount, note: '6ft banquet tables (est.)' })
-    }
+  if (tableShape === 'round') {
+    sizes.push({ label: '132" round', qty: tablesNeeded, note: 'Round dining tables' })
   } else if (tableShape === 'rectangular') {
-    const tableL  = guestsPerTable >= 8 ? 96 : 72
-    const clothW  = 30 + d * 2
-    const clothL  = tableL + d * 2
-    sizes.push({ label: `${clothW}"×${clothL}"`, qty: tablesNeeded, note: `${tableL/12}ft banquet tables (${guestsPerTable} guests each)` })
+    const isEight = headTableSize >= 8 // use guestsPerTable as proxy — actually just show both options
+    sizes.push({ label: '90"×132"', qty: tablesNeeded, note: '6ft rectangular dining tables' })
+    // Note: if any are 8ft, add a note
   } else if (tableShape === 'farm') {
     sizes.push({ label: '14"×108" runner', qty: tablesNeeded, note: 'Farm tables — runner over bare wood' })
+  } else if (tableShape === 'mixed') {
+    const roundCount = tablesNeeded - (rectTableCount || 0)
+    if (roundCount > 0) sizes.push({ label: '132" round', qty: roundCount, note: 'Round dining tables' })
+    if (rectTableCount > 0) sizes.push({ label: '90"×132"', qty: rectTableCount, note: '6ft rectangular dining tables' })
   }
 
-  // Head table
-  if (headTable && headTableSize) {
-    const hl = headTableSize <= 8 ? 96 : 120 // 8ft or 10ft
-    const hw = 30 + d * 2
-    const hcl = hl + d * 2
-    sizes.push({ label: `${hw}"×${hcl}"`, qty: 1, note: `Head table (${hl/12}ft, ${headTableSize} seats)` })
+  // Head table — 8ft rectangle
+  if (headTable) {
+    sizes.push({ label: '90"×156"', qty: 1, note: `Head table (8ft rectangle, ${headTableSize} seats)` })
   }
 
-  // Sweetheart — usually a 48" or 60" round
+  // Sweetheart — 5ft round
   if (sweetheartTable) {
-    const sweethD = 48 + d * 2
-    sizes.push({ label: `${sweethD}" round`, qty: 1, note: 'Sweetheart table (48" round)' })
+    sizes.push({ label: '132" round', qty: 1, note: 'Sweetheart table (5ft round)' })
   }
 
-  // Cocktail high-tops (30" round, 42" tall — need longer cloth to reach floor)
+  // Cocktail high-tops
   if (cocktailTables > 0) {
-    const cocktailCloth = 30 + (42 + 2) * 2  // to floor from table height
-    // Standard: 120" round works for most cocktail tables to the floor
     sizes.push({ label: '120" round', qty: cocktailTables, note: 'Cocktail high-tops (to floor)' })
+  }
+
+  // Auxiliary tables (all 6ft rectangles except cake table — that's confirmed separately)
+  if (extraTablesLinenCount > 0) {
+    sizes.push({ label: '90"×132"', qty: extraTablesLinenCount, note: 'Auxiliary tables (6ft rectangles) — excluding cake table' })
   }
 
   return sizes
@@ -155,6 +150,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
   const [guestCount, setGuestCount] = useState(100)
   const [tableShape, setTableShape] = useState('round')
   const [guestsPerTable, setGuestsPerTable] = useState(8)
+  const [rectTableCount, setRectTableCount] = useState(0)
   const [headTable, setHeadTable] = useState(false)
   const [headTableSize, setHeadTableSize] = useState(8)
   const [sweetheartTable, setSweetheartTable] = useState(true)
@@ -375,6 +371,19 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
         </select>
       </div>
 
+      {/* Mixed table split */}
+      {tableShape === 'mixed' && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+          <p className="text-sm font-medium text-amber-800 mb-2">How many of your dining tables will be rectangular?</p>
+          <div className="flex items-center gap-3">
+            <input type="number" min={0} max={tablesNeeded} value={rectTableCount}
+              onChange={e => setRectTableCount(Math.min(tablesNeeded, Math.max(0, Number(e.target.value))))}
+              className="w-20 px-3 py-2 border border-amber-300 rounded-lg text-center font-medium" />
+            <span className="text-sm text-amber-700">rectangular, {Math.max(0, tablesNeeded - rectTableCount)} round</span>
+          </div>
+        </div>
+      )}
+
       {/* Special Tables */}
       <div className="bg-cream-50 rounded-xl p-4 space-y-4">
         <h3 className="font-medium text-sage-700">Special Tables</h3>
@@ -544,9 +553,8 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
               <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">What to order</p>
               <div className="bg-white border border-cream-200 rounded-xl divide-y divide-cream-100">
                 {getLinenSizes({
-                  tableShape, guestsPerTable,
-                  drop: LINEN_DROPS.find(d => d.key === linenDrop)?.drop || 30,
-                  tablesNeeded, cocktailTables, headTable, headTableSize, sweetheartTable
+                  tableShape, tablesNeeded, rectTableCount,
+                  cocktailTables, headTable, headTableSize, sweetheartTable, extraTablesLinenCount
                 }).map((row, i) => (
                   <div key={i} className="flex items-center justify-between px-4 py-3">
                     <div>
@@ -873,9 +881,8 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
             <p className="text-sage-200 text-sm mb-2">Tablecloth sizes to order:</p>
             <div className="space-y-1">
               {getLinenSizes({
-                tableShape, guestsPerTable,
-                drop: LINEN_DROPS.find(d => d.key === linenDrop)?.drop || 30,
-                tablesNeeded, cocktailTables, headTable, headTableSize, sweetheartTable
+                tableShape, tablesNeeded, rectTableCount,
+                cocktailTables, headTable, headTableSize, sweetheartTable, extraTablesLinenCount
               }).map((row, i) => (
                 <div key={i} className="flex justify-between text-sm text-sage-100">
                   <span>{row.note}</span>
