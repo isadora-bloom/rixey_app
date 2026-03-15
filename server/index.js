@@ -6959,33 +6959,6 @@ app.delete('/api/bar-shopping/:id', async (req, res) => {
 });
 
 // Recipes
-app.get('/api/bar-recipes/:weddingId', async (req, res) => {
-  try {
-    const { data, error } = await supabaseAdmin.from('bar_recipes').select('*').eq('wedding_id', req.params.weddingId).order('created_at');
-    if (error) throw error;
-    res.json(data || []);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.post('/api/bar-recipes/:weddingId', async (req, res) => {
-  try {
-    const { name, source_type, source_url, ingredients, servings_basis, notes } = req.body;
-    const { data, error } = await supabaseAdmin.from('bar_recipes')
-      .insert({ wedding_id: req.params.weddingId, name, source_type, source_url, ingredients, servings_basis, notes })
-      .select().single();
-    if (error) throw error;
-    res.json(data);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.delete('/api/bar-recipes/:id', async (req, res) => {
-  try {
-    const { error } = await supabaseAdmin.from('bar_recipes').delete().eq('id', req.params.id);
-    if (error) throw error;
-    res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
 // Extract ingredients from a URL using Claude
 app.post('/api/bar-recipes/extract-url', async (req, res) => {
   try {
@@ -7054,6 +7027,33 @@ app.post('/api/bar-recipes/extract-upload', upload.single('file'), async (req, r
     console.error('Recipe upload extract error:', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+app.get('/api/bar-recipes/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('bar_recipes').select('*').eq('wedding_id', req.params.weddingId).order('created_at');
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/bar-recipes/:weddingId', async (req, res) => {
+  try {
+    const { name, source_type, source_url, ingredients, servings_basis, notes } = req.body;
+    const { data, error } = await supabaseAdmin.from('bar_recipes')
+      .insert({ wedding_id: req.params.weddingId, name, source_type, source_url, ingredients, servings_basis, notes })
+      .select().single();
+    if (error) throw error;
+    res.json(data);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/bar-recipes/:id', async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin.from('bar_recipes').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ============ WEDDING WEBSITE FEATURE ============
