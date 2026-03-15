@@ -6923,6 +6923,23 @@ app.put('/api/worksheets/:weddingId', async (req, res) => {
 
 // ============ BAR PLANNER ============
 
+// Notes
+app.get('/api/bar-notes/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('weddings').select('bar_notes').eq('id', req.params.weddingId).single();
+    if (error) throw error;
+    res.json(data?.bar_notes || {});
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/bar-notes/:weddingId', async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin.from('weddings').update({ bar_notes: req.body }).eq('id', req.params.weddingId);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // Shopping list
 app.get('/api/bar-shopping/:weddingId', async (req, res) => {
   try {

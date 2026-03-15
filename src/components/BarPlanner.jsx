@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -142,6 +142,18 @@ function printList(items, coupleNames) {
   w.print()
 }
 
+// ── Notes box ─────────────────────────────────────────────────────────────────
+
+function NotesBox({ value, onChange, placeholder }) {
+  return (
+    <div className="mt-6 border-t border-cream-100 pt-4">
+      <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-2">Notes</p>
+      <textarea value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder || 'Any notes for this section…'}
+        rows={3} className="w-full border border-cream-200 rounded-xl px-3 py-2 text-sm text-sage-700 placeholder-sage-300 focus:outline-none focus:ring-2 focus:ring-sage-300 resize-none" />
+    </div>
+  )
+}
+
 // ── Shopping list row ─────────────────────────────────────────────────────────
 
 function ShoppingRow({ item, onToggle, onDelete, onUpdate }) {
@@ -234,7 +246,13 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
   const [recipeFile, setRecipeFile]                   = useState(null)
   const [extracting, setExtracting]                   = useState(false)
   const [editableIngredients, setEditableIngredients] = useState(null) // editable before saving
-  const fileRef = useRef()
+  const fileRef     = useRef()
+  const notesTimer  = useRef()
+
+  // Notes per tab
+  const [notes, setNotes] = useState({ calculator: '', list: '', recipes: '' })
+  // Shopping list: show calc summary
+  const [showCalcSummary, setShowCalcSummary] = useState(false)
 
   useEffect(() => { load() }, [weddingId])
 
@@ -258,15 +276,32 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
 
   const load = async () => {
     try {
-      const [itemsRes, recipesRes] = await Promise.all([
+      const [itemsRes, recipesRes, notesRes] = await Promise.all([
         fetch(`${API_URL}/api/bar-shopping/${weddingId}`),
         fetch(`${API_URL}/api/bar-recipes/${weddingId}`),
+        fetch(`${API_URL}/api/bar-notes/${weddingId}`),
       ])
       setItems(await itemsRes.json() || [])
       setRecipes(await recipesRes.json() || [])
+      const n = await notesRes.json()
+      setNotes({ calculator: '', list: '', recipes: '', ...n })
     } catch (err) { console.error('Failed to load bar planner:', err) }
     setLoading(false)
   }
+
+  const updateNotes = useCallback((tabKey, val) => {
+    setNotes(prev => {
+      const next = { ...prev, [tabKey]: val }
+      clearTimeout(notesTimer.current)
+      notesTimer.current = setTimeout(() => {
+        fetch(`${API_URL}/api/bar-notes/${weddingId}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(next),
+        })
+      }, 800)
+      return next
+    })
+  }, [weddingId])
 
   // ── Shopping list ──
 
@@ -633,6 +668,9 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
           >
             Add to shopping list
           </button>
+
+          <NotesBox value={notes.calculator} onChange={v => updateNotes('calculator', v)}
+            placeholder="Notes about the bar setup, preferences, restrictions…" />
         </div>
       )}
 
@@ -644,15 +682,72 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
             <p className="text-xs text-sage-400">
               {totalCount === 0 ? 'No items yet' : `${checkedCount} of ${totalCount} items ticked off`}
             </p>
-            {unchecked.length > 0 && (
-              <button onClick={() => printList(items, coupleNames)}
-                className="flex items-center gap-1.5 text-xs text-sage-500 hover:text-sage-700 border border-cream-200 rounded-lg px-3 py-1.5"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
-                Print list
-              </button>
-            )}
+            <div className="flex items-center gap-2">
+              {calcPreview.length > 0 && (
+                <button onClick={() => setShowCalcSummary(v => !v)}
+                  className="text-xs text-sage-500 hover:text-sage-700 border border-cream-200 rounded-lg px-3 py-1.5">
+                  {showCalcSummary ? 'Hide' : 'View'} last calculation
+                </button>
+              )}
+              {unchecked.length > 0 && (
+                <button onClick={() => printList(items, coupleNames)}
+                  className="flex items-center gap-1.5 text-xs text-sage-500 hover:text-sage-700 border border-cream-200 rounded-lg px-3 py-1.5"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
+                  Print
+                </button>
+              )}
+            </div>
           </div>
+
+          {/* Last calculation summary */}
+          {showCalcSummary && calcPreview.length > 0 && (
+            <div className="mb-4 bg-amber-50 border border-amber-200 rounded-xl p-4">
+              <p className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-2">Last calculation — {guests} guests · {hours}h · {BAR_TYPES.find(b=>b.key===barType)?.label}</p>
+              <div className="space-y-1">
+                {calcPreview.map((item, i) => (
+                  <div key={i} className="flex justify-between text-xs text-amber-800">
+                    <span>{item.item_name}</span>
+                    <span className="font-semibold ml-4">{item.quantity} {item.unit}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Add item — at the top, always visible */}
+          {addingItem ? (
+            <div className="mb-4 bg-cream-50 border border-cream-200 rounded-xl p-4 space-y-3">
+              <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide">Add item</p>
+              <div className="flex gap-2 flex-wrap">
+                <input value={newItem.item_name} onChange={e => setNewItem(p => ({...p, item_name: e.target.value}))}
+                  placeholder="e.g. Lavender syrup, Honey, Elderflower cordial…" autoFocus
+                  className="flex-1 min-w-0 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+                <input value={newItem.quantity} onChange={e => setNewItem(p => ({...p, quantity: e.target.value}))}
+                  placeholder="Qty" className="w-16 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+                <input value={newItem.unit} onChange={e => setNewItem(p => ({...p, unit: e.target.value}))}
+                  placeholder="Unit" className="w-20 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+              </div>
+              <div className="flex gap-2 flex-wrap">
+                <select value={newItem.category} onChange={e => setNewItem(p => ({...p, category: e.target.value}))}
+                  className="border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300">
+                  {CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.emoji} {c.label}</option>)}
+                </select>
+                <input value={newItem.notes} onChange={e => setNewItem(p => ({...p, notes: e.target.value}))}
+                  placeholder="Notes (optional)"
+                  className="flex-1 min-w-0 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+              </div>
+              <div className="flex gap-2">
+                <button onClick={addItem} className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700">Add item</button>
+                <button onClick={() => setAddingItem(false)} className="px-4 py-2 text-sage-500 text-sm hover:text-sage-700">Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <button onClick={() => setAddingItem(true)}
+              className="mb-4 w-full py-2.5 border-2 border-dashed border-cream-300 rounded-xl text-sm text-sage-500 hover:border-sage-400 hover:text-sage-600 transition">
+              + Add item &mdash; lavender syrup, honey, anything that doesn't fit the calculator
+            </button>
+          )}
 
           {totalCount === 0 ? (
             <div className="text-center py-10 text-sage-400">
@@ -686,37 +781,8 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
             </div>
           )}
 
-          {/* Add item */}
-          {addingItem ? (
-            <div className="mt-4 bg-cream-50 border border-cream-200 rounded-xl p-4 space-y-3">
-              <div className="flex gap-2 flex-wrap">
-                <input value={newItem.item_name} onChange={e => setNewItem(p => ({...p, item_name: e.target.value}))}
-                  placeholder="Item name" autoFocus
-                  className="flex-1 min-w-0 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
-                <input value={newItem.quantity} onChange={e => setNewItem(p => ({...p, quantity: e.target.value}))}
-                  placeholder="Qty" className="w-16 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
-                <input value={newItem.unit} onChange={e => setNewItem(p => ({...p, unit: e.target.value}))}
-                  placeholder="Unit" className="w-20 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
-              </div>
-              <div className="flex gap-2 flex-wrap">
-                <select value={newItem.category} onChange={e => setNewItem(p => ({...p, category: e.target.value}))}
-                  className="border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300">
-                  {CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.emoji} {c.label}</option>)}
-                </select>
-                <input value={newItem.notes} onChange={e => setNewItem(p => ({...p, notes: e.target.value}))}
-                  placeholder="Notes (optional)"
-                  className="flex-1 min-w-0 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
-              </div>
-              <div className="flex gap-2">
-                <button onClick={addItem} className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700">Add item</button>
-                <button onClick={() => setAddingItem(false)} className="px-4 py-2 text-sage-500 text-sm hover:text-sage-700">Cancel</button>
-              </div>
-            </div>
-          ) : (
-            <button onClick={() => setAddingItem(true)} className="mt-4 text-sage-500 hover:text-sage-700 text-sm font-medium">
-              + Add item manually
-            </button>
-          )}
+          <NotesBox value={notes.list} onChange={v => updateNotes('list', v)}
+            placeholder="Shopping notes — where to buy, brands you like, things to remember…" />
         </div>
       )}
 
@@ -734,9 +800,9 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
             <div key={recipe.id} className="bg-white border border-cream-200 rounded-xl p-5">
               <div className="flex items-start justify-between gap-3 mb-3">
                 <div>
-                  <p className="font-medium text-sage-700">{recipe.name}</p>
+                  <p className="font-semibold text-sage-700">{recipe.name}</p>
                   {recipe.source_url && (
-                    <a href={recipe.source_url} target="_blank" rel="noopener noreferrer" className="text-xs text-sage-400 hover:text-sage-600 underline">View source →</a>
+                    <a href={recipe.source_url} target="_blank" rel="noopener noreferrer" className="text-xs text-sage-400 hover:text-sage-600 underline">View original recipe →</a>
                   )}
                 </div>
                 <button onClick={() => deleteRecipe(recipe.id)} className="text-red-300 hover:text-red-500 flex-shrink-0 p-1">
@@ -745,20 +811,24 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
               </div>
               {recipe.ingredients?.length > 0 ? (
                 <>
-                  <div className="space-y-1 mb-4">
-                    {recipe.ingredients.map((ing, i) => (
-                      <div key={i} className="flex items-center justify-between text-sm">
-                        <span className="text-sage-600">{ing.name}</span>
-                        <span className="text-sage-400 text-xs">
-                          {ing.per_serving
-                            ? `${Math.ceil(ing.quantity * guests)} ${ing.unit} (for ${guests} guests)`
-                            : `${ing.quantity} ${ing.unit}`}
-                        </span>
-                      </div>
-                    ))}
+                  <p className="text-xs font-semibold text-sage-400 uppercase tracking-wide mb-2">Ingredients scaled to {guests} guests</p>
+                  <div className="bg-cream-50 rounded-xl divide-y divide-cream-100 mb-4">
+                    {recipe.ingredients.map((ing, i) => {
+                      const scaledQty = ing.per_serving ? Math.ceil(ing.quantity * guests) : ing.quantity
+                      return (
+                        <div key={i} className="flex items-center justify-between px-3 py-2">
+                          <span className="text-sm text-sage-700">{ing.name}</span>
+                          <span className="text-sm font-semibold text-sage-600 ml-4 flex-shrink-0">
+                            {scaledQty} <span className="font-normal text-xs text-sage-400">{ing.unit}</span>
+                            {ing.per_serving && <span className="text-xs text-sage-300 ml-1">(×{guests})</span>}
+                          </span>
+                        </div>
+                      )
+                    })}
                   </div>
-                  <button onClick={() => addRecipeToList(recipe)} className="text-sm text-sage-600 hover:text-sage-800 font-medium">
-                    + Add scaled quantities to shopping list
+                  <button onClick={() => addRecipeToList(recipe)}
+                    className="w-full py-2 bg-sage-100 hover:bg-sage-200 text-sage-700 text-sm font-medium rounded-lg transition">
+                    + Add all ingredients to shopping list
                   </button>
                 </>
               ) : (
@@ -837,6 +907,9 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
               + Add cocktail recipe
             </button>
           )}
+
+          <NotesBox value={notes.recipes} onChange={v => updateNotes('recipes', v)}
+            placeholder="Notes about cocktail choices, garnish ideas, batch prep instructions…" />
         </div>
       )}
     </div>
