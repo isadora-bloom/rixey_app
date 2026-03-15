@@ -2,6 +2,78 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
+// ── Ingredient scaling → meaningful units ─────────────────────────────────────
+// Converts a raw total (e.g. 120 oz) into something you'd actually buy (2 handles)
+
+function toOz(qty, unit) {
+  const u = (unit || '').toLowerCase().trim()
+  if (u === 'oz' || u === 'fl oz' || u === 'ounce' || u === 'ounces') return qty
+  if (u === 'ml')                                                        return qty / 29.574
+  if (u === 'l' || u === 'liter' || u === 'liters')                     return qty * 33.814
+  if (u === 'cup' || u === 'cups')                                       return qty * 8
+  if (u === 'tbsp' || u === 'tablespoon' || u === 'tablespoons')        return qty * 0.5
+  if (u === 'tsp' || u === 'teaspoon' || u === 'teaspoons')             return qty / 6
+  if (u === 'shot' || u === 'shots')                                     return qty * 1.5
+  return null // unknown unit — can't convert
+}
+
+function scaleIngredient(perServingQty, unit, category, guests) {
+  const total = perServingQty * guests
+  const u     = (unit || '').toLowerCase().trim()
+
+  // Dashes (bitters) — ~200 dashes per bottle
+  if (u === 'dash' || u === 'dashes') {
+    const bottles = Math.ceil(total / 200)
+    return { qty: bottles, unit: bottles === 1 ? 'bottle' : 'bottles', note: `${Math.ceil(total)} dashes` }
+  }
+
+  // Whole items (fruit, eggs, etc.) — just count
+  if (!u || u === 'each' || u === 'piece' || u === 'pieces' || u === 'wedge' || u === 'wedges' || u === 'slice' || u === 'slices') {
+    return { qty: Math.ceil(total), unit: u || '', note: null }
+  }
+
+  const totalOz = toOz(total, unit)
+  if (totalOz === null) {
+    // Can't convert — return rounded raw
+    return { qty: Math.ceil(total * 10) / 10, unit, note: null }
+  }
+
+  // Spirits → handles (59 oz = 1.75L) then 750ml bottles
+  if (category === 'spirits') {
+    if (totalOz >= 30) {
+      const handles = totalOz / 59.2
+      const rounded = Math.ceil(handles * 4) / 4 // round to nearest 0.25
+      return { qty: rounded, unit: rounded === 1 ? 'handle (1.75L)' : 'handles (1.75L)', note: `${Math.round(totalOz)} oz total` }
+    }
+    const bottles = totalOz / 25.4
+    const rounded = Math.ceil(bottles * 2) / 2
+    return { qty: rounded, unit: rounded === 1 ? 'bottle (750ml)' : 'bottles (750ml)', note: `${Math.round(totalOz)} oz total` }
+  }
+
+  // Mixers / juices → gallons then quarts then oz
+  if (category === 'mixers') {
+    if (totalOz >= 64) {
+      const gallons = totalOz / 128
+      const rounded = Math.ceil(gallons * 4) / 4
+      return { qty: rounded, unit: rounded === 1 ? 'gallon' : 'gallons', note: `${Math.round(totalOz)} oz total` }
+    }
+    if (totalOz >= 24) {
+      const quarts = totalOz / 32
+      const rounded = Math.ceil(quarts * 2) / 2
+      return { qty: rounded, unit: rounded === 1 ? 'quart' : 'quarts', note: `${Math.round(totalOz)} oz total` }
+    }
+    return { qty: Math.ceil(totalOz), unit: 'oz', note: null }
+  }
+
+  // Everything else (syrups, liqueurs, etc.) → 750ml bottles then oz
+  if (totalOz >= 20) {
+    const bottles = totalOz / 25.4
+    const rounded = Math.ceil(bottles * 2) / 2
+    return { qty: rounded, unit: rounded === 1 ? 'bottle (750ml)' : 'bottles (750ml)', note: `${Math.round(totalOz)} oz total` }
+  }
+  return { qty: Math.ceil(totalOz * 10) / 10, unit: 'oz', note: null }
+}
+
 const CATEGORIES = [
   { key: 'beer',    label: 'Beer',    emoji: '🍺' },
   { key: 'wine',    label: 'Wine',    emoji: '🍷' },
@@ -427,13 +499,15 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
   const addRecipeToList = async (recipe) => {
     const added = []
     for (const ing of recipe.ingredients) {
-      const scaledQty = ing.per_serving ? Math.ceil(ing.quantity * guests) : ing.quantity
+      const scaled = ing.per_serving
+        ? scaleIngredient(ing.quantity, ing.unit, ing.category, guests)
+        : { qty: ing.quantity, unit: ing.unit, note: null }
       const res = await fetch(`${API_URL}/api/bar-shopping/${weddingId}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          item_name: ing.name, quantity: scaledQty, unit: ing.unit,
+          item_name: ing.name, quantity: scaled.qty, unit: scaled.unit,
           category: ing.category || 'other',
-          notes: `For ${recipe.name} (scaled to ${guests} guests)`,
+          notes: `For ${recipe.name}${scaled.note ? ` (${scaled.note})` : ` (scaled to ${guests} guests)`}`,
           sort_order: items.length + added.length,
         }),
       })
@@ -814,13 +888,15 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
                   <p className="text-xs font-semibold text-sage-400 uppercase tracking-wide mb-2">Ingredients scaled to {guests} guests</p>
                   <div className="bg-cream-50 rounded-xl divide-y divide-cream-100 mb-4">
                     {recipe.ingredients.map((ing, i) => {
-                      const scaledQty = ing.per_serving ? Math.ceil(ing.quantity * guests) : ing.quantity
+                      const scaled = ing.per_serving
+                        ? scaleIngredient(ing.quantity, ing.unit, ing.category, guests)
+                        : { qty: ing.quantity, unit: ing.unit, note: null }
                       return (
                         <div key={i} className="flex items-center justify-between px-3 py-2">
                           <span className="text-sm text-sage-700">{ing.name}</span>
-                          <span className="text-sm font-semibold text-sage-600 ml-4 flex-shrink-0">
-                            {scaledQty} <span className="font-normal text-xs text-sage-400">{ing.unit}</span>
-                            {ing.per_serving && <span className="text-xs text-sage-300 ml-1">(×{guests})</span>}
+                          <span className="text-sm font-semibold text-sage-600 ml-4 flex-shrink-0 text-right">
+                            {scaled.qty} <span className="font-normal text-xs text-sage-400">{scaled.unit}</span>
+                            {scaled.note && <span className="block text-xs text-sage-300">{scaled.note}</span>}
                           </span>
                         </div>
                       )
