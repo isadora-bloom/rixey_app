@@ -10,6 +10,7 @@ const TABLE_SHAPES = [
 ]
 
 const LINEN_COLORS = [
+  { id: 'venue', name: 'Leave to Rixey', color: '#f0f0f0', border: '#aaa' },
   { id: 'white', name: 'White', color: '#ffffff', border: '#e5e5e5' },
   { id: 'ivory', name: 'Ivory', color: '#fffff0' },
   { id: 'champagne', name: 'Champagne', color: '#f7e7ce' },
@@ -21,6 +22,79 @@ const LINEN_COLORS = [
   { id: 'burgundy', name: 'Burgundy', color: '#722f37' },
   { id: 'black', name: 'Black', color: '#000000' },
 ]
+
+// How far the cloth hangs below the table edge
+const LINEN_DROPS = [
+  { key: 'floor',  label: 'Floor length',  desc: '~30" drop — formal, drapes to the ground', drop: 30 },
+  { key: 'mid',    label: 'Mid-length',     desc: '~15" drop — contemporary, shows chair legs', drop: 15 },
+  { key: 'lap',    label: 'Lap length',     desc: '~10" drop — casual/modern, barely past the edge', drop: 10 },
+]
+
+const RUNNER_STYLES = [
+  { key: 'none',      label: 'No runner',         desc: 'Cloth only' },
+  { key: 'greenery',  label: 'Greenery / florals', desc: 'Down the centre of each table' },
+  { key: 'lace',      label: 'Lace runner',        desc: 'Over the tablecloth' },
+  { key: 'burlap',    label: 'Burlap / hessian',   desc: 'Rustic look, often on farm tables' },
+  { key: 'satin',     label: 'Satin overlay',      desc: 'Sheer or satin over a base cloth' },
+  { key: 'custom',    label: 'Other / custom',      desc: '' },
+]
+
+const DANCE_FLOOR_OPTIONS = [
+  { key: 'none',   label: 'No dance floor' },
+  { key: 'small',  label: 'Small — 12×12 ft (~20–30 dancers)' },
+  { key: 'medium', label: 'Medium — 16×16 ft (~40–60 dancers)' },
+  { key: 'large',  label: 'Large — 20×20 ft (~80+ dancers)' },
+]
+
+// Returns per-table-type cloth sizes based on table shape + drop
+function getLinenSizes({ tableShape, guestsPerTable, drop, tablesNeeded, cocktailTables, headTable, headTableSize, sweetheartTable }) {
+  const sizes = []
+  const d = drop
+
+  if (tableShape === 'round' || tableShape === 'mixed') {
+    const tableD  = guestsPerTable >= 10 ? 72 : 60
+    const clothD  = tableD + d * 2
+    sizes.push({ label: `${clothD}" round`, qty: tablesNeeded, note: `${tableD}" dining tables (${guestsPerTable} guests each)` })
+    if (tableShape === 'mixed') {
+      // estimate ~40% banquet
+      const banqCount = Math.floor(tablesNeeded * 0.4)
+      const roundCount = tablesNeeded - banqCount
+      sizes[0].qty = roundCount
+      sizes[0].note = `round dining tables (est. ${guestsPerTable} guests)`
+      sizes.push({ label: `90"×132"`, qty: banqCount, note: '6ft banquet tables (est.)' })
+    }
+  } else if (tableShape === 'rectangular') {
+    const tableL  = guestsPerTable >= 8 ? 96 : 72
+    const clothW  = 30 + d * 2
+    const clothL  = tableL + d * 2
+    sizes.push({ label: `${clothW}"×${clothL}"`, qty: tablesNeeded, note: `${tableL/12}ft banquet tables (${guestsPerTable} guests each)` })
+  } else if (tableShape === 'farm') {
+    sizes.push({ label: '14"×108" runner', qty: tablesNeeded, note: 'Farm tables — runner over bare wood' })
+  }
+
+  // Head table
+  if (headTable && headTableSize) {
+    const hl = headTableSize <= 8 ? 96 : 120 // 8ft or 10ft
+    const hw = 30 + d * 2
+    const hcl = hl + d * 2
+    sizes.push({ label: `${hw}"×${hcl}"`, qty: 1, note: `Head table (${hl/12}ft, ${headTableSize} seats)` })
+  }
+
+  // Sweetheart — usually a 48" or 60" round
+  if (sweetheartTable) {
+    const sweethD = 48 + d * 2
+    sizes.push({ label: `${sweethD}" round`, qty: 1, note: 'Sweetheart table (48" round)' })
+  }
+
+  // Cocktail high-tops (30" round, 42" tall — need longer cloth to reach floor)
+  if (cocktailTables > 0) {
+    const cocktailCloth = 30 + (42 + 2) * 2  // to floor from table height
+    // Standard: 120" round works for most cocktail tables to the floor
+    sizes.push({ label: '120" round', qty: cocktailTables, note: 'Cocktail high-tops (to floor)' })
+  }
+
+  return sizes
+}
 
 const EXTRA_TABLES = [
   {
@@ -89,8 +163,17 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
   const [kidsCount, setKidsCount] = useState(0)
   const [linenColor, setLinenColor] = useState('white')
   const [napkinColor, setNapkinColor] = useState('sage')
+  const [linenDrop, setLinenDrop] = useState('floor')
+  const [linenVenueChoice, setLinenVenueChoice] = useState(false)
+  const [runnerStyle, setRunnerStyle] = useState('none')
+  const [chairSash, setChairSash] = useState(false)
+  const [chairSashColor, setChairSashColor] = useState('white')
   const [centerpieceNotes, setCenterpieceNotes] = useState('')
   const [layoutNotes, setLayoutNotes] = useState('')
+  const [linenNotes, setLinenNotes] = useState('')
+  const [danceFloorSize, setDanceFloorSize] = useState('medium')
+  const [loungeArea, setLoungeArea] = useState(false)
+  const [headTablePlacement, setHeadTablePlacement] = useState('')
   const [extraTables, setExtraTables] = useState({}) // { tableId: { selected: bool, count: number, notes: string } }
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -117,8 +200,17 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
         setKidsCount(data.tables.kids_count || 0)
         setLinenColor(data.tables.linen_color || 'white')
         setNapkinColor(data.tables.napkin_color || 'sage')
+        setLinenDrop(data.tables.linen_drop || 'floor')
+        setLinenVenueChoice(data.tables.linen_venue_choice || false)
+        setRunnerStyle(data.tables.runner_style || 'none')
+        setChairSash(data.tables.chair_sash || false)
+        setChairSashColor(data.tables.chair_sash_color || 'white')
         setCenterpieceNotes(data.tables.centerpiece_notes || '')
         setLayoutNotes(data.tables.layout_notes || '')
+        setLinenNotes(data.tables.linen_notes || '')
+        setDanceFloorSize(data.tables.dance_floor_size || 'medium')
+        setLoungeArea(data.tables.lounge_area || false)
+        setHeadTablePlacement(data.tables.head_table_placement || '')
         setExtraTables(data.tables.extra_tables || {})
       }
     } catch (err) {
@@ -147,8 +239,17 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
           kidsCount,
           linenColor,
           napkinColor,
+          linenDrop,
+          linenVenueChoice,
+          runnerStyle,
+          chairSash,
+          chairSashColor,
           centerpieceNotes,
           layoutNotes,
+          linenNotes,
+          danceFloorSize,
+          loungeArea,
+          headTablePlacement,
           extraTables
         })
       })
@@ -408,6 +509,167 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
         </div>
       </div>
 
+      {/* Linen sizes + drop */}
+      <div className="border border-cream-200 rounded-xl overflow-hidden">
+        <div className="bg-cream-50 px-4 py-3 border-b border-cream-200 flex items-center justify-between">
+          <div>
+            <h3 className="font-medium text-sage-700">Tablecloth Sizes</h3>
+            <p className="text-sage-500 text-xs mt-0.5">What length cloth do you need and exactly what size to order</p>
+          </div>
+          <label className="flex items-center gap-2 text-xs text-sage-500 cursor-pointer">
+            <input type="checkbox" checked={linenVenueChoice} onChange={e => setLinenVenueChoice(e.target.checked)}
+              className="rounded border-sage-300 text-sage-600" />
+            Leave to Rixey
+          </label>
+        </div>
+
+        {!linenVenueChoice && (
+          <div className="p-4 space-y-5">
+            {/* Drop selector */}
+            <div>
+              <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">Drop length</p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {LINEN_DROPS.map(d => (
+                  <button key={d.key} onClick={() => setLinenDrop(d.key)}
+                    className={`p-3 rounded-xl border-2 text-left transition ${linenDrop === d.key ? 'border-sage-500 bg-sage-50' : 'border-cream-200 hover:border-sage-300'}`}>
+                    <p className={`text-sm font-medium ${linenDrop === d.key ? 'text-sage-700' : 'text-sage-500'}`}>{d.label}</p>
+                    <p className="text-xs text-sage-400 mt-0.5">{d.desc}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Size guide */}
+            <div>
+              <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">What to order</p>
+              <div className="bg-white border border-cream-200 rounded-xl divide-y divide-cream-100">
+                {getLinenSizes({
+                  tableShape, guestsPerTable,
+                  drop: LINEN_DROPS.find(d => d.key === linenDrop)?.drop || 30,
+                  tablesNeeded, cocktailTables, headTable, headTableSize, sweetheartTable
+                }).map((row, i) => (
+                  <div key={i} className="flex items-center justify-between px-4 py-3">
+                    <div>
+                      <p className="text-sm font-semibold text-sage-700">{row.label}</p>
+                      <p className="text-xs text-sage-400">{row.note}</p>
+                    </div>
+                    <span className="text-lg font-bold text-sage-600 ml-4 flex-shrink-0">×{row.qty}</span>
+                  </div>
+                ))}
+                {/* Extra table linens */}
+                {extraTablesLinenCount > 0 && (
+                  <div className="flex items-center justify-between px-4 py-3">
+                    <div>
+                      <p className="text-sm font-semibold text-sage-700">Match your dining tables</p>
+                      <p className="text-xs text-sage-400">Additional / specialty tables needing cloths</p>
+                    </div>
+                    <span className="text-lg font-bold text-sage-600 ml-4 flex-shrink-0">×{extraTablesLinenCount}</span>
+                  </div>
+                )}
+              </div>
+              <p className="text-xs text-sage-400 mt-2">Total tablecloths needed: <strong>{linensNeeded}</strong></p>
+            </div>
+
+            {/* Runner */}
+            <div>
+              <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">Table runner / overlay</p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {RUNNER_STYLES.map(r => (
+                  <button key={r.key} onClick={() => setRunnerStyle(r.key)}
+                    className={`p-3 rounded-xl border-2 text-left transition ${runnerStyle === r.key ? 'border-sage-500 bg-sage-50' : 'border-cream-200 hover:border-sage-300'}`}>
+                    <p className={`text-sm font-medium ${runnerStyle === r.key ? 'text-sage-700' : 'text-sage-500'}`}>{r.label}</p>
+                    {r.desc && <p className="text-xs text-sage-400 mt-0.5">{r.desc}</p>}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Chair sashes */}
+            <div>
+              <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">Chair sashes</p>
+              <label className="flex items-center gap-3 cursor-pointer mb-3">
+                <button type="button" onClick={() => setChairSash(v => !v)}
+                  className={`w-10 h-5 rounded-full flex-shrink-0 transition-colors relative ${chairSash ? 'bg-sage-500' : 'bg-cream-300'}`}>
+                  <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${chairSash ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                </button>
+                <span className={`text-sm ${chairSash ? 'text-sage-700 font-medium' : 'text-sage-400'}`}>
+                  Add chair sashes {chairSash && `— ${guestCount} sashes needed`}
+                </span>
+              </label>
+              {chairSash && (
+                <div>
+                  <p className="text-xs text-sage-500 mb-2">Sash colour</p>
+                  <div className="flex flex-wrap gap-2">
+                    {LINEN_COLORS.filter(c => c.id !== 'venue').map(color => (
+                      <button key={color.id} onClick={() => setChairSashColor(color.id)}
+                        className={`w-8 h-8 rounded-full border-2 transition ${chairSashColor === color.id ? 'scale-110' : ''}`}
+                        style={{ backgroundColor: color.color, borderColor: color.border || (chairSashColor === color.id ? '#4a7c59' : '#e5e5e5') }}
+                        title={color.name} />
+                    ))}
+                  </div>
+                  <p className="text-xs text-sage-400 mt-1">{LINEN_COLORS.find(c => c.id === chairSashColor)?.name}</p>
+                </div>
+              )}
+            </div>
+
+            {/* Linen notes */}
+            <div>
+              <label className="block text-xs font-semibold text-sage-500 uppercase tracking-wide mb-2">Linen notes</label>
+              <textarea value={linenNotes} onChange={e => setLinenNotes(e.target.value)}
+                placeholder="Specific linen requests, supplier, rental company, any constraints…"
+                rows={2} className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 resize-none" />
+            </div>
+          </div>
+        )}
+
+        {linenVenueChoice && (
+          <p className="px-4 py-3 text-sm text-sage-400 italic">Rixey will select appropriate linens for your table style and colour scheme.</p>
+        )}
+      </div>
+
+      {/* Layout preferences (feeds into floor plan) */}
+      <div className="bg-cream-50 rounded-xl p-4 space-y-4">
+        <h3 className="font-medium text-sage-700">Layout Preferences</h3>
+        <p className="text-sage-400 text-xs -mt-2">This helps us build your floor plan — the more detail the better.</p>
+
+        {/* Dance floor */}
+        <div>
+          <label className="block text-sage-600 text-sm font-medium mb-2">Dance floor</label>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {DANCE_FLOOR_OPTIONS.map(opt => (
+              <button key={opt.key} onClick={() => setDanceFloorSize(opt.key)}
+                className={`px-3 py-2 rounded-lg border-2 text-xs text-left transition ${danceFloorSize === opt.key ? 'border-sage-500 bg-sage-50 text-sage-700 font-medium' : 'border-cream-200 text-sage-500 hover:border-sage-300'}`}>
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Lounge area */}
+        <label className="flex items-center gap-3 cursor-pointer">
+          <button type="button" onClick={() => setLoungeArea(v => !v)}
+            className={`w-10 h-5 rounded-full flex-shrink-0 transition-colors relative ${loungeArea ? 'bg-sage-500' : 'bg-cream-300'}`}>
+            <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${loungeArea ? 'translate-x-5' : 'translate-x-0.5'}`} />
+          </button>
+          <div>
+            <p className={`text-sm ${loungeArea ? 'text-sage-700 font-medium' : 'text-sage-500'}`}>Lounge seating area</p>
+            <p className="text-xs text-sage-400">Sofas / armchairs — takes up roughly 10×12 ft of floor space</p>
+          </div>
+        </label>
+
+        {/* Head table placement */}
+        {(headTable || sweetheartTable) && (
+          <div>
+            <label className="block text-sage-600 text-sm font-medium mb-2">
+              {sweetheartTable ? 'Sweetheart' : 'Head'} table placement
+            </label>
+            <input value={headTablePlacement} onChange={e => setHeadTablePlacement(e.target.value)}
+              placeholder="e.g. Facing guests on the north wall, in front of the fireplace…"
+              className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+          </div>
+        )}
+      </div>
+
       {/* Centerpieces */}
       <div>
         <label className="block text-sage-700 font-medium mb-2">Centerpiece Ideas</label>
@@ -587,12 +849,48 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
             <p className="text-sage-200 text-sm">Napkins</p>
           </div>
         </div>
-        <div className="mt-4 pt-4 border-t border-sage-500 text-center">
-          <p className="text-sage-200">
-            {LINEN_COLORS.find(c => c.id === linenColor)?.name} tablecloths with{' '}
-            {LINEN_COLORS.find(c => c.id === napkinColor)?.name} napkins
-          </p>
+        <div className="mt-4 pt-4 border-t border-sage-500 space-y-2 text-center text-sage-200 text-sm">
+          {linenVenueChoice ? (
+            <p>Linens: leaving colour choice to Rixey</p>
+          ) : (
+            <p>{LINEN_COLORS.find(c => c.id === linenColor)?.name} tablecloths · {LINEN_COLORS.find(c => c.id === napkinColor)?.name} napkins · {LINEN_DROPS.find(d => d.key === linenDrop)?.label.toLowerCase()} drop</p>
+          )}
+          {!linenVenueChoice && runnerStyle !== 'none' && (
+            <p>{RUNNER_STYLES.find(r => r.key === runnerStyle)?.label} on dining tables</p>
+          )}
+          {chairSash && (
+            <p>Chair sashes: {LINEN_COLORS.find(c => c.id === chairSashColor)?.name} · {guestCount} needed</p>
+          )}
+          {danceFloorSize !== 'none' && (
+            <p>Dance floor: {DANCE_FLOOR_OPTIONS.find(d => d.key === danceFloorSize)?.label}</p>
+          )}
+          {loungeArea && <p>Lounge seating area included</p>}
         </div>
+
+        {/* Linen size breakdown */}
+        {!linenVenueChoice && (
+          <div className="mt-4 pt-4 border-t border-sage-500">
+            <p className="text-sage-200 text-sm mb-2">Tablecloth sizes to order:</p>
+            <div className="space-y-1">
+              {getLinenSizes({
+                tableShape, guestsPerTable,
+                drop: LINEN_DROPS.find(d => d.key === linenDrop)?.drop || 30,
+                tablesNeeded, cocktailTables, headTable, headTableSize, sweetheartTable
+              }).map((row, i) => (
+                <div key={i} className="flex justify-between text-sm text-sage-100">
+                  <span>{row.note}</span>
+                  <span className="font-bold ml-4">{row.qty} × {row.label}</span>
+                </div>
+              ))}
+              {extraTablesLinenCount > 0 && (
+                <div className="flex justify-between text-sm text-sage-100">
+                  <span>Additional tables</span>
+                  <span className="font-bold ml-4">{extraTablesLinenCount} × match dining</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* List selected extra tables */}
         {extraTablesCount > 0 && (

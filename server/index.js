@@ -5999,7 +5999,10 @@ app.post('/api/tables', async (req, res) => {
       headTable, headTableSize, sweetheartTable,
       cocktailTables, kidsTable, kidsCount,
       layoutNotes, linenColor, napkinColor,
-      tableNumbersStyle, centerpieceNotes, extraTables
+      tableNumbersStyle, centerpieceNotes, extraTables,
+      linenDrop, linenVenueChoice, runnerStyle,
+      chairSash, chairSashColor,
+      danceFloorSize, loungeArea, headTablePlacement, linenNotes
     } = req.body;
 
     const { data, error } = await supabaseAdmin
@@ -6021,6 +6024,15 @@ app.post('/api/tables', async (req, res) => {
         table_numbers_style: tableNumbersStyle,
         centerpiece_notes: centerpieceNotes,
         extra_tables: extraTables || {},
+        linen_drop: linenDrop,
+        linen_venue_choice: linenVenueChoice,
+        runner_style: runnerStyle,
+        chair_sash: chairSash,
+        chair_sash_color: chairSashColor,
+        dance_floor_size: danceFloorSize,
+        lounge_area: loungeArea,
+        head_table_placement: headTablePlacement,
+        linen_notes: linenNotes,
         updated_at: new Date().toISOString()
       }, { onConflict: 'wedding_id' })
       .select()
