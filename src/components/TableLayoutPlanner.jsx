@@ -36,8 +36,8 @@ const RUNNER_STYLES = [
 function headTableCount(people, sided) {
   if (!people || people < 1) return 1
   return sided === 'two'
-    ? Math.ceil((people + 4) / 12)
-    : Math.ceil((people + 2) / 6)
+    ? Math.ceil(((people + 4) / 2) / 3)
+    : Math.ceil((people + 2) / 3)
 }
 
 // Rixey inventory: all round dining tables → 132" round
