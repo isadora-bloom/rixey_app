@@ -5371,11 +5371,15 @@ app.get('/api/communication-pulse/:weddingId', async (req, res) => {
 
     const { data: wedding, error: wErr } = await supabaseAdmin
       .from('weddings')
-      .select('wedding_date, created_at, user_id')
+      .select('wedding_date, created_at')
       .eq('id', weddingId)
       .single();
 
     if (wErr || !wedding) return res.status(404).json({ error: 'Wedding not found' });
+
+    // Get profile IDs for this wedding (to count Sage messages by user_id)
+    const { data: wProfiles } = await supabaseAdmin.from('profiles').select('id').eq('wedding_id', weddingId).eq('is_admin', false);
+    const profileIds = (wProfiles || []).map(p => p.id);
 
     // Count all inbound communication channels in parallel — each query isolated so one bad table doesn't fail all
     const safeCount = async (fn) => { try { const r = await fn(); return r.count || 0; } catch { return 0; } };
@@ -5384,7 +5388,7 @@ app.get('/api/communication-pulse/:weddingId', async (req, res) => {
       safeCount(() => supabaseAdmin.from('processed_emails').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).gte('created_at', since)),
       safeCount(() => supabaseAdmin.from('processed_quo_messages').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).eq('direction', 'inbound').gte('created_at', since)),
       safeCount(() => supabaseAdmin.from('processed_zoom_meetings').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).gte('created_at', since)),
-      safeCount(() => supabaseAdmin.from('messages').select('id', { count: 'exact', head: true }).eq('user_id', wedding.user_id).eq('sender', 'user').gte('created_at', since)),
+      safeCount(() => profileIds.length ? supabaseAdmin.from('messages').select('id', { count: 'exact', head: true }).in('user_id', profileIds).eq('sender', 'user').gte('created_at', since) : Promise.resolve({ count: 0 })),
       safeCount(() => supabaseAdmin.from('direct_messages').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).eq('sender_type', 'client').gte('created_at', since)),
       safeCount(() => supabaseAdmin.from('activity_log').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).gte('created_at', since)),
     ]);
@@ -5422,13 +5426,16 @@ app.get('/api/communication-pulse', async (req, res) => {
 
     const { data: weddings, error: wErr } = await supabaseAdmin
       .from('weddings')
-      .select('id, wedding_date, created_at, user_id');
+      .select('id, wedding_date, created_at');
 
-    console.log('[Pulse] weddings query:', weddings?.length ?? 'null', wErr?.message ?? 'no error');
     if (!weddings?.length) return res.json({ pulses: {} });
 
-    // Fetch all counts in parallel — each query is individually resilient so one bad table doesn't kill the response
+    // Build user_id → wedding_id map via profiles table
     const safeQ = async (fn) => { try { const r = await fn(); if (r.error) { console.warn('[Pulse] Query error:', r.error.message); } return r.data || []; } catch (e) { console.warn('[Pulse] Query threw:', e.message); return []; } };
+
+    const profiles = await safeQ(() => supabaseAdmin.from('profiles').select('id, wedding_id').eq('is_admin', false));
+    const userToWedding = {};
+    profiles.forEach(p => { if (p.id && p.wedding_id) userToWedding[p.id] = p.wedding_id; });
 
     const [emails, texts, zooms, sageMsgs, directMsgs, activity] = await Promise.all([
       safeQ(() => supabaseAdmin.from('processed_emails').select('wedding_id').gte('created_at', since)),
@@ -5438,10 +5445,6 @@ app.get('/api/communication-pulse', async (req, res) => {
       safeQ(() => supabaseAdmin.from('direct_messages').select('wedding_id').eq('sender_type', 'client').gte('created_at', since)),
       safeQ(() => supabaseAdmin.from('activity_log').select('wedding_id').gte('created_at', since)),
     ]);
-
-    // Build user_id → wedding_id map
-    const userToWedding = {};
-    weddings.forEach(w => { if (w.user_id) userToWedding[w.user_id] = w.id; });
 
     // Count per wedding
     const counts = {};
