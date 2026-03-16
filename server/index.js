@@ -15,11 +15,11 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
   fileFilter: (req, file, cb) => {
-    const allowed = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
+    const allowed = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/svg+xml', 'image/gif'];
     if (allowed.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error('Only PDF and image files are allowed'));
+      cb(new Error(`File type not allowed: ${file.mimetype}`));
     }
   }
 });
@@ -7575,6 +7575,13 @@ app.post('/api/rsvp/:slug', async (req, res) => {
     console.error('RSVP submit error:', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// Global error handler — ensures all unhandled Express errors return JSON, not HTML
+app.use((err, req, res, next) => {
+  console.error('Unhandled Express error:', err.message || err);
+  if (res.headersSent) return next(err);
+  res.status(err.status || err.statusCode || 500).json({ error: err.message || 'Internal server error' });
 });
 
 const PORT = process.env.PORT || 3001;
