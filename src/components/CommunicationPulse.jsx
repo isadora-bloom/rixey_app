@@ -25,11 +25,11 @@ export function PulsePill({ level }) {
 export function PulseMeter({ level }) {
   if (!level) return null
   return (
-    <div className="flex items-center gap-0.5" title={LEVELS[level]?.label}>
-      <div className={`h-2.5 w-2 rounded-sm ${level === 'less' ? 'bg-slate-400' : 'bg-cream-200'}`} />
-      <div className={`h-3.5 w-2 rounded-sm ${level === 'typical' ? 'bg-sage-400' : 'bg-cream-200'}`} />
-      <div className={`h-2.5 w-2 rounded-sm ${level === 'more' ? 'bg-amber-400' : 'bg-cream-200'}`} />
-    </div>
+    <span className="inline-flex items-center gap-0.5 align-middle" title={LEVELS[level]?.label}>
+      <span className={`inline-block h-2.5 w-2 rounded-sm ${level === 'less' ? 'bg-slate-400' : 'bg-cream-200'}`} />
+      <span className={`inline-block h-3.5 w-2 rounded-sm ${level === 'typical' ? 'bg-sage-400' : 'bg-cream-200'}`} />
+      <span className={`inline-block h-2.5 w-2 rounded-sm ${level === 'more' ? 'bg-amber-400' : 'bg-cream-200'}`} />
+    </span>
   )
 }
 
