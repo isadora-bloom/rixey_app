@@ -676,9 +676,9 @@ export default function Admin() {
 
     // Load communication pulses for all weddings (background, non-blocking)
     fetch(`${API_URL}/api/communication-pulse`)
-      .then(r => r.json())
-      .then(d => { if (d.pulses) setPulses(d.pulses) })
-      .catch(() => {})
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
+      .then(d => { if (d.pulses) setPulses(d.pulses); else console.warn('[Pulse] Response had no pulses key:', d) })
+      .catch(err => console.error('[Pulse] Failed to load pulses:', err))
 
     // Load last 24h activity summary
     fetch(`${API_URL}/api/admin/last-24h`)

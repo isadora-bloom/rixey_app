@@ -111,7 +111,7 @@ export default function BorrowCatalog({ onAskSage, weddingId, isAdmin, refreshKe
           ))}
         </div>
         {/* Grid skeleton */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
           {[...Array(9)].map((_, i) => (
             <div key={i} className="animate-pulse">
               <div className="aspect-square bg-cream-200 rounded-xl mb-2" />
@@ -169,14 +169,14 @@ export default function BorrowCatalog({ onAskSage, weddingId, isAdmin, refreshKe
           <p>No items in this category yet.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
           {filtered.map(item => {
             const isSelected = selectedIds.has(item.id)
             const isToggling = toggling.has(item.id)
             return (
               <div
                 key={item.id}
-                className={`group relative bg-white rounded-xl border overflow-hidden transition ${
+                className={`group relative bg-white rounded-xl border overflow-hidden transition flex flex-col ${
                   isSelected
                     ? 'border-sage-400 shadow-md ring-2 ring-sage-300'
                     : 'border-cream-200 hover:border-sage-300 hover:shadow-md'
@@ -215,7 +215,7 @@ export default function BorrowCatalog({ onAskSage, weddingId, isAdmin, refreshKe
                 </div>
 
                 {/* Info */}
-                <div className="p-3">
+                <div className="p-3 flex-1">
                   <p className="font-medium text-sage-800 text-sm leading-tight">{item.item_name}</p>
                   {item.description && (
                     <p className="text-sage-500 text-xs mt-1 line-clamp-2">{item.description}</p>

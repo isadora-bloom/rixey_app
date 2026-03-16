@@ -5377,46 +5377,20 @@ app.get('/api/communication-pulse/:weddingId', async (req, res) => {
 
     if (wErr || !wedding) return res.status(404).json({ error: 'Wedding not found' });
 
-    // Count all inbound communication channels in parallel
-    const [emails, texts, zooms, sageMsgs, directMsgs, activity] = await Promise.all([
-      supabaseAdmin.from('processed_emails')
-        .select('id', { count: 'exact', head: true })
-        .eq('wedding_id', weddingId)
-        .gte('created_at', since),
-      supabaseAdmin.from('processed_quo_messages')
-        .select('id', { count: 'exact', head: true })
-        .eq('wedding_id', weddingId)
-        .eq('direction', 'inbound')
-        .gte('created_at', since),
-      supabaseAdmin.from('processed_zoom_meetings')
-        .select('id', { count: 'exact', head: true })
-        .eq('wedding_id', weddingId)
-        .gte('created_at', since),
-      supabaseAdmin.from('messages')
-        .select('id', { count: 'exact', head: true })
-        .eq('user_id', wedding.user_id)
-        .eq('sender', 'user')
-        .gte('created_at', since),
-      supabaseAdmin.from('direct_messages')
-        .select('id', { count: 'exact', head: true })
-        .eq('wedding_id', weddingId)
-        .eq('sender_type', 'client')
-        .gte('created_at', since),
-      supabaseAdmin.from('activity_log')
-        .select('id', { count: 'exact', head: true })
-        .eq('wedding_id', weddingId)
-        .gte('created_at', since),
+    // Count all inbound communication channels in parallel — each query isolated so one bad table doesn't fail all
+    const safeCount = async (fn) => { try { const r = await fn(); return r.count || 0; } catch { return 0; } };
+
+    const [emailCt, textCt, zoomCt, sageCt, dmCt, actCt] = await Promise.all([
+      safeCount(() => supabaseAdmin.from('processed_emails').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).gte('created_at', since)),
+      safeCount(() => supabaseAdmin.from('processed_quo_messages').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).eq('direction', 'inbound').gte('created_at', since)),
+      safeCount(() => supabaseAdmin.from('processed_zoom_meetings').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).gte('created_at', since)),
+      safeCount(() => supabaseAdmin.from('messages').select('id', { count: 'exact', head: true }).eq('user_id', wedding.user_id).eq('sender', 'user').gte('created_at', since)),
+      safeCount(() => supabaseAdmin.from('direct_messages').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).eq('sender_type', 'client').gte('created_at', since)),
+      safeCount(() => supabaseAdmin.from('activity_log').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).gte('created_at', since)),
     ]);
 
     // Weight: direct comms count full, portal activity counts half
-    const score = Math.round(
-      (emails.count || 0) +
-      (texts.count || 0) +
-      (zooms.count || 0) +
-      (sageMsgs.count || 0) +
-      (directMsgs.count || 0) +
-      (activity.count || 0) * 0.5
-    );
+    const score = Math.round(emailCt + textCt + zoomCt + sageCt + dmCt + actCt * 0.5);
 
     const { stage, min, max } = getPulseStage(wedding.wedding_date, wedding.created_at);
     const level = score < min ? 'less' : score > max ? 'more' : 'typical';
@@ -5427,12 +5401,12 @@ app.get('/api/communication-pulse/:weddingId', async (req, res) => {
       expected: { min, max },
       stage,
       breakdown: {
-        emails: emails.count || 0,
-        texts: texts.count || 0,
-        zooms: zooms.count || 0,
-        sageChat: sageMsgs.count || 0,
-        directMessages: directMsgs.count || 0,
-        portalActivity: activity.count || 0,
+        emails: emailCt,
+        texts: textCt,
+        zooms: zoomCt,
+        sageChat: sageCt,
+        directMessages: dmCt,
+        portalActivity: actCt,
       }
     });
   } catch (error) {
@@ -5452,14 +5426,16 @@ app.get('/api/communication-pulse', async (req, res) => {
 
     if (!weddings?.length) return res.json({ pulses: {} });
 
-    // Fetch all counts in parallel across all weddings
+    // Fetch all counts in parallel — each query is individually resilient so one bad table doesn't kill the response
+    const safeQ = async (fn) => { try { const r = await fn(); if (r.error) { console.warn('[Pulse] Query error:', r.error.message); } return r.data || []; } catch (e) { console.warn('[Pulse] Query threw:', e.message); return []; } };
+
     const [emails, texts, zooms, sageMsgs, directMsgs, activity] = await Promise.all([
-      supabaseAdmin.from('processed_emails').select('wedding_id').gte('created_at', since),
-      supabaseAdmin.from('processed_quo_messages').select('wedding_id').eq('direction', 'inbound').gte('created_at', since),
-      supabaseAdmin.from('processed_zoom_meetings').select('wedding_id').gte('created_at', since),
-      supabaseAdmin.from('messages').select('user_id').eq('sender', 'user').gte('created_at', since),
-      supabaseAdmin.from('direct_messages').select('wedding_id').eq('sender_type', 'client').gte('created_at', since),
-      supabaseAdmin.from('activity_log').select('wedding_id').gte('created_at', since),
+      safeQ(() => supabaseAdmin.from('processed_emails').select('wedding_id').gte('created_at', since)),
+      safeQ(() => supabaseAdmin.from('processed_quo_messages').select('wedding_id').eq('direction', 'inbound').gte('created_at', since)),
+      safeQ(() => supabaseAdmin.from('processed_zoom_meetings').select('wedding_id').gte('created_at', since)),
+      safeQ(() => supabaseAdmin.from('messages').select('user_id').eq('sender', 'user').gte('created_at', since)),
+      safeQ(() => supabaseAdmin.from('direct_messages').select('wedding_id').eq('sender_type', 'client').gte('created_at', since)),
+      safeQ(() => supabaseAdmin.from('activity_log').select('wedding_id').gte('created_at', since)),
     ]);
 
     // Build user_id → wedding_id map
@@ -5469,15 +5445,15 @@ app.get('/api/communication-pulse', async (req, res) => {
     // Count per wedding
     const counts = {};
     weddings.forEach(w => { counts[w.id] = { emails: 0, texts: 0, zooms: 0, sage: 0, dm: 0, activity: 0 }; });
-    (emails.data || []).forEach(r => { if (counts[r.wedding_id]) counts[r.wedding_id].emails++; });
-    (texts.data || []).forEach(r => { if (counts[r.wedding_id]) counts[r.wedding_id].texts++; });
-    (zooms.data || []).forEach(r => { if (counts[r.wedding_id]) counts[r.wedding_id].zooms++; });
-    (sageMsgs.data || []).forEach(r => {
+    emails.forEach(r => { if (counts[r.wedding_id]) counts[r.wedding_id].emails++; });
+    texts.forEach(r => { if (counts[r.wedding_id]) counts[r.wedding_id].texts++; });
+    zooms.forEach(r => { if (counts[r.wedding_id]) counts[r.wedding_id].zooms++; });
+    sageMsgs.forEach(r => {
       const wid = userToWedding[r.user_id];
       if (wid && counts[wid]) counts[wid].sage++;
     });
-    (directMsgs.data || []).forEach(r => { if (counts[r.wedding_id]) counts[r.wedding_id].dm++; });
-    (activity.data || []).forEach(r => { if (counts[r.wedding_id]) counts[r.wedding_id].activity++; });
+    directMsgs.forEach(r => { if (counts[r.wedding_id]) counts[r.wedding_id].dm++; });
+    activity.forEach(r => { if (counts[r.wedding_id]) counts[r.wedding_id].activity++; });
 
     const pulses = {};
     weddings.forEach(w => {
