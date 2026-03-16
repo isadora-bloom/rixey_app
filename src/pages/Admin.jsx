@@ -3314,7 +3314,7 @@ export default function Admin() {
                               <span className="mx-1 sm:mx-2 text-sage-300">·</span>
                               <span className="font-mono text-xs">{wedding.event_code}</span>
                               {pulses[wedding.id] && (
-                                <><span className="mx-1 sm:mx-2 text-sage-300">·</span><PulseMeter level={pulses[wedding.id].level} /></>
+                                <><span className="mx-1 sm:mx-2 text-sage-300">·</span><span className="text-xs text-sage-400">{pulses[wedding.id].level}</span><PulseMeter level={pulses[wedding.id].level} /></>
                               )}
                             </p>
                             {wedding.profiles?.length > 0 && (
