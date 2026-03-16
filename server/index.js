@@ -6119,8 +6119,8 @@ app.post('/api/manor-assets', upload.single('file'), async (req, res) => {
 
     res.json({ ...data, publicUrl });
   } catch (err) {
-    console.error('Upload manor asset error:', err);
-    res.status(500).json({ error: 'Failed to upload asset' });
+    console.error('Upload manor asset error:', err.message || err);
+    res.status(500).json({ error: err.message || 'Failed to upload asset' });
   }
 });
 

@@ -98,9 +98,12 @@ function UploadForm({ onUploaded }) {
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef()
 
+  const [uploadError, setUploadError] = useState('')
+
   const submit = async () => {
     if (!file || !title.trim()) return
     setUploading(true)
+    setUploadError('')
     const fd = new FormData()
     fd.append('file', file)
     fd.append('title', title)
@@ -108,9 +111,10 @@ function UploadForm({ onUploaded }) {
     try {
       const res  = await fetch(`${API_URL}/api/manor-assets`, { method: 'POST', body: fd })
       const data = await res.json()
+      if (!res.ok) { setUploadError(data.error || 'Upload failed'); setUploading(false); return }
       onUploaded(data)
       setTitle(''); setDesc(''); setFile(null); setOpen(false)
-    } catch (err) { console.error(err) }
+    } catch (err) { setUploadError(err.message || 'Upload failed'); console.error(err) }
     setUploading(false)
   }
 
@@ -146,6 +150,7 @@ function UploadForm({ onUploaded }) {
         placeholder="Description — what is this file and when should couples use it?"
         rows={2} className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-sage-300" />
 
+      {uploadError && <p className="text-red-500 text-xs">{uploadError}</p>}
       <div className="flex gap-2">
         <button onClick={submit} disabled={uploading || !file || !title.trim()}
           className="flex-1 py-2 bg-sage-600 text-white text-sm font-medium rounded-lg hover:bg-sage-700 disabled:opacity-50 transition">
