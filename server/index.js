@@ -5225,6 +5225,35 @@ app.get('/api/messages/admin/conversations', async (req, res) => {
 // ============ SAGE CHAT MESSAGES (for admin view) ============
 
 // Get admin notifications (bypasses RLS)
+// Last 24 hours summary — new signups + recent activity
+app.get('/api/admin/last-24h', async (req, res) => {
+  try {
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+    const [signups, activity] = await Promise.all([
+      supabaseAdmin
+        .from('weddings')
+        .select('id, couple_names, wedding_date, created_at')
+        .gte('created_at', since)
+        .order('created_at', { ascending: false }),
+      supabaseAdmin
+        .from('activity_log')
+        .select('id, wedding_id, activity_type, details, created_at, weddings(couple_names)')
+        .gte('created_at', since)
+        .order('created_at', { ascending: false })
+        .limit(60),
+    ]);
+
+    res.json({
+      signups:  signups.data  || [],
+      activity: activity.data || [],
+    });
+  } catch (err) {
+    console.error('Last 24h error:', err);
+    res.status(500).json({ error: 'Failed to fetch last 24h data' });
+  }
+});
+
 app.get('/api/admin/notifications', async (req, res) => {
   try {
     const { data: notifications, error } = await supabaseAdmin

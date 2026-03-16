@@ -13,7 +13,7 @@ import WebsiteBuilder from '../components/WebsiteBuilder'
 import PhotoBucket from '../components/PhotoBucket'
 import WeddingParty from '../components/WeddingParty'
 import BarPlanner from '../components/BarPlanner'
-import CommunicationPulse, { PulsePill } from '../components/CommunicationPulse'
+import CommunicationPulse, { PulsePill, PulseMeter } from '../components/CommunicationPulse'
 import RecommendedVendorsAdmin from '../components/RecommendedVendorsAdmin'
 import UsageStats from '../components/UsageStats'
 import UpcomingMeetings from '../components/UpcomingMeetings'
@@ -320,6 +320,8 @@ export default function Admin() {
   const [checkedIn, setCheckedIn] = useState(false)
   const [pulses, setPulses] = useState({})
   const [weddingPulse, setWeddingPulse] = useState(null)
+  const [last24h, setLast24h] = useState({ signups: [], activity: [] })
+  const [last24hLoading, setLast24hLoading] = useState(true)
 
   // Keep unanswered count in sync with loaded uncertain questions
   useEffect(() => {
@@ -677,6 +679,13 @@ export default function Admin() {
       .then(r => r.json())
       .then(d => { if (d.pulses) setPulses(d.pulses) })
       .catch(() => {})
+
+    // Load last 24h activity summary
+    fetch(`${API_URL}/api/admin/last-24h`)
+      .then(r => r.json())
+      .then(d => { setLast24h({ signups: d.signups || [], activity: d.activity || [] }) })
+      .catch(() => {})
+      .finally(() => setLast24hLoading(false))
 
     // Load all Sage messages for escalation detection via server (bypasses RLS)
     if (weddingsData && weddingsData.length > 0) {
@@ -2990,6 +2999,112 @@ export default function Admin() {
         {/* Weddings View */}
         {mainView === 'weddings' && (
         <>
+
+        {/* ── Last 24 Hours ── */}
+        {(() => {
+          const ACTIVITY_LABELS = {
+            timeline_updated:    'updated their timeline',
+            tables_updated:      'updated their table layout',
+            floor_plan_needed:   'saved table setup — floor plan needed',
+            staffing_updated:    'updated their staffing plan',
+            vendor_added:        'added a new vendor',
+            vendor_updated:      'updated a vendor',
+            contract_uploaded:   'uploaded a vendor contract',
+            checklist_completed: 'completed a checklist item',
+            inspo_uploaded:      'added inspiration photos',
+          }
+
+          // Deduplicate activity: one line per wedding per activity_type
+          const seen = new Set()
+          const deduped = (last24h.activity || []).filter(a => {
+            const key = `${a.wedding_id}-${a.activity_type}`
+            if (seen.has(key)) return false
+            seen.add(key)
+            return true
+          })
+
+          // Communication concerns from already-loaded pulse data
+          const concerns = Object.entries(pulses)
+            .filter(([, p]) => p.level === 'less')
+            .map(([wid]) => weddings.find(w => w.id === wid))
+            .filter(Boolean)
+
+          const hasAnything = last24h.signups.length > 0 || deduped.length > 0 || concerns.length > 0
+
+          if (!hasAnything && !last24hLoading) return null
+
+          return (
+            <div className="mb-6 bg-white rounded-2xl border border-cream-200 overflow-hidden">
+              <div className="px-4 py-3 border-b border-cream-100 flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-sage-400 animate-pulse" />
+                <h3 className="font-medium text-sage-700 text-sm">Last 24 hours</h3>
+              </div>
+
+              {last24hLoading ? (
+                <div className="px-4 py-3 text-sm text-sage-400">Loading…</div>
+              ) : !hasAnything ? null : (
+                <div className="divide-y divide-cream-50">
+
+                  {/* New signups */}
+                  {last24h.signups.map(w => (
+                    <div key={w.id}
+                      onClick={() => { const wed = weddings.find(x => x.id === w.id); if (wed) viewWeddingProfile(wed) }}
+                      className="flex items-center gap-3 px-4 py-2.5 hover:bg-cream-50 cursor-pointer transition">
+                      <span className="text-base">🎉</span>
+                      <div className="flex-1 min-w-0">
+                        <span className="text-sm font-medium text-sage-800">{w.couple_names}</span>
+                        <span className="text-sm text-sage-500"> signed up</span>
+                        {w.wedding_date && <span className="text-xs text-sage-400 ml-2">· {new Date(w.wedding_date).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}</span>}
+                      </div>
+                      <span className="text-xs text-sage-300 flex-shrink-0">{new Date(w.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</span>
+                    </div>
+                  ))}
+
+                  {/* Activity updates */}
+                  {deduped.map(a => {
+                    const coupleName = a.weddings?.couple_names || weddings.find(w => w.id === a.wedding_id)?.couple_names || 'Unknown'
+                    const label = ACTIVITY_LABELS[a.activity_type] || a.activity_type.replace(/_/g, ' ')
+                    const emoji = {
+                      timeline_updated: '📅', tables_updated: '🪑', floor_plan_needed: '📐',
+                      vendor_added: '🤝', vendor_updated: '🤝', contract_uploaded: '📄',
+                      checklist_completed: '✅', inspo_uploaded: '📸', staffing_updated: '👥',
+                    }[a.activity_type] || '✏️'
+                    return (
+                      <div key={a.id}
+                        onClick={() => { const wed = weddings.find(w => w.id === a.wedding_id); if (wed) viewWeddingProfile(wed) }}
+                        className="flex items-center gap-3 px-4 py-2.5 hover:bg-cream-50 cursor-pointer transition">
+                        <span className="text-base">{emoji}</span>
+                        <div className="flex-1 min-w-0">
+                          <span className="text-sm font-medium text-sage-800">{coupleName}</span>
+                          <span className="text-sm text-sage-500"> {label}</span>
+                          {a.details && <span className="text-xs text-sage-400 ml-1">· {a.details}</span>}
+                        </div>
+                        <span className="text-xs text-sage-300 flex-shrink-0">{new Date(a.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</span>
+                      </div>
+                    )
+                  })}
+
+                  {/* Communication concerns */}
+                  {concerns.map(w => (
+                    <div key={w.id}
+                      onClick={() => viewWeddingProfile(w)}
+                      className="flex items-center gap-3 px-4 py-2.5 bg-slate-50 hover:bg-slate-100 cursor-pointer transition border-l-2 border-slate-300">
+                      <span className="text-base">📉</span>
+                      <div className="flex-1 min-w-0">
+                        <span className="text-sm font-medium text-sage-800">{w.couple_names}</span>
+                        <span className="text-sm text-slate-600"> is communicating less than usual</span>
+                        <span className="text-xs text-slate-400 ml-2">· {pulses[w.id]?.score ?? 0} touchpoints this month, expected {pulses[w.id]?.expected?.min}–{pulses[w.id]?.expected?.max}</span>
+                      </div>
+                      <PulseMeter level="less" />
+                    </div>
+                  ))}
+
+                </div>
+              )}
+            </div>
+          )
+        })()}
+
         {/* Needs Attention Section - Only show if there are items */}
         {(uncertainQuestions.length > 0 || stats.needsAttention > 0 || unreadCount > 0) && (
           <div className="mb-6 grid md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -3198,8 +3313,8 @@ export default function Admin() {
                               {wedding.wedding_date ? new Date(wedding.wedding_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'No date set'}
                               <span className="mx-1 sm:mx-2 text-sage-300">·</span>
                               <span className="font-mono text-xs">{wedding.event_code}</span>
-                              {pulses[wedding.id] && pulses[wedding.id].level !== 'typical' && (
-                                <><span className="mx-1 sm:mx-2 text-sage-300">·</span><PulsePill level={pulses[wedding.id].level} /></>
+                              {pulses[wedding.id] && (
+                                <><span className="mx-1 sm:mx-2 text-sage-300">·</span><PulseMeter level={pulses[wedding.id].level} /></>
                               )}
                             </p>
                             {wedding.profiles?.length > 0 && (

@@ -21,6 +21,18 @@ export function PulsePill({ level }) {
   )
 }
 
+// Compact 3-bar meter for wedding list cards
+export function PulseMeter({ level }) {
+  if (!level) return null
+  return (
+    <div className="flex items-center gap-0.5" title={LEVELS[level]?.label}>
+      <div className={`h-2.5 w-2 rounded-sm ${level === 'less' ? 'bg-slate-400' : 'bg-cream-200'}`} />
+      <div className={`h-3.5 w-2 rounded-sm ${level === 'typical' ? 'bg-sage-400' : 'bg-cream-200'}`} />
+      <div className={`h-2.5 w-2 rounded-sm ${level === 'more' ? 'bg-amber-400' : 'bg-cream-200'}`} />
+    </div>
+  )
+}
+
 // Full scale for the overview tab
 export default function CommunicationPulse({ pulse }) {
   if (!pulse) return null
