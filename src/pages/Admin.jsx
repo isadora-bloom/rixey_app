@@ -323,6 +323,15 @@ export default function Admin() {
   const [last24h, setLast24h] = useState({ signups: [], activity: [] })
   const [last24hLoading, setLast24hLoading] = useState(true)
 
+  // Debug pulse key matching
+  useEffect(() => {
+    if (Object.keys(pulses).length > 0 && weddings.length > 0) {
+      console.log('[Pulse] pulse keys (first 3):', Object.keys(pulses).slice(0, 3))
+      console.log('[Pulse] wedding IDs (first 3):', weddings.slice(0, 3).map(w => w.id))
+      console.log('[Pulse] first match?', pulses[weddings[0]?.id])
+    }
+  }, [pulses, weddings])
+
   // Keep unanswered count in sync with loaded uncertain questions
   useEffect(() => {
     setUnansweredCount(uncertainQuestions.filter(q => !q.admin_answer).length)
