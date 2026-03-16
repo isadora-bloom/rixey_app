@@ -115,6 +115,7 @@ export default function WeddingDetails({ weddingId, userId }) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [saveError, setSaveError] = useState(null)
 
   useEffect(() => {
     if (!weddingId) return
@@ -138,16 +139,22 @@ export default function WeddingDetails({ weddingId, userId }) {
 
   const handleSave = async () => {
     setSaving(true)
+    setSaveError(null)
     try {
-      await fetch(`${API_URL}/api/wedding-details`, {
+      const res = await fetch(`${API_URL}/api/wedding-details`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ weddingId, userId, ...details }),
       })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error || `Error ${res.status}`)
+      }
       setSaved(true)
       setTimeout(() => setSaved(false), 2500)
     } catch (err) {
       console.error(err)
+      setSaveError('Save failed — please try again.')
     } finally {
       setSaving(false)
     }
@@ -337,13 +344,16 @@ export default function WeddingDetails({ weddingId, userId }) {
             Saved
           </span>
         )}
+        {saveError && (
+          <span className="text-sm text-red-600">{saveError}</span>
+        )}
         <button
           onClick={handleSave}
           disabled={saving}
-          className="flex items-center gap-2 px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50 transition-colors"
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm disabled:opacity-50 transition-colors text-white ${saveError ? 'bg-red-500 hover:bg-red-600' : 'bg-sage-600 hover:bg-sage-700'}`}
         >
           <SaveIcon />
-          {saving ? 'Saving…' : 'Save Details'}
+          {saving ? 'Saving…' : saveError ? 'Retry' : 'Save Details'}
         </button>
       </div>
     </div>

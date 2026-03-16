@@ -407,11 +407,16 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
     setNotes(prev => {
       const next = { ...prev, [tabKey]: val }
       clearTimeout(notesTimer.current)
-      notesTimer.current = setTimeout(() => {
-        fetch(`${API_URL}/api/bar-notes/${weddingId}`, {
-          method: 'PUT', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(next),
-        })
+      notesTimer.current = setTimeout(async () => {
+        try {
+          const res = await fetch(`${API_URL}/api/bar-notes/${weddingId}`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(next),
+          })
+          if (!res.ok) console.error('[BarPlanner] Notes save failed:', res.status)
+        } catch (err) {
+          console.error('[BarPlanner] Notes save error:', err)
+        }
       }, 800)
       return next
     })
@@ -421,14 +426,20 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
 
   const addItem = async () => {
     if (!newItem.item_name.trim()) return
-    const res  = await fetch(`${API_URL}/api/bar-shopping/${weddingId}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...newItem, sort_order: items.length }),
-    })
-    const saved = await res.json()
-    setItems(prev => [...prev, saved])
-    setNewItem({ item_name: '', quantity: '', unit: '', category: 'other', notes: '' })
-    setAddingItem(false)
+    try {
+      const res = await fetch(`${API_URL}/api/bar-shopping/${weddingId}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...newItem, sort_order: items.length }),
+      })
+      if (!res.ok) throw new Error(`Error ${res.status}`)
+      const saved = await res.json()
+      setItems(prev => [...prev, saved])
+      setNewItem({ item_name: '', quantity: '', unit: '', category: 'other', notes: '' })
+      setAddingItem(false)
+    } catch (err) {
+      console.error('[BarPlanner] Add item failed:', err)
+      alert('Failed to save item — please try again.')
+    }
   }
 
   const toggleItem = async (id, checked) => {

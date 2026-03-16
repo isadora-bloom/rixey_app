@@ -188,9 +188,10 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
   // Extra tables
   const [extraTables, setExtraTables] = useState({})
 
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving]   = useState(false)
-  const [saved, setSaved]     = useState(false)
+  const [loading, setLoading]   = useState(true)
+  const [saving, setSaving]     = useState(false)
+  const [saved, setSaved]       = useState(false)
+  const [saveError, setSaveError] = useState(null)
 
   useEffect(() => {
     if (weddingId) loadTableSetup()
@@ -235,8 +236,9 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
 
   const saveTableSetup = async () => {
     setSaving(true)
+    setSaveError(null)
     try {
-      await fetch(`${API_URL}/api/tables`, {
+      const res = await fetch(`${API_URL}/api/tables`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -265,10 +267,15 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
           extraTables,
         })
       })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error || `Error ${res.status}`)
+      }
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
     } catch (err) {
       console.error('Failed to save table setup:', err)
+      setSaveError('Save failed — please try again.')
     }
     setSaving(false)
   }
@@ -309,8 +316,8 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
           <p className="text-sage-500 text-sm">Calculate tables, linens, and layout</p>
         </div>
         <button onClick={saveTableSetup} disabled={saving}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition ${saved ? 'bg-green-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'} disabled:opacity-50`}>
-          {saved ? '✓ Saved!' : saving ? 'Saving…' : 'Save Setup'}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition ${saved ? 'bg-green-500 text-white' : saveError ? 'bg-red-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'} disabled:opacity-50`}>
+          {saved ? '✓ Saved!' : saving ? 'Saving…' : saveError ? 'Retry' : 'Save Setup'}
         </button>
       </div>
 
@@ -741,9 +748,12 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
 
       {/* Bottom Save Button */}
       <div className="sticky bottom-0 bg-gradient-to-t from-white via-white to-transparent pt-4 pb-2">
+        {saveError && (
+          <p className="text-center text-sm text-red-600 mb-2">{saveError}</p>
+        )}
         <button onClick={saveTableSetup} disabled={saving}
-          className={`w-full px-5 py-3 rounded-lg font-medium transition text-lg ${saved ? 'bg-green-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'} disabled:opacity-50 shadow-lg`}>
-          {saved ? '✓ Table Setup Saved!' : saving ? 'Saving…' : 'Save Table Setup'}
+          className={`w-full px-5 py-3 rounded-lg font-medium transition text-lg ${saved ? 'bg-green-500 text-white' : saveError ? 'bg-red-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'} disabled:opacity-50 shadow-lg`}>
+          {saved ? '✓ Table Setup Saved!' : saving ? 'Saving…' : saveError ? 'Save failed — tap to retry' : 'Save Table Setup'}
         </button>
       </div>
     </div>

@@ -26,6 +26,7 @@ export default function BudgetTracker({ weddingId }) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [saveError, setSaveError] = useState(null)
 
   useEffect(() => {
     loadBudget()
@@ -99,16 +100,22 @@ export default function BudgetTracker({ weddingId }) {
 
   const handleSave = async () => {
     setSaving(true)
+    setSaveError(null)
     try {
-      await fetch(`${API_URL}/api/budget`, {
+      const res = await fetch(`${API_URL}/api/budget`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ weddingId, totalBudget, isShared, categories })
       })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error || `Error ${res.status}`)
+      }
       setSaved(true)
       setTimeout(() => setSaved(false), 2500)
     } catch (err) {
       console.error('Failed to save budget:', err)
+      setSaveError('Save failed — please try again.')
     }
     setSaving(false)
   }
@@ -329,14 +336,17 @@ export default function BudgetTracker({ weddingId }) {
       </div>
 
       {/* Save button */}
+      {saveError && (
+        <p className="text-sm text-red-600 text-center">{saveError}</p>
+      )}
       <button
         onClick={handleSave}
         disabled={saving}
         className={`w-full py-3 rounded-xl font-medium transition text-white ${
-          saved ? 'bg-green-600' : 'bg-sage-600 hover:bg-sage-700'
+          saved ? 'bg-green-600' : saveError ? 'bg-red-500' : 'bg-sage-600 hover:bg-sage-700'
         } disabled:opacity-50`}
       >
-        {saved ? '✓ Saved!' : saving ? 'Saving...' : 'Save Budget'}
+        {saved ? '✓ Saved!' : saving ? 'Saving...' : saveError ? 'Save failed — tap to retry' : 'Save Budget'}
       </button>
     </div>
   )

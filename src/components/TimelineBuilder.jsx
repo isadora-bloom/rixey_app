@@ -159,6 +159,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, isAdmi
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [saveError, setSaveError] = useState(null)
   const [showAddCustom, setShowAddCustom] = useState(false)
   const [newCustomEvent, setNewCustomEvent] = useState({ name: '', time: '', duration: 15, notes: '', section: 'reception' })
   const [editingCustomEvent, setEditingCustomEvent] = useState(null)
@@ -856,8 +857,9 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, isAdmi
 
   const saveTimeline = async () => {
     setSaving(true)
+    setSaveError(null)
     try {
-      await fetch(`${API_URL}/api/timeline`, {
+      const res = await fetch(`${API_URL}/api/timeline`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -881,10 +883,15 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, isAdmi
           notes
         })
       })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error || `Error ${res.status}`)
+      }
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (err) {
       console.error('Failed to save timeline:', err)
+      setSaveError('Save failed — please try again.')
     }
     setSaving(false)
   }
@@ -1181,10 +1188,10 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, isAdmi
           onClick={saveTimeline}
           disabled={saving}
           className={`px-5 py-2 rounded-lg font-medium transition ${
-            saved ? 'bg-green-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'
+            saved ? 'bg-green-500 text-white' : saveError ? 'bg-red-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'
           } disabled:opacity-50`}
         >
-          {saved ? '✓ Saved!' : saving ? 'Saving...' : 'Save Timeline'}
+          {saved ? '✓ Saved!' : saving ? 'Saving...' : saveError ? 'Retry save' : 'Save Timeline'}
         </button>
       </div>
 
@@ -1755,14 +1762,17 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, isAdmi
 
       {/* Bottom Save Button */}
       <div className="sticky bottom-0 bg-gradient-to-t from-white via-white to-transparent pt-4 pb-2 -mx-4 px-4 sm:-mx-6 sm:px-6">
+        {saveError && (
+          <p className="text-center text-sm text-red-600 mb-2">{saveError}</p>
+        )}
         <button
           onClick={saveTimeline}
           disabled={saving}
           className={`w-full px-5 py-3 rounded-lg font-medium transition text-lg ${
-            saved ? 'bg-green-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'
+            saved ? 'bg-green-500 text-white' : saveError ? 'bg-red-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'
           } disabled:opacity-50 shadow-lg`}
         >
-          {saved ? '✓ Timeline Saved!' : saving ? 'Saving...' : 'Save Timeline'}
+          {saved ? '✓ Timeline Saved!' : saving ? 'Saving...' : saveError ? 'Save failed — tap to retry' : 'Save Timeline'}
         </button>
       </div>
     </div>
