@@ -5420,10 +5420,11 @@ app.get('/api/communication-pulse', async (req, res) => {
   try {
     const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-    const { data: weddings } = await supabaseAdmin
+    const { data: weddings, error: wErr } = await supabaseAdmin
       .from('weddings')
       .select('id, wedding_date, created_at, user_id');
 
+    console.log('[Pulse] weddings query:', weddings?.length ?? 'null', wErr?.message ?? 'no error');
     if (!weddings?.length) return res.json({ pulses: {} });
 
     // Fetch all counts in parallel — each query is individually resilient so one bad table doesn't kill the response
@@ -5463,6 +5464,7 @@ app.get('/api/communication-pulse', async (req, res) => {
       pulses[w.id] = { level: score < min ? 'less' : score > max ? 'more' : 'typical', score, stage };
     });
 
+    console.log('[Pulse] returning pulses for', Object.keys(pulses).length, 'weddings');
     res.json({ pulses });
   } catch (error) {
     console.error('Batch pulse error:', error);
