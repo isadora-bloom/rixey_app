@@ -34,8 +34,16 @@ import PhotoBucket from '../components/PhotoBucket'
 import WeddingParty from '../components/WeddingParty'
 import WebsiteBuilder from '../components/WebsiteBuilder'
 import BarPlanner from '../components/BarPlanner'
+import SectionFinaliser from '../components/SectionFinaliser'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+
+// Sections that can be finalised in the pre-wedding period
+const FINALISABLE = new Set([
+  'timeline', 'ceremony-order', 'guests', 'table-map', 'vendor',
+  'makeup', 'shuttle', 'rehearsal', 'bedrooms', 'decor',
+  'allergies', 'staffing', 'bar', 'tables', 'guestcare',
+])
 
 // Countdown component
 function WeddingCountdown({ weddingDate }) {
@@ -136,11 +144,29 @@ export default function Dashboard() {
   const [timelineSummary, setTimelineSummary] = useState(null)
   const [tableSummary, setTableSummary] = useState(null)
   const [retryState, setRetryState] = useState(null) // { userMessage, baseMessages, secondsLeft }
+  const [finalisations, setFinalisations] = useState({}) // { [sectionKey]: { couple_finalised, staff_finalised } }
   const fileInputRef = useRef(null)
   const messagesEndRef = useRef(null)
   const chatContainerRef = useRef(null)
   const contentRef = useRef(null)
   const prevSectionRef = useRef('chat')
+
+  // Pre-wedding period: within 6 weeks of the wedding date
+  const isPreWedding = (() => {
+    if (!wedding?.wedding_date) return false
+    const days = (new Date(wedding.wedding_date + 'T00:00:00') - new Date()) / (1000 * 60 * 60 * 24)
+    return days >= 0 && days <= 42
+  })()
+
+  function handleFinalised(sectionKey, party, value) {
+    setFinalisations(prev => ({
+      ...prev,
+      [sectionKey]: {
+        ...(prev[sectionKey] || {}),
+        [party === 'couple' ? 'couple_finalised' : 'staff_finalised']: value,
+      },
+    }))
+  }
 
   useEffect(() => {
     if (['timeline', 'tables', 'budget'].includes(prevSectionRef.current) && activeSection !== prevSectionRef.current) {
@@ -183,6 +209,12 @@ export default function Dashboard() {
         if (weddingData) {
           setWedding(weddingData)
         }
+
+        // Load finalisations
+        try {
+          const finRes = await fetch(`${API_URL}/api/finalisations/${data.wedding_id}`)
+          if (finRes.ok) setFinalisations(await finRes.json())
+        } catch {}
 
         // Load budget summary
         try {
@@ -876,7 +908,26 @@ export default function Dashboard() {
                         <img src={item.icon} className="w-5 h-5 flex-shrink-0" alt="" />
                         <span>{item.label}</span>
                       </span>
-                      {item.dot && <span className="w-1.5 h-1.5 rounded-full bg-sage-400 flex-shrink-0" />}
+                      {/* Finalisation ticks — last 6 weeks only */}
+                      {isPreWedding && FINALISABLE.has(item.key) ? (
+                        <span className="flex items-center gap-0.5 shrink-0">
+                          {[
+                            finalisations[item.key]?.couple_finalised,
+                            finalisations[item.key]?.staff_finalised,
+                          ].map((done, i) => (
+                            <span
+                              key={i}
+                              className={`w-3 h-3 rounded-full border flex items-center justify-center ${
+                                done ? 'bg-sage-500 border-sage-500' : 'border-cream-400 bg-white'
+                              }`}
+                            >
+                              {done && <span className="text-white text-[7px] leading-none">✓</span>}
+                            </span>
+                          ))}
+                        </span>
+                      ) : (
+                        item.dot && <span className="w-1.5 h-1.5 rounded-full bg-sage-400 flex-shrink-0" />
+                      )}
                     </button>
                   )
                 })}
@@ -885,7 +936,7 @@ export default function Dashboard() {
           </div>
 
           {/* Main Content */}
-          <div ref={contentRef} className="order-1 lg:order-2">
+          <div ref={contentRef} className={`order-1 lg:order-2 ${isPreWedding && FINALISABLE.has(activeSection) ? 'pb-24' : ''}`}>
             {/* Mobile: section dropdown */}
             <div className="lg:hidden mb-3">
               <select
@@ -1331,6 +1382,18 @@ export default function Dashboard() {
           </div>
         </div>
       </main>
+
+      {/* Section Finaliser — fixed bottom bar, pre-wedding period only */}
+      {FINALISABLE.has(activeSection) && profile?.wedding_id && (
+        <SectionFinaliser
+          sectionKey={activeSection}
+          weddingId={profile.wedding_id}
+          finalisations={finalisations}
+          onFinalised={handleFinalised}
+          role="couple"
+          isPreWedding={isPreWedding}
+        />
+      )}
 
       {/* Edit Profile Modal */}
       {showEditProfile && (

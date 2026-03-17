@@ -7580,6 +7580,51 @@ app.post('/api/rsvp/:slug', async (req, res) => {
   }
 });
 
+// ============ SECTION FINALISATIONS ============
+
+app.get('/api/finalisations/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('section_finalisations')
+      .select('*')
+      .eq('wedding_id', req.params.weddingId);
+    if (error) throw error;
+    // Return as a map keyed by section for easy lookup
+    const map = {};
+    (data || []).forEach(row => { map[row.section] = row; });
+    res.json(map);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/finalisations/:weddingId', async (req, res) => {
+  try {
+    const { section, party, value } = req.body; // party: 'couple' | 'staff'
+    if (!section || !party) return res.status(400).json({ error: 'section and party required' });
+
+    const field     = party === 'couple' ? 'couple_finalised' : 'staff_finalised';
+    const fieldAt   = party === 'couple' ? 'couple_finalised_at' : 'staff_finalised_at';
+    const now       = new Date().toISOString();
+
+    const { data, error } = await supabaseAdmin
+      .from('section_finalisations')
+      .upsert(
+        {
+          wedding_id:  req.params.weddingId,
+          section,
+          [field]:     value,
+          [fieldAt]:   value ? now : null,
+          updated_at:  now,
+        },
+        { onConflict: 'wedding_id,section' }
+      )
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json(data);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Global error handler — ensures all unhandled Express errors return JSON, not HTML
 app.use((err, req, res, next) => {
   console.error('Unhandled Express error:', err.message || err);
