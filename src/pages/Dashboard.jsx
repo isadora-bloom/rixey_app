@@ -148,6 +148,8 @@ export default function Dashboard() {
   const [profileLoading, setProfileLoading] = useState(true)
   const [needsPhoto, setNeedsPhoto] = useState(false)
   const [photoUploading, setPhotoUploading] = useState(false)
+  const [photoError, setPhotoError] = useState('')
+  const [couplePhotoKey, setCouplePhotoKey] = useState(0)
   const photoInputRef = useRef(null)
   const fileInputRef = useRef(null)
   const messagesEndRef = useRef(null)
@@ -165,6 +167,7 @@ export default function Dashboard() {
   const handlePhotoUpload = async (file) => {
     if (!file || !profile?.wedding_id) return
     setPhotoUploading(true)
+    setPhotoError('')
     const formData = new FormData()
     formData.append('photo', file)
     formData.append('weddingId', profile.wedding_id)
@@ -172,8 +175,15 @@ export default function Dashboard() {
     try {
       const res = await fetch(`${API_URL}/api/couple-photo`, { method: 'POST', body: formData })
       const data = await res.json()
-      if (data.photo) setNeedsPhoto(false)
-    } catch {}
+      if (data.photo) {
+        setNeedsPhoto(false)
+        setCouplePhotoKey(k => k + 1) // force sidebar CouplePhoto to reload
+      } else {
+        setPhotoError(data.error || 'Upload failed — please try again.')
+      }
+    } catch {
+      setPhotoError('Could not connect to the server — please try again.')
+    }
     setPhotoUploading(false)
     if (photoInputRef.current) photoInputRef.current.value = ''
   }
@@ -821,7 +831,7 @@ export default function Dashboard() {
             {/* Couple Photo */}
             {profile?.wedding_id && (
               <div id="couple-photo-section" className="flex-shrink-0">
-                <CouplePhoto weddingId={profile.wedding_id} userId={user?.id} compact />
+                <CouplePhoto key={couplePhotoKey} weddingId={profile.wedding_id} userId={user?.id} compact />
               </div>
             )}
 
@@ -1456,6 +1466,9 @@ export default function Dashboard() {
             >
               {photoUploading ? 'Uploading…' : 'Upload a photo'}
             </button>
+            {photoError && (
+              <p className="text-red-500 text-xs mt-3">{photoError}</p>
+            )}
             <p className="text-sage-400 text-xs mt-4">JPG, PNG or HEIC · any size</p>
           </div>
         </div>
