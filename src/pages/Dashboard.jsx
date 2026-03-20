@@ -203,10 +203,8 @@ export default function Dashboard() {
       refreshSummaries()
     }
     prevSectionRef.current = activeSection
-    // On mobile, scroll the content area into view when switching sections
-    if (window.innerWidth < 1024) {
-      setTimeout(() => contentRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
-    }
+    // Scroll to top of page on every section change
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }, [activeSection]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
