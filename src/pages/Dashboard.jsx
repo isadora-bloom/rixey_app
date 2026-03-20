@@ -146,6 +146,9 @@ export default function Dashboard() {
   const [retryState, setRetryState] = useState(null) // { userMessage, baseMessages, secondsLeft }
   const [finalisations, setFinalisations] = useState({}) // { [sectionKey]: { couple_finalised, staff_finalised } }
   const [profileLoading, setProfileLoading] = useState(true)
+  const [needsPhoto, setNeedsPhoto] = useState(false)
+  const [photoUploading, setPhotoUploading] = useState(false)
+  const photoInputRef = useRef(null)
   const fileInputRef = useRef(null)
   const messagesEndRef = useRef(null)
   const chatContainerRef = useRef(null)
@@ -158,6 +161,22 @@ export default function Dashboard() {
     const days = (new Date(wedding.wedding_date + 'T00:00:00') - new Date()) / (1000 * 60 * 60 * 24)
     return days >= 0 && days <= 42
   })()
+
+  const handlePhotoUpload = async (file) => {
+    if (!file || !profile?.wedding_id) return
+    setPhotoUploading(true)
+    const formData = new FormData()
+    formData.append('photo', file)
+    formData.append('weddingId', profile.wedding_id)
+    formData.append('uploadedBy', user?.id || '')
+    try {
+      const res = await fetch(`${API_URL}/api/couple-photo`, { method: 'POST', body: formData })
+      const data = await res.json()
+      if (data.photo) setNeedsPhoto(false)
+    } catch {}
+    setPhotoUploading(false)
+    if (photoInputRef.current) photoInputRef.current.value = ''
+  }
 
   function handleFinalised(sectionKey, party, value) {
     setFinalisations(prev => ({
@@ -210,6 +229,15 @@ export default function Dashboard() {
 
         if (weddingData) {
           setWedding(weddingData)
+        }
+
+        // Check if couple photo has been uploaded — require it if not
+        if (data.role?.startsWith('couple')) {
+          try {
+            const photoRes = await fetch(`${API_URL}/api/couple-photo/${data.wedding_id}`)
+            const photoData = await photoRes.json()
+            if (!photoData.photo) setNeedsPhoto(true)
+          } catch {}
         }
 
         // Load finalisations
@@ -1136,11 +1164,10 @@ export default function Dashboard() {
               )}
 
 
-              {/* Fallback: section needs wedding_id but it's not set yet */}
+              {/* Fallback: staff/admin account on the couple dashboard */}
               {!['chat', 'photos', 'website-builder', 'wedding-party', 'preferred-vendors', 'downloads', 'picks', 'booking', 'resources'].includes(activeSection) && !profile?.wedding_id && !profileLoading && (
                 <div className="p-8 text-center">
-                  <p className="text-sage-400 text-sm">This section will be available once your account is linked to your wedding.</p>
-                  <p className="text-sage-400 text-sm mt-2">Message your coordinator in the Inbox if you have any questions.</p>
+                  <p className="text-sage-400 text-sm">This account isn't linked to a wedding — please sign in with your couple account.</p>
                 </div>
               )}
 
@@ -1403,6 +1430,35 @@ export default function Dashboard() {
           role="couple"
           isPreWedding={isPreWedding}
         />
+      )}
+
+      {/* Mandatory couple photo overlay — blocks portal until uploaded */}
+      {needsPhoto && (
+        <div className="fixed inset-0 bg-sage-900/80 flex items-center justify-center z-[100] px-4">
+          <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full text-center">
+            <h2 className="font-serif text-2xl text-sage-700 mb-2">One last thing</h2>
+            <p className="text-sage-500 text-sm mb-6">
+              Add a photo of you two so your coordinator knows who they're planning with.
+              It'll show up in your portal and on your planning file.
+            </p>
+            <input
+              ref={photoInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => { if (e.target.files?.[0]) handlePhotoUpload(e.target.files[0]) }}
+              disabled={photoUploading}
+            />
+            <button
+              onClick={() => photoInputRef.current?.click()}
+              disabled={photoUploading}
+              className="w-full py-3 px-6 bg-sage-600 text-white rounded-xl font-medium hover:bg-sage-700 transition disabled:opacity-50"
+            >
+              {photoUploading ? 'Uploading…' : 'Upload a photo'}
+            </button>
+            <p className="text-sage-400 text-xs mt-4">JPG, PNG or HEIC · any size</p>
+          </div>
+        </div>
       )}
 
       {/* Edit Profile Modal */}
