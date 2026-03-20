@@ -6013,7 +6013,7 @@ app.post('/api/tables', async (req, res) => {
       centerpieceNotes, extraTables,
       linenVenueChoice, runnerStyle,
       chargersOn, checkeredDanceFloor,
-      loungeArea, linenNotes
+      loungeArea, linenNotes, isDraft
     } = req.body;
 
     const { data, error } = await supabaseAdmin
@@ -6041,6 +6041,7 @@ app.post('/api/tables', async (req, res) => {
         dance_floor_size:     checkeredDanceFloor ? 'checkered' : 'none',
         lounge_area:          loungeArea,
         linen_notes:          linenNotes,
+        is_draft:             isDraft === true,
         updated_at:           new Date().toISOString()
       }, { onConflict: 'wedding_id' })
       .select()

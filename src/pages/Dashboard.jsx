@@ -145,6 +145,7 @@ export default function Dashboard() {
   const [tableSummary, setTableSummary] = useState(null)
   const [retryState, setRetryState] = useState(null) // { userMessage, baseMessages, secondsLeft }
   const [finalisations, setFinalisations] = useState({}) // { [sectionKey]: { couple_finalised, staff_finalised } }
+  const [profileLoading, setProfileLoading] = useState(true)
   const fileInputRef = useRef(null)
   const messagesEndRef = useRef(null)
   const chatContainerRef = useRef(null)
@@ -193,6 +194,7 @@ export default function Dashboard() {
       .eq('id', user.id)
       .single()
 
+    setProfileLoading(false)
     if (!error && data) {
       setProfile(data)
       setEditName(data.name || '')
@@ -1133,6 +1135,14 @@ export default function Dashboard() {
                 </div>
               )}
 
+
+              {/* Fallback: section needs wedding_id but it's not set yet */}
+              {!['chat', 'photos', 'website-builder', 'wedding-party', 'preferred-vendors', 'downloads', 'picks', 'booking', 'resources'].includes(activeSection) && !profile?.wedding_id && !profileLoading && (
+                <div className="p-8 text-center">
+                  <p className="text-sage-400 text-sm">This section will be available once your account is linked to your wedding.</p>
+                  <p className="text-sage-400 text-sm mt-2">Message your coordinator in the Inbox if you have any questions.</p>
+                </div>
+              )}
 
               {/* Timeline section */}
               {activeSection === 'timeline' && profile?.wedding_id && (

@@ -188,6 +188,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
   // Extra tables
   const [extraTables, setExtraTables] = useState({})
 
+  const [isDraft, setIsDraft]   = useState(false)
   const [loading, setLoading]   = useState(true)
   const [saving, setSaving]     = useState(false)
   const [saved, setSaved]       = useState(false)
@@ -226,6 +227,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
         setLayoutNotes(t.layout_notes || '')
         setLinenNotes(t.linen_notes || '')
         setExtraTables(t.extra_tables || {})
+        setIsDraft(t.is_draft || false)
         if (t.table_shape === 'mixed') setRectTableCount(0)
       }
     } catch (err) {
@@ -234,7 +236,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
     setLoading(false)
   }
 
-  const saveTableSetup = async () => {
+  const saveTableSetup = async (draft = false) => {
     setSaving(true)
     setSaveError(null)
     try {
@@ -265,12 +267,14 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
           layoutNotes,
           linenNotes,
           extraTables,
+          isDraft: draft,
         })
       })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
         throw new Error(body.error || `Error ${res.status}`)
       }
+      setIsDraft(draft)
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
     } catch (err) {
@@ -306,19 +310,48 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
 
   if (loading) return <div className="text-sage-400 text-center py-8">Loading table setup…</div>
 
+  // Client view when setup is still a draft
+  if (!isAdmin && isDraft) {
+    return (
+      <div className="bg-cream-50 rounded-2xl border border-cream-200 p-12 text-center">
+        <p className="text-sage-500 text-sm">We're working on your table setup — we'll let you know when it's ready to review.</p>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
 
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h2 className="font-serif text-xl text-sage-700">Table & Seating Planner</h2>
-          <p className="text-sage-500 text-sm">Calculate tables, linens, and layout</p>
+          <p className="text-sage-500 text-sm">
+            {isAdmin && isDraft && <span className="text-amber-600 font-medium">In progress — not visible to client · </span>}
+            Calculate tables, linens, and layout
+          </p>
         </div>
-        <button onClick={saveTableSetup} disabled={saving}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition ${saved ? 'bg-green-500 text-white' : saveError ? 'bg-red-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'} disabled:opacity-50`}>
-          {saved ? '✓ Saved!' : saving ? 'Saving…' : saveError ? 'Retry' : 'Save Setup'}
-        </button>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {saveError && <span className="text-red-500 text-xs">{saveError}</span>}
+          {saved && <span className="text-green-600 text-xs">✓ Saved</span>}
+          {isAdmin ? (
+            <>
+              <button onClick={() => saveTableSetup(true)} disabled={saving}
+                className="px-3 py-2 rounded-lg text-sm font-medium border border-amber-300 text-amber-700 hover:bg-amber-50 transition disabled:opacity-50">
+                {saving ? 'Saving…' : 'Save Draft'}
+              </button>
+              <button onClick={() => saveTableSetup(false)} disabled={saving}
+                className="px-3 py-2 rounded-lg text-sm font-medium bg-sage-600 text-white hover:bg-sage-700 transition disabled:opacity-50">
+                {saving ? 'Saving…' : 'Send to Client'}
+              </button>
+            </>
+          ) : (
+            <button onClick={() => saveTableSetup(false)} disabled={saving}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition ${saveError ? 'bg-red-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'} disabled:opacity-50`}>
+              {saving ? 'Saving…' : saveError ? 'Retry' : 'Save Setup'}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Guest Count */}
