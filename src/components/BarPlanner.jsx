@@ -161,9 +161,14 @@ function calcQuantities({ guests, hours, barType, season, beerPct, winePct, spir
   } else {
     r.push({ item_name: 'Soda Water (12-packs)',  quantity: Math.max(1, Math.ceil(1 * s * h)),               unit: 'cases',   category: 'mixers' })
   }
-  r.push({ item_name: 'Orange juice (mimosas, breakfast, mixing)', quantity: Math.max(1, Math.ceil(guests / 25)), unit: 'gallons',    category: 'mixers' })
-  r.push({ item_name: 'Cranberry juice',                           quantity: Math.max(1, Math.ceil(guests / 30)), unit: 'gallons',    category: 'mixers' })
-  r.push({ item_name: 'Pineapple juice',                           quantity: Math.max(1, Math.ceil(guests / 30)), unit: 'large cans', category: 'mixers' })
+  // OJ: beer+wine bars mainly use it for mimosas — much less than a full bar
+  r.push({ item_name: 'Orange juice (mimosas, mixing)', quantity: Math.max(1, Math.ceil(guests / (barType === 'beer-wine' ? 50 : 30))), unit: 'gallons', category: 'mixers' })
+  // Cranberry: spirits mixer primarily; small amount for beer+wine (soda + cran)
+  r.push({ item_name: 'Cranberry juice', quantity: Math.max(1, Math.ceil(guests / (barType === 'beer-wine' ? 70 : 40))), unit: 'gallons', category: 'mixers' })
+  // Pineapple: spirits bars only
+  if (barType !== 'beer-wine') {
+    r.push({ item_name: 'Pineapple juice', quantity: Math.max(1, Math.ceil(guests / 50)), unit: 'large cans', category: 'mixers' })
+  }
   r.push({ item_name: 'Water (small bottles)',                     quantity: Math.max(6, Math.ceil(guests / 20)), unit: 'cases',      category: 'mixers' })
 
   // ── Garnishes — olives/cherries only for spirits bars ──
