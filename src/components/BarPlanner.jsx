@@ -754,25 +754,36 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
               {/* Per-guest summary — under the selectors */}
               {(() => {
                 const bt         = BAR_TYPES.find(b => b.key === barType) || BAR_TYPES[0]
-                const beerPct    = bt.beerPct    * DRINK_LEVELS[beerLevel].scale
-                const winePct    = bt.winePct    * DRINK_LEVELS[wineLevel].scale
-                const spiritsPct = bt.spiritsPct * DRINK_LEVELS[spiritsLevel].scale
-                const nonAlcPct  = 15            * DRINK_LEVELS[nonAlcLevel].scale
-                const stats      = perDedicatedDrinkerStats(calcPreview, guests, beerPct, winePct, spiritsPct, nonAlcPct)
+                // Scaled pcts drive quantities; base pcts drive drinker-count estimates
+                // (drink levels adjust intensity, not how many people drink each type)
+                const beerScale    = DRINK_LEVELS[beerLevel].scale
+                const wineScale    = DRINK_LEVELS[wineLevel].scale
+                const spiritsScale = DRINK_LEVELS[spiritsLevel].scale
+                const nonAlcScale  = DRINK_LEVELS[nonAlcLevel].scale
+                const stats = perDedicatedDrinkerStats(calcPreview, guests, bt.beerPct, bt.winePct, bt.spiritsPct, 15)
+                // Total drinks: sum actual available drinks from calcPreview
+                const totalDrinks = calcPreview.reduce((sum, item) => {
+                  if (item.category === 'beer' && item.unit === 'kegs')
+                    return sum + item.quantity * (item.item_name.includes('1/4') ? 82 : 55)
+                  if (item.category === 'wine' && item.unit === 'bottles')
+                    return sum + item.quantity * 5
+                  if (item.category === 'spirits' && (item.unit === 'handles' || item.unit === 'handles (1.75L)'))
+                    return sum + item.quantity * 39
+                  return sum
+                }, 0)
                 return (
                   <div className="bg-sage-50 border border-sage-200 rounded-xl px-4 py-3 mt-5 space-y-3">
                     <div>
-                      <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1">Average guest over {hours}h</p>
+                      <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1">Per drinker over {hours}h</p>
                       {(champagneToast || tableWine) && (
-                        <p className="text-xs text-amber-600 mb-1.5">Bar drinks only — champagne toast{tableWine ? ' and table wine' : ''} not included in these numbers.</p>
+                        <p className="text-xs text-amber-600 mb-1.5">Bar drinks only — champagne toast{tableWine ? ' and table wine' : ''} not included.</p>
                       )}
                       <p className="text-sage-700 text-sm leading-relaxed">
-                        {winePct > 0 && <><strong>{(hours * winePct / 100).toFixed(1)} {hours * winePct / 100 === 1 ? 'glass wine' : 'glasses wine'}</strong>{(beerPct > 0 || spiritsPct > 0) ? ', ' : ''}</>}
-                        {beerPct > 0 && <><strong>{(hours * beerPct / 100).toFixed(1)} {hours * beerPct / 100 === 1 ? 'beer' : 'beers'}</strong>{spiritsPct > 0 ? ', ' : ''}</>}
-                        {spiritsPct > 0 && <><strong>{(hours * spiritsPct / 100).toFixed(1)} {hours * spiritsPct / 100 === 1 ? 'cocktail' : 'cocktails'}</strong></>}
-                        {nonAlcPct > 0 && <>, <strong>{(hours * nonAlcPct / 100).toFixed(1)} non-alc</strong></>}
+                        {bt.winePct > 0 && wineScale > 0 && <><strong>{(hours * wineScale).toFixed(1)} {hours * wineScale === 1 ? 'glass wine' : 'glasses wine'}/wine drinker</strong>{(bt.beerPct > 0 && beerScale > 0) || (bt.spiritsPct > 0 && spiritsScale > 0) ? ', ' : ''}</>}
+                        {bt.beerPct > 0 && beerScale > 0 && <><strong>{(hours * beerScale).toFixed(1)} {hours * beerScale === 1 ? 'beer' : 'beers'}/beer drinker</strong>{bt.spiritsPct > 0 && spiritsScale > 0 ? ', ' : ''}</>}
+                        {bt.spiritsPct > 0 && spiritsScale > 0 && <><strong>{(hours * spiritsScale).toFixed(1)} {hours * spiritsScale === 1 ? 'cocktail' : 'cocktails'}/cocktail drinker</strong></>}
                       </p>
-                      <p className="text-xs text-sage-400 mt-0.5"><strong>{(hours * guests).toLocaleString()}</strong> drinks total across {guests} guests</p>
+                      <p className="text-xs text-sage-400 mt-0.5"><strong>~{totalDrinks.toLocaleString()}</strong> total drinks available for {guests} guests</p>
                     </div>
                     <div className="border-t border-sage-200 pt-3">
                       <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1.5">If a guest drinks only their preferred type</p>
@@ -786,8 +797,8 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
                         {stats.spirits && (
                           <p className="text-sm text-sage-700">🥃 ~{stats.spirits.drinkers} cocktail drinkers, {stats.spirits.total} cocktails available — <strong>{stats.spirits.each} cocktails each</strong> over {hours}h</p>
                         )}
-                        {nonAlcPct > 0 && (
-                          <p className="text-sm text-sage-700">🥤 ~{Math.round(guests * nonAlcPct / 100)} non-drinkers — soft drinks + water provided</p>
+                        {nonAlcScale > 0 && (
+                          <p className="text-sm text-sage-700">🥤 ~{Math.round(guests * 0.15)} non-drinkers — soft drinks + water provided</p>
                         )}
                       </div>
                     </div>
