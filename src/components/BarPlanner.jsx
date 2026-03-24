@@ -89,6 +89,14 @@ const BAR_TYPES = [
   { key: 'full',       label: 'Modified Full Bar',                beerPct: 25, winePct: 40, spiritsPct: 35 },
 ]
 
+// Drinking level selector — maps to a scale factor applied to bar-type defaults
+const DRINK_LEVELS = [
+  { label: 'None',    scale: 0   },
+  { label: 'Light',   scale: 0.6 },
+  { label: 'Average', scale: 1.0 },
+  { label: 'Heavy',   scale: 1.5 },
+]
+
 // ── Quantity calculator ───────────────────────────────────────────────────────
 // Handbook baseline: 120 guests × 8 hrs. Sliders scale from those defaults.
 
@@ -107,22 +115,28 @@ function calcQuantities({ guests, hours, barType, season, beerPct, winePct, spir
   const r        = []
 
   // ── Beer (kegs — no half kegs at Rixey) ──
+  // Floor total kegs at 1 (not 1 per size), so small parties don't over-order.
   if (beerPct > 0) {
-    r.push({ item_name: '1/6th barrel keg (~55 beers each)', quantity: Math.max(1, Math.ceil(2 * s * h * beerScale)),    unit: 'kegs', category: 'beer' })
-    r.push({ item_name: '1/4 barrel keg (~82 beers each)',   quantity: Math.max(1, Math.ceil(2 * s * h * beerScale)),    unit: 'kegs', category: 'beer' })
+    const rawKegs = Math.ceil(2 * s * h * beerScale)
+    const kegQty  = Math.max(1, rawKegs) // 1 total minimum, not 1 per type
+    r.push({ item_name: '1/6th barrel keg (~55 beers each)', quantity: kegQty, unit: 'kegs', category: 'beer' })
+    r.push({ item_name: '1/4 barrel keg (~82 beers each)',   quantity: kegQty, unit: 'kegs', category: 'beer' })
   }
 
   // ── Wine — base: 8 cases for beer+wine/specialty, 6 for full bar (handbook) ──
+  // Work in individual bottles so the red/white split is fine-grained even at small guest counts.
   if (winePct > 0) {
     const baseCases        = barType === 'full' ? 6 : 8
-    const totalCases       = Math.max(2, Math.ceil(baseCases * s * h * wineScale))
-    const sparklingCases   = Math.max(1, Math.round(totalCases / 8))
-    const remaining        = totalCases - sparklingCases
-    const whiteCases       = isWinter ? Math.ceil(remaining * 3 / 7) : Math.ceil(remaining * 4 / 7)
-    const redCases         = remaining - whiteCases
-    r.push({ item_name: 'Sparkling wine / prosecco (toasts + mimosas)',                                         quantity: sparklingCases * 12, unit: 'bottles', category: 'wine' })
-    r.push({ item_name: `White wine & rosé${isWinter ? ' (winter — less white)' : ' (summer — more white)'}`,  quantity: whiteCases * 12,     unit: 'bottles', category: 'wine' })
-    r.push({ item_name: `Red wine${isWinter ? ' (winter — more red)' : ' (summer — less red)'}`,               quantity: redCases * 12,       unit: 'bottles', category: 'wine' })
+    const totalBottles     = Math.max(12, Math.ceil(baseCases * 12 * s * h * wineScale))
+    const sparklingBottles = Math.max(3, Math.round(totalBottles / 8))
+    const remaining        = totalBottles - sparklingBottles
+    const whiteBottles     = isWinter ? Math.ceil(remaining * 3 / 7) : Math.ceil(remaining * 4 / 7)
+    const redBottles       = remaining - whiteBottles
+    r.push({ item_name: 'Sparkling wine / prosecco (toasts + mimosas)',                                         quantity: sparklingBottles, unit: 'bottles', category: 'wine' })
+    r.push({ item_name: `White wine & rosé${isWinter ? ' (winter — less white)' : ' (summer — more white)'}`,  quantity: whiteBottles,     unit: 'bottles', category: 'wine' })
+    if (redBottles > 0) {
+      r.push({ item_name: `Red wine${isWinter ? ' (winter — more red)' : ' (summer — less red)'}`, quantity: redBottles, unit: 'bottles', category: 'wine' })
+    }
   }
 
   // ── Spirits — full bar only (handbook: handles by type) ──
@@ -147,9 +161,9 @@ function calcQuantities({ guests, hours, barType, season, beerPct, winePct, spir
   } else {
     r.push({ item_name: 'Soda Water (12-packs)',  quantity: Math.max(1, Math.ceil(1 * s * h)),               unit: 'cases',   category: 'mixers' })
   }
-  r.push({ item_name: 'Orange juice (mimosas, breakfast, mixing)', quantity: Math.max(1, Math.ceil(guests / 15)), unit: 'gallons',    category: 'mixers' })
-  r.push({ item_name: 'Cranberry juice',                           quantity: Math.max(1, Math.ceil(guests / 20)), unit: 'gallons',    category: 'mixers' })
-  r.push({ item_name: 'Pineapple juice',                           quantity: Math.max(1, Math.ceil(guests / 20)), unit: 'large cans', category: 'mixers' })
+  r.push({ item_name: 'Orange juice (mimosas, breakfast, mixing)', quantity: Math.max(1, Math.ceil(guests / 25)), unit: 'gallons',    category: 'mixers' })
+  r.push({ item_name: 'Cranberry juice',                           quantity: Math.max(1, Math.ceil(guests / 30)), unit: 'gallons',    category: 'mixers' })
+  r.push({ item_name: 'Pineapple juice',                           quantity: Math.max(1, Math.ceil(guests / 30)), unit: 'large cans', category: 'mixers' })
   r.push({ item_name: 'Water (small bottles)',                     quantity: Math.max(6, Math.ceil(guests / 20)), unit: 'cases',      category: 'mixers' })
 
   // ── Garnishes — olives/cherries only for spirits bars ──
@@ -336,14 +350,14 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
   const [loading, setLoading] = useState(true)
 
   // Calculator state
-  const [guests, setGuests]         = useState(guestCountProp || 80)
+  const [guests, setGuests]         = useState(Math.min(200, guestCountProp || 80))
   const [hours, setHours]           = useState(5)
   const [barType, setBarType]       = useState('beer-wine')
   const [season, setSeason]         = useState(() => seasonFromDate(weddingDate) || (new Date().getMonth() >= 4 && new Date().getMonth() <= 9 ? 'summer' : 'winter'))
-  const [beerPct, setBeerPct]       = useState(35)
-  const [winePct, setWinePct]       = useState(65)
-  const [spiritsPct, setSpiritsPct] = useState(0)
-  const [nonAlcPct, setNonAlcPct]       = useState(15)
+  const [beerLevel,    setBeerLevel]    = useState(2) // 0=None 1=Light 2=Average 3=Heavy
+  const [wineLevel,    setWineLevel]    = useState(2)
+  const [spiritsLevel, setSpiritLevel]  = useState(2)
+  const [nonAlcLevel,  setNonAlcLevel]  = useState(2)
   const [champagneToast, setChampagneToast] = useState(false)
   const [tableWine, setTableWine]           = useState(false)
   const [calcPreview, setCalcPreview] = useState([])
@@ -371,8 +385,13 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
   useEffect(() => { load() }, [weddingId])
 
   useEffect(() => {
+    const bt         = BAR_TYPES.find(b => b.key === barType) || BAR_TYPES[0]
+    const beerPct    = bt.beerPct    * DRINK_LEVELS[beerLevel].scale
+    const winePct    = bt.winePct    * DRINK_LEVELS[wineLevel].scale
+    const spiritsPct = bt.spiritsPct * DRINK_LEVELS[spiritsLevel].scale
+    const nonAlcPct  = 15            * DRINK_LEVELS[nonAlcLevel].scale
     setCalcPreview(calcQuantities({ guests, hours, barType, season, beerPct, winePct, spiritsPct, nonAlcPct, champagneToast, tableWine }))
-  }, [guests, hours, barType, season, beerPct, winePct, spiritsPct, nonAlcPct, champagneToast, tableWine])
+  }, [guests, hours, barType, season, beerLevel, wineLevel, spiritsLevel, nonAlcLevel, champagneToast, tableWine])
 
   // Sync season if wedding date prop changes
   useEffect(() => {
@@ -381,11 +400,10 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
   }, [weddingDate])
 
   const selectBarType = (key) => {
-    const bt = BAR_TYPES.find(b => b.key === key)
     setBarType(key)
-    setBeerPct(bt.beerPct)
-    setWinePct(bt.winePct)
-    setSpiritsPct(bt.spiritsPct)
+    setBeerLevel(2)
+    setWineLevel(2)
+    setSpiritLevel(2)
   }
 
   const load = async () => {
@@ -461,6 +479,15 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
   const deleteItem = async (id) => {
     setItems(prev => prev.filter(i => i.id !== id))
     await fetch(`${API_URL}/api/bar-shopping/${id}`, { method: 'DELETE' })
+  }
+
+  const clearList = async () => {
+    if (!window.confirm('Clear everything on the shopping list? This can't be undone.')) return
+    const snapshot = [...items]
+    setItems([])
+    for (const item of snapshot) {
+      await fetch(`${API_URL}/api/bar-shopping/${item.id}`, { method: 'DELETE' })
+    }
   }
 
   const importFromCalculator = async () => {
@@ -676,12 +703,12 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-xs font-semibold text-sage-500 uppercase tracking-wide">Guest count</label>
-              <input type="number" value={guests} onChange={e => setGuests(Math.max(1, Number(e.target.value)))}
+              <input type="number" value={guests} min={10} max={200} onChange={e => setGuests(Math.min(200, Math.max(1, Number(e.target.value))))}
                 className="w-20 border border-cream-300 rounded-lg px-2 py-1 text-sm text-center font-medium text-sage-700 focus:outline-none focus:ring-2 focus:ring-sage-300" />
             </div>
-            <input type="range" min={10} max={400} step={5} value={guests}
+            <input type="range" min={10} max={200} step={5} value={guests}
               onChange={e => setGuests(Number(e.target.value))} className="w-full accent-sage-600" />
-            <div className="flex justify-between text-xs text-sage-300 mt-1"><span>10</span><span>100</span><span>200</span><span>300</span><span>400</span></div>
+            <div className="flex justify-between text-xs text-sage-300 mt-1"><span>10</span><span>50</span><span>100</span><span>150</span><span>200</span></div>
           </div>
 
           {/* Hours */}
@@ -698,51 +725,57 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
           {/* Sliders + Live quantities table — side by side */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 items-start">
 
-            {/* Left: sliders */}
+            {/* Left: drinking level selectors */}
             <div>
               <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1">Adjust for your crowd</p>
-              <p className="text-xs text-sage-400 mb-4">Quantities update live as you move these.</p>
-              <div className="space-y-5">
+              <p className="text-xs text-sage-400 mb-4">Quantities update live as you change these.</p>
+              <div className="space-y-4">
                 {[
-                  { label: '🍺 Beer',                val: beerPct,    set: setBeerPct,    color: 'accent-amber-500', disabled: false },
-                  { label: '🍷 Wine',                val: winePct,    set: setWinePct,    color: 'accent-rose-500',  disabled: false },
-                  { label: '🥃 Spirits / cocktails', val: spiritsPct, set: setSpiritsPct, color: 'accent-sage-600',  disabled: barType === 'beer-wine' },
-                  { label: '🥤 Non-alcoholic',        val: nonAlcPct,  set: setNonAlcPct,  color: 'accent-blue-400',  disabled: false },
-                ].map(({ label, val, set, color, disabled }) => (
+                  { label: '🍺 Beer',           level: beerLevel,    set: setBeerLevel,   disabled: false },
+                  { label: '🍷 Wine',           level: wineLevel,    set: setWineLevel,   disabled: false },
+                  { label: '🥃 Spirits',        level: spiritsLevel, set: setSpiritLevel, disabled: barType !== 'full' },
+                  { label: '🥤 Non-alcoholic',  level: nonAlcLevel,  set: setNonAlcLevel, disabled: false },
+                ].map(({ label, level, set, disabled }) => (
                   <div key={label} className={disabled ? 'opacity-30 pointer-events-none' : ''}>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-sm text-sage-700">{label}</span>
-                      <span className="text-sm font-semibold text-sage-700 w-10 text-right">{val}%</span>
+                    <p className="text-sm text-sage-700 mb-1.5">{label}</p>
+                    <div className="flex rounded-lg border border-cream-200 overflow-hidden">
+                      {DRINK_LEVELS.map((dl, i) => (
+                        <button key={i} type="button" onClick={() => set(i)}
+                          className={`flex-1 py-1.5 text-xs font-medium transition border-r border-cream-200 last:border-r-0 ${
+                            level === i ? 'bg-sage-600 text-white' : 'bg-white text-sage-500 hover:bg-sage-50'
+                          }`}
+                        >{dl.label}</button>
+                      ))}
                     </div>
-                    <input type="range" min={0} max={100} step={5} value={val}
-                      onChange={e => set(Number(e.target.value))} className={`w-full ${color}`} />
                   </div>
                 ))}
               </div>
-              {(beerPct + winePct + spiritsPct) !== 100 && (
-                <p className="text-xs text-amber-600 mt-3">Beer + wine + spirits = {beerPct + winePct + spiritsPct}%</p>
-              )}
 
-              {/* Per-guest summary — under the sliders */}
-              <div className="bg-sage-50 border border-sage-200 rounded-xl px-4 py-3 mt-5 space-y-3">
-                <div>
-                  <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1">Average guest over {hours}h</p>
-                  {(champagneToast || tableWine) && (
-                    <p className="text-xs text-amber-600 mb-1.5">Bar drinks only — champagne toast{tableWine ? ' and table wine' : ''} not included in these numbers.</p>
-                  )}
-                  <p className="text-sage-700 text-sm leading-relaxed">
-                    {winePct > 0 && <><strong>{(hours * winePct / 100).toFixed(1)} {hours * winePct / 100 === 1 ? 'glass wine' : 'glasses wine'}</strong>{(beerPct > 0 || spiritsPct > 0) ? ', ' : ''}</>}
-                    {beerPct > 0 && <><strong>{(hours * beerPct / 100).toFixed(1)} {hours * beerPct / 100 === 1 ? 'beer' : 'beers'}</strong>{spiritsPct > 0 ? ', ' : ''}</>}
-                    {spiritsPct > 0 && <><strong>{(hours * spiritsPct / 100).toFixed(1)} {hours * spiritsPct / 100 === 1 ? 'cocktail' : 'cocktails'}</strong></>}
-                    {nonAlcPct > 0 && <>, <strong>{(hours * nonAlcPct / 100).toFixed(1)} non-alc</strong></>}
-                  </p>
-                  <p className="text-xs text-sage-400 mt-0.5"><strong>{(hours * guests).toLocaleString()}</strong> drinks total across {guests} guests</p>
-                </div>
-                <div className="border-t border-sage-200 pt-3">
-                  <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1.5">If a guest drinks only their preferred type</p>
-                  {(() => {
-                    const stats = perDedicatedDrinkerStats(calcPreview, guests, beerPct, winePct, spiritsPct, nonAlcPct)
-                    return (
+              {/* Per-guest summary — under the selectors */}
+              {(() => {
+                const bt         = BAR_TYPES.find(b => b.key === barType) || BAR_TYPES[0]
+                const beerPct    = bt.beerPct    * DRINK_LEVELS[beerLevel].scale
+                const winePct    = bt.winePct    * DRINK_LEVELS[wineLevel].scale
+                const spiritsPct = bt.spiritsPct * DRINK_LEVELS[spiritsLevel].scale
+                const nonAlcPct  = 15            * DRINK_LEVELS[nonAlcLevel].scale
+                const stats      = perDedicatedDrinkerStats(calcPreview, guests, beerPct, winePct, spiritsPct, nonAlcPct)
+                return (
+                  <div className="bg-sage-50 border border-sage-200 rounded-xl px-4 py-3 mt-5 space-y-3">
+                    <div>
+                      <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1">Average guest over {hours}h</p>
+                      {(champagneToast || tableWine) && (
+                        <p className="text-xs text-amber-600 mb-1.5">Bar drinks only — champagne toast{tableWine ? ' and table wine' : ''} not included in these numbers.</p>
+                      )}
+                      <p className="text-sage-700 text-sm leading-relaxed">
+                        {winePct > 0 && <><strong>{(hours * winePct / 100).toFixed(1)} {hours * winePct / 100 === 1 ? 'glass wine' : 'glasses wine'}</strong>{(beerPct > 0 || spiritsPct > 0) ? ', ' : ''}</>}
+                        {beerPct > 0 && <><strong>{(hours * beerPct / 100).toFixed(1)} {hours * beerPct / 100 === 1 ? 'beer' : 'beers'}</strong>{spiritsPct > 0 ? ', ' : ''}</>}
+                        {spiritsPct > 0 && <><strong>{(hours * spiritsPct / 100).toFixed(1)} {hours * spiritsPct / 100 === 1 ? 'cocktail' : 'cocktails'}</strong></>}
+                        {nonAlcPct > 0 && <>, <strong>{(hours * nonAlcPct / 100).toFixed(1)} non-alc</strong></>}
+                      </p>
+                      <p className="text-xs text-sage-400 mt-0.5"><strong>{(hours * guests).toLocaleString()}</strong> drinks total across {guests} guests</p>
+                    </div>
+                    <div className="border-t border-sage-200 pt-3">
+                      <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1.5">If a guest drinks only their preferred type</p>
                       <div className="space-y-1.5">
                         {stats.wine && (
                           <p className="text-sm text-sage-700">🍷 ~{stats.wine.drinkers} wine drinkers, {stats.wine.total} glasses available — <strong>{stats.wine.each} glasses each</strong> over {hours}h</p>
@@ -757,10 +790,10 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
                           <p className="text-sm text-sage-700">🥤 ~{Math.round(guests * nonAlcPct / 100)} non-drinkers — soft drinks + water provided</p>
                         )}
                       </div>
-                    )
-                  })()}
-                </div>
-              </div>
+                    </div>
+                  </div>
+                )
+              })()}
             </div>
 
             {/* Right: live quantities table */}
@@ -827,6 +860,13 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
                 >
                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
                   Print
+                </button>
+              )}
+              {totalCount > 0 && (
+                <button onClick={clearList}
+                  className="text-xs text-red-400 hover:text-red-600 border border-red-100 hover:border-red-300 rounded-lg px-3 py-1.5 transition"
+                >
+                  Clear all
                 </button>
               )}
             </div>
