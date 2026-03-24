@@ -482,7 +482,7 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
   }
 
   const clearList = async () => {
-    if (!window.confirm('Clear everything on the shopping list? This can't be undone.')) return
+    if (!window.confirm("Clear everything on the shopping list? This can't be undone.")) return
     const snapshot = [...items]
     setItems([])
     for (const item of snapshot) {
