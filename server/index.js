@@ -7523,7 +7523,23 @@ app.put('/api/wedding-website/:weddingId', async (req, res) => {
       .eq('wedding_id', req.params.weddingId)
       .single();
 
-    const payload = { ...req.body, wedding_id: req.params.weddingId, updated_at: new Date().toISOString() };
+    // Whitelist known columns to prevent errors from unknown fields
+    const ALLOWED = [
+      'slug', 'published', 'theme', 'welcome_message', 'our_story', 'dress_code',
+      'dress_code_note', 'ceremony_time', 'reception_time', 'registry_links',
+      'unplugged_ceremony', 'kids_policy', 'plus_one_policy', 'signature_cocktail',
+      'faq_items', 'show_story', 'show_wedding_party', 'show_dress_code',
+      'show_schedule', 'show_transport', 'show_accommodations', 'show_registry',
+      'show_faq', 'show_gallery', 'show_rsvp', 'rsvp_deadline', 'rsvp_note',
+      // New columns (require migration 004)
+      'accent_color', 'font_pair', 'hero_pretext', 'the_proposal', 'things_to_do',
+      'footer_message', 'section_order', 'access_password', 'show_things_to_do',
+    ];
+    const filtered = {};
+    for (const key of ALLOWED) {
+      if (req.body[key] !== undefined) filtered[key] = req.body[key];
+    }
+    const payload = { ...filtered, wedding_id: req.params.weddingId, updated_at: new Date().toISOString() };
 
     const { data, error } = existing
       ? await supabaseAdmin.from('wedding_website_settings').update(payload).eq('wedding_id', req.params.weddingId).select().single()
