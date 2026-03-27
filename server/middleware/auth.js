@@ -21,6 +21,10 @@ export async function requireAuth(req, res, next) {
   }
 
   const token = authHeader.slice(7);
+  if (!token || token === 'undefined' || token === 'null') {
+    return res.status(401).json({ error: 'Missing or invalid authorization header' });
+  }
+
   try {
     const { data: { user }, error } = await supabase.auth.getUser(token);
     if (error || !user) {
@@ -37,10 +41,9 @@ export async function requireAuth(req, res, next) {
 
 /**
  * Middleware: Verify the user is an admin.
- * Must be used after requireAuth.
+ * Chains requireAuth internally.
  */
 export async function requireAdmin(req, res, next) {
-  // First run requireAuth
   requireAuth(req, res, async () => {
     try {
       const { data: profile, error } = await supabaseAdmin
@@ -59,4 +62,31 @@ export async function requireAdmin(req, res, next) {
       return res.status(403).json({ error: 'Admin verification failed' });
     }
   });
+}
+
+/**
+ * Middleware: Try to authenticate but don't block if no token.
+ * Useful for routes that work for both authenticated and anonymous users.
+ */
+export async function optionalAuth(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return next();
+  }
+
+  const token = authHeader.slice(7);
+  if (!token || token === 'undefined' || token === 'null') {
+    return next();
+  }
+
+  try {
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    if (!error && user) {
+      req.user = user;
+      req.userId = user.id;
+    }
+  } catch {
+    // Silently continue — auth is optional
+  }
+  next();
 }
