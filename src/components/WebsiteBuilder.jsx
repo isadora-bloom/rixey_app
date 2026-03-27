@@ -359,7 +359,7 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
           <div className={`mx-auto ${previewDevice === 'mobile' ? 'max-w-sm' : 'w-full'}`}>
             <div className={`${previewDevice === 'mobile' ? 'aspect-[9/16] border-[6px] border-gray-800 rounded-[2rem] overflow-hidden shadow-xl' : 'aspect-video border border-cream-300 rounded-xl overflow-hidden shadow-sm'}`}>
               <iframe
-                src={`/w/${slug}`}
+                src={`/w/${slug}?preview=${weddingId}`}
                 className="w-full h-full bg-white"
                 title="Website preview"
               />

@@ -7598,12 +7598,18 @@ app.put('/api/venue-settings', async (req, res) => {
 // ── Public wedding website endpoint ──────────────────────────────────────────
 app.get('/api/w/:slug', async (req, res) => {
   try {
-    const { data: settings, error } = await supabaseAdmin
+    // Allow preview mode: /api/w/slug?preview=weddingId skips the published check
+    const previewWeddingId = req.query.preview;
+    let query = supabaseAdmin
       .from('wedding_website_settings')
       .select('*')
-      .eq('slug', req.params.slug)
-      .eq('published', true)
-      .single();
+      .eq('slug', req.params.slug);
+    if (!previewWeddingId) {
+      query = query.eq('published', true);
+    } else {
+      query = query.eq('wedding_id', previewWeddingId);
+    }
+    const { data: settings, error } = await query.single();
 
     if (error || !settings) return res.status(404).json({ error: 'Wedding website not found' });
 

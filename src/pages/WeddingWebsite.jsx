@@ -777,7 +777,13 @@ export default function WeddingWebsite() {
   }, [])
 
   useEffect(() => {
-    fetch(`${API_URL}/api/w/${slug}`)
+    // Support preview mode: /w/slug?preview=weddingId bypasses published check
+    const params = new URLSearchParams(window.location.search)
+    const preview = params.get('preview')
+    const apiUrl = preview
+      ? `${API_URL}/api/w/${slug}?preview=${preview}`
+      : `${API_URL}/api/w/${slug}`
+    fetch(apiUrl)
       .then(r => { if (!r.ok) throw new Error(); return r.json() })
       .then(d => { setData(d); setLoading(false) })
       .catch(() => { setNotFound(true); setLoading(false) })
