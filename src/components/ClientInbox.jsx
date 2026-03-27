@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
+import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 export default function ClientInbox({ weddingId, userId, onUnreadChange }) {
   const [messages, setMessages] = useState([])
@@ -37,7 +38,9 @@ export default function ClientInbox({ weddingId, userId, onUnreadChange }) {
 
   const loadMessages = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/messages/${weddingId}`)
+      const response = await fetch(`${API_URL}/api/messages/${weddingId}`, {
+        headers: await authHeaders()
+      })
       const data = await response.json()
       setMessages(data.messages || [])
     } catch (err) {
@@ -48,7 +51,9 @@ export default function ClientInbox({ weddingId, userId, onUnreadChange }) {
 
   const loadUnreadCount = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/messages/unread/${weddingId}`)
+      const response = await fetch(`${API_URL}/api/messages/unread/${weddingId}`, {
+        headers: await authHeaders()
+      })
       const data = await response.json()
       setUnreadCount(data.unread || 0)
       onUnreadChange?.(data.unread || 0)
@@ -62,7 +67,7 @@ export default function ClientInbox({ weddingId, userId, onUnreadChange }) {
     try {
       await fetch(`${API_URL}/api/messages/read/${weddingId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ senderType: 'admin' })
       })
       setUnreadCount(0)
@@ -80,7 +85,7 @@ export default function ClientInbox({ weddingId, userId, onUnreadChange }) {
     try {
       const response = await fetch(`${API_URL}/api/messages`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({
           weddingId,
           senderId: userId,

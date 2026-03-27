@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
+import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 export default function AdminInbox({ weddings = [], onUnreadChange }) {
   const [conversations, setConversations] = useState([])
@@ -41,7 +42,9 @@ export default function AdminInbox({ weddings = [], onUnreadChange }) {
 
   const loadConversations = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/messages/admin/conversations`)
+      const response = await fetch(`${API_URL}/api/messages/admin/conversations`, {
+        headers: await authHeaders()
+      })
       const data = await response.json()
       setConversations(data.conversations || [])
     } catch (err) {
@@ -52,7 +55,9 @@ export default function AdminInbox({ weddings = [], onUnreadChange }) {
 
   const loadUnreadCounts = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/messages/admin/unread`)
+      const response = await fetch(`${API_URL}/api/messages/admin/unread`, {
+        headers: await authHeaders()
+      })
       const data = await response.json()
       setTotalUnread(data.total || 0)
       onUnreadChange?.(data.total || 0)
@@ -63,14 +68,16 @@ export default function AdminInbox({ weddings = [], onUnreadChange }) {
 
   const loadMessages = async (weddingId) => {
     try {
-      const response = await fetch(`${API_URL}/api/messages/${weddingId}`)
+      const response = await fetch(`${API_URL}/api/messages/${weddingId}`, {
+        headers: await authHeaders()
+      })
       const data = await response.json()
       setMessages(data.messages || [])
 
       // Mark client messages as read
       await fetch(`${API_URL}/api/messages/read/${weddingId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ senderType: 'client' })
       })
 
@@ -90,7 +97,7 @@ export default function AdminInbox({ weddings = [], onUnreadChange }) {
     try {
       const response = await fetch(`${API_URL}/api/messages`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({
           weddingId: selectedWedding.id,
           senderType: 'admin',

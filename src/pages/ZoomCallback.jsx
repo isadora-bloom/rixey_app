@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { API_URL } from '../config/api'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 export default function ZoomCallback() {
   const [searchParams] = useSearchParams()

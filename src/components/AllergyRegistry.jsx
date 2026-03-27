@@ -1,4 +1,7 @@
 import { useState, useEffect } from 'react'
+import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
+import { Button, Input, ConfirmDialog } from './ui'
 const PlusIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
 const PencilIcon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
 const Trash2Icon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
@@ -6,7 +9,6 @@ const AlertTriangleIcon = ({className}) => <svg width="16" height="16" viewBox="
 const XIcon = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
 const CheckIcon = ({className}) => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polyline points="20 6 9 17 4 12"/></svg>
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 const SEVERITY_OPTIONS = ['Mild', 'Moderate', 'Severe / Anaphylactic']
 
@@ -55,21 +57,27 @@ export default function AllergyRegistry({ weddingId, userId }) {
   const [editingId, setEditingId] = useState(null)
   const [saving, setSaving] = useState(false)
   const [deletingId, setDeletingId] = useState(null)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [confirmTarget, setConfirmTarget] = useState(null)
 
   useEffect(() => {
     if (!weddingId) return
     fetchAllergies()
   }, [weddingId])
 
-  const fetchAllergies = () => {
+  const fetchAllergies = async () => {
     setLoading(true)
-    fetch(`${API_URL}/api/allergies/${weddingId}`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (Array.isArray(data)) setAllergies(data)
+    try {
+      const res = await fetch(`${API_URL}/api/allergies/${weddingId}`, {
+        headers: await authHeaders()
       })
-      .catch(console.error)
-      .finally(() => setLoading(false))
+      const data = await res.json()
+      if (Array.isArray(data)) setAllergies(data)
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setLoading(false)
+    }
   }
 
   const setField = (field) => (val) =>
@@ -110,7 +118,7 @@ export default function AllergyRegistry({ weddingId, userId }) {
       if (editingId) {
         const res = await fetch(`${API_URL}/api/allergies/${editingId}`, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: await authHeaders(),
           body: JSON.stringify({ ...formData, wedding_id: weddingId }),
         })
         const updated = await res.json()
@@ -120,7 +128,7 @@ export default function AllergyRegistry({ weddingId, userId }) {
       } else {
         const res = await fetch(`${API_URL}/api/allergies`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: await authHeaders(),
           body: JSON.stringify({
             wedding_id: weddingId,
             ...formData,
@@ -138,16 +146,22 @@ export default function AllergyRegistry({ weddingId, userId }) {
     }
   }
 
-  const handleDelete = async (id) => {
-    if (!window.confirm('Remove this allergy entry? This cannot be undone.')) return
+  const handleDeleteClick = (id) => {
+    setConfirmTarget(id)
+    setConfirmOpen(true)
+  }
+
+  const handleDeleteConfirm = async () => {
+    const id = confirmTarget
     setDeletingId(id)
     try {
-      await fetch(`${API_URL}/api/allergies/${id}`, { method: 'DELETE' })
+      await fetch(`${API_URL}/api/allergies/${id}`, { method: 'DELETE', headers: await authHeaders() })
       setAllergies((prev) => prev.filter((a) => a.id !== id))
     } catch (err) {
       console.error(err)
     } finally {
       setDeletingId(null)
+      setConfirmTarget(null)
     }
   }
 
@@ -173,13 +187,10 @@ export default function AllergyRegistry({ weddingId, userId }) {
       <div className="flex items-center justify-between">
         <h2 className="text-base font-semibold text-sage-700">Allergy Registry</h2>
         {!showForm && (
-          <button
-            onClick={handleAddClick}
-            className="flex items-center gap-2 px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 transition-colors"
-          >
+          <Button onClick={handleAddClick} className="flex items-center gap-2">
             <PlusIcon />
             Add Guest
-          </button>
+          </Button>
         )}
       </div>
 
@@ -239,7 +250,7 @@ export default function AllergyRegistry({ weddingId, userId }) {
                             <PencilIcon />
                           </button>
                           <button
-                            onClick={() => handleDelete(row.id)}
+                            onClick={() => handleDeleteClick(row.id)}
                             disabled={deletingId === row.id}
                             className="p-1 text-sage-400 hover:text-rose-400 transition-colors disabled:opacity-50"
                             title="Delete"
@@ -276,12 +287,12 @@ export default function AllergyRegistry({ weddingId, userId }) {
                 <label className="block text-xs font-medium text-sage-600">
                   Guest name <span className="text-rose-400">*</span>
                 </label>
-                <input
+                <Input
                   type="text"
                   value={formData.guest_name}
                   onChange={setInputField('guest_name')}
                   placeholder="Full name"
-                  className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 bg-white"
+                  className="bg-white"
                 />
               </div>
 
@@ -289,12 +300,12 @@ export default function AllergyRegistry({ weddingId, userId }) {
                 <label className="block text-xs font-medium text-sage-600">
                   Allergy / restriction <span className="text-rose-400">*</span>
                 </label>
-                <input
+                <Input
                   type="text"
                   value={formData.allergy}
                   onChange={setInputField('allergy')}
                   placeholder="e.g. peanuts, gluten, shellfish"
-                  className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 bg-white"
+                  className="bg-white"
                 />
               </div>
             </div>
@@ -348,21 +359,19 @@ export default function AllergyRegistry({ weddingId, userId }) {
             </div>
 
             <div className="flex items-center justify-end gap-3 pt-1">
-              <button
-                type="button"
+              <Button
+                variant="ghost"
                 onClick={handleCancel}
-                className="px-4 py-2 text-sm text-sage-600 hover:text-sage-700 transition-colors"
               >
                 Cancel
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
+                variant="primary"
                 onClick={handleSave}
                 disabled={saving || !formData.guest_name.trim() || !formData.allergy.trim()}
-                className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50 transition-colors"
               >
                 {saving ? 'Saving…' : editingId ? 'Update' : 'Add to registry'}
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -378,6 +387,16 @@ export default function AllergyRegistry({ weddingId, userId }) {
           Add another guest
         </button>
       )}
+
+      <ConfirmDialog
+        open={confirmOpen}
+        onClose={() => { setConfirmOpen(false); setConfirmTarget(null); }}
+        onConfirm={handleDeleteConfirm}
+        title="Remove allergy entry"
+        message="Remove this allergy entry? This cannot be undone."
+        confirmLabel="Remove"
+        danger
+      />
     </div>
   )
 }

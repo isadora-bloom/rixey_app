@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { API_URL } from '../config/api'
+import { Button, Input, ConfirmDialog } from './ui'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 const SPACE_OPTIONS = [
   'Round Guest Tables',
@@ -199,18 +200,19 @@ function AddItemRow({ spaceName, onAdd, onCancel }) {
       </td>
       <td className="py-2 px-2 w-10">
         <div className="flex gap-1">
-          <button
+          <Button
+            size="sm"
             onClick={handleSubmit}
             disabled={saving || !form.item_name.trim()}
-            className="px-3 py-1.5 bg-sage-600 text-white rounded-lg text-xs hover:bg-sage-700 disabled:opacity-50 whitespace-nowrap"
+            className="whitespace-nowrap"
           >
-            {saving ? '…' : 'Add'}
-          </button>
+            {saving ? '...' : 'Add'}
+          </Button>
           <button
             onClick={onCancel}
             className="px-2 py-1.5 bg-cream-200 text-gray-700 rounded-lg text-xs hover:bg-cream-300"
           >
-            ✕
+            &#10005;
           </button>
         </div>
       </td>
@@ -304,6 +306,8 @@ export default function DecorInventory({ weddingId, userId }) {
   const [activeSpaces, setActiveSpaces] = useState([]);
   const [showPicker, setShowPicker] = useState(false);
   const [customSpaceInput, setCustomSpaceInput] = useState('');
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmTarget, setConfirmTarget] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -334,8 +338,13 @@ export default function DecorInventory({ weddingId, userId }) {
     setCustomSpaceInput('');
   };
 
-  const handleDeleteSpace = async (spaceName) => {
-    if (!window.confirm(`Remove "${spaceName}" and all its items?`)) return;
+  const handleDeleteSpaceClick = (spaceName) => {
+    setConfirmTarget(spaceName);
+    setConfirmOpen(true);
+  };
+
+  const handleDeleteSpaceConfirm = async () => {
+    const spaceName = confirmTarget;
     const spaceItems = items.filter((i) => i.space_name === spaceName);
     await Promise.all(
       spaceItems.map((item) =>
@@ -344,6 +353,7 @@ export default function DecorInventory({ weddingId, userId }) {
     );
     setItems((prev) => prev.filter((i) => i.space_name !== spaceName));
     setActiveSpaces((prev) => prev.filter((s) => s !== spaceName));
+    setConfirmTarget(null);
   };
 
   const getNextSortOrder = (spaceName) => {
@@ -424,12 +434,9 @@ export default function DecorInventory({ weddingId, userId }) {
             Track what's coming, where it goes, and what gets left behind.
           </p>
         </div>
-        <button
-          onClick={() => setShowPicker(true)}
-          className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 shrink-0"
-        >
+        <Button onClick={() => setShowPicker(true)} className="shrink-0">
           + Add Space
-        </button>
+        </Button>
       </div>
 
       {/* Space picker panel */}
@@ -467,8 +474,8 @@ export default function DecorInventory({ weddingId, userId }) {
           </div>
           <div className="flex items-center gap-2 pt-2 border-t border-cream-200">
             <span className="text-xs font-medium text-sage-500 shrink-0">Other:</span>
-            <input
-              className="flex-1 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
+            <Input
+              className="flex-1"
               placeholder="Custom space or table name"
               value={customSpaceInput}
               onChange={(e) => setCustomSpaceInput(e.target.value)}
@@ -478,14 +485,13 @@ export default function DecorInventory({ weddingId, userId }) {
                 }
               }}
             />
-            <button
-              type="button"
+            <Button
               disabled={!customSpaceInput.trim()}
               onClick={() => handleAddSpace(customSpaceInput)}
-              className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50 shrink-0"
+              className="shrink-0"
             >
               Add
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -497,12 +503,9 @@ export default function DecorInventory({ weddingId, userId }) {
           <p className="text-sage-400 text-sm mb-5">
             Add a table or space to start tracking your decor items.
           </p>
-          <button
-            onClick={() => setShowPicker(true)}
-            className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700"
-          >
+          <Button onClick={() => setShowPicker(true)}>
             + Add your first space
-          </button>
+          </Button>
         </div>
       ) : (
         activeSpaces.map((spaceName) => (
@@ -513,10 +516,20 @@ export default function DecorInventory({ weddingId, userId }) {
             onAddItem={handleAddItem}
             onDeleteItem={handleDeleteItem}
             onUpdateItem={handleUpdateItem}
-            onDeleteSpace={handleDeleteSpace}
+            onDeleteSpace={handleDeleteSpaceClick}
           />
         ))
       )}
+
+      <ConfirmDialog
+        open={confirmOpen}
+        onClose={() => { setConfirmOpen(false); setConfirmTarget(null); }}
+        onConfirm={handleDeleteSpaceConfirm}
+        title="Remove space"
+        message={confirmTarget ? `Remove "${confirmTarget}" and all its items?` : ''}
+        confirmLabel="Remove"
+        danger
+      />
     </div>
   );
 }

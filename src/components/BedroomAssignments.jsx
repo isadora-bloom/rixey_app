@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
+import { API_URL } from '../config/api'
+import { Input } from './ui'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 export default function BedroomAssignments({ weddingId, userId }) {
   const [rooms, setRooms] = useState([]);
@@ -122,33 +123,30 @@ export default function BedroomAssignments({ weddingId, userId }) {
                   )}
                 </td>
                 <td className="px-4 py-3 align-middle">
-                  <input
+                  <Input
                     type="text"
                     value={room.friday_night || ''}
                     placeholder="Guest name(s)"
                     onChange={e => handleChange(room.id, 'friday_night', e.target.value)}
                     onBlur={() => handleBlur(room)}
-                    className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
                   />
                 </td>
                 <td className="px-4 py-3 align-middle">
-                  <input
+                  <Input
                     type="text"
                     value={room.saturday_night || ''}
                     placeholder="Guest name(s)"
                     onChange={e => handleChange(room.id, 'saturday_night', e.target.value)}
                     onBlur={() => handleBlur(room)}
-                    className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
                   />
                 </td>
                 <td className="px-4 py-3 align-middle">
-                  <input
+                  <Input
                     type="text"
                     value={room.notes || ''}
-                    placeholder="Any notes…"
+                    placeholder="Any notes..."
                     onChange={e => handleChange(room.id, 'notes', e.target.value)}
                     onBlur={() => handleBlur(room)}
-                    className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
                   />
                 </td>
                 <td className="px-4 py-3 align-middle text-center">
@@ -185,37 +183,34 @@ export default function BedroomAssignments({ weddingId, userId }) {
 
             <div className="space-y-2">
               <label className="block text-xs text-sage-500 font-medium">Friday Night</label>
-              <input
+              <Input
                 type="text"
                 value={room.friday_night || ''}
                 placeholder="Guest name(s)"
                 onChange={e => handleChange(room.id, 'friday_night', e.target.value)}
                 onBlur={() => handleBlur(room)}
-                className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
               />
             </div>
 
             <div className="space-y-2">
               <label className="block text-xs text-sage-500 font-medium">Saturday Night</label>
-              <input
+              <Input
                 type="text"
                 value={room.saturday_night || ''}
                 placeholder="Guest name(s)"
                 onChange={e => handleChange(room.id, 'saturday_night', e.target.value)}
                 onBlur={() => handleBlur(room)}
-                className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
               />
             </div>
 
             <div className="space-y-2">
               <label className="block text-xs text-sage-500 font-medium">Notes</label>
-              <input
+              <Input
                 type="text"
                 value={room.notes || ''}
-                placeholder="Any notes…"
+                placeholder="Any notes..."
                 onChange={e => handleChange(room.id, 'notes', e.target.value)}
                 onBlur={() => handleBlur(room)}
-                className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
               />
             </div>
           </div>

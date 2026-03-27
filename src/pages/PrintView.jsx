@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
+import { API_URL } from '../config/api'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 // All timeline event definitions (mirrored from TimelineBuilder for rendering)
 const ALL_TIMELINE_EVENTS = {

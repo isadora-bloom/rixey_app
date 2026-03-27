@@ -35,8 +35,9 @@ import WeddingParty from '../components/WeddingParty'
 import WebsiteBuilder from '../components/WebsiteBuilder'
 import BarPlanner from '../components/BarPlanner'
 import SectionFinaliser from '../components/SectionFinaliser'
+import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 // Sections that can be finalised in the pre-wedding period
 const FINALISABLE = new Set([
@@ -173,7 +174,8 @@ export default function Dashboard() {
     formData.append('weddingId', profile.wedding_id)
     formData.append('uploadedBy', user?.id || '')
     try {
-      const res = await fetch(`${API_URL}/api/couple-photo`, { method: 'POST', body: formData })
+      const token = (await authHeaders())['Authorization']
+      const res = await fetch(`${API_URL}/api/couple-photo`, { method: 'POST', headers: token ? { 'Authorization': token } : {}, body: formData })
       const data = await res.json()
       if (data.photo) {
         setNeedsPhoto(false)
@@ -242,7 +244,9 @@ export default function Dashboard() {
         // Check if couple photo has been uploaded — require it if not
         if (data.role?.startsWith('couple')) {
           try {
-            const photoRes = await fetch(`${API_URL}/api/couple-photo/${data.wedding_id}`)
+            const photoRes = await fetch(`${API_URL}/api/couple-photo/${data.wedding_id}`, {
+              headers: await authHeaders()
+            })
             const photoData = await photoRes.json()
             if (!photoData.photo) setNeedsPhoto(true)
           } catch {}
@@ -250,13 +254,17 @@ export default function Dashboard() {
 
         // Load finalisations
         try {
-          const finRes = await fetch(`${API_URL}/api/finalisations/${data.wedding_id}`)
+          const finRes = await fetch(`${API_URL}/api/finalisations/${data.wedding_id}`, {
+            headers: await authHeaders()
+          })
           if (finRes.ok) setFinalisations(await finRes.json())
         } catch {}
 
         // Load budget summary
         try {
-          const budgetRes = await fetch(`${API_URL}/api/budget/${data.wedding_id}`)
+          const budgetRes = await fetch(`${API_URL}/api/budget/${data.wedding_id}`, {
+            headers: await authHeaders()
+          })
           if (budgetRes.ok) {
             const budgetData = await budgetRes.json()
             if (budgetData.budget) {
@@ -274,7 +282,9 @@ export default function Dashboard() {
 
         // Load timeline summary
         try {
-          const timelineRes = await fetch(`${API_URL}/api/timeline/${data.wedding_id}`)
+          const timelineRes = await fetch(`${API_URL}/api/timeline/${data.wedding_id}`, {
+            headers: await authHeaders()
+          })
           const timelineData = await timelineRes.json()
           if (timelineData.timeline) {
             const tl = timelineData.timeline
@@ -295,7 +305,9 @@ export default function Dashboard() {
 
         // Load table summary
         try {
-          const tablesRes = await fetch(`${API_URL}/api/tables/${data.wedding_id}`)
+          const tablesRes = await fetch(`${API_URL}/api/tables/${data.wedding_id}`, {
+            headers: await authHeaders()
+          })
           const tablesData = await tablesRes.json()
           if (tablesData.tables) {
             const tb = tablesData.tables
@@ -326,7 +338,9 @@ export default function Dashboard() {
 
     // Refresh timeline summary
     try {
-      const timelineRes = await fetch(`${API_URL}/api/timeline/${profile.wedding_id}`)
+      const timelineRes = await fetch(`${API_URL}/api/timeline/${profile.wedding_id}`, {
+        headers: await authHeaders()
+      })
       const timelineData = await timelineRes.json()
       if (timelineData.timeline) {
         const tl = timelineData.timeline
@@ -347,7 +361,9 @@ export default function Dashboard() {
 
     // Refresh table summary
     try {
-      const tablesRes = await fetch(`${API_URL}/api/tables/${profile.wedding_id}`)
+      const tablesRes = await fetch(`${API_URL}/api/tables/${profile.wedding_id}`, {
+        headers: await authHeaders()
+      })
       const tablesData = await tablesRes.json()
       if (tablesData.tables) {
         const tb = tablesData.tables
@@ -407,7 +423,7 @@ export default function Dashboard() {
     try {
       const response = await fetch(`${API_URL}/api/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({
           message: userMessage,
           userId: user.id,
@@ -419,7 +435,7 @@ export default function Dashboard() {
       if (data.message) {
         const saveRes = await fetch(`${API_URL}/api/sage-messages`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: await authHeaders(),
           body: JSON.stringify({ user_id: user.id, content: data.message, sender: 'sage' })
         })
         const saveData = await saveRes.json()
@@ -440,7 +456,9 @@ export default function Dashboard() {
 
   const loadMessages = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/sage-messages/user/${user.id}`)
+      const response = await fetch(`${API_URL}/api/sage-messages/user/${user.id}`, {
+        headers: await authHeaders()
+      })
       const data = await response.json()
       setMessages(data.messages || [])
     } catch (error) {
@@ -456,7 +474,7 @@ export default function Dashboard() {
     try {
       const response = await fetch(`${API_URL}/api/welcome`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({
           userId: user.id,
           userEmail: user.email,
@@ -471,7 +489,7 @@ export default function Dashboard() {
         // Save welcome message via server endpoint
         const saveRes = await fetch(`${API_URL}/api/sage-messages`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: await authHeaders(),
           body: JSON.stringify({
             user_id: user.id,
             content: data.message,
@@ -506,7 +524,7 @@ export default function Dashboard() {
     try {
       const saveRes = await fetch(`${API_URL}/api/sage-messages`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({
           user_id: user.id,
           content: userMessageContent,
@@ -570,7 +588,7 @@ export default function Dashboard() {
     try {
       const saveRes = await fetch(`${API_URL}/api/sage-messages`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({
           user_id: user.id,
           content: userMessageContent,
@@ -600,8 +618,10 @@ export default function Dashboard() {
       formData.append('userId', user.id)
       formData.append('weddingId', profile?.wedding_id || '')
 
+      const fileToken = (await authHeaders())['Authorization']
       const response = await fetch(`${API_URL}/api/chat-with-file`, {
         method: 'POST',
+        headers: fileToken ? { 'Authorization': fileToken } : {},
         body: formData
       })
 
@@ -611,7 +631,7 @@ export default function Dashboard() {
         // Save Sage's response via server endpoint
         const saveRes = await fetch(`${API_URL}/api/sage-messages`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: await authHeaders(),
           body: JSON.stringify({
             user_id: user.id,
             content: data.message,
@@ -629,7 +649,7 @@ export default function Dashboard() {
       // Save error message via server endpoint
       const saveRes = await fetch(`${API_URL}/api/sage-messages`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({
           user_id: user.id,
           content: "I had trouble processing that file. Please try again.",
@@ -686,7 +706,7 @@ export default function Dashboard() {
         <div className="max-w-6xl mx-auto px-4 py-3 sm:py-4 flex items-center justify-between">
           <div className="flex-1 min-w-0">
             <button onClick={() => setActiveSection('chat')} className="inline-block">
-              <img src="/rixey-r.png" alt="Rixey Manor" className="h-9 w-auto" />
+              <img src="/icons/icon-192x192.png" alt="Rixey Manor" className="h-9 w-auto" />
             </button>
             <button
               onClick={() => setShowEditProfile(true)}
@@ -882,7 +902,7 @@ export default function Dashboard() {
           <div className="hidden lg:block lg:order-1">
             <div className="bg-white rounded-2xl shadow-sm border border-cream-200 overflow-hidden lg:sticky lg:top-24">
               <div className="px-4 pt-5 pb-3 flex justify-center border-b border-cream-200">
-                <img src="/rixey-manor-logo.png" alt="Rixey Manor" className="h-16 w-auto" />
+                <img src="/rixey-manor-logo-optimized.png" alt="Rixey Manor" className="h-16 w-auto" />
               </div>
               <nav className="p-2">
                 {[

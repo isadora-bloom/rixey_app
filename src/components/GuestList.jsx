@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
+import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 const RSVP_OPTIONS = [
   { value: 'pending', label: 'Pending', color: 'bg-amber-100 text-amber-700' },
@@ -83,7 +84,7 @@ function GuestModal({ guest, weddingId, tagOptions, mealOptions, platedMeal, tab
       const method = guest?.id ? 'PUT' : 'POST'
       const res = await fetch(url, {
         method,
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify(payload),
       })
       const data = await res.json()
@@ -347,7 +348,7 @@ function SettingsModal({ weddingId, tagOptions, mealOptions, platedMeal, onUpdat
     setPlated(val)
     await fetch(`${API_URL}/api/guest-settings/${weddingId}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await authHeaders(),
       body: JSON.stringify({ platedMeal: val }),
     })
     emit({ platedMeal: val })
@@ -357,7 +358,7 @@ function SettingsModal({ weddingId, tagOptions, mealOptions, platedMeal, onUpdat
     if (!newTag.trim()) return
     const res = await fetch(`${API_URL}/api/guest-tags`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await authHeaders(),
       body: JSON.stringify({ weddingId, label: newTag.trim(), color: newTagColor }),
     })
     const data = await res.json()
@@ -368,7 +369,7 @@ function SettingsModal({ weddingId, tagOptions, mealOptions, platedMeal, onUpdat
   }
 
   const deleteTag = async (id) => {
-    await fetch(`${API_URL}/api/guest-tags/${id}`, { method: 'DELETE' })
+    await fetch(`${API_URL}/api/guest-tags/${id}`, { method: 'DELETE', headers: await authHeaders() })
     const updated = tags.filter(t => t.id !== id)
     setTags(updated)
     emit({ tagOptions: updated })
@@ -378,7 +379,7 @@ function SettingsModal({ weddingId, tagOptions, mealOptions, platedMeal, onUpdat
     if (!newMeal.trim()) return
     const res = await fetch(`${API_URL}/api/meal-options`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await authHeaders(),
       body: JSON.stringify({ weddingId, label: newMeal.trim() }),
     })
     const data = await res.json()
@@ -389,7 +390,7 @@ function SettingsModal({ weddingId, tagOptions, mealOptions, platedMeal, onUpdat
   }
 
   const deleteMeal = async (id) => {
-    await fetch(`${API_URL}/api/meal-options/${id}`, { method: 'DELETE' })
+    await fetch(`${API_URL}/api/meal-options/${id}`, { method: 'DELETE', headers: await authHeaders() })
     const updated = meals.filter(m => m.id !== id)
     setMeals(updated)
     emit({ mealOptions: updated })
@@ -547,10 +548,11 @@ export default function GuestList({ weddingId, userId }) {
   const loadData = async () => {
     setLoading(true)
     try {
+      const hdrs = await authHeaders()
       const [gRes, sRes, tRes] = await Promise.all([
-        fetch(`${API_URL}/api/guests/${weddingId}`),
-        fetch(`${API_URL}/api/guest-settings/${weddingId}`),
-        fetch(`${API_URL}/api/table-layout/${weddingId}`),
+        fetch(`${API_URL}/api/guests/${weddingId}`, { headers: hdrs }),
+        fetch(`${API_URL}/api/guest-settings/${weddingId}`, { headers: hdrs }),
+        fetch(`${API_URL}/api/table-layout/${weddingId}`, { headers: hdrs }),
       ])
       const gData = await gRes.json()
       const sData = await sRes.json()
@@ -590,7 +592,7 @@ export default function GuestList({ weddingId, userId }) {
   }
 
   const handleDelete = async (id) => {
-    await fetch(`${API_URL}/api/guests/${id}`, { method: 'DELETE' })
+    await fetch(`${API_URL}/api/guests/${id}`, { method: 'DELETE', headers: await authHeaders() })
     setGuests(prev => prev.filter(g => g.id !== id))
     setDeleteConfirm(null)
   }
@@ -623,7 +625,7 @@ export default function GuestList({ weddingId, userId }) {
     try {
       const res = await fetch(`${API_URL}/api/guests/bulk`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ weddingId, guests: normalised }),
       })
       const data = await res.json()
@@ -650,7 +652,7 @@ export default function GuestList({ weddingId, userId }) {
     try {
       await fetch(`${API_URL}/api/guests/${guest.id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({
           first_name: guest.first_name, last_name: guest.last_name,
           rsvp: guest.rsvp, dietary_restrictions: guest.dietary_restrictions,

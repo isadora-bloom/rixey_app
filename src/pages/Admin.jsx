@@ -1,242 +1,24 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { supabase } from '../lib/supabase'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
-import VendorChecklist from '../components/VendorChecklist'
-import InspoGallery from '../components/InspoGallery'
-import PlanningChecklist from '../components/PlanningChecklist'
-import CouplePhoto from '../components/CouplePhoto'
+// Components still used directly in the main Admin view (not in profile)
 import KnowledgeBaseAdmin from '../components/KnowledgeBaseAdmin'
 import VenueSettings from '../components/VenueSettings'
-import WebsiteBuilder from '../components/WebsiteBuilder'
-import PhotoBucket from '../components/PhotoBucket'
-import WeddingParty from '../components/WeddingParty'
-import BarPlanner from '../components/BarPlanner'
-import CommunicationPulse, { PulsePill, PulseMeter } from '../components/CommunicationPulse'
 import RecommendedVendorsAdmin from '../components/RecommendedVendorsAdmin'
 import UsageStats from '../components/UsageStats'
 import UpcomingMeetings from '../components/UpcomingMeetings'
 import AdminInbox from '../components/AdminInbox'
-import TimelineBuilder from '../components/TimelineBuilder'
-import TableLayoutPlanner from '../components/TableLayoutPlanner'
 import BorrowCatalog from '../components/BorrowCatalog'
-import NotificationBell from '../components/NotificationBell'
-import GuestCareNotes from '../components/GuestCareNotes'
 import StorefrontAdmin from '../components/StorefrontAdmin'
 import ManorDownloads from '../components/ManorDownloads'
-import WeddingDetails from '../components/WeddingDetails'
-import AllergyRegistry from '../components/AllergyRegistry'
-import BedroomAssignments from '../components/BedroomAssignments'
-import CeremonyOrder from '../components/CeremonyOrder'
-import DecorInventory from '../components/DecorInventory'
-import MakeupSchedule from '../components/MakeupSchedule'
-import ShuttleSchedule from '../components/ShuttleSchedule'
-import RehearsalDinner from '../components/RehearsalDinner'
-import StaffingCalculator from '../components/StaffingCalculator'
-import BudgetTracker from '../components/BudgetTracker'
-import GuestList from '../components/GuestList'
-import TableCanvas from '../components/TableCanvas'
+import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
-// Stress/escalation keywords to detect
-const ESCALATION_KEYWORDS = [
-  'stressed', 'stress', 'anxious', 'worried', 'frustrated', 'frustrating',
-  'overwhelmed', 'help', 'urgent', 'problem', 'issue', 'wrong', 'mistake',
-  'angry', 'upset', 'confused', 'lost', 'panic', 'emergency', 'asap',
-  'deadline', 'behind', 'late', 'cancel', 'disaster', 'terrible', 'awful'
-]
-
-// Calculate time since last activity
-function getLastActivity(messages) {
-  if (!messages || messages.length === 0) return null
-
-  // Find the most recent user message
-  const userMessages = messages.filter(m => m.sender === 'user')
-  if (userMessages.length === 0) return null
-
-  const lastMessage = userMessages.reduce((latest, msg) => {
-    return new Date(msg.created_at) > new Date(latest.created_at) ? msg : latest
-  })
-
-  const lastDate = new Date(lastMessage.created_at)
-  const now = new Date()
-  const diffMs = now - lastDate
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
-  const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
-  const diffMinutes = Math.floor(diffMs / (1000 * 60))
-
-  let display, status
-  if (diffMinutes < 60) {
-    display = `${diffMinutes}m ago`
-    status = 'recent'
-  } else if (diffHours < 24) {
-    display = `${diffHours}h ago`
-    status = 'recent'
-  } else if (diffDays < 7) {
-    display = `${diffDays}d ago`
-    status = 'active'
-  } else if (diffDays < 30) {
-    const weeks = Math.floor(diffDays / 7)
-    display = `${weeks}w ago`
-    status = 'moderate'
-  } else {
-    const months = Math.floor(diffDays / 30)
-    display = `${months}mo ago`
-    status = 'inactive'
-  }
-
-  return { display, status, diffDays, lastDate }
-}
-
-function detectEscalation(messages, handledAt = null) {
-  const recentMessages = messages.filter(m => {
-    const msgDate = new Date(m.created_at)
-    const weekAgo = new Date()
-    weekAgo.setDate(weekAgo.getDate() - 7)
-    // Only count messages after the last "handled" timestamp
-    const afterHandled = !handledAt || msgDate > new Date(handledAt)
-    return msgDate > weekAgo && m.sender === 'user' && afterHandled
-  })
-
-  const escalationMessages = recentMessages.filter(msg => {
-    const content = msg.content.toLowerCase()
-    return ESCALATION_KEYWORDS.some(keyword => content.includes(keyword))
-  })
-
-  return {
-    hasEscalation: escalationMessages.length > 0,
-    count: escalationMessages.length,
-    messages: escalationMessages
-  }
-}
-
-// Direct messages panel for individual wedding profile
-function DirectMessagesPanel({ weddingId, weddingName }) {
-  const [messages, setMessages] = useState([])
-  const [newMessage, setNewMessage] = useState('')
-  const [loading, setLoading] = useState(true)
-  const [sending, setSending] = useState(false)
-  const messagesEndRef = useRef(null)
-
-  useEffect(() => {
-    loadMessages()
-  }, [weddingId])
-
-  useEffect(() => {
-    if (messages.length > 0) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-    }
-  }, [messages])
-
-  const loadMessages = async () => {
-    try {
-      const response = await fetch(`${API_URL}/api/messages/${weddingId}`)
-      const data = await response.json()
-      setMessages(data.messages || [])
-
-      // Mark client messages as read
-      await fetch(`${API_URL}/api/messages/read/${weddingId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ senderType: 'client' })
-      })
-    } catch (err) {
-      console.error('Failed to load messages:', err)
-    }
-    setLoading(false)
-  }
-
-  const sendMessage = async (e) => {
-    e.preventDefault()
-    if (!newMessage.trim() || sending) return
-
-    setSending(true)
-    try {
-      await fetch(`${API_URL}/api/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          weddingId,
-          senderType: 'admin',
-          content: newMessage.trim()
-        })
-      })
-      setNewMessage('')
-      loadMessages()
-    } catch (err) {
-      console.error('Failed to send message:', err)
-    }
-    setSending(false)
-  }
-
-  const formatTime = (dateStr) => {
-    const date = new Date(dateStr)
-    return date.toLocaleString('en-US', {
-      month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
-    })
-  }
-
-  return (
-    <div>
-      <p className="text-sage-500 text-sm mb-4">Direct messages with {weddingName}</p>
-
-      <div className="bg-cream-50 rounded-xl border border-cream-200 overflow-hidden">
-        <div className="h-64 sm:h-80 overflow-y-auto p-3 sm:p-4 space-y-3">
-          {loading ? (
-            <p className="text-sage-400 text-center py-8">Loading messages...</p>
-          ) : messages.length === 0 ? (
-            <div className="text-center py-8">
-              <p className="text-sage-500">No messages yet</p>
-              <p className="text-sage-400 text-sm">Send a message to start the conversation</p>
-            </div>
-          ) : (
-            messages.map(msg => (
-              <div
-                key={msg.id}
-                className={`flex ${msg.sender_type === 'admin' ? 'justify-end' : 'justify-start'}`}
-              >
-                <div
-                  className={`max-w-[80%] rounded-2xl px-4 py-2 ${
-                    msg.sender_type === 'admin'
-                      ? 'bg-sage-600 text-white rounded-br-md'
-                      : 'bg-white border border-cream-200 text-sage-800 rounded-bl-md'
-                  }`}
-                >
-                  <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
-                  <p className={`text-xs mt-1 ${
-                    msg.sender_type === 'admin' ? 'text-sage-200' : 'text-sage-400'
-                  }`}>
-                    {formatTime(msg.created_at)}
-                  </p>
-                </div>
-              </div>
-            ))
-          )}
-          <div ref={messagesEndRef} />
-        </div>
-
-        <form onSubmit={sendMessage} className="p-3 border-t border-cream-200 bg-white">
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={newMessage}
-              onChange={(e) => setNewMessage(e.target.value)}
-              placeholder="Type a message..."
-              className="flex-1 px-4 py-2 border border-cream-300 rounded-full text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
-            />
-            <button
-              type="submit"
-              disabled={!newMessage.trim() || sending}
-              className="px-4 py-2 bg-sage-600 text-white rounded-full hover:bg-sage-700 disabled:opacity-50"
-            >
-              {sending ? 'Sending...' : 'Send'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  )
-}
+// Extracted sub-components
+import AdminHeader from './admin/AdminHeader'
+import AdminWeddingList from './admin/AdminWeddingList'
+import AdminWeddingProfile from './admin/AdminWeddingProfile'
+import { detectEscalation } from './admin/adminUtils'
 
 export default function Admin() {
   const navigate = useNavigate()
@@ -339,7 +121,9 @@ export default function Admin() {
 
   const fetchUnreadMessages = async () => {
     try {
-      const res = await fetch(`${API_URL}/api/messages/admin/unread`)
+      const res = await fetch(`${API_URL}/api/messages/admin/unread`, {
+        headers: await authHeaders()
+      })
       const data = await res.json()
       setUnreadMessages(data.total || 0)
     } catch (err) {
@@ -361,7 +145,9 @@ export default function Admin() {
 
   const checkGmailStatus = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/gmail/status`)
+      const response = await fetch(`${API_URL}/api/gmail/status`, {
+        headers: await authHeaders()
+      })
       const data = await response.json()
       setGmailConnected(data.connected)
     } catch (err) {
@@ -371,7 +157,9 @@ export default function Admin() {
 
   const connectGmail = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/gmail/auth`)
+      const response = await fetch(`${API_URL}/api/gmail/auth`, {
+        headers: await authHeaders()
+      })
       const data = await response.json()
       if (data.authUrl) {
         window.location.href = data.authUrl
@@ -386,7 +174,8 @@ export default function Admin() {
     setGmailStatus('')
     try {
       const response = await fetch(`${API_URL}/api/gmail/sync`, {
-        method: 'POST'
+        method: 'POST',
+        headers: await authHeaders()
       })
       const data = await response.json()
       setGmailStatus(data.message || data.error)
@@ -400,7 +189,7 @@ export default function Admin() {
 
   const disconnectGmail = async () => {
     try {
-      await fetch(`${API_URL}/api/gmail/disconnect`, { method: 'POST' })
+      await fetch(`${API_URL}/api/gmail/disconnect`, { method: 'POST', headers: await authHeaders() })
       setGmailConnected(false)
       setGmailStatus('Gmail disconnected')
     } catch (err) {
@@ -410,7 +199,9 @@ export default function Admin() {
 
   const checkQuoStatus = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/quo/status`)
+      const response = await fetch(`${API_URL}/api/quo/status`, {
+        headers: await authHeaders()
+      })
       const data = await response.json()
       setQuoConnected(data.connected)
     } catch (err) {
@@ -425,7 +216,7 @@ export default function Admin() {
       console.log('Calling Quo sync with forceReprocess:', forceReprocess)
       const response = await fetch(`${API_URL}/api/quo/sync`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ forceReprocess })
       })
 
@@ -469,7 +260,9 @@ export default function Admin() {
 
   const checkZoomStatus = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/zoom/status`)
+      const response = await fetch(`${API_URL}/api/zoom/status`, {
+        headers: await authHeaders()
+      })
       const data = await response.json()
       setZoomConnected(data.connected)
     } catch (err) {
@@ -479,7 +272,9 @@ export default function Admin() {
 
   const connectZoom = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/zoom/auth`)
+      const response = await fetch(`${API_URL}/api/zoom/auth`, {
+        headers: await authHeaders()
+      })
       const data = await response.json()
       if (data.authUrl) {
         window.location.href = data.authUrl
@@ -494,7 +289,8 @@ export default function Admin() {
     setZoomStatus('')
     try {
       const response = await fetch(`${API_URL}/api/zoom/sync`, {
-        method: 'POST'
+        method: 'POST',
+        headers: await authHeaders()
       })
       const data = await response.json()
       setZoomStatus(data.message || data.error)
@@ -509,7 +305,7 @@ export default function Admin() {
     setZoomSyncing(true)
     setZoomStatus('')
     try {
-      const response = await fetch(`${API_URL}/api/zoom/reextract`, { method: 'POST' })
+      const response = await fetch(`${API_URL}/api/zoom/reextract`, { method: 'POST', headers: await authHeaders() })
       const data = await response.json()
       setZoomStatus(data.message || data.error)
       loadData()
@@ -524,7 +320,7 @@ export default function Admin() {
     setZoomSyncing(true)
     setZoomStatus('')
     try {
-      const response = await fetch(`${API_URL}/api/zoom/clear`, { method: 'POST' })
+      const response = await fetch(`${API_URL}/api/zoom/clear`, { method: 'POST', headers: await authHeaders() })
       const data = await response.json()
       setZoomStatus(data.message || data.error)
     } catch (err) {
@@ -535,7 +331,7 @@ export default function Admin() {
 
   const disconnectZoom = async () => {
     try {
-      await fetch(`${API_URL}/api/zoom/disconnect`, { method: 'POST' })
+      await fetch(`${API_URL}/api/zoom/disconnect`, { method: 'POST', headers: await authHeaders() })
       setZoomConnected(false)
       setZoomStatus('Zoom disconnected')
     } catch (err) {
@@ -551,7 +347,7 @@ export default function Admin() {
     try {
       const response = await fetch(`${API_URL}/api/notes-highlights`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ weddingId: viewingWedding.id })
       })
       const data = await response.json()
@@ -564,7 +360,9 @@ export default function Admin() {
 
   const loadUncertainQuestions = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/uncertain-questions`)
+      const response = await fetch(`${API_URL}/api/uncertain-questions`, {
+        headers: await authHeaders()
+      })
       const data = await response.json()
       setUncertainQuestions(data.questions || [])
     } catch (err) {
@@ -578,7 +376,7 @@ export default function Admin() {
     try {
       const res = await fetch(`${API_URL}/api/sage-messages/inject`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({
           user_id: userId,
           content: injectText.trim(),
@@ -602,7 +400,9 @@ export default function Admin() {
   const loadAllCouplePhotos = async () => {
     try {
       // Load couple photos via server endpoint (bypasses RLS)
-      const response = await fetch(`${API_URL}/api/couple-photos/all`)
+      const response = await fetch(`${API_URL}/api/couple-photos/all`, {
+        headers: await authHeaders()
+      })
       const data = await response.json()
 
       if (data.photos) {
@@ -624,7 +424,7 @@ export default function Admin() {
     try {
       const response = await fetch(`${API_URL}/api/uncertain-questions/${questionId}/answer`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({
           answer: adminAnswer,
           addToKnowledgeBase: addToKb,
@@ -652,7 +452,8 @@ export default function Admin() {
   const deleteUncertainQuestion = async (questionId) => {
     try {
       await fetch(`${API_URL}/api/uncertain-questions/${questionId}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: await authHeaders()
       })
       setUncertainQuestions(prev => prev.filter(q => q.id !== questionId))
     } catch (err) {
@@ -663,7 +464,9 @@ export default function Admin() {
   const loadData = async () => {
     // Load notifications via server endpoint (bypasses RLS)
     try {
-      const notifsRes = await fetch(`${API_URL}/api/admin/notifications`)
+      const notifsRes = await fetch(`${API_URL}/api/admin/notifications`, {
+        headers: await authHeaders()
+      })
       const notifsData = await notifsRes.json()
       setNotifications(notifsData.notifications || [])
     } catch (err) {
@@ -674,7 +477,9 @@ export default function Admin() {
     // Load weddings with profiles via server endpoint (bypasses RLS)
     let weddingsData = []
     try {
-      const weddingsRes = await fetch(`${API_URL}/api/admin/weddings`)
+      const weddingsRes = await fetch(`${API_URL}/api/admin/weddings`, {
+        headers: await authHeaders()
+      })
       const weddingsJson = await weddingsRes.json()
       weddingsData = weddingsJson.weddings || []
       setWeddings(weddingsData)
@@ -684,22 +489,28 @@ export default function Admin() {
     }
 
     // Load communication pulses for all weddings (background, non-blocking)
-    fetch(`${API_URL}/api/communication-pulse`)
-      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
-      .then(d => { console.log('[Pulse] got response:', d); if (d.pulses) setPulses(d.pulses); else console.warn('[Pulse] no pulses key in response:', d) })
-      .catch(err => console.error('[Pulse] Failed to load pulses:', err))
+    authHeaders().then(hdrs =>
+      fetch(`${API_URL}/api/communication-pulse`, { headers: hdrs })
+        .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
+        .then(d => { console.log('[Pulse] got response:', d); if (d.pulses) setPulses(d.pulses); else console.warn('[Pulse] no pulses key in response:', d) })
+        .catch(err => console.error('[Pulse] Failed to load pulses:', err))
+    )
 
     // Load last 24h activity summary
-    fetch(`${API_URL}/api/admin/last-24h`)
-      .then(r => r.json())
-      .then(d => { setLast24h({ signups: d.signups || [], activity: d.activity || [] }) })
-      .catch(() => {})
-      .finally(() => setLast24hLoading(false))
+    authHeaders().then(hdrs =>
+      fetch(`${API_URL}/api/admin/last-24h`, { headers: hdrs })
+        .then(r => r.json())
+        .then(d => { setLast24h({ signups: d.signups || [], activity: d.activity || [] }) })
+        .catch(() => {})
+        .finally(() => setLast24hLoading(false))
+    )
 
     // Load all Sage messages for escalation detection via server (bypasses RLS)
     if (weddingsData && weddingsData.length > 0) {
       try {
-        const messagesRes = await fetch(`${API_URL}/api/sage-messages/all`)
+        const messagesRes = await fetch(`${API_URL}/api/sage-messages/all`, {
+          headers: await authHeaders()
+        })
         const messagesData = await messagesRes.json()
         const messages = messagesData.messages || []
 
@@ -727,7 +538,8 @@ export default function Admin() {
   const markAsRead = async (id) => {
     try {
       await fetch(`${API_URL}/api/admin/notifications/${id}/read`, {
-        method: 'PUT'
+        method: 'PUT',
+        headers: await authHeaders()
       })
       setNotifications(notifications.map(n =>
         n.id === id ? { ...n, read: true } : n
@@ -748,7 +560,7 @@ export default function Admin() {
     try {
       const response = await fetch(`${API_URL}/api/weddings/${editingWedding}/links`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({
           honeybook_link: honeybook || null,
           google_sheets_link: googleSheets || null
@@ -773,7 +585,7 @@ export default function Admin() {
     try {
       const response = await fetch(`${API_URL}/api/weddings/${weddingId}/archive`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ archived: !currentArchived })
       })
 
@@ -792,7 +604,7 @@ export default function Admin() {
     try {
       const response = await fetch(`${API_URL}/api/weddings/${weddingId}/escalation`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ escalation_handled_at: now })
       })
 
@@ -814,159 +626,135 @@ export default function Admin() {
   const viewWeddingProfile = async (wedding) => {
     setViewingWedding(wedding)
     setWeddingPulse(null)
-    fetch(`${API_URL}/api/communication-pulse/${wedding.id}`)
-      .then(r => r.json())
-      .then(d => { if (d.level) setWeddingPulse(d) })
-      .catch(() => {})
     setLoadingMessages(true)
     setSearchQuery('')
     setNotesSearchQuery('')
     setNotesHighlights('')
     setActiveTab('overview')
 
-    // Refresh couple photo for this wedding
-    try {
-      const response = await fetch(`${API_URL}/api/couple-photo/${wedding.id}`)
-      const data = await response.json()
-      if (data.photo) {
-        setCouplePhotos(prev => ({ ...prev, [wedding.id]: data.photo.image_url }))
-      }
-    } catch (err) {
-      console.error('Failed to load couple photo:', err)
+    // Fire-and-forget pulse load
+    authHeaders().then(hdrs =>
+      fetch(`${API_URL}/api/communication-pulse/${wedding.id}`, { headers: hdrs })
+        .then(r => r.json())
+        .then(d => { if (d.level) setWeddingPulse(d) })
+        .catch(() => {})
+    )
+
+    // PARALLELIZED: Load all wedding data concurrently with Promise.allSettled
+    const hdrs = await authHeaders()
+    const [
+      couplePhotoResult,
+      messagesResult,
+      notesResult,
+      timelineResult,
+      tablesResult,
+      staffingResult,
+      budgetResult,
+      borrowResult,
+      activitiesResult,
+      internalNotesResult,
+    ] = await Promise.allSettled([
+      // 0: Couple photo
+      fetch(`${API_URL}/api/couple-photo/${wedding.id}`, { headers: hdrs }).then(r => r.json()),
+      // 1: Sage chat messages
+      fetch(`${API_URL}/api/sage-messages/${wedding.id}`, { headers: hdrs }).then(r => r.json()),
+      // 2: Planning notes
+      fetch(`${API_URL}/api/planning-notes/${wedding.id}`, { headers: hdrs }).then(r => r.json()),
+      // 3: Timeline
+      fetch(`${API_URL}/api/timeline/${wedding.id}`, { headers: hdrs }).then(r => r.json()),
+      // 4: Tables
+      fetch(`${API_URL}/api/tables/${wedding.id}`, { headers: hdrs }).then(r => r.json()),
+      // 5: Staffing
+      fetch(`${API_URL}/api/staffing/${wedding.id}`, { headers: hdrs }).then(r => r.json()),
+      // 6: Budget
+      fetch(`${API_URL}/api/budget/${wedding.id}`, { headers: hdrs }).then(r => r.ok ? r.json() : null),
+      // 7: Borrow selections
+      fetch(`${API_URL}/api/borrow-selections/${wedding.id}`, { headers: hdrs }).then(r => r.json()),
+      // 8: Activities
+      fetch(`${API_URL}/api/activities/${wedding.id}?limit=20`, { headers: hdrs }).then(r => r.json()),
+      // 9: Internal notes
+      fetch(`${API_URL}/api/internal-notes/${wedding.id}`, { headers: hdrs }).then(r => r.json()),
+    ])
+
+    // Process results
+    if (couplePhotoResult.status === 'fulfilled' && couplePhotoResult.value?.photo) {
+      setCouplePhotos(prev => ({ ...prev, [wedding.id]: couplePhotoResult.value.photo.image_url }))
     }
 
-    // Load Sage chat messages via server endpoint (bypasses RLS)
-    try {
-      const messagesRes = await fetch(`${API_URL}/api/sage-messages/${wedding.id}`)
-      const messagesData = await messagesRes.json()
-      setWeddingMessages(messagesData.messages || [])
-    } catch (err) {
-      console.error('Failed to load Sage messages:', err)
+    if (messagesResult.status === 'fulfilled') {
+      setWeddingMessages(messagesResult.value.messages || [])
+    } else {
       setWeddingMessages([])
     }
 
-    // Load planning notes via server endpoint (bypasses RLS)
-    try {
-      const notesRes = await fetch(`${API_URL}/api/planning-notes/${wedding.id}`)
-      const notesData = await notesRes.json()
-      setPlanningNotes(notesData.notes || [])
-    } catch (err) {
-      console.error('Failed to load planning notes:', err)
+    if (notesResult.status === 'fulfilled') {
+      setPlanningNotes(notesResult.value.notes || [])
+    } else {
       setPlanningNotes([])
     }
 
-    // Load timeline summary
-    try {
-      const timelineRes = await fetch(`${API_URL}/api/timeline/${wedding.id}`)
-      const timelineData = await timelineRes.json()
-      if (timelineData.timeline) {
-        const tl = timelineData.timeline
-        const events = tl.timeline_data?.events || {}
-        const includedCount = Object.values(events).filter(e => e.included).length
-        setTimelineSummary({
-          ceremonyTime: tl.ceremony_start,
-          receptionEnd: tl.reception_end,
-          doingFirstLook: tl.timeline_data?.doingFirstLook,
-          dinnerType: tl.timeline_data?.dinnerType,
-          includedEvents: includedCount,
-          updatedAt: tl.updated_at
-        })
-      } else {
-        setTimelineSummary(null)
-      }
-    } catch (err) {
-      console.error('Failed to load timeline:', err)
+    if (timelineResult.status === 'fulfilled' && timelineResult.value?.timeline) {
+      const tl = timelineResult.value.timeline
+      const events = tl.timeline_data?.events || {}
+      const includedCount = Object.values(events).filter(e => e.included).length
+      setTimelineSummary({
+        ceremonyTime: tl.ceremony_start,
+        receptionEnd: tl.reception_end,
+        doingFirstLook: tl.timeline_data?.doingFirstLook,
+        dinnerType: tl.timeline_data?.dinnerType,
+        includedEvents: includedCount,
+        updatedAt: tl.updated_at
+      })
+    } else {
       setTimelineSummary(null)
     }
 
-    // Load table summary
-    try {
-      const tablesRes = await fetch(`${API_URL}/api/tables/${wedding.id}`)
-      const tablesData = await tablesRes.json()
-      if (tablesData.tables) {
-        const tb = tablesData.tables
-        const guestsPerTable = tb.guests_per_table || 8
-        const baseGuests = tb.guest_count - (tb.head_table ? tb.head_table_size : 0) - (tb.sweetheart_table ? 2 : 0) - (tb.kids_count || 0)
-        const tablesNeeded = Math.ceil(baseGuests / guestsPerTable)
-        setTableSummary({
-          guestCount: tb.guest_count,
-          tableShape: tb.table_shape,
-          tablesNeeded,
-          headTable: tb.head_table,
-          sweetheartTable: tb.sweetheart_table,
-          linenColor: tb.linen_color,
-          napkinColor: tb.napkin_color,
-          updatedAt: tb.updated_at
-        })
-      } else {
-        setTableSummary(null)
-      }
-    } catch (err) {
-      console.error('Failed to load tables:', err)
+    if (tablesResult.status === 'fulfilled' && tablesResult.value?.tables) {
+      const tb = tablesResult.value.tables
+      const guestsPerTable = tb.guests_per_table || 8
+      const baseGuests = tb.guest_count - (tb.head_table ? tb.head_table_size : 0) - (tb.sweetheart_table ? 2 : 0) - (tb.kids_count || 0)
+      const tablesNeeded = Math.ceil(baseGuests / guestsPerTable)
+      setTableSummary({
+        guestCount: tb.guest_count,
+        tableShape: tb.table_shape,
+        tablesNeeded,
+        headTable: tb.head_table,
+        sweetheartTable: tb.sweetheart_table,
+        linenColor: tb.linen_color,
+        napkinColor: tb.napkin_color,
+        updatedAt: tb.updated_at
+      })
+    } else {
       setTableSummary(null)
     }
 
-    // Load staffing summary
-    try {
-      const staffingRes = await fetch(`${API_URL}/api/staffing/${wedding.id}`)
-      const staffingData = await staffingRes.json()
-      if (staffingData.staffing) {
-        setStaffingSummary(staffingData.staffing)
-      } else {
-        setStaffingSummary(null)
-      }
-    } catch (err) {
-      console.error('Failed to load staffing:', err)
+    if (staffingResult.status === 'fulfilled' && staffingResult.value?.staffing) {
+      setStaffingSummary(staffingResult.value.staffing)
+    } else {
       setStaffingSummary(null)
     }
 
-    // Load budget (only show if couple shared it)
-    try {
-      const budgetRes = await fetch(`${API_URL}/api/budget/${wedding.id}`)
-      if (budgetRes.ok) {
-        const budgetData = await budgetRes.json()
-        if (budgetData.budget?.is_shared) {
-          setSharedBudget(budgetData.budget)
-        } else {
-          setSharedBudget(null)
-        }
-      } else {
-        setSharedBudget(null)
-      }
-    } catch (err) {
-      console.error('Failed to load budget:', err)
+    if (budgetResult.status === 'fulfilled' && budgetResult.value?.budget?.is_shared) {
+      setSharedBudget(budgetResult.value.budget)
+    } else {
       setSharedBudget(null)
     }
 
-    // Load borrow selections
-    try {
-      const borrowRes = await fetch(`${API_URL}/api/borrow-selections/${wedding.id}`)
-      const borrowData = await borrowRes.json()
-      setBorrowSelections(borrowData.selections || [])
-    } catch (err) {
-      console.error('Failed to load borrow selections:', err)
+    if (borrowResult.status === 'fulfilled') {
+      setBorrowSelections(borrowResult.value.selections || [])
+    } else {
       setBorrowSelections([])
     }
 
-    // Load recent activities
-    try {
-      setLoadingActivities(true)
-      const activitiesRes = await fetch(`${API_URL}/api/activities/${wedding.id}?limit=20`)
-      const activitiesData = await activitiesRes.json()
-      setActivities(activitiesData.activities || [])
-    } catch (err) {
-      console.error('Failed to load activities:', err)
+    if (activitiesResult.status === 'fulfilled') {
+      setActivities(activitiesResult.value.activities || [])
+    } else {
       setActivities([])
     }
-    setLoadingActivities(false)
 
-    // Load internal notes
-    try {
-      const notesRes = await fetch(`${API_URL}/api/internal-notes/${wedding.id}`)
-      const notesData = await notesRes.json()
-      setInternalNotes(notesData.notes || [])
-    } catch (err) {
-      console.error('Failed to load internal notes:', err)
+    if (internalNotesResult.status === 'fulfilled') {
+      setInternalNotes(internalNotesResult.value.notes || [])
+    } else {
       setInternalNotes([])
     }
 
@@ -977,7 +765,7 @@ export default function Admin() {
     try {
       const response = await fetch(`${API_URL}/api/planning-notes/${noteId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ status: newStatus })
       })
 
@@ -997,7 +785,7 @@ export default function Admin() {
     try {
       const res = await fetch(`${API_URL}/api/internal-notes`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ weddingId: viewingWedding.id, content: newNoteText.trim() })
       })
       const data = await res.json()
@@ -1013,7 +801,7 @@ export default function Admin() {
 
   const deleteInternalNote = async (noteId) => {
     try {
-      await fetch(`${API_URL}/api/internal-notes/${noteId}`, { method: 'DELETE' })
+      await fetch(`${API_URL}/api/internal-notes/${noteId}`, { method: 'DELETE', headers: await authHeaders() })
       setInternalNotes(prev => prev.filter(n => n.id !== noteId))
     } catch (err) {
       console.error('Failed to delete internal note:', err)
@@ -1032,8 +820,10 @@ export default function Admin() {
     formData.append('weddingId', viewingWedding.id)
 
     try {
+      const contractToken = (await authHeaders())['Authorization']
       const response = await fetch(`${API_URL}/api/extract-contract`, {
         method: 'POST',
+        headers: contractToken ? { 'Authorization': contractToken } : {},
         body: formData
       })
 
@@ -1045,7 +835,9 @@ export default function Admin() {
           message: `Extracted ${data.notesExtracted} notes from contract`
         })
         // Reload planning notes via server endpoint
-        const notesRes = await fetch(`${API_URL}/api/planning-notes/${viewingWedding.id}`)
+        const notesRes = await fetch(`${API_URL}/api/planning-notes/${viewingWedding.id}`, {
+          headers: await authHeaders()
+        })
         const notesData = await notesRes.json()
         setPlanningNotes(notesData.notes || [])
       } else {
@@ -1070,7 +862,7 @@ export default function Admin() {
     try {
       const response = await fetch(`${API_URL}/api/ask-contracts`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({
           weddingId: viewingWedding.id,
           question: contractQuestion
@@ -1087,75 +879,11 @@ export default function Admin() {
     setAskingQuestion(false)
   }
 
-  const getCategoryIcon = (category) => {
-    switch (category) {
-      case 'vendor': return '👥'
-      case 'vendor_contact': return '📞'
-      case 'guest_count': return '🎫'
-      case 'decor': return '🌸'
-      case 'ceremony': return '💒'
-      case 'allergy': return '⚠️'
-      case 'timeline': return '⏰'
-      case 'colors': return '🎨'
-      case 'reception': return '🥂'
-      case 'bar': return '🍷'
-      case 'catering': return '🍽️'
-      case 'accommodations': return '🛏️'
-      case 'shuttle': return '🚌'
-      case 'family': return '👨‍👩‍👧'
-      case 'budget': return '💰'
-      case 'stress': return '💛'
-      case 'grief': return '🕊️'
-      case 'relationship': return '💑'
-      case 'health': return '💙'
-      case 'note': return '📝'
-      case 'follow_up': return '🔔'
-      case 'sms_message': return '💬'
-      case 'call_transcript': return '📱'
-      case 'zoom_transcript': return '🎥'
-      case 'email': return '📧'
-      case 'borrow_selection': return '📋'
-      default: return '📌'
-    }
-  }
-
-  const getCategoryLabel = (category) => {
-    switch (category) {
-      case 'vendor': return 'Vendor'
-      case 'vendor_contact': return 'Contact Info'
-      case 'guest_count': return 'Guest Count'
-      case 'decor': return 'Decor'
-      case 'ceremony': return 'Ceremony'
-      case 'allergy': return 'Allergy / Dietary'
-      case 'timeline': return 'Timeline'
-      case 'colors': return 'Colors & Style'
-      case 'reception': return 'Reception'
-      case 'bar': return 'Bar Setup'
-      case 'catering': return 'Catering'
-      case 'accommodations': return 'Accommodations'
-      case 'shuttle': return 'Transportation'
-      case 'family': return 'Family'
-      case 'budget': return 'Budget'
-      case 'stress': return 'Stress / Worry'
-      case 'grief': return 'Grief / Loss'
-      case 'relationship': return 'Couple Dynamics'
-      case 'health': return 'Health / Access'
-      case 'note': return 'Note'
-      case 'follow_up': return 'Follow Up'
-      case 'sms_message': return 'SMS'
-      case 'call_transcript': return 'Call'
-      case 'zoom_transcript': return 'Zoom'
-      case 'email': return 'Email'
-      case 'borrow_selection': return 'Borrow Selection'
-      default: return category.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
-    }
-  }
-
   const sendCheckin = async () => {
     if (!viewingWedding || checkingIn) return
     setCheckingIn(true)
     try {
-      await fetch(`${API_URL}/api/checkin/${viewingWedding.id}`, { method: 'POST' })
+      await fetch(`${API_URL}/api/checkin/${viewingWedding.id}`, { method: 'POST', headers: await authHeaders() })
       setCheckedIn(true)
       setTimeout(() => setCheckedIn(false), 3000)
     } catch (err) {
@@ -1183,30 +911,6 @@ export default function Admin() {
     setNewItemCategory('')
     setNewItemDescription('')
     setNewItemImage(null)
-  }
-
-  // Filter messages by search query
-  const filteredMessages = searchQuery.trim()
-    ? weddingMessages.filter(m =>
-        m.content.toLowerCase().includes(searchQuery.toLowerCase())
-      )
-    : weddingMessages
-
-  // Get only user messages (questions)
-  const userQuestions = filteredMessages.filter(m => m.sender === 'user')
-
-  // Get message stats
-  const getMessageStats = () => {
-    const total = weddingMessages.length
-    const userMsgs = weddingMessages.filter(m => m.sender === 'user').length
-    const sageMsgs = weddingMessages.filter(m => m.sender === 'sage').length
-
-    // Get unique days with activity
-    const uniqueDays = new Set(
-      weddingMessages.map(m => new Date(m.created_at).toDateString())
-    ).size
-
-    return { total, userMsgs, sageMsgs, uniqueDays }
   }
 
   // Quick stats
@@ -1297,1428 +1001,85 @@ export default function Admin() {
 
   // Wedding Profile View
   if (viewingWedding) {
-    const msgStats = getMessageStats()
-    const profileMap = {}
-    viewingWedding.profiles?.forEach(p => { profileMap[p.id] = p })
-    const escalation = escalations[viewingWedding.id]
-
     return (
-      <div className="min-h-screen min-h-[100dvh] bg-cream-50">
-        <header className="bg-white border-b border-cream-200 sticky top-0 z-40">
-          {/* Breadcrumb */}
-          <div className="max-w-6xl mx-auto px-3 sm:px-4 pt-2 pb-0">
-            <nav className="flex items-center gap-1.5 text-xs text-sage-400">
-              <button onClick={closeProfile} className="hover:text-sage-600 transition">Admin</button>
-              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-              </svg>
-              <span className="text-sage-600 font-medium truncate">{viewingWedding.couple_names || 'Wedding'}</span>
-            </nav>
-          </div>
-          <div className="max-w-6xl mx-auto px-3 sm:px-4 py-3 sm:py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              {/* Couple Photo in Header */}
-              {couplePhotos[viewingWedding.id] ? (
-                <img
-                  src={couplePhotos[viewingWedding.id]}
-                  alt={viewingWedding.couple_names}
-                  className="w-12 h-12 sm:w-14 sm:h-14 rounded-full object-cover border-2 border-sage-300 shadow-sm cursor-pointer hover:opacity-80 transition flex-shrink-0"
-                  onClick={() => setEnlargedPhoto(couplePhotos[viewingWedding.id])}
-                  title="Click to enlarge"
-                />
-              ) : (
-                <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-cream-100 flex items-center justify-center border-2 border-cream-200 flex-shrink-0">
-                  <span className="text-sage-400 text-lg sm:text-xl">
-                    {viewingWedding.couple_names?.charAt(0) || '?'}
-                  </span>
-                </div>
-              )}
-              <div className="min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <h1 className="font-serif text-lg sm:text-2xl text-sage-700 leading-tight">
-                  {viewingWedding.couple_names || 'Wedding'} Profile
-                </h1>
-                {/* Last Activity in header */}
-                {(() => {
-                  const lastActivity = getLastActivity(weddingMessages)
-                  if (!lastActivity) {
-                    return (
-                      <span className="text-sm px-3 py-1 rounded-full bg-gray-100 text-gray-500 font-medium">
-                        No activity
-                      </span>
-                    )
-                  }
-                  return (
-                    <span className={`text-sm px-3 py-1 rounded-full font-medium ${
-                      lastActivity.status === 'recent'
-                        ? 'bg-green-100 text-green-700'
-                        : lastActivity.status === 'active'
-                        ? 'bg-sage-100 text-sage-700'
-                        : lastActivity.status === 'moderate'
-                        ? 'bg-amber-100 text-amber-700'
-                        : 'bg-red-100 text-red-700'
-                    }`}>
-                      Last active {lastActivity.display}
-                    </span>
-                  )
-                })()}
-              </div>
-              <p className="text-sage-400 text-sm">
-                {viewingWedding.wedding_date
-                  ? new Date(viewingWedding.wedding_date).toLocaleDateString('en-US', {
-                      month: 'long', day: 'numeric', year: 'numeric'
-                    })
-                  : 'No date set'
-                } · Code: {viewingWedding.event_code}
-              </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <button
-                onClick={sendCheckin}
-                disabled={checkingIn}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition ${
-                  checkedIn
-                    ? 'bg-green-100 text-green-700'
-                    : 'bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200'
-                }`}
-                title="Send a friendly check-in message to this couple"
-              >
-                {checkedIn ? '✓ Sent!' : checkingIn ? '…' : '💛 Check in'}
-              </button>
-              <button
-                onClick={() => window.open(`/admin/print/${viewingWedding.id}`, '_blank')}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sage-100 hover:bg-sage-200 text-sage-700 text-sm font-medium transition"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
-                </svg>
-                Print
-              </button>
-              <button
-                onClick={closeProfile}
-                className="flex items-center gap-1.5 text-sage-500 hover:text-sage-700 text-sm font-medium"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                </svg>
-                Back
-              </button>
-            </div>
-          </div>
-        </header>
-
-        <main className="max-w-6xl mx-auto px-3 sm:px-4 py-4 sm:py-8">
-          {/* Escalation Alert */}
-          {escalation?.hasEscalation && (
-            <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-6">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2 text-red-700 font-medium">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                  </svg>
-                  Needs Attention - {escalation.count} concerning message(s) this week
-                </div>
-                <button
-                  onClick={() => markEscalationHandled(viewingWedding.id)}
-                  className="px-3 py-1 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700"
-                >
-                  Mark Handled
-                </button>
-              </div>
-              <p className="text-red-600 text-sm">
-                This client may be stressed or need extra support. Review their recent messages below.
-              </p>
-              {escalation.messages?.[0] && (
-                <p className="mt-2 text-sm text-red-700 bg-red-100 rounded-lg px-3 py-2 italic line-clamp-2">
-                  "{escalation.messages[0].content.length > 140
-                    ? escalation.messages[0].content.slice(0, 140) + '…'
-                    : escalation.messages[0].content}"
-                </p>
-              )}
-            </div>
-          )}
-
-          {/* Ask About This Wedding — always visible at top */}
-          <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 mb-4 sm:mb-6">
-            <div className="flex gap-2">
-              <img src="/icons/ask-about-wedding.svg" className="w-5 h-5 flex-shrink-0 mt-2" alt="" />
-              <div className="flex-1">
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={contractQuestion}
-                    onChange={(e) => setContractQuestion(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && askContractQuestion()}
-                    placeholder="Ask anything about this wedding…"
-                    className="flex-1 px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
-                    disabled={askingQuestion}
-                  />
-                  <button
-                    onClick={askContractQuestion}
-                    disabled={askingQuestion || !contractQuestion.trim()}
-                    className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
-                  >
-                    {askingQuestion ? '…' : 'Ask'}
-                  </button>
-                </div>
-                {contractAnswer && (
-                  <div className="mt-3 p-3 bg-cream-50 rounded-lg text-sm text-sage-700 whitespace-pre-wrap">
-                    {contractAnswer}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="grid lg:grid-cols-[220px_1fr] gap-4 sm:gap-8">
-            {/* Compact Nav Sidebar */}
-            <div className="order-2 lg:order-1">
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 overflow-hidden lg:sticky lg:top-24">
-                <div className="px-4 pt-5 pb-3 flex justify-center border-b border-cream-200">
-                  <img src="/rixey-manor-logo.png" alt="Rixey Manor" className="h-16 w-auto" />
-                </div>
-                <nav className="p-2">
-                  {[
-                    { tab: 'overview', label: 'Overview', icon: '/icons/overview.svg' },
-                    { section: 'Planning' },
-                    { tab: 'notes', label: 'Planning Notes', icon: '/icons/planning-notes.svg', badge: planningNotes.filter(n => n.status === 'pending').length },
-                    { tab: 'wedding-details', label: 'Wedding Details', icon: '/icons/overview.svg' },
-                    { tab: 'allergies', label: 'Allergy Registry', icon: '/icons/guest-care.svg' },
-                    { tab: 'ceremony-order', label: 'Ceremony Order', icon: '/icons/timeline.svg' },
-                    { tab: 'decor', label: 'Decor Inventory', icon: '/icons/inspiration.svg' },
-                    { tab: 'makeup', label: 'Hair & Makeup', icon: '/icons/upload-photo-of-you-two.svg' },
-                    { tab: 'shuttle', label: 'Shuttle Schedule', icon: '/icons/book-a-meeting.svg' },
-                    { tab: 'rehearsal', label: 'Rehearsal Dinner', icon: '/icons/meetings.svg' },
-                    { tab: 'bedrooms', label: 'Bedroom Assignments', icon: '/icons/direct-messages.svg' },
-                    { tab: 'vendors', label: 'Vendors', icon: '/icons/vendors.svg' },
-                    { tab: 'inspo', label: 'Inspiration', icon: '/icons/inspiration.svg' },
-                    { tab: 'checklist', label: 'Checklist', icon: '/icons/checklist.svg' },
-                    { section: 'Conversations' },
-                    { tab: 'messages', label: 'Conversations', icon: '/icons/conversations.svg' },
-                    { tab: 'uncertain', label: "Uncertain Q's", icon: '/icons/uncertain-questions.svg', badge: uncertainQuestions.filter(q => q.wedding_id === viewingWedding.id).length },
-                    { tab: 'meetings', label: 'Meetings', icon: '/icons/meetings.svg' },
-                    { tab: 'direct-messages', label: 'Direct Messages', icon: '/icons/direct-messages.svg' },
-                    { section: 'Tools' },
-                    { tab: 'table-map', label: 'Table Map', icon: '/icons/tables.svg' },
-                    { tab: 'timeline', label: 'Timeline', icon: '/icons/timeline.svg' },
-                    { tab: 'tables', label: 'Tables', icon: '/icons/tables.svg' },
-                    { tab: 'staffing', label: 'Staffing Guide', icon: '/icons/staffing-guide.svg' },
-                    { tab: 'bar', label: 'Bar Planner', icon: '/icons/staffing-guide.svg' },
-                    { tab: 'budget', label: 'Budget', icon: '/icons/budget.svg' },
-                    { tab: 'guests', label: 'Guest List', icon: '/icons/guest-care.svg' },
-                    { tab: 'borrow', label: 'Borrow Brochure', icon: '/icons/borrow-brochure.svg', badge: borrowSelections.length },
-                    { tab: 'guest-care', label: 'Guest Care', icon: '/icons/guest-care.svg' },
-                    { section: 'Website' },
-                    { tab: 'website-builder', label: 'Website Builder', icon: '/icons/overview.svg' },
-                    { tab: 'photo-library', label: 'Photo Library', icon: '/icons/inspiration.svg' },
-                    { tab: 'wedding-party', label: 'Wedding Party', icon: '/icons/guest-care.svg' },
-                    { tab: 'activity', label: 'Recent Activity', icon: '/icons/recent-activity.svg', badge: activities.length },
-                    { section: 'Admin' },
-                    { tab: 'contract-upload', label: 'Upload Contract', icon: '/icons/upload-contract.svg' },
-                    { tab: 'ask', label: 'Ask About Wedding', icon: '/icons/ask-about-wedding.svg' },
-                    { tab: 'api-usage', label: 'API Usage', icon: '/icons/api-usage.svg' },
-                  ].map((item, idx) => {
-                    if (item.section) {
-                      return (
-                        <p key={idx} className="text-xs font-semibold text-sage-400 uppercase tracking-wide px-3 pt-3 pb-1">
-                          {item.section}
-                        </p>
-                      )
-                    }
-                    return (
-                      <button
-                        key={item.tab}
-                        onClick={() => {
-                          setActiveTab(item.tab)
-                          if (item.tab === 'messages') { setSelectedChatUser(null); setSearchQuery('') }
-                        }}
-                        className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition ${
-                          activeTab === item.tab
-                            ? 'bg-sage-100 text-sage-700 font-medium'
-                            : 'text-sage-500 hover:bg-cream-50 hover:text-sage-700'
-                        }`}
-                      >
-                        <span className="flex items-center gap-2">
-                          <img src={item.icon} className="w-5 h-5 flex-shrink-0" alt="" />
-                          <span>{item.label}</span>
-                        </span>
-                        {item.badge > 0 && (
-                          <span className="bg-amber-100 text-amber-700 text-xs px-1.5 py-0.5 rounded-full min-w-[1.25rem] text-center">
-                            {item.badge}
-                          </span>
-                        )}
-                      </button>
-                    )
-                  })}
-                </nav>
-              </div>
-            </div>
-
-            {/* Main Content Panel */}
-            <div className="order-1 lg:order-2">
-              <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-3 sm:p-4 lg:p-6">
-                {/* Mobile: Dropdown selector */}
-                <div className="lg:hidden mb-4">
-                  <select
-                    value={activeTab}
-                    onChange={(e) => {
-                      setActiveTab(e.target.value)
-                      if (e.target.value === 'messages') { setSelectedChatUser(null); setSearchQuery('') }
-                    }}
-                    className="w-full p-3 border border-cream-200 rounded-lg bg-cream-50 text-sage-700 font-medium focus:outline-none focus:ring-2 focus:ring-sage-300"
-                  >
-                    <option value="overview">Overview</option>
-                    <option value="notes">
-                      Planning Notes {planningNotes.filter(n => n.status === 'pending').length > 0 ? `(${planningNotes.filter(n => n.status === 'pending').length})` : ''}
-                    </option>
-                    <option value="vendors">Vendors & Contracts</option>
-                    <option value="inspo">Inspiration</option>
-                    <option value="checklist">Checklist</option>
-                    <option value="messages">All Conversations</option>
-                    <option value="uncertain">
-                      Uncertain Q's {uncertainQuestions.filter(q => q.wedding_id === viewingWedding.id).length > 0 ? `(${uncertainQuestions.filter(q => q.wedding_id === viewingWedding.id).length})` : ''}
-                    </option>
-                    <option value="meetings">Meetings</option>
-                    <option value="direct-messages">Direct Messages</option>
-                    <option value="table-map">Table Map</option>
-                    <option value="timeline">Timeline</option>
-                    <option value="tables">Tables</option>
-                    <option value="staffing">Staffing Guide</option>
-                    <option value="bar">Bar Planner</option>
-                    <option value="budget">Budget</option>
-                    <option value="guests">Guest List</option>
-                    <option value="borrow">Borrow Brochure</option>
-                    <option value="guest-care">Guest Care</option>
-                    <option value="website-builder">Website Builder</option>
-                    <option value="photo-library">Photo Library</option>
-                    <option value="wedding-party">Wedding Party</option>
-                    <option value="activity">
-                      Recent Activity {activities.length > 0 ? `(${activities.length})` : ''}
-                    </option>
-                    <option value="contract-upload">Upload Contract</option>
-                    <option value="ask">Ask About Wedding</option>
-                    <option value="api-usage">API Usage</option>
-                  </select>
-                </div>
-
-                {/* Overview Tab */}
-                {activeTab === 'overview' && (
-                  <div className="space-y-5">
-                    {/* Communication Pulse */}
-                    <CommunicationPulse pulse={weddingPulse} />
-
-                    {/* Stats Row */}
-                    <div className="grid grid-cols-4 gap-2 sm:gap-3">
-                      <div className="bg-sage-50 rounded-xl p-2 sm:p-3 text-center">
-                        <p className="text-xl sm:text-2xl font-semibold text-sage-700">{msgStats.userMsgs}</p>
-                        <p className="text-sage-500 text-xs mt-0.5">Questions</p>
-                      </div>
-                      <div className="bg-cream-100 rounded-xl p-2 sm:p-3 text-center">
-                        <p className="text-xl sm:text-2xl font-semibold text-sage-700">{msgStats.total}</p>
-                        <p className="text-sage-500 text-xs mt-0.5">Messages</p>
-                      </div>
-                      <div className="bg-amber-50 rounded-xl p-2 sm:p-3 text-center">
-                        <p className="text-xl sm:text-2xl font-semibold text-sage-700">{msgStats.uniqueDays}</p>
-                        <p className="text-sage-500 text-xs mt-0.5">Active Days</p>
-                      </div>
-                      <div className="bg-green-50 rounded-xl p-2 sm:p-3 text-center">
-                        <p className="text-xl sm:text-2xl font-semibold text-sage-700">{viewingWedding.profiles?.length || 0}</p>
-                        <p className="text-sage-500 text-xs mt-0.5">Members</p>
-                      </div>
-                    </div>
-
-                    {/* Planning Links */}
-                    <div className="flex flex-wrap gap-2">
-                      {viewingWedding.honeybook_link ? (
-                        <a href={viewingWedding.honeybook_link} target="_blank" rel="noopener noreferrer"
-                          className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 text-green-700 border border-green-200 rounded-lg hover:bg-green-100 transition text-xs">
-                          ✓ HoneyBook ↗
-                        </a>
-                      ) : (
-                        <span className="px-3 py-1.5 bg-amber-50 text-amber-600 border border-amber-200 rounded-lg text-xs">⚠ No HoneyBook link</span>
-                      )}
-                      {viewingWedding.google_sheets_link ? (
-                        <a href={viewingWedding.google_sheets_link} target="_blank" rel="noopener noreferrer"
-                          className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 text-green-700 border border-green-200 rounded-lg hover:bg-green-100 transition text-xs">
-                          ✓ Spreadsheet ↗
-                        </a>
-                      ) : (
-                        <span className="px-3 py-1.5 bg-amber-50 text-amber-600 border border-amber-200 rounded-lg text-xs">⚠ No Spreadsheet</span>
-                      )}
-                    </div>
-
-                    {/* AI Summary */}
-                    <div className="bg-gradient-to-r from-sage-50 to-cream-50 rounded-xl p-4 border border-sage-100">
-                      <div className="flex items-center justify-between mb-2">
-                        <h3 className="font-medium text-sage-700 flex items-center gap-2">
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                          </svg>
-                          AI Summary
-                        </h3>
-                        <button
-                          onClick={getNotesHighlights}
-                          disabled={loadingHighlights || planningNotes.length === 0}
-                          className="px-3 py-1 bg-sage-600 text-white text-xs rounded-lg hover:bg-sage-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {loadingHighlights ? 'Generating...' : 'Generate Highlights'}
-                        </button>
-                      </div>
-                      {notesHighlights ? (
-                        <div className="bg-white rounded-lg p-3 text-sm text-sage-700 whitespace-pre-wrap">{notesHighlights}</div>
-                      ) : (
-                        <p className="text-sage-400 text-sm">Generate a quick AI summary of all planning notes.</p>
-                      )}
-                    </div>
-
-                    {/* Data Tiles */}
-                    {(timelineSummary || tableSummary || staffingSummary || sharedBudget || borrowSelections.length > 0 || viewingWedding.profiles?.length > 0) && (
-                      <div>
-                        <h3 className="text-xs font-semibold text-sage-400 uppercase tracking-wide mb-3">Wedding Details</h3>
-                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                          {timelineSummary && (
-                            <button onClick={() => setActiveTab('timeline')} className="text-left bg-amber-50 border border-amber-200 rounded-xl p-3 hover:shadow-sm transition group">
-                              <p className="text-sm font-medium text-sage-700 mb-1">📅 Timeline</p>
-                              <p className="text-xs text-sage-500">{timelineSummary.ceremonyTime ? new Date(`2000-01-01T${timelineSummary.ceremonyTime}`).toLocaleTimeString('en-US', {hour:'numeric',minute:'2-digit'}) : '—'} ceremony</p>
-                              <p className="text-xs text-sage-400 mt-1 group-hover:text-sage-600">View →</p>
-                            </button>
-                          )}
-                          {tableSummary && (
-                            <button onClick={() => setActiveTab('tables')} className="text-left bg-sage-50 border border-sage-200 rounded-xl p-3 hover:shadow-sm transition group">
-                              <p className="text-sm font-medium text-sage-700 mb-1">🪑 Tables</p>
-                              <p className="text-xs text-sage-500">{tableSummary.guestCount} guests · {tableSummary.tablesNeeded} tables</p>
-                              <p className="text-xs text-sage-400 mt-1 group-hover:text-sage-600">View →</p>
-                            </button>
-                          )}
-                          {staffingSummary && (
-                            <div className="text-left bg-purple-50 border border-purple-200 rounded-xl p-3">
-                              <p className="text-sm font-medium text-sage-700 mb-1">🙋 Staffing</p>
-                              <p className="text-xs text-sage-500">{staffingSummary.total_staff} staff · ${Number(staffingSummary.total_cost).toLocaleString()}</p>
-                            </div>
-                          )}
-                          {sharedBudget && (() => {
-                            const cats = sharedBudget.categories || {}
-                            const totalCommitted = Object.values(cats).reduce((s, c) => s + (c.committed || 0), 0)
-                            const effectiveBudget = sharedBudget.total_budget || Object.values(cats).reduce((s, c) => s + (c.budgeted || 0), 0)
-                            return (
-                              <div className="text-left bg-emerald-50 border border-emerald-200 rounded-xl p-3">
-                                <p className="text-sm font-medium text-sage-700 mb-1">💰 Budget</p>
-                                <p className="text-xs text-sage-500">${totalCommitted.toLocaleString()} / ${effectiveBudget.toLocaleString()}</p>
-                              </div>
-                            )
-                          })()}
-                          {borrowSelections.length > 0 && (
-                            <button onClick={() => setActiveTab('borrow')} className="text-left bg-orange-50 border border-orange-200 rounded-xl p-3 hover:shadow-sm transition group">
-                              <p className="text-sm font-medium text-sage-700 mb-1">📋 Borrow</p>
-                              <p className="text-xs text-sage-500">{borrowSelections.length} items selected</p>
-                              <p className="text-xs text-sage-400 mt-1 group-hover:text-sage-600">View →</p>
-                            </button>
-                          )}
-                          {viewingWedding.profiles?.length > 0 && (
-                            <div className="text-left bg-blue-50 border border-blue-200 rounded-xl p-3">
-                              <p className="text-sm font-medium text-sage-700 mb-1">👥 Party</p>
-                              <p className="text-xs text-sage-500">{viewingWedding.profiles.length} member{viewingWedding.profiles.length !== 1 ? 's' : ''} joined</p>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Planning Notes by Category */}
-                    {planningNotes.length > 0 && (
-                      <div>
-                        <div className="flex items-center justify-between mb-2">
-                          <h3 className="text-xs font-semibold text-sage-400 uppercase tracking-wide">Planning Notes</h3>
-                          <button onClick={() => setActiveTab('notes')} className="text-xs text-sage-500 hover:text-sage-700">View all →</button>
-                        </div>
-                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                          {(() => {
-                            const notesByCategory = planningNotes.reduce((acc, note) => {
-                              const cat = note.category || 'note'
-                              if (!acc[cat]) acc[cat] = { total: 0, pending: 0 }
-                              acc[cat].total++
-                              if (note.status === 'pending') acc[cat].pending++
-                              return acc
-                            }, {})
-                            const PRIORITY_CATS = ['allergy', 'stress', 'grief', 'health', 'family', 'follow_up', 'relationship']
-                            const sortedCats = Object.entries(notesByCategory).sort((a, b) => {
-                              const aP = PRIORITY_CATS.indexOf(a[0])
-                              const bP = PRIORITY_CATS.indexOf(b[0])
-                              if (aP !== -1 && bP !== -1) return aP - bP
-                              if (aP !== -1) return -1
-                              if (bP !== -1) return 1
-                              return b[1].pending - a[1].pending || b[1].total - a[1].total
-                            })
-                            return sortedCats.map(([cat, counts]) => {
-                              const isHighAlert = cat === 'allergy'
-                              const isEmotional = ['stress', 'grief', 'relationship', 'family', 'health'].includes(cat)
-                              const isFollowUp = cat === 'follow_up'
-                              const tileClass = isHighAlert
-                                ? 'bg-amber-50 border-amber-300'
-                                : isEmotional
-                                ? 'bg-rose-50 border-rose-200'
-                                : isFollowUp
-                                ? 'bg-blue-50 border-blue-200'
-                                : 'bg-cream-50 border-cream-200'
-                              const labelClass = isHighAlert ? 'text-amber-800' : isEmotional ? 'text-rose-700' : isFollowUp ? 'text-blue-700' : 'text-sage-700'
-                              const subClass = isHighAlert ? 'text-amber-700' : isEmotional ? 'text-rose-500' : isFollowUp ? 'text-blue-500' : 'text-sage-400'
-                              return (
-                              <button key={cat} onClick={() => setActiveTab('notes')} className={`text-left rounded-lg p-2.5 hover:border-sage-300 transition border ${tileClass}`}>
-                                <p className={`text-xs font-medium flex items-center gap-1.5 ${labelClass}`}>
-                                  <span>{getCategoryIcon(cat)}</span>
-                                  <span className="capitalize">{getCategoryLabel(cat)}</span>
-                                </p>
-                                <p className={`text-xs mt-0.5 ${subClass}`}>
-                                  {counts.total} note{counts.total !== 1 ? 's' : ''}
-                                  {counts.pending > 0 && <span className="ml-1 text-amber-600">· {counts.pending} new</span>}
-                                </p>
-                              </button>
-                              )
-                            })
-                          })()}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Internal Notes */}
-                    <div className="border border-amber-100 rounded-xl p-4">
-                      <div className="flex items-center gap-2 mb-3">
-                        <h3 className="font-medium text-sage-700">Internal Notes</h3>
-                        <span className="text-xs bg-amber-50 text-amber-600 border border-amber-200 px-2 py-0.5 rounded-full">Admin only</span>
-                      </div>
-                      <div className="space-y-2 mb-3 max-h-48 overflow-y-auto">
-                        {internalNotes.length === 0 ? (
-                          <p className="text-sage-400 text-sm italic">No notes yet</p>
-                        ) : (
-                          internalNotes.map(note => (
-                            <div key={note.id} className="group bg-amber-50 rounded-lg px-3 py-2 text-sm">
-                              <div className="flex items-start justify-between gap-2">
-                                <p className="text-sage-700 whitespace-pre-wrap leading-snug flex-1">{note.content}</p>
-                                <button
-                                  onClick={() => deleteInternalNote(note.id)}
-                                  className="opacity-0 group-hover:opacity-100 text-sage-300 hover:text-red-400 transition flex-shrink-0 mt-0.5"
-                                  title="Delete note"
-                                >
-                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                  </svg>
-                                </button>
-                              </div>
-                              <p className="text-sage-400 text-xs mt-1">
-                                {new Date(note.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                              </p>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                      <textarea
-                        value={newNoteText}
-                        onChange={e => setNewNoteText(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) addInternalNote() }}
-                        placeholder="Add a note… (Cmd+Enter to save)"
-                        rows={2}
-                        className="w-full text-sm border border-cream-200 rounded-lg px-3 py-2 text-sage-700 placeholder-sage-300 focus:outline-none focus:border-sage-400 resize-none"
-                      />
-                      <button
-                        onClick={addInternalNote}
-                        disabled={!newNoteText.trim() || savingNote}
-                        className="mt-2 w-full py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition"
-                      >
-                        {savingNote ? 'Saving…' : 'Add Note'}
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Planning Notes Tab */}
-                {activeTab === 'notes' && (
-                  <div>
-                    {/* AI Highlights Section */}
-                    <div className="bg-gradient-to-r from-sage-50 to-cream-50 rounded-xl p-4 mb-4 border border-sage-100">
-                      <div className="flex items-center justify-between mb-2">
-                        <h3 className="font-medium text-sage-700 flex items-center gap-2">
-                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                          </svg>
-                          AI Summary
-                        </h3>
-                        <button
-                          onClick={getNotesHighlights}
-                          disabled={loadingHighlights || planningNotes.length === 0}
-                          className="px-3 py-1 bg-sage-600 text-white text-sm rounded-lg hover:bg-sage-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {loadingHighlights ? 'Generating...' : 'Generate Highlights'}
-                        </button>
-                      </div>
-                      {notesHighlights ? (
-                        <div className="bg-white rounded-lg p-3 text-sm text-sage-700 whitespace-pre-wrap">
-                          {notesHighlights}
-                        </div>
-                      ) : (
-                        <p className="text-sage-500 text-sm">
-                          Click "Generate Highlights" to get an AI summary of all planning notes for quick review.
-                        </p>
-                      )}
-                    </div>
-
-                    {/* Notes Search */}
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
-                      <p className="text-sage-500 text-sm">
-                        Auto-detected planning updates. Mark as "Added" once updated.
-                      </p>
-                      <div className="relative">
-                        <input
-                          type="text"
-                          value={notesSearchQuery}
-                          onChange={(e) => setNotesSearchQuery(e.target.value)}
-                          placeholder="Search notes..."
-                          className="pl-9 pr-4 py-2 border border-cream-300 rounded-lg text-sm w-full sm:w-56 focus:outline-none focus:ring-2 focus:ring-sage-300"
-                        />
-                        <svg className="w-4 h-4 text-sage-400 absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                        </svg>
-                      </div>
-                    </div>
-
-                    {notesSearchQuery && (
-                      <p className="text-sage-500 text-sm mb-3">
-                        Found {planningNotes.filter(n =>
-                          n.content.toLowerCase().includes(notesSearchQuery.toLowerCase()) ||
-                          n.category.toLowerCase().includes(notesSearchQuery.toLowerCase()) ||
-                          (n.source_message && n.source_message.toLowerCase().includes(notesSearchQuery.toLowerCase()))
-                        ).length} note(s) matching "{notesSearchQuery}"
-                      </p>
-                    )}
-
-                    {loadingMessages ? (
-                      <p className="text-sage-400 text-center py-8">Loading...</p>
-                    ) : planningNotes.length === 0 ? (
-                      <p className="text-sage-400 text-center py-8">
-                        No planning notes detected yet. They'll appear here as clients share decisions with Sage.
-                      </p>
-                    ) : (
-                      <div className="space-y-2 max-h-[500px] overflow-y-auto">
-                        {/* Group notes by category */}
-                        {(() => {
-                          const filteredNotes = planningNotes.filter(note => {
-                            if (!notesSearchQuery.trim()) return true
-                            const query = notesSearchQuery.toLowerCase()
-                            return (
-                              note.content.toLowerCase().includes(query) ||
-                              note.category.toLowerCase().includes(query) ||
-                              (note.source_message && note.source_message.toLowerCase().includes(query))
-                            )
-                          })
-
-                          // Group by category
-                          const grouped = filteredNotes.reduce((acc, note) => {
-                            const cat = note.category || 'other'
-                            if (!acc[cat]) acc[cat] = []
-                            acc[cat].push(note)
-                            return acc
-                          }, {})
-
-                          // Sort categories - pending first, then by note count
-                          const sortedCategories = Object.keys(grouped).sort((a, b) => {
-                            const aPending = grouped[a].filter(n => n.status === 'pending').length
-                            const bPending = grouped[b].filter(n => n.status === 'pending').length
-                            if (aPending !== bPending) return bPending - aPending
-                            return grouped[b].length - grouped[a].length
-                          })
-
-                          return sortedCategories.map(category => {
-                            const notes = grouped[category]
-                            const pendingCount = notes.filter(n => n.status === 'pending').length
-                            const isCollapsed = collapsedNoteCategories[category]
-
-                            return (
-                              <div key={category} className="border border-cream-200 rounded-lg overflow-hidden">
-                                <button
-                                  onClick={() => setCollapsedNoteCategories(prev => ({
-                                    ...prev,
-                                    [category]: !prev[category]
-                                  }))}
-                                  className="w-full flex items-center justify-between p-3 bg-cream-50 hover:bg-cream-100 transition"
-                                >
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-lg">{getCategoryIcon(category)}</span>
-                                    <span className="font-medium text-sage-700">{getCategoryLabel(category)}</span>
-                                    <span className="text-sage-400 text-sm">({notes.length})</span>
-                                    {pendingCount > 0 && (
-                                      <span className="bg-amber-100 text-amber-700 text-xs px-2 py-0.5 rounded-full">
-                                        {pendingCount} new
-                                      </span>
-                                    )}
-                                  </div>
-                                  <svg
-                                    className={`w-5 h-5 text-sage-400 transition-transform ${isCollapsed ? '' : 'rotate-180'}`}
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                  >
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                                  </svg>
-                                </button>
-
-                                {!isCollapsed && (
-                                  <div className="p-2 space-y-2">
-                                    {notes.map(note => (
-                                      <div
-                                        key={note.id}
-                                        className={`border rounded-lg p-3 ${
-                                          note.status === 'pending'
-                                            ? 'border-amber-200 bg-amber-50/50'
-                                            : note.status === 'added'
-                                            ? 'border-green-200 bg-green-50/50'
-                                            : note.status === 'confirmed'
-                                            ? 'border-blue-200 bg-blue-50/50'
-                                            : 'border-cream-200 bg-white'
-                                        }`}
-                                      >
-                                        <div className="flex items-start justify-between gap-3">
-                                          <div className="flex-1 min-w-0">
-                                            <div className="flex items-center gap-2 mb-1 flex-wrap">
-                                              <span className={`text-xs font-medium px-2 py-0.5 rounded ${
-                                                note.status === 'pending'
-                                                  ? 'bg-amber-100 text-amber-700'
-                                                  : note.status === 'added'
-                                                  ? 'bg-green-100 text-green-700'
-                                                  : note.status === 'confirmed'
-                                                  ? 'bg-blue-100 text-blue-700'
-                                                  : 'bg-gray-100 text-gray-600'
-                                              }`}>
-                                                {note.status === 'pending' ? 'New' : note.status === 'confirmed' ? 'Synced' : note.status}
-                                              </span>
-                                              <span className="text-sage-400 text-xs">
-                                                {new Date(note.created_at).toLocaleDateString('en-US', {
-                                                  month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
-                                                })}
-                                              </span>
-                                            </div>
-                                            <p className="text-sage-800 text-sm">{note.content}</p>
-                                            {note.source_message && (
-                                              <p className="text-sage-500 text-xs mt-1 italic line-clamp-1">
-                                                "{note.source_message}"
-                                              </p>
-                                            )}
-                                          </div>
-                                          <div className="flex flex-col gap-1 shrink-0">
-                                            {note.status === 'pending' && (
-                                              <>
-                                                <button
-                                                  onClick={() => updateNoteStatus(note.id, 'added')}
-                                                  className="text-xs px-2 py-1 bg-green-600 text-white rounded hover:bg-green-700"
-                                                >
-                                                  ✓
-                                                </button>
-                                                <button
-                                                  onClick={() => updateNoteStatus(note.id, 'dismissed')}
-                                                  className="text-xs px-2 py-1 text-sage-400 hover:text-sage-600"
-                                                >
-                                                  ✕
-                                                </button>
-                                              </>
-                                            )}
-                                            {note.status === 'added' && (
-                                              <span className="text-xs text-green-600">✓</span>
-                                            )}
-                                            {note.status === 'dismissed' && (
-                                              <button
-                                                onClick={() => updateNoteStatus(note.id, 'pending')}
-                                                className="text-xs text-sage-400 hover:text-sage-600"
-                                              >
-                                                ↩
-                                              </button>
-                                            )}
-                                          </div>
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            )
-                          })
-                        })()}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Messages Tab */}
-                {activeTab === 'messages' && (
-                  <div>
-                    {selectedChatUser ? (
-                      /* ── Chat Thread View ── */
-                      (() => {
-                        const chronological = [...weddingMessages]
-                          .filter(m => m.user_id === selectedChatUser)
-                          .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
-                        const chatProfile = profileMap[selectedChatUser]
-                        return (
-                          <div>
-                            {/* Header */}
-                            <div className="flex items-center gap-3 mb-4">
-                              <button
-                                onClick={() => { setSelectedChatUser(null); setSearchQuery('') }}
-                                className="flex items-center gap-1 text-sage-500 hover:text-sage-700 text-sm"
-                              >
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                                </svg>
-                                All conversations
-                              </button>
-                              <span className="text-sage-300">|</span>
-                              <div className="flex items-center gap-2">
-                                <div className="w-7 h-7 rounded-full bg-sage-100 flex items-center justify-center">
-                                  <span className="text-xs font-medium text-sage-600">
-                                    {chatProfile?.name?.charAt(0) || '?'}
-                                  </span>
-                                </div>
-                                <div>
-                                  <span className="font-medium text-sage-800 text-sm">{chatProfile?.name || 'Unknown'}</span>
-                                  <span className="text-sage-400 text-xs ml-2">{chatProfile?.role?.replace('couple-', '').replace('-', ' ') || 'Member'}</span>
-                                </div>
-                              </div>
-                              <span className="ml-auto text-sage-400 text-xs">{chronological.length} messages</span>
-                            </div>
-
-                            {/* Chat bubbles */}
-                            <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
-                              {chronological.map((msg, idx) => {
-                                const isUser = msg.sender === 'user'
-                                const isEscalation = isUser && ESCALATION_KEYWORDS.some(kw =>
-                                  msg.content.toLowerCase().includes(kw)
-                                )
-                                const showTime = idx === 0 ||
-                                  new Date(msg.created_at) - new Date(chronological[idx - 1].created_at) > 5 * 60 * 1000
-                                return (
-                                  <div key={msg.id}>
-                                    {showTime && (
-                                      <p className="text-center text-sage-400 text-xs my-2">
-                                        {new Date(msg.created_at).toLocaleDateString('en-US', {
-                                          month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
-                                        })}
-                                      </p>
-                                    )}
-                                    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-                                      {!isUser && (
-                                        <div className="w-6 h-6 rounded-full bg-sage-200 flex items-center justify-center mr-2 mt-1 flex-shrink-0">
-                                          <span className="text-xs text-sage-600 font-medium">S</span>
-                                        </div>
-                                      )}
-                                      <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 text-sm ${
-                                        isUser
-                                          ? isEscalation
-                                            ? 'bg-red-100 text-red-800 rounded-br-sm'
-                                            : 'bg-sage-600 text-white rounded-br-sm'
-                                          : msg.is_team_note
-                                            ? 'bg-amber-50 text-sage-800 rounded-bl-sm border border-amber-200'
-                                            : 'bg-cream-100 text-sage-800 rounded-bl-sm border border-cream-200'
-                                      }`}>
-                                        {isEscalation && (
-                                          <span className="block text-xs text-red-500 font-medium mb-1">Needs attention</span>
-                                        )}
-                                        {msg.is_team_note && (
-                                          <span className="block text-xs text-amber-600 font-medium mb-1">★ Team note</span>
-                                        )}
-                                        <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
-                                      </div>
-                                    </div>
-                                  </div>
-                                )
-                              })}
-                            </div>
-
-                            {/* ── Inject Team Note ── */}
-                            <div className="mt-4 pt-4 border-t border-cream-200">
-                              <p className="text-xs text-sage-500 mb-2 font-medium">Inject a note as Sage</p>
-                              <textarea
-                                value={injectText}
-                                onChange={e => setInjectText(e.target.value)}
-                                placeholder="Type a correction or clarification — it will appear in the client's chat thread marked as a team note…"
-                                rows={3}
-                                className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-sage-300"
-                              />
-                              <div className="flex flex-wrap items-center gap-3 mt-2">
-                                <label className="flex items-center gap-2 text-sm text-sage-600 cursor-pointer">
-                                  <input
-                                    type="checkbox"
-                                    checked={injectKb}
-                                    onChange={e => setInjectKb(e.target.checked)}
-                                    className="rounded border-cream-300"
-                                  />
-                                  Also save to Knowledge Base
-                                </label>
-                                {injectKb && (
-                                  <input
-                                    type="text"
-                                    value={injectKbCat}
-                                    onChange={e => setInjectKbCat(e.target.value)}
-                                    placeholder="KB category (e.g. Catering)"
-                                    className="flex-1 px-3 py-1.5 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
-                                  />
-                                )}
-                                <button
-                                  onClick={() => injectNote(selectedChatUser)}
-                                  disabled={!injectText.trim() || injecting}
-                                  className="ml-auto px-4 py-1.5 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                                >
-                                  {injecting ? 'Sending…' : 'Send as Team Note'}
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        )
-                      })()
-                    ) : (
-                      /* ── User List View ── */
-                      <div>
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
-                          <h3 className="font-medium text-sage-700">Questions & Conversations</h3>
-                          <div className="relative">
-                            <input
-                              type="text"
-                              value={searchQuery}
-                              onChange={(e) => setSearchQuery(e.target.value)}
-                              placeholder="Search messages..."
-                              className="pl-9 pr-4 py-2 border border-cream-300 rounded-lg text-sm w-full sm:w-64 focus:outline-none focus:ring-2 focus:ring-sage-300"
-                            />
-                            <svg className="w-4 h-4 text-sage-400 absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                            </svg>
-                          </div>
-                        </div>
-
-                        {loadingMessages ? (
-                          <p className="text-sage-400 text-center py-8">Loading messages...</p>
-                        ) : weddingMessages.length === 0 ? (
-                          <p className="text-sage-400 text-center py-8">No conversations yet</p>
-                        ) : (() => {
-                          // Group messages by user, filter by search
-                          const byUser = {}
-                          weddingMessages.forEach(m => {
-                            if (!byUser[m.user_id]) byUser[m.user_id] = []
-                            byUser[m.user_id].push(m)
-                          })
-                          const userIds = Object.keys(byUser).filter(uid => {
-                            if (!searchQuery.trim()) return true
-                            return byUser[uid].some(m =>
-                              m.content.toLowerCase().includes(searchQuery.toLowerCase())
-                            )
-                          })
-                          if (userIds.length === 0) {
-                            return <p className="text-sage-400 text-center py-8">No messages match your search</p>
-                          }
-                          return (
-                            <div className="space-y-3">
-                              {userIds.map(uid => {
-                                const msgs = byUser[uid]
-                                const profile = profileMap[uid]
-                                const userMsgs = msgs.filter(m => m.sender === 'user')
-                                const hasEscalation = userMsgs.some(m =>
-                                  ESCALATION_KEYWORDS.some(kw => m.content.toLowerCase().includes(kw))
-                                )
-                                // Latest message chronologically
-                                const latest = [...msgs].sort((a, b) =>
-                                  new Date(b.created_at) - new Date(a.created_at)
-                                )[0]
-                                return (
-                                  <button
-                                    key={uid}
-                                    onClick={() => setSelectedChatUser(uid)}
-                                    className={`w-full text-left border rounded-xl p-4 hover:shadow-sm transition-shadow ${
-                                      hasEscalation ? 'border-red-200 bg-red-50/40' : 'border-cream-200 hover:border-sage-200'
-                                    }`}
-                                  >
-                                    <div className="flex items-center justify-between mb-2">
-                                      <div className="flex items-center gap-2">
-                                        <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                                          hasEscalation ? 'bg-red-100' : 'bg-sage-100'
-                                        }`}>
-                                          <span className={`text-sm font-medium ${
-                                            hasEscalation ? 'text-red-600' : 'text-sage-600'
-                                          }`}>
-                                            {profile?.name?.charAt(0) || '?'}
-                                          </span>
-                                        </div>
-                                        <div>
-                                          <p className="font-medium text-sage-800 text-sm">
-                                            {profile?.name || 'Unknown User'}
-                                            {hasEscalation && (
-                                              <span className="ml-2 text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded">
-                                                Needs attention
-                                              </span>
-                                            )}
-                                          </p>
-                                          <p className="text-sage-400 text-xs">
-                                            {profile?.role?.replace('couple-', '').replace('-', ' ') || 'Member'} · {userMsgs.length} question{userMsgs.length !== 1 ? 's' : ''}
-                                          </p>
-                                        </div>
-                                      </div>
-                                      <div className="flex items-center gap-2">
-                                        <span className="text-sage-400 text-xs">
-                                          {new Date(latest.created_at).toLocaleDateString('en-US', {
-                                            month: 'short', day: 'numeric'
-                                          })}
-                                        </span>
-                                        <svg className="w-4 h-4 text-sage-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                                        </svg>
-                                      </div>
-                                    </div>
-                                    <p className="text-sage-500 text-sm truncate pl-10">
-                                      {latest.sender === 'user' ? latest.content : `Sage: ${latest.content}`}
-                                    </p>
-                                  </button>
-                                )
-                              })}
-                            </div>
-                          )
-                        })()}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {activeTab === 'wedding-details' && (
-                  <WeddingDetails weddingId={viewingWedding.id} userId={null} />
-                )}
-
-                {activeTab === 'allergies' && (
-                  <AllergyRegistry weddingId={viewingWedding.id} userId={null} />
-                )}
-
-                {activeTab === 'ceremony-order' && (
-                  <CeremonyOrder weddingId={viewingWedding.id} userId={null} />
-                )}
-
-                {activeTab === 'decor' && (
-                  <DecorInventory weddingId={viewingWedding.id} userId={null} />
-                )}
-
-                {activeTab === 'makeup' && (
-                  <MakeupSchedule weddingId={viewingWedding.id} userId={null} />
-                )}
-
-                {activeTab === 'shuttle' && (
-                  <ShuttleSchedule weddingId={viewingWedding.id} userId={null} />
-                )}
-
-                {activeTab === 'rehearsal' && (
-                  <RehearsalDinner weddingId={viewingWedding.id} userId={null} />
-                )}
-
-                {activeTab === 'bedrooms' && (
-                  <BedroomAssignments weddingId={viewingWedding.id} userId={null} />
-                )}
-
-                {/* Vendors Tab */}
-                {activeTab === 'vendors' && (
-                  <div>
-                    {/* Couple Photo Section */}
-                    <div className="bg-gradient-to-r from-sage-50 to-cream-50 rounded-xl p-4 mb-6 border border-sage-100">
-                      <h3 className="font-medium text-sage-700 mb-3 flex items-center gap-2">
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-                        </svg>
-                        The Couple
-                      </h3>
-                      <CouplePhoto weddingId={viewingWedding.id} />
-                    </div>
-                    <VendorChecklist weddingId={viewingWedding.id} isAdmin />
-                  </div>
-                )}
-
-                {/* Inspiration Tab */}
-                {activeTab === 'inspo' && (
-                  <div>
-                    <InspoGallery weddingId={viewingWedding.id} isAdmin />
-                  </div>
-                )}
-
-                {/* Checklist Tab */}
-                {activeTab === 'checklist' && (
-                  <div>
-                    <PlanningChecklist weddingId={viewingWedding.id} isAdmin />
-                  </div>
-                )}
-
-                {/* Uncertain Questions Tab */}
-                {activeTab === 'uncertain' && (
-                  <div>
-                    <p className="text-sage-500 text-sm mb-4">
-                      Questions Sage was uncertain about for this wedding. Answer to help Sage improve.
-                    </p>
-                    {uncertainQuestions.filter(q => q.wedding_id === viewingWedding.id).length === 0 ? (
-                      <p className="text-sage-400 text-center py-8">
-                        No uncertain questions for this wedding
-                      </p>
-                    ) : (
-                      <div className="space-y-4">
-                        {uncertainQuestions
-                          .filter(q => q.wedding_id === viewingWedding.id)
-                          .map(q => {
-                            const isAnswering = answeringQuestion === q.id
-
-                            return (
-                              <div key={q.id} className="bg-amber-50 rounded-lg p-4 border border-amber-200">
-                                <div className="flex items-start justify-between gap-2 mb-2">
-                                  <div>
-                                    <p className="text-sage-800 font-medium">{q.question}</p>
-                                    <p className="text-sage-400 text-xs mt-1">
-                                      {new Date(q.created_at).toLocaleDateString()}
-                                      {q.confidence_level && (
-                                        <span className="ml-2 text-amber-600">
-                                          {q.confidence_level}% confident
-                                        </span>
-                                      )}
-                                    </p>
-                                  </div>
-                                  <button
-                                    onClick={() => deleteUncertainQuestion(q.id)}
-                                    className="text-sage-400 hover:text-red-500 text-sm"
-                                    title="Delete question"
-                                  >
-                                    ✕
-                                  </button>
-                                </div>
-
-                                {q.sage_response && (
-                                  <div className="bg-white rounded p-3 mb-3 text-sm text-sage-600 border border-cream-200">
-                                    <span className="font-medium">Sage said:</span> {q.sage_response}
-                                  </div>
-                                )}
-
-                                {isAnswering ? (
-                                  <div className="space-y-3 mt-3 pt-3 border-t border-amber-300">
-                                    <textarea
-                                      value={adminAnswer}
-                                      onChange={(e) => setAdminAnswer(e.target.value)}
-                                      placeholder="Your answer..."
-                                      rows={3}
-                                      className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
-                                    />
-
-                                    <div className="flex items-center gap-2">
-                                      <input
-                                        type="checkbox"
-                                        id={`kb-profile-${q.id}`}
-                                        checked={addToKb}
-                                        onChange={(e) => setAddToKb(e.target.checked)}
-                                        className="rounded border-cream-300"
-                                      />
-                                      <label htmlFor={`kb-profile-${q.id}`} className="text-sm text-sage-600">
-                                        Add to Knowledge Base
-                                      </label>
-                                    </div>
-
-                                    {addToKb && (
-                                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                        <input
-                                          type="text"
-                                          value={kbCategory}
-                                          onChange={(e) => setKbCategory(e.target.value)}
-                                          placeholder="Category (e.g., venue)"
-                                          className="px-3 py-2 border border-cream-300 rounded-lg text-sm"
-                                        />
-                                        <input
-                                          type="text"
-                                          value={kbSubcategory}
-                                          onChange={(e) => setKbSubcategory(e.target.value)}
-                                          placeholder="Subcategory (optional)"
-                                          className="px-3 py-2 border border-cream-300 rounded-lg text-sm"
-                                        />
-                                      </div>
-                                    )}
-
-                                    <div className="flex gap-2">
-                                      <button
-                                        onClick={() => submitAnswer(q.id)}
-                                        disabled={submittingAnswer || !adminAnswer.trim()}
-                                        className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
-                                      >
-                                        {submittingAnswer ? 'Saving...' : 'Save Answer'}
-                                      </button>
-                                      <button
-                                        onClick={() => {
-                                          setAnsweringQuestion(null)
-                                          setAdminAnswer('')
-                                          setAddToKb(false)
-                                        }}
-                                        className="px-4 py-2 text-sage-500 text-sm hover:text-sage-700"
-                                      >
-                                        Cancel
-                                      </button>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <button
-                                    onClick={() => setAnsweringQuestion(q.id)}
-                                    className="mt-2 text-sm text-sage-600 hover:text-sage-800 font-medium"
-                                  >
-                                    Answer this question →
-                                  </button>
-                                )}
-                              </div>
-                            )
-                          })}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Meetings Tab */}
-                {activeTab === 'meetings' && (
-                  <div>
-                    <UpcomingMeetings filterWedding={viewingWedding} compact />
-                  </div>
-                )}
-
-                {/* Direct Messages Tab */}
-                {activeTab === 'direct-messages' && (
-                  <DirectMessagesPanel weddingId={viewingWedding.id} weddingName={viewingWedding.couple_names} />
-                )}
-
-                {/* Timeline Tab */}
-                {activeTab === 'timeline' && (
-                  <TimelineBuilder weddingId={viewingWedding.id} weddingDate={viewingWedding.wedding_date} isAdmin />
-                )}
-
-                {/* Tables Tab */}
-                {activeTab === 'tables' && (
-                  <TableLayoutPlanner weddingId={viewingWedding.id} isAdmin />
-                )}
-
-                {activeTab === 'table-map' && (
-                  <TableCanvas weddingId={viewingWedding.id} isAdmin />
-                )}
-
-                {activeTab === 'staffing' && (
-                  <StaffingCalculator weddingId={viewingWedding.id} userId={null} isAdmin />
-                )}
-
-                {activeTab === 'bar' && (
-                  <BarPlanner weddingId={viewingWedding.id} guestCount={viewingWedding.guest_count} weddingDate={viewingWedding.wedding_date} coupleNames={viewingWedding.couple_names} />
-                )}
-
-                {activeTab === 'budget' && (
-                  <BudgetTracker weddingId={viewingWedding.id} />
-                )}
-
-                {activeTab === 'guests' && (
-                  <GuestList weddingId={viewingWedding.id} userId={null} />
-                )}
-
-                {/* Borrow Brochure Tab */}
-                {activeTab === 'borrow' && (
-                  <div>
-                    <p className="text-sage-500 text-sm mb-4">
-                      Items this couple has selected. To add new catalog items, go to the <button onClick={() => { closeProfile(); setMainView('borrow-catalog') }} className="text-sage-600 underline hover:text-sage-800">Borrow Catalog</button> tab.
-                    </p>
-                    <BorrowCatalog
-                      weddingId={viewingWedding.id}
-                      isAdmin={true}
-                      refreshKey={borrowCatalogRefreshKey}
-                    />
-                  </div>
-                )}
-
-                {/* Activity Tab */}
-                {activeTab === 'activity' && (
-                  <div>
-                    <p className="text-sage-500 text-sm mb-4">
-                      Recent client actions and updates. Shows when they interact with the portal.
-                    </p>
-                    {loadingActivities ? (
-                      <p className="text-sage-400 text-center py-8">Loading activities...</p>
-                    ) : activities.length === 0 ? (
-                      <div className="text-center py-8 bg-cream-50 rounded-xl">
-                        <p className="text-sage-500">No recent activity</p>
-                        <p className="text-sage-400 text-sm mt-1">Activity will appear when clients make updates</p>
-                      </div>
-                    ) : (
-                      <div className="space-y-2">
-                        {activities.map(activity => {
-                          const activityIcons = {
-                            'timeline_updated': '📅',
-                            'tables_updated': '🪑',
-                            'staffing_updated': '🙋',
-                            'vendor_added': '👥',
-                            'vendor_updated': '✏️',
-                            'contract_uploaded': '📄',
-                            'message_sent': '💬',
-                            'inspo_uploaded': '💡',
-                            'checklist_completed': '✅',
-                          }
-                          const activityLabels = {
-                            'timeline_updated': 'Updated timeline',
-                            'tables_updated': 'Updated table setup',
-                            'staffing_updated': 'Updated staffing guide',
-                            'vendor_added': 'Added vendor',
-                            'vendor_updated': 'Updated vendor',
-                            'contract_uploaded': 'Uploaded contract',
-                            'message_sent': 'Sent message',
-                            'inspo_uploaded': 'Added inspiration',
-                            'checklist_completed': 'Completed task',
-                          }
-                          const icon = activityIcons[activity.activity_type] || '📌'
-                          const label = activityLabels[activity.activity_type] || activity.activity_type
-
-                          return (
-                            <div
-                              key={activity.id}
-                              className="flex items-start gap-3 p-3 bg-white rounded-lg border border-cream-200"
-                            >
-                              <span className="text-xl">{icon}</span>
-                              <div className="flex-1 min-w-0">
-                                <p className="text-sage-800 text-sm font-medium">{label}</p>
-                                {activity.details && (
-                                  <p className="text-sage-500 text-xs mt-0.5">{activity.details}</p>
-                                )}
-                                <div className="flex items-center gap-2 mt-1">
-                                  {activity.profiles?.name && (
-                                    <span className="text-sage-400 text-xs">by {activity.profiles.name}</span>
-                                  )}
-                                  <span className="text-sage-300 text-xs">
-                                    {new Date(activity.created_at).toLocaleDateString('en-US', {
-                                      month: 'short',
-                                      day: 'numeric',
-                                      hour: 'numeric',
-                                      minute: '2-digit'
-                                    })}
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Guest Care Tab */}
-                {activeTab === 'guest-care' && (
-                  <GuestCareNotes weddingId={viewingWedding.id} />
-                )}
-
-                {/* Website Builder Tab */}
-                {activeTab === 'website-builder' && (
-                  <WebsiteBuilder
-                    weddingId={viewingWedding.id}
-                    coupleNames={viewingWedding.couple_names}
-                  />
-                )}
-
-                {/* Photo Library Tab */}
-                {activeTab === 'photo-library' && (
-                  <PhotoBucket weddingId={viewingWedding.id} />
-                )}
-
-                {/* Wedding Party Tab */}
-                {activeTab === 'wedding-party' && (
-                  <WeddingParty
-                    weddingId={viewingWedding.id}
-                    partner1={viewingWedding.partner1_name}
-                    partner2={viewingWedding.partner2_name}
-                  />
-                )}
-
-                {/* Contract Upload Tab */}
-                {activeTab === 'contract-upload' && (
-                  <div>
-                    <h3 className="font-medium text-sage-700 mb-3">Upload Contract</h3>
-                    <p className="text-sage-500 text-sm mb-4">
-                      Upload vendor contracts (PDF or image) and Claude will extract key details as planning notes.
-                    </p>
-                    <label className={`block w-full p-4 border-2 border-dashed rounded-lg text-center cursor-pointer transition ${
-                      uploadingContract
-                        ? 'border-sage-300 bg-sage-50'
-                        : 'border-cream-300 hover:border-sage-400 hover:bg-cream-50'
-                    }`}>
-                      <input
-                        type="file"
-                        accept=".pdf,image/*"
-                        onChange={handleContractUpload}
-                        disabled={uploadingContract}
-                        className="hidden"
-                      />
-                      {uploadingContract ? (
-                        <span className="text-sage-600">
-                          <svg className="w-5 h-5 animate-spin inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                          </svg>
-                          Extracting details...
-                        </span>
-                      ) : (
-                        <span className="text-sage-500">
-                          <svg className="w-6 h-6 mx-auto mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                          </svg>
-                          Click to upload PDF or image
-                        </span>
-                      )}
-                    </label>
-                    {uploadResult && (
-                      <div className={`mt-3 p-3 rounded-lg text-sm ${
-                        uploadResult.success
-                          ? 'bg-green-50 text-green-700'
-                          : 'bg-red-50 text-red-700'
-                      }`}>
-                        {uploadResult.message}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Ask About Wedding Tab */}
-                {activeTab === 'ask' && (
-                  <div>
-                    <h3 className="font-medium text-sage-700 mb-2">Ask About This Wedding</h3>
-                    <p className="text-sage-500 text-sm mb-4">
-                      Search contracts & planning notes (e.g., "Is the caterer doing a welcome drink?" or "How many guests?")
-                    </p>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={contractQuestion}
-                        onChange={(e) => setContractQuestion(e.target.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && askContractQuestion()}
-                        placeholder="Ask a question..."
-                        className="flex-1 px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
-                        disabled={askingQuestion}
-                      />
-                      <button
-                        onClick={askContractQuestion}
-                        disabled={askingQuestion || !contractQuestion.trim()}
-                        className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
-                      >
-                        {askingQuestion ? '...' : 'Ask'}
-                      </button>
-                    </div>
-                    {contractAnswer && (
-                      <div className="mt-3 p-3 bg-cream-50 rounded-lg text-sm text-sage-700 whitespace-pre-wrap">
-                        {contractAnswer}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* API Usage Tab */}
-                {activeTab === 'api-usage' && (
-                  <div>
-                    <h3 className="font-medium text-sage-700 mb-4">API Usage & Costs</h3>
-                    <UsageStats weddingId={viewingWedding.id} />
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </main>
-      </div>
+      <AdminWeddingProfile
+        viewingWedding={viewingWedding}
+        closeProfile={closeProfile}
+        weddingMessages={weddingMessages}
+        setWeddingMessages={setWeddingMessages}
+        loadingMessages={loadingMessages}
+        selectedChatUser={selectedChatUser}
+        setSelectedChatUser={setSelectedChatUser}
+        searchQuery={searchQuery}
+        setSearchQuery={setSearchQuery}
+        escalations={escalations}
+        markEscalationHandled={markEscalationHandled}
+        weddingPulse={weddingPulse}
+        couplePhotos={couplePhotos}
+        setEnlargedPhoto={setEnlargedPhoto}
+        setCouplePhotos={setCouplePhotos}
+        planningNotes={planningNotes}
+        setPlanningNotes={setPlanningNotes}
+        updateNoteStatus={updateNoteStatus}
+        notesSearchQuery={notesSearchQuery}
+        setNotesSearchQuery={setNotesSearchQuery}
+        notesHighlights={notesHighlights}
+        setNotesHighlights={setNotesHighlights}
+        loadingHighlights={loadingHighlights}
+        getNotesHighlights={getNotesHighlights}
+        collapsedNoteCategories={collapsedNoteCategories}
+        setCollapsedNoteCategories={setCollapsedNoteCategories}
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        timelineSummary={timelineSummary}
+        tableSummary={tableSummary}
+        staffingSummary={staffingSummary}
+        sharedBudget={sharedBudget}
+        borrowSelections={borrowSelections}
+        borrowCatalogRefreshKey={borrowCatalogRefreshKey}
+        internalNotes={internalNotes}
+        newNoteText={newNoteText}
+        setNewNoteText={setNewNoteText}
+        savingNote={savingNote}
+        addInternalNote={addInternalNote}
+        deleteInternalNote={deleteInternalNote}
+        uploadingContract={uploadingContract}
+        uploadResult={uploadResult}
+        handleContractUpload={handleContractUpload}
+        contractQuestion={contractQuestion}
+        setContractQuestion={setContractQuestion}
+        contractAnswer={contractAnswer}
+        askContractQuestion={askContractQuestion}
+        askingQuestion={askingQuestion}
+        uncertainQuestions={uncertainQuestions}
+        answeringQuestion={answeringQuestion}
+        setAnsweringQuestion={setAnsweringQuestion}
+        adminAnswer={adminAnswer}
+        setAdminAnswer={setAdminAnswer}
+        addToKb={addToKb}
+        setAddToKb={setAddToKb}
+        kbCategory={kbCategory}
+        setKbCategory={setKbCategory}
+        kbSubcategory={kbSubcategory}
+        setKbSubcategory={setKbSubcategory}
+        submittingAnswer={submittingAnswer}
+        submitAnswer={submitAnswer}
+        deleteUncertainQuestion={deleteUncertainQuestion}
+        injectText={injectText}
+        setInjectText={setInjectText}
+        injectKb={injectKb}
+        setInjectKb={setInjectKb}
+        injectKbCat={injectKbCat}
+        setInjectKbCat={setInjectKbCat}
+        injecting={injecting}
+        injectNote={injectNote}
+        checkingIn={checkingIn}
+        checkedIn={checkedIn}
+        sendCheckin={sendCheckin}
+        activities={activities}
+        loadingActivities={loadingActivities}
+        setMainView={setMainView}
+      />
     )
   }
 
@@ -2726,98 +1087,19 @@ export default function Admin() {
   return (
     <div className="min-h-screen min-h-[100dvh] bg-cream-50">
       {/* Header with integrated navigation */}
-      <header className="bg-white border-b border-cream-200 sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-3 sm:px-4">
-          <div className="flex items-center justify-between py-3">
-            <button onClick={() => { setViewingWedding(null); setActiveTab('overview'); }} className="inline-block">
-              <img src="/rixey-r.png" alt="Rixey Manor" className="h-9 w-auto" />
-            </button>
-            <div className="flex items-center gap-3">
-              {/* Notification Bell */}
-              <NotificationBell
-                recipientType="admin"
-                extraItems={[
-                  {
-                    count: unreadMessages,
-                    label: `${unreadMessages} unread message${unreadMessages !== 1 ? 's' : ''}`,
-                    sublabel: 'Go to Messages tab →',
-                    dotColor: 'bg-red-500',
-                    onClick: () => setMainView('messages'),
-                  },
-                  {
-                    count: unansweredCount,
-                    label: `${unansweredCount} Sage question${unansweredCount !== 1 ? 's' : ''} to review`,
-                    sublabel: "Sage wasn't fully confident →",
-                    dotColor: 'bg-amber-400',
-                    onClick: () => setShowUncertainModal(true),
-                  },
-                ]}
-              />
-              <button
-                onClick={async () => { await supabase.auth.signOut(); navigate('/staff'); }}
-                className="text-sage-500 hover:text-sage-700 text-sm font-medium"
-              >
-                Sign Out
-              </button>
-            </div>
-          </div>
-          {/* Navigation — mobile select / desktop tabs */}
-          <div className="pb-px">
-            {/* Mobile select */}
-            <div className="sm:hidden py-2">
-              <select
-                value={mainView}
-                onChange={e => { setMainView(e.target.value); if (e.target.value === 'messages') setTimeout(fetchUnreadMessages, 2000) }}
-                className="w-full px-3 py-2 border border-cream-200 rounded-lg bg-white text-sage-700 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-sage-300"
-              >
-                <option value="weddings">Weddings {stats.active > 0 ? `(${stats.active})` : ''}</option>
-                <option value="messages">Messages {unreadMessages > 0 ? `(${unreadMessages} unread)` : ''}</option>
-                <option value="vendors">Vendors</option>
-                <option value="meetings">Meetings</option>
-                <option value="borrow-catalog">Borrow Catalog</option>
-                <option value="picks">Picks</option>
-                <option value="knowledge-base">Knowledge Base</option>
-                <option value="venue-settings">Venue Settings</option>
-                <option value="usage">Usage</option>
-              </select>
-            </div>
-          </div>
-          {/* Desktop tabs */}
-          <div className="hidden sm:flex gap-1 -mb-px overflow-x-auto scrollbar-hide">
-            {[
-              { id: 'weddings', label: 'Weddings', count: stats.active },
-              { id: 'messages', label: 'Messages', count: unreadMessages, alert: unreadMessages > 0 },
-              { id: 'vendors', label: 'Vendors' },
-              { id: 'meetings', label: 'Meetings' },
-              { id: 'borrow-catalog', label: 'Borrow Catalog' },
-              { id: 'picks', label: 'Picks' },
-              { id: 'manor-downloads', label: 'Manor Downloads' },
-              { id: 'knowledge-base', label: 'Knowledge Base' },
-              { id: 'venue-settings', label: 'Venue Settings' },
-              { id: 'usage', label: 'Usage' },
-            ].map(tab => (
-              <button
-                key={tab.id}
-                onClick={() => { setMainView(tab.id); if (tab.id === 'messages') setTimeout(fetchUnreadMessages, 2000) }}
-                className={`px-3 sm:px-4 py-2.5 text-sm font-medium border-b-2 transition relative whitespace-nowrap ${
-                  mainView === tab.id
-                    ? 'border-sage-600 text-sage-700'
-                    : 'border-transparent text-sage-500 hover:text-sage-700 hover:border-sage-300'
-                }`}
-              >
-                {tab.label}
-                {tab.count > 0 && (
-                  <span className={`ml-1.5 px-1.5 py-0.5 text-xs rounded-full ${
-                    tab.alert ? 'bg-red-500 text-white' : 'bg-sage-100 text-sage-600'
-                  }`}>
-                    {tab.count}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-        </div>
-      </header>
+      <AdminHeader
+        navigate={navigate}
+        mainView={mainView}
+        setMainView={setMainView}
+        stats={stats}
+        unreadMessages={unreadMessages}
+        setUnreadMessages={setUnreadMessages}
+        unansweredCount={unansweredCount}
+        setShowUncertainModal={setShowUncertainModal}
+        fetchUnreadMessages={fetchUnreadMessages}
+        setViewingWedding={setViewingWedding}
+        setActiveTab={setActiveTab}
+      />
 
       <main className="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
         {/* Quick Stats - Compact Row */}
@@ -2848,7 +1130,6 @@ export default function Admin() {
           )}
         </div>
 
-        {/* Borrow Catalog View */}
         {/* Rixey Picks Admin */}
         {mainView === 'picks' && (
           <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
@@ -2899,7 +1180,7 @@ export default function Admin() {
                       onChange={e => setNewItemCategory(e.target.value)}
                       className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 bg-white"
                     >
-                      <option value="">Select category…</option>
+                      <option value="">Select category...</option>
                       {['Arbors','Candles & Lighting','Card Boxes','Ceremony','Dessert & Cake','Extras','Signs','Silk Florals','Stands & Displays','Table Numbers','Vases'].map(c => (
                         <option key={c} value={c}>{c}</option>
                       ))}
@@ -2911,7 +1192,7 @@ export default function Admin() {
                   <textarea
                     value={newItemDescription}
                     onChange={e => setNewItemDescription(e.target.value)}
-                    placeholder="Short description of the item…"
+                    placeholder="Short description of the item..."
                     rows={2}
                     className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 resize-none"
                   />
@@ -2941,7 +1222,8 @@ export default function Admin() {
                       fd.append('category', newItemCategory)
                       fd.append('description', newItemDescription.trim())
                       if (newItemImage) fd.append('image', newItemImage)
-                      const res = await fetch(`${API_URL}/api/admin/borrow-catalog`, { method: 'POST', body: fd })
+                      const borrowToken = (await authHeaders())['Authorization']
+                      const res = await fetch(`${API_URL}/api/admin/borrow-catalog`, { method: 'POST', headers: borrowToken ? { 'Authorization': borrowToken } : {}, body: fd })
                       const data = await res.json()
                       if (data.item) {
                         setAddItemResult({ success: true, message: `"${data.item.item_name}" added to catalog.` })
@@ -2958,7 +1240,7 @@ export default function Admin() {
                   disabled={savingNewItem || !newItemName.trim() || !newItemCategory}
                   className="px-6 py-2 bg-sage-600 text-white rounded-xl text-sm font-medium hover:bg-sage-700 transition disabled:opacity-50"
                 >
-                  {savingNewItem ? 'Saving…' : 'Save Item'}
+                  {savingNewItem ? 'Saving...' : 'Save Item'}
                 </button>
               </div>
             )}
@@ -3007,637 +1289,60 @@ export default function Admin() {
 
         {/* Weddings View */}
         {mainView === 'weddings' && (
-        <>
-
-        {/* ── Last 24 Hours ── */}
-        {(() => {
-          const ACTIVITY_LABELS = {
-            timeline_updated:    'updated their timeline',
-            tables_updated:      'updated their table layout',
-            floor_plan_needed:   'saved table setup — floor plan needed',
-            staffing_updated:    'updated their staffing plan',
-            vendor_added:        'added a new vendor',
-            vendor_updated:      'updated a vendor',
-            contract_uploaded:   'uploaded a vendor contract',
-            checklist_completed: 'completed a checklist item',
-            inspo_uploaded:      'added inspiration photos',
-          }
-
-          // Deduplicate activity: one line per wedding per activity_type
-          const seen = new Set()
-          const deduped = (last24h.activity || []).filter(a => {
-            const key = `${a.wedding_id}-${a.activity_type}`
-            if (seen.has(key)) return false
-            seen.add(key)
-            return true
-          })
-
-          // Communication concerns from already-loaded pulse data
-          const concerns = Object.entries(pulses)
-            .filter(([, p]) => p.level === 'less')
-            .map(([wid]) => weddings.find(w => w.id === wid))
-            .filter(Boolean)
-
-          const hasAnything = last24h.signups.length > 0 || deduped.length > 0 || concerns.length > 0
-
-          if (!hasAnything && !last24hLoading) return null
-
-          return (
-            <div className="mb-6 bg-white rounded-2xl border border-cream-200 overflow-hidden">
-              <div className="px-4 py-3 border-b border-cream-100 flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-sage-400 animate-pulse" />
-                <h3 className="font-medium text-sage-700 text-sm">Last 24 hours</h3>
-              </div>
-
-              {last24hLoading ? (
-                <div className="px-4 py-3 text-sm text-sage-400">Loading…</div>
-              ) : !hasAnything ? null : (
-                <div className="divide-y divide-cream-50">
-
-                  {/* New signups */}
-                  {last24h.signups.map(w => (
-                    <div key={w.id}
-                      onClick={() => { const wed = weddings.find(x => x.id === w.id); if (wed) viewWeddingProfile(wed) }}
-                      className="flex items-center gap-3 px-4 py-2.5 hover:bg-cream-50 cursor-pointer transition">
-                      <span className="text-base">🎉</span>
-                      <div className="flex-1 min-w-0">
-                        <span className="text-sm font-medium text-sage-800">{w.couple_names}</span>
-                        <span className="text-sm text-sage-500"> signed up</span>
-                        {w.wedding_date && <span className="text-xs text-sage-400 ml-2">· {new Date(w.wedding_date).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}</span>}
-                      </div>
-                      <span className="text-xs text-sage-300 flex-shrink-0">{new Date(w.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</span>
-                    </div>
-                  ))}
-
-                  {/* Activity updates */}
-                  {deduped.map(a => {
-                    const coupleName = a.weddings?.couple_names || weddings.find(w => w.id === a.wedding_id)?.couple_names || 'Unknown'
-                    const label = ACTIVITY_LABELS[a.activity_type] || a.activity_type.replace(/_/g, ' ')
-                    const emoji = {
-                      timeline_updated: '📅', tables_updated: '🪑', floor_plan_needed: '📐',
-                      vendor_added: '🤝', vendor_updated: '🤝', contract_uploaded: '📄',
-                      checklist_completed: '✅', inspo_uploaded: '📸', staffing_updated: '👥',
-                    }[a.activity_type] || '✏️'
-                    return (
-                      <div key={a.id}
-                        onClick={() => { const wed = weddings.find(w => w.id === a.wedding_id); if (wed) viewWeddingProfile(wed) }}
-                        className="flex items-center gap-3 px-4 py-2.5 hover:bg-cream-50 cursor-pointer transition">
-                        <span className="text-base">{emoji}</span>
-                        <div className="flex-1 min-w-0">
-                          <span className="text-sm font-medium text-sage-800">{coupleName}</span>
-                          <span className="text-sm text-sage-500"> {label}</span>
-                          {a.details && <span className="text-xs text-sage-400 ml-1">· {a.details}</span>}
-                        </div>
-                        <span className="text-xs text-sage-300 flex-shrink-0">{new Date(a.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</span>
-                      </div>
-                    )
-                  })}
-
-                  {/* Communication concerns */}
-                  {concerns.map(w => (
-                    <div key={w.id}
-                      onClick={() => viewWeddingProfile(w)}
-                      className="flex items-center gap-3 px-4 py-2.5 bg-slate-50 hover:bg-slate-100 cursor-pointer transition border-l-2 border-slate-300">
-                      <span className="text-base">📉</span>
-                      <div className="flex-1 min-w-0">
-                        <span className="text-sm font-medium text-sage-800">{w.couple_names}</span>
-                        <span className="text-sm text-slate-600"> is communicating less than usual</span>
-                        <span className="text-xs text-slate-400 ml-2">· {pulses[w.id]?.score ?? 0} touchpoints this month, expected {pulses[w.id]?.expected?.min}–{pulses[w.id]?.expected?.max}</span>
-                      </div>
-                      <PulseMeter level="less" />
-                    </div>
-                  ))}
-
-                </div>
-              )}
-            </div>
-          )
-        })()}
-
-        {/* Needs Attention Section - Only show if there are items */}
-        {(uncertainQuestions.length > 0 || stats.needsAttention > 0 || unreadCount > 0) && (
-          <div className="mb-6 grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {/* Uncertain Questions */}
-            {uncertainQuestions.length > 0 && (
-              <div className="bg-amber-50 rounded-xl border border-amber-200 p-4">
-                <h3 className="font-medium text-amber-800 mb-3 flex items-center gap-2">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  Sage Needs Help ({uncertainQuestions.length})
-                </h3>
-                <div className="space-y-2 max-h-40 overflow-y-auto">
-                  {uncertainQuestions.slice(0, 3).map(q => {
-                    const wedding = weddings.find(w => w.id === q.wedding_id)
-                    return (
-                      <div
-                        key={q.id}
-                        onClick={() => { setAnsweringQuestion(q.id); setShowUncertainModal(true) }}
-                        className="bg-white rounded-lg p-2 text-sm cursor-pointer hover:bg-amber-100 transition"
-                      >
-                        <p className="text-sage-700 line-clamp-1">{q.question}</p>
-                        <p className="text-sage-400 text-xs">{wedding?.couple_names}</p>
-                      </div>
-                    )
-                  })}
-                </div>
-                <button
-                  onClick={() => setShowUncertainModal(true)}
-                  className="text-amber-700 text-sm mt-2 hover:underline"
-                >
-                  {uncertainQuestions.length > 3 ? `+${uncertainQuestions.length - 3} more` : 'View all'} →
-                </button>
-              </div>
-            )}
-
-            {/* Notifications */}
-            {unreadCount > 0 && (
-              <div className="bg-blue-50 rounded-xl border border-blue-200 p-4">
-                <h3 className="font-medium text-blue-800 mb-3 flex items-center gap-2">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-                  </svg>
-                  Notifications ({unreadCount})
-                </h3>
-                <div className="space-y-2 max-h-40 overflow-y-auto">
-                  {notifications.filter(n => !n.read).slice(0, 3).map(notif => (
-                    <div key={notif.id} className="bg-white rounded-lg p-2 text-sm flex items-start justify-between gap-2">
-                      <p className="text-sage-700 line-clamp-2">{notif.message}</p>
-                      <button onClick={() => markAsRead(notif.id)} className="text-sage-400 hover:text-sage-600 flex-shrink-0">
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                        </svg>
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Escalations Summary */}
-            {stats.needsAttention > 0 && (
-              <div className="bg-red-50 rounded-xl border border-red-200 p-4">
-                <h3 className="font-medium text-red-800 mb-3 flex items-center gap-2">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                  </svg>
-                  Clients Need Attention ({stats.needsAttention})
-                </h3>
-                <p className="text-red-700 text-sm">
-                  {stats.needsAttention} client(s) may be stressed. Check their profiles for details.
-                </p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Main Grid: Weddings List + Sidebar */}
-        <div className="grid lg:grid-cols-4 gap-4 sm:gap-6">
-          {/* Weddings List - Takes 3/4 */}
-          <div className="lg:col-span-3">
-            <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-3 sm:p-6">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
-                <h2 className="font-serif text-xl text-sage-700">
-                  {showArchived ? 'Archived Weddings' : 'Active Weddings'}
-                </h2>
-                <div className="flex items-center gap-3 flex-wrap">
-                  {!showArchived && Object.keys(pulses).length > 0 && (
-                    <div className="flex items-center gap-1 bg-cream-50 rounded-lg p-1">
-                      {[
-                        { key: 'all', label: 'All' },
-                        { key: 'less', label: 'Quieter' },
-                        { key: 'typical', label: 'About right' },
-                        { key: 'more', label: 'More active' },
-                      ].map(({ key, label }) => (
-                        <button
-                          key={key}
-                          onClick={() => setPulseFilter(key)}
-                          className={`px-3 py-1 text-sm rounded-md transition ${
-                            pulseFilter === key ? 'bg-white text-sage-700 shadow-sm' : 'text-sage-500 hover:text-sage-700'
-                          }`}
-                        >
-                          {label}
-                          {key !== 'all' && Object.values(pulses).filter(p => p.level === key).length > 0 && (
-                            <span className="ml-1 text-xs text-sage-400">
-                              ({Object.values(pulses).filter(p => p.level === key).length})
-                            </span>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  {!showArchived && (
-                    <div className="flex items-center gap-1 bg-cream-50 rounded-lg p-1">
-                      <button
-                        onClick={() => setSortBy('lastActivity')}
-                        className={`px-3 py-1 text-sm rounded-md transition ${
-                          sortBy === 'lastActivity' ? 'bg-white text-sage-700 shadow-sm' : 'text-sage-500 hover:text-sage-700'
-                        }`}
-                      >
-                        Last Active
-                      </button>
-                      <button
-                        onClick={() => setSortBy('weddingDate')}
-                        className={`px-3 py-1 text-sm rounded-md transition ${
-                          sortBy === 'weddingDate' ? 'bg-white text-sage-700 shadow-sm' : 'text-sage-500 hover:text-sage-700'
-                        }`}
-                      >
-                        Date
-                      </button>
-                    </div>
-                  )}
-                  <button
-                    onClick={() => setShowArchived(!showArchived)}
-                    className="text-sage-500 hover:text-sage-700 text-sm"
-                  >
-                    {showArchived ? 'Show Active' : `Archived (${stats.archived})`}
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                {displayedWeddings.length === 0 ? (
-                  <p className="text-sage-400 text-sm py-8 text-center">
-                    {showArchived ? 'No archived weddings' : 'No active weddings'}
-                  </p>
-                ) : (
-                  displayedWeddings.map(wedding => {
-                    const escalation = escalations[wedding.id]
-                    const lastActivity = getLastActivity(allMessages[wedding.id])
-                    const couplePhoto = couplePhotos[wedding.id]
-
-                    return (
-                      <div
-                        key={wedding.id}
-                        className={`border rounded-xl p-3 sm:p-4 hover:shadow-md transition ${
-                          escalation?.hasEscalation ? 'border-red-200 bg-red-50/30' : 'border-cream-200 hover:border-sage-300'
-                        }`}
-                      >
-                        <div className="flex flex-col sm:flex-row sm:items-start gap-3 sm:gap-4">
-                          {/* Top row on mobile: Photo + Actions */}
-                          <div className="flex items-center justify-between sm:contents">
-                            {/* Photo */}
-                            {couplePhoto ? (
-                              <img
-                                src={couplePhoto}
-                                alt={wedding.couple_names}
-                                className="w-12 h-12 sm:w-14 sm:h-14 rounded-full object-cover border-2 border-sage-200 flex-shrink-0 cursor-pointer hover:opacity-80 transition"
-                                onClick={(e) => { e.stopPropagation(); setEnlargedPhoto(couplePhoto); }}
-                                title="Click to enlarge"
-                              />
-                            ) : (
-                              <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-cream-100 flex items-center justify-center border-2 border-cream-200 flex-shrink-0">
-                                <span className="text-sage-400 text-lg sm:text-xl">{wedding.couple_names?.charAt(0) || '?'}</span>
-                              </div>
-                            )}
-                            {/* Mobile-only view button */}
-                            <button onClick={() => viewWeddingProfile(wedding)} className="sm:hidden px-3 py-1.5 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700">
-                              View
-                            </button>
-                          </div>
-
-                          {/* Info */}
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <h3 className="font-medium text-sage-800 text-sm sm:text-base">{wedding.couple_names || 'Unnamed'}</h3>
-                              {lastActivity ? (
-                                <span className={`text-xs px-2 py-0.5 rounded ${
-                                  lastActivity.status === 'recent' ? 'bg-green-100 text-green-700' :
-                                  lastActivity.status === 'active' ? 'bg-sage-100 text-sage-700' :
-                                  lastActivity.status === 'moderate' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'
-                                }`}>
-                                  {lastActivity.display}
-                                </span>
-                              ) : (
-                                <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-500">No activity</span>
-                              )}
-                              {escalation?.hasEscalation && (
-                                <span className="bg-red-100 text-red-600 text-xs px-2 py-0.5 rounded flex items-center gap-1">
-                                  Needs attention
-                                  <button onClick={(e) => { e.stopPropagation(); markEscalationHandled(wedding.id) }} className="ml-1 text-green-600 hover:text-green-800" title="Mark handled">✓</button>
-                                </span>
-                              )}
-                            </div>
-                            <p className="text-sage-500 text-xs sm:text-sm">
-                              {wedding.wedding_date ? new Date(wedding.wedding_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'No date set'}
-                              <span className="mx-1 sm:mx-2 text-sage-300">·</span>
-                              <span className="font-mono text-xs">{wedding.event_code}</span>
-                              {pulses[wedding.id] && (
-                                <><span className="mx-1 sm:mx-2 text-sage-300">·</span><span className="text-xs text-sage-400">{pulses[wedding.id].level}</span><PulseMeter level={pulses[wedding.id].level} /></>
-                              )}
-                            </p>
-                            {wedding.profiles?.length > 0 && (
-                              <div className="flex flex-wrap gap-1 mt-1.5 sm:mt-2">
-                                {wedding.profiles.slice(0, 2).map(p => (
-                                  <span key={p.id} className="bg-cream-100 text-sage-600 text-xs px-2 py-0.5 rounded truncate max-w-[100px]">
-                                    {p.name}
-                                  </span>
-                                ))}
-                                {wedding.profiles.length > 2 && (
-                                  <span className="text-sage-400 text-xs">+{wedding.profiles.length - 2}</span>
-                                )}
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Actions - Hidden on mobile, visible on sm+ */}
-                          <div className="hidden sm:flex flex-col gap-2 flex-shrink-0">
-                            <button onClick={() => viewWeddingProfile(wedding)} className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700">
-                              View Profile
-                            </button>
-                            <button onClick={() => startEditing(wedding)} className="text-sage-500 hover:text-sage-700 text-xs">
-                              Edit Links
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Edit Form */}
-                        {editingWedding === wedding.id && (
-                          <div className="bg-cream-50 rounded-lg p-4 mt-4 space-y-3">
-                            <div className="grid sm:grid-cols-2 gap-3">
-                              <div>
-                                <label className="block text-sm font-medium text-sage-600 mb-1">HoneyBook Link</label>
-                                <input type="url" value={honeybook} onChange={(e) => setHoneybook(e.target.value)} placeholder="https://..." className="w-full px-3 py-2 rounded-lg border border-cream-300 text-sm" />
-                              </div>
-                              <div>
-                                <label className="block text-sm font-medium text-sage-600 mb-1">Google Sheets Link</label>
-                                <input type="url" value={googleSheets} onChange={(e) => setGoogleSheets(e.target.value)} placeholder="https://..." className="w-full px-3 py-2 rounded-lg border border-cream-300 text-sm" />
-                              </div>
-                            </div>
-                            <div className="flex gap-2">
-                              <button onClick={saveLinks} disabled={saving} className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50">
-                                {saving ? 'Saving...' : 'Save'}
-                              </button>
-                              <button onClick={() => setEditingWedding(null)} className="px-4 py-2 text-sage-600 text-sm hover:text-sage-800">Cancel</button>
-                              <button onClick={() => toggleArchive(wedding.id, wedding.archived)} className="ml-auto text-xs px-3 py-1 rounded bg-cream-100 text-sage-500 hover:bg-cream-200">
-                                {wedding.archived ? 'Unarchive' : 'Archive'}
-                              </button>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Link Status (when not editing) */}
-                        {editingWedding !== wedding.id && (
-                          <div className="flex items-center gap-4 mt-3 pt-3 border-t border-cream-100 text-xs">
-                            {wedding.honeybook_link ? (
-                              <span className="text-green-600">✓ HoneyBook</span>
-                            ) : (
-                              <span className="text-amber-600">⚠ No HoneyBook</span>
-                            )}
-                            {wedding.google_sheets_link ? (
-                              <span className="text-green-600">✓ Sheets</span>
-                            ) : (
-                              <span className="text-amber-600">⚠ No Sheets</span>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Sidebar - Integrations & Tools */}
-          <div className="lg:col-span-1 space-y-4">
-            {/* Email Sync */}
-            <div className="bg-white rounded-xl border border-cream-200 p-4">
-              <h3 className="font-medium text-sage-700 mb-3 flex items-center gap-2">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                </svg>
-                Email Sync
-              </h3>
-              {gmailConnected ? (
-                <div className="space-y-2">
-                  <p className="text-green-600 text-sm flex items-center gap-1">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-                    Connected
-                  </p>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={syncEmails}
-                      disabled={gmailSyncing}
-                      className="flex-1 px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
-                    >
-                      {gmailSyncing ? 'Syncing...' : 'Sync Now'}
-                    </button>
-                    <button
-                      onClick={disconnectGmail}
-                      className="px-4 py-2 text-sage-500 hover:text-sage-700 text-sm"
-                    >
-                      Disconnect
-                    </button>
-                  </div>
-                  {gmailStatus && (
-                    <p className="text-sage-600 text-sm bg-cream-50 p-2 rounded">{gmailStatus}</p>
-                  )}
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  <p className="text-sage-500 text-sm">
-                    Connect your Gmail to search past and incoming emails from registered clients. Planning notes are automatically extracted.
-                  </p>
-                  <button
-                    onClick={connectGmail}
-                    className="w-full px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 flex items-center justify-center gap-2"
-                  >
-                    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-                      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-                    </svg>
-                    Connect Gmail
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* SMS/Phone Sync */}
-            <div className="bg-white rounded-xl border border-cream-200 p-4">
-              <h3 className="font-medium text-sage-700 mb-3 flex items-center gap-2">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                </svg>
-                Phone & SMS
-              </h3>
-              {quoConnected ? (
-                <div className="space-y-2">
-                  <p className="text-green-600 text-sm flex items-center gap-1">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-                    Connected
-                  </p>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => syncQuo(false)}
-                      disabled={quoSyncing}
-                      className="flex-1 px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
-                    >
-                      {quoSyncing ? 'Syncing...' : 'Sync New'}
-                    </button>
-                    <button
-                      onClick={() => syncQuo(true)}
-                      disabled={quoSyncing}
-                      className="flex-1 px-4 py-2 bg-amber-600 text-white rounded-lg text-sm hover:bg-amber-700 disabled:opacity-50"
-                      title="Clears processed message cache and re-syncs all messages with planning note extraction"
-                    >
-                      {quoSyncing ? 'Syncing...' : 'Force Resync'}
-                    </button>
-                  </div>
-                  {quoStatus && (
-                    <pre className="text-sage-600 text-xs bg-cream-50 p-2 rounded whitespace-pre-wrap font-sans">{quoStatus}</pre>
-                  )}
-                </div>
-              ) : (
-                <p className="text-sage-500 text-sm">
-                  Add QUO_API_KEY to .env to enable SMS sync
-                </p>
-              )}
-            </div>
-
-            {/* Zoom Integration */}
-            <div className="bg-white rounded-xl border border-cream-200 p-4">
-              <h3 className="font-medium text-sage-700 mb-3 flex items-center gap-2">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-                Zoom Meetings
-              </h3>
-              {zoomConnected ? (
-                <div className="space-y-2">
-                  <p className="text-green-600 text-sm flex items-center gap-1">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-                    Connected
-                  </p>
-                  <div className="flex gap-2 flex-wrap">
-                    <button
-                      onClick={syncZoom}
-                      disabled={zoomSyncing}
-                      className="flex-1 px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
-                    >
-                      {zoomSyncing ? 'Working...' : 'Sync'}
-                    </button>
-                    <button
-                      onClick={reextractZoom}
-                      disabled={zoomSyncing}
-                      className="flex-1 px-4 py-2 bg-cream-100 text-sage-700 rounded-lg text-sm hover:bg-cream-200 disabled:opacity-50"
-                      title="Re-run AI extraction on already-synced transcripts"
-                    >
-                      Re-extract
-                    </button>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={connectZoom}
-                      className="text-blue-600 hover:text-blue-800 text-xs"
-                      title="Re-authorize Zoom (use if sync is failing)"
-                    >
-                      Re-auth
-                    </button>
-                    <span className="text-cream-300 text-xs">·</span>
-                    <button
-                      onClick={clearZoom}
-                      disabled={zoomSyncing}
-                      className="text-amber-600 hover:text-amber-800 text-xs disabled:opacity-50"
-                      title="Clear stored transcripts so next Sync re-downloads everything fresh"
-                    >
-                      Force Resync
-                    </button>
-                    <span className="text-cream-300 text-xs">·</span>
-                    <button
-                      onClick={disconnectZoom}
-                      className="text-sage-400 hover:text-sage-600 text-xs"
-                    >
-                      Disconnect
-                    </button>
-                  </div>
-                  {zoomStatus && (
-                    <p className={`text-sm p-2 rounded ${zoomStatus.includes('fail') || zoomStatus.includes('error') || zoomStatus.includes('Error') ? 'text-red-700 bg-red-50' : 'text-sage-600 bg-cream-50'}`}>{zoomStatus}</p>
-                  )}
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  <p className="text-sage-500 text-sm">
-                    Sync meeting transcripts for planning notes
-                  </p>
-                  <button
-                    onClick={connectZoom}
-                    className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 flex items-center justify-center gap-2"
-                  >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M4.5 4.5h15a2 2 0 012 2v11a2 2 0 01-2 2h-15a2 2 0 01-2-2v-11a2 2 0 012-2zm13.5 7.5l4-3v6l-4-3z"/>
-                    </svg>
-                    Connect Zoom
-                  </button>
-                  {zoomStatus && (
-                    <p className="text-sage-600 text-sm bg-cream-50 p-2 rounded">{zoomStatus}</p>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Sage Needs Help */}
-            <div
-              onClick={() => setShowUncertainModal(true)}
-              className={`rounded-xl border p-4 cursor-pointer transition ${
-                uncertainQuestions.length > 0
-                  ? 'bg-amber-50 border-amber-200 hover:border-amber-300'
-                  : 'bg-white border-cream-200 hover:border-sage-300'
-              }`}
-            >
-              <h3 className="font-medium text-sage-700 mb-1 flex items-center gap-2">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                Sage Needs Help
-                {uncertainQuestions.length > 0 && (
-                  <span className="bg-amber-500 text-white text-xs px-1.5 py-0.5 rounded-full ml-auto">
-                    {uncertainQuestions.length}
-                  </span>
-                )}
-              </h3>
-              <p className="text-sage-500 text-xs">
-                {uncertainQuestions.length > 0
-                  ? `${uncertainQuestions.length} question${uncertainQuestions.length > 1 ? 's' : ''} to review`
-                  : 'No questions right now'
-                }
-              </p>
-            </div>
-
-            {/* Quick Links */}
-            <div className="bg-white rounded-xl border border-cream-200 p-4">
-              <h3 className="font-medium text-sage-700 mb-3 flex items-center gap-2">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                </svg>
-                Quick Links
-              </h3>
-              <div className="space-y-2 text-sm">
-                <a
-                  href="https://calendly.com/rixeymanor"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-2 text-sage-600 hover:text-sage-800"
-                >
-                  <span>📅</span> Calendly
-                  <span className="ml-auto text-sage-400">↗</span>
-                </a>
-                <a
-                  href="https://www.honeybook.com"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-2 text-sage-600 hover:text-sage-800"
-                >
-                  <span>📒</span> HoneyBook
-                  <span className="ml-auto text-sage-400">↗</span>
-                </a>
-              </div>
-            </div>
-          </div>
-        </div>
-        </>
+          <AdminWeddingList
+            weddings={weddings}
+            displayedWeddings={displayedWeddings}
+            allMessages={allMessages}
+            escalations={escalations}
+            pulses={pulses}
+            couplePhotos={couplePhotos}
+            showArchived={showArchived}
+            setShowArchived={setShowArchived}
+            sortBy={sortBy}
+            setSortBy={setSortBy}
+            pulseFilter={pulseFilter}
+            setPulseFilter={setPulseFilter}
+            stats={stats}
+            editingWedding={editingWedding}
+            setEditingWedding={setEditingWedding}
+            honeybook={honeybook}
+            setHoneybook={setHoneybook}
+            googleSheets={googleSheets}
+            setGoogleSheets={setGoogleSheets}
+            saving={saving}
+            saveLinks={saveLinks}
+            startEditing={startEditing}
+            toggleArchive={toggleArchive}
+            markEscalationHandled={markEscalationHandled}
+            viewWeddingProfile={viewWeddingProfile}
+            setEnlargedPhoto={setEnlargedPhoto}
+            last24h={last24h}
+            last24hLoading={last24hLoading}
+            uncertainQuestions={uncertainQuestions}
+            setAnsweringQuestion={setAnsweringQuestion}
+            setShowUncertainModal={setShowUncertainModal}
+            notifications={notifications}
+            unreadCount={unreadCount}
+            markAsRead={markAsRead}
+            gmailConnected={gmailConnected}
+            gmailSyncing={gmailSyncing}
+            gmailStatus={gmailStatus}
+            connectGmail={connectGmail}
+            syncEmails={syncEmails}
+            disconnectGmail={disconnectGmail}
+            quoConnected={quoConnected}
+            quoSyncing={quoSyncing}
+            quoStatus={quoStatus}
+            syncQuo={syncQuo}
+            zoomConnected={zoomConnected}
+            zoomSyncing={zoomSyncing}
+            zoomStatus={zoomStatus}
+            connectZoom={connectZoom}
+            syncZoom={syncZoom}
+            reextractZoom={reextractZoom}
+            clearZoom={clearZoom}
+            disconnectZoom={disconnectZoom}
+          />
         )}
 
         {/* Uncertain Questions Modal */}

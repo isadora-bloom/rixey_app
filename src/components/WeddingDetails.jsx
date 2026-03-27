@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
+import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 const SaveIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
 const CheckIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 const defaultDetails = {
   wedding_colors: '',
@@ -120,15 +121,22 @@ export default function WeddingDetails({ weddingId, userId }) {
   useEffect(() => {
     if (!weddingId) return
     setLoading(true)
-    fetch(`${API_URL}/api/wedding-details/${weddingId}`)
-      .then((r) => r.json())
-      .then((data) => {
+    const load = async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/wedding-details/${weddingId}`, {
+          headers: await authHeaders()
+        })
+        const data = await res.json()
         if (data && !data.error) {
           setDetails({ ...defaultDetails, ...data })
         }
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false))
+      } catch (err) {
+        console.error(err)
+      } finally {
+        setLoading(false)
+      }
+    }
+    load()
   }, [weddingId])
 
   const set = (field) => (val) =>
@@ -143,7 +151,7 @@ export default function WeddingDetails({ weddingId, userId }) {
     try {
       const res = await fetch(`${API_URL}/api/wedding-details`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ weddingId, userId, ...details }),
       })
       if (!res.ok) {

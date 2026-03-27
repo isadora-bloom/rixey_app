@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
+import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 const DEFAULT_CATEGORIES = {
   catering:    { label: 'Catering / Food',      budgeted: 0, committed: 0 },
@@ -34,7 +35,9 @@ export default function BudgetTracker({ weddingId }) {
 
   const loadBudget = async () => {
     try {
-      const res = await fetch(`${API_URL}/api/budget/${weddingId}`)
+      const res = await fetch(`${API_URL}/api/budget/${weddingId}`, {
+        headers: await authHeaders()
+      })
       if (res.status === 404) {
         setLoading(false)
         return
@@ -104,7 +107,7 @@ export default function BudgetTracker({ weddingId }) {
     try {
       const res = await fetch(`${API_URL}/api/budget`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ weddingId, totalBudget, isShared, categories })
       })
       if (!res.ok) {

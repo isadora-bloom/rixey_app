@@ -2,8 +2,9 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { supabase } from '../lib/supabase'
+import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 const ROLE_OPTIONS = [
   { value: 'couple-bride', label: 'Couple (Bride)', isCouple: true },
@@ -176,7 +177,7 @@ export default function Login() {
             // Create admin notification for new wedding (via server to bypass RLS)
             await fetch(`${API_URL}/api/admin/notifications`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: await authHeaders(),
               body: JSON.stringify({
                 type: 'new_wedding',
                 message: `New wedding created: ${coupleNames || 'Unknown'} on ${weddingDate}. Event code: ${newEventCode}. Please add HoneyBook and Google Sheets links.`,
@@ -188,7 +189,8 @@ export default function Login() {
             // Initialize default planning checklist for the new wedding
             try {
               await fetch(`${API_URL}/api/checklist/initialize/${newWedding.id}`, {
-                method: 'POST'
+                method: 'POST',
+                headers: await authHeaders()
               })
               console.log('Default checklist initialized for new wedding')
             } catch (checklistErr) {

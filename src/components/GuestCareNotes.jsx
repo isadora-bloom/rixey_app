@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
+import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 const SECTIONS = [
   {
@@ -104,14 +105,21 @@ export default function GuestCareNotes({ weddingId }) {
 
   useEffect(() => {
     if (!weddingId) return
-    fetch(`${API_URL}/api/guest-care/${weddingId}`)
-      .then(r => r.json())
-      .then(({ data, updated_at }) => {
+    const load = async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/guest-care/${weddingId}`, {
+          headers: await authHeaders()
+        })
+        const { data, updated_at } = await res.json()
         setFormData(merge(data))
         setSavedAt(updated_at)
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false))
+      } catch (err) {
+        console.error(err)
+      } finally {
+        setLoading(false)
+      }
+    }
+    load()
   }, [weddingId])
 
   const setHas = (key, val) => {
@@ -130,7 +138,7 @@ export default function GuestCareNotes({ weddingId }) {
     try {
       const res = await fetch(`${API_URL}/api/guest-care`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ weddingId, data: formData }),
       })
       const result = await res.json()

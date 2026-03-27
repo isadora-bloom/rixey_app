@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
+import { API_URL } from '../config/api'
 
 const STAFF_RATE = 350 // 2026 rate
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 export default function StaffingCalculator({ guestCount: initialGuestCount, weddingId, userId }) {
   const [step, setStep] = useState(0)

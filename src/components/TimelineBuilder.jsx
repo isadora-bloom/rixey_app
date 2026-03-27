@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
+import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 // Events organized by section
 // 'chain' property groups events that should be calculated sequentially
@@ -773,7 +774,9 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, isAdmi
 
   const loadTimeline = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/timeline/${weddingId}`)
+      const response = await fetch(`${API_URL}/api/timeline/${weddingId}`, {
+        headers: await authHeaders()
+      })
       const data = await response.json()
 
       let loadedCeremonyTime = '16:00'
@@ -861,7 +864,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, isAdmi
     try {
       const res = await fetch(`${API_URL}/api/timeline`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({
           weddingId,
           userId,

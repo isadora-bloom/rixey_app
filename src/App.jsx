@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
+import ErrorBoundary from './components/ErrorBoundary'
 import ProtectedRoute from './components/ProtectedRoute'
 import AdminRoute from './components/AdminRoute'
 import Login from './pages/Login'
@@ -15,12 +16,14 @@ import Preview from './pages/Preview'
 import PrintView from './pages/PrintView'
 import VendorPortal from './pages/VendorPortal'
 import WeddingWebsite from './pages/WeddingWebsite'
+import NotFound from './pages/NotFound'
 
 function App() {
   return (
-    <BrowserRouter>
-      <AuthProvider>
-        <Routes>
+    <ErrorBoundary>
+      <BrowserRouter>
+        <AuthProvider>
+          <Routes>
           {/* Public routes — no auth */}
           <Route path="/preview" element={<Preview />} />
           <Route path="/vendor/:token" element={<VendorPortal />} />
@@ -92,9 +95,13 @@ function App() {
               </AdminRoute>
             }
           />
+
+          {/* Catch-all 404 */}
+          <Route path="*" element={<NotFound />} />
         </Routes>
-      </AuthProvider>
-    </BrowserRouter>
+        </AuthProvider>
+      </BrowserRouter>
+    </ErrorBoundary>
   )
 }
 

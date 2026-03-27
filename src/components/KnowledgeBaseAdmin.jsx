@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
+import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 // Splits text and wraps matched parts in a highlight span
 function Highlight({ text, query }) {
@@ -54,7 +55,9 @@ export default function KnowledgeBaseAdmin() {
 
   const loadEntries = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/knowledge-base`)
+      const response = await fetch(`${API_URL}/api/knowledge-base`, {
+        headers: await authHeaders()
+      })
       const data = await response.json()
       setEntries(data.entries || [])
     } catch (err) {
@@ -74,7 +77,7 @@ export default function KnowledgeBaseAdmin() {
 
       const response = await fetch(url, {
         method: editingId ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify(formData)
       })
 
@@ -104,7 +107,8 @@ export default function KnowledgeBaseAdmin() {
 
     try {
       await fetch(`${API_URL}/api/knowledge-base/${id}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: await authHeaders()
       })
       setEntries(entries.filter(e => e.id !== id))
     } catch (err) {
@@ -116,7 +120,7 @@ export default function KnowledgeBaseAdmin() {
     try {
       await fetch(`${API_URL}/api/knowledge-base/${entry.id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ active: !entry.active })
       })
       setEntries(entries.map(e =>

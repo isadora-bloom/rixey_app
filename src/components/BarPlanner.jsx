@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { API_URL } from '../config/api'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 // ── Ingredient scaling → meaningful units ─────────────────────────────────────
 // Converts a raw total (e.g. 120 oz) into something you'd actually buy (2 handles)

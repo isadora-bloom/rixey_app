@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Stage, Layer, Image as KonvaImage, Circle, Rect, Text, Group } from 'react-konva'
+import { API_URL } from '../config/api'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 // Cropped image is 2893×1550. Barn measured: 718px = 40ft → 17.95 px/ft
 const IMAGE_W = 2893

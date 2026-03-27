@@ -6,6 +6,8 @@ import dotenv from 'dotenv';
 import multer from 'multer';
 import { google } from 'googleapis';
 import { Resend } from 'resend';
+import { requireAuth, requireAdmin } from './middleware/auth.js';
+import { validateBody } from './middleware/validate.js';
 // PDF parsing removed - using Claude vision for all documents
 
 dotenv.config();
@@ -36,9 +38,43 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
-// Health check endpoint for Railway
+// Health check endpoint for Railway (public)
 app.get('/', (req, res) => {
   res.status(200).json({ status: 'ok', service: 'rixey-portal-api' });
+});
+
+// ============ AUTH MIDDLEWARE ============
+// Public routes that skip auth (matched by path prefix)
+const PUBLIC_ROUTES = [
+  '/',                        // health check
+  '/api/w/',                  // public wedding websites
+  '/api/rsvp/',               // public RSVP
+  '/api/vendor-portal/',      // token-based vendor portal
+  '/api/vendor-directory',    // public vendor directory
+];
+
+// Apply auth to all /api/ routes except public ones
+app.use('/api', (req, res, next) => {
+  const fullPath = req.baseUrl + req.path;
+  const isPublic = PUBLIC_ROUTES.some(prefix => fullPath.startsWith(prefix));
+  if (isPublic) return next();
+  requireAuth(req, res, next);
+});
+
+// Admin-only route groups
+app.use('/api/admin', requireAdmin);
+app.use('/api/gmail', requireAdmin);
+app.use('/api/zoom', requireAdmin);
+app.use('/api/quo', requireAdmin);
+app.use('/api/uncertain-questions', requireAdmin);
+app.use('/api/knowledge-base', requireAdmin);
+app.use('/api/recommended-vendors', requireAdmin);
+app.use('/api/venue-settings', requireAdmin);
+app.use('/api/usage', requireAdmin);
+app.use('/api/storefront', (req, res, next) => {
+  // GET /api/storefront is client-facing, others are admin-only
+  if (req.method === 'GET' && req.path === '/') return next();
+  requireAdmin(req, res, next);
 });
 
 const anthropic = new Anthropic({
@@ -577,8 +613,47 @@ Never:
 
 
 
+// Stop words for keyword extraction
+const KB_STOP_WORDS = new Set([
+  'the','a','an','is','what','how','where','when','can','do','does','will',
+  'would','should','could','i','we','my','our','me','us','it','this','that',
+  'are','was','were','been','be','have','has','had','for','with','about',
+  'from','to','in','on','at','of','and','or','not','there','their','they',
+  'you','your','any','all','some','just','also','very','really','much',
+  'get','got','but','if','so','then','than','more','most','like','want',
+  'need','know','tell','please','thanks','thank','hi','hello','hey',
+]);
+
 // Get relevant knowledge based on the user's question
 async function getRelevantKnowledge(question) {
+  // Extract meaningful keywords from the question
+  const keywords = question
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, '')
+    .split(/\s+/)
+    .filter(w => w.length >= 3 && !KB_STOP_WORDS.has(w));
+
+  // If we have keywords, filter by them
+  if (keywords.length > 0) {
+    const orFilters = keywords.slice(0, 5).map(kw => {
+      const safe = kw.replace(/%/g, '\\%').replace(/_/g, '\\_');
+      return `title.ilike.%${safe}%,content.ilike.%${safe}%`;
+    }).join(',');
+
+    const { data, error } = await supabaseAdmin
+      .from('knowledge_base')
+      .select('title, category, subcategory, content')
+      .or(orFilters)
+      .limit(15);
+
+    if (!error && data && data.length > 0) {
+      return data.map(item =>
+        `## ${item.title} (${item.category} > ${item.subcategory})\n${item.content}`
+      ).join('\n\n---\n\n');
+    }
+  }
+
+  // Fallback: load all entries if no keywords or no matches
   const { data, error } = await supabaseAdmin
     .from('knowledge_base')
     .select('title, category, subcategory, content');
@@ -588,12 +663,9 @@ async function getRelevantKnowledge(question) {
     return '';
   }
 
-  // Format knowledge for context
-  const knowledge = data.map(item =>
+  return data.map(item =>
     `## ${item.title} (${item.category} > ${item.subcategory})\n${item.content}`
   ).join('\n\n---\n\n');
-
-  return knowledge;
 }
 
 // Strip VTT timestamps/headers to plain conversation text
@@ -2506,12 +2578,10 @@ app.post('/api/quo/sync', async (req, res) => {
     // Build phone-to-wedding lookup
     const phoneToWedding = {};
     const phoneToUser = {};
-    console.log('DEBUG: Found profiles with phones:', profiles.map(p => ({ phone: p.phone, wedding_id: p.wedding_id })));
 
     for (const profile of profiles) {
       if (profile.phone && profile.wedding_id) {
         const normalized = normalizePhone(profile.phone);
-        console.log(`DEBUG: Profile phone "${profile.phone}" normalized to "${normalized}"`);
         if (normalized) {
           phoneToWedding[normalized] = profile.wedding_id;
           phoneToUser[normalized] = profile.id;
@@ -2520,7 +2590,6 @@ app.post('/api/quo/sync', async (req, res) => {
     }
 
     console.log(`Searching Quo for messages from ${Object.keys(phoneToWedding).length} registered phone numbers`);
-    console.log('DEBUG: Registered phone lookup:', phoneToWedding);
 
     // Get already processed message IDs (use admin to bypass RLS)
     const { data: processed } = await supabaseAdmin
@@ -2543,9 +2612,7 @@ app.post('/api/quo/sync', async (req, res) => {
     }
 
     const phoneNumbersData = await phoneNumbersResponse.json();
-    console.log('DEBUG: Phone numbers raw response:', JSON.stringify(phoneNumbersData).substring(0, 1000));
     const quoPhoneNumbers = phoneNumbersData.data || phoneNumbersData.phoneNumbers || phoneNumbersData || [];
-    console.log('DEBUG: Quo phone numbers:', quoPhoneNumbers.map(p => ({ id: p.id, phoneNumber: p.phoneNumber })));
 
     // Track debug info
     let totalMessagesFound = 0;
@@ -2555,12 +2622,10 @@ app.post('/api/quo/sync', async (req, res) => {
 
     // Convert registered phones to E.164 format for API queries
     const registeredPhonesE164 = Object.keys(phoneToWedding).map(phone => `+1${phone}`);
-    console.log('DEBUG: Registered phones in E.164:', registeredPhonesE164);
 
     // For each Quo phone number AND each registered client, fetch their conversation
     for (const quoPhone of quoPhoneNumbers) {
       const phoneNumberId = quoPhone.id;
-      console.log(`DEBUG: Processing Quo phone ${phoneNumberId} (${quoPhone.phoneNumber})`);
 
       // Query messages for each registered client phone
       for (const clientPhoneE164 of registeredPhonesE164) {
@@ -2572,7 +2637,6 @@ app.post('/api/quo/sync', async (req, res) => {
 
         // Fetch messages for this specific conversation (Quo API requires participants param)
         const messagesUrl = `${QUO_API_BASE}/messages?phoneNumberId=${phoneNumberId}&participants=${encodeURIComponent(clientPhoneE164)}&maxResults=100`;
-        console.log(`DEBUG: Fetching messages from: ${messagesUrl}`);
 
         const messagesResponse = await fetch(messagesUrl, {
           headers: { 'Authorization': QUO_API_KEY }
@@ -2580,15 +2644,12 @@ app.post('/api/quo/sync', async (req, res) => {
 
         if (!messagesResponse.ok) {
           const errText = await messagesResponse.text();
-          console.log(`DEBUG: Messages fetch failed: ${messagesResponse.status} ${errText}`);
           continue;
         }
 
         const messagesData = await messagesResponse.json();
-        console.log(`DEBUG: Messages response for ${clientPhoneE164}:`, JSON.stringify(messagesData).substring(0, 500));
         const messages = messagesData.data || messagesData.messages || messagesData || [];
         totalMessagesFound += messages.length;
-        console.log(`DEBUG: Found ${messages.length} messages with ${clientPhoneE164}`);
 
         // Capture sample for debugging
         if (sampleMessages.length < 3 && messages.length > 0) {
@@ -2604,17 +2665,14 @@ app.post('/api/quo/sync', async (req, res) => {
 
         for (const msg of messages) {
           if (processedIds.has(msg.id)) {
-            console.log(`DEBUG: Skipping already processed message ${msg.id}`);
             continue;
           }
 
           // Log raw message structure for debugging
-          console.log(`DEBUG: Raw message structure:`, JSON.stringify(msg).substring(0, 300));
 
           const messageBody = msg.body || msg.text || msg.content || '';
           const direction = msg.direction || 'inbound';
 
-          console.log(`DEBUG: Message body="${messageBody.substring(0, 50)}", direction=${direction}`);
 
           // Save to processed messages
           const { error: insertError } = await supabaseAdmin.from('processed_quo_messages').insert({
@@ -2626,7 +2684,7 @@ app.post('/api/quo/sync', async (req, res) => {
           });
 
           if (insertError) {
-            console.error(`DEBUG: Error saving to processed_quo_messages:`, insertError);
+            console.error(`Error saving to processed_quo_messages:`, insertError);
           }
 
           // Skip outbound auto-reply templates — real personal responses should still be recorded
@@ -2655,11 +2713,10 @@ app.post('/api/quo/sync', async (req, res) => {
             }).select();
 
             if (noteError) {
-              console.error(`DEBUG: Error saving SMS to planning_notes:`, noteError);
+              console.error(`Error saving SMS to planning_notes:`, noteError);
               planningNotesErrors.push({ type: 'sms', error: noteError.message || JSON.stringify(noteError) });
             } else {
               planningNotesSaved++;
-              console.log(`DEBUG: Saved ${direction} SMS as planning note for wedding ${weddingId}, id: ${savedNote?.[0]?.id}`);
             }
           }
 
@@ -2696,7 +2753,6 @@ app.post('/api/quo/sync', async (req, res) => {
         try {
           // Fetch calls for this specific conversation
           const callsUrl = `${QUO_API_BASE}/calls?phoneNumberId=${phoneNumberId}&participants=${encodeURIComponent(clientPhoneE164)}&maxResults=50`;
-          console.log(`DEBUG: Fetching calls from: ${callsUrl}`);
 
           const callsResponse = await fetch(callsUrl, {
             headers: { 'Authorization': QUO_API_KEY }
@@ -2704,14 +2760,12 @@ app.post('/api/quo/sync', async (req, res) => {
 
           if (!callsResponse.ok) {
             const errText = await callsResponse.text();
-            console.log(`DEBUG: Calls fetch failed: ${callsResponse.status} ${errText}`);
             continue;
           }
 
           const callsData = await callsResponse.json();
           const calls = callsData.data || callsData.calls || callsData || [];
           totalCallsFound += calls.length;
-          console.log(`DEBUG: Found ${calls.length} calls with ${clientPhoneE164}`);
 
           for (const call of calls) {
             const callId = `call_${call.id}`;
@@ -2721,7 +2775,6 @@ app.post('/api/quo/sync', async (req, res) => {
             const transcript = call.transcript || call.transcription || call.voicemail?.transcript || '';
             if (!transcript) continue; // Skip calls without transcripts
 
-            console.log(`DEBUG: Processing call with transcript for wedding ${weddingId}`);
             const direction = call.direction || 'inbound';
 
             // Save to processed
@@ -2734,7 +2787,7 @@ app.post('/api/quo/sync', async (req, res) => {
             });
 
             if (insertError) {
-              console.error(`DEBUG: Error saving call to processed_quo_messages:`, insertError);
+              console.error(`Error saving call to processed_quo_messages:`, insertError);
             }
 
             // Also save transcript as a planning note so Sage can search it
@@ -2748,11 +2801,10 @@ app.post('/api/quo/sync', async (req, res) => {
             }).select();
 
             if (noteError) {
-              console.error(`DEBUG: Error saving call transcript to planning_notes:`, noteError);
+              console.error(`Error saving call transcript to planning_notes:`, noteError);
               planningNotesErrors.push({ type: 'call', error: noteError.message || JSON.stringify(noteError) });
             } else {
               planningNotesSaved++;
-              console.log(`DEBUG: Saved call transcript as planning note for wedding ${weddingId}`);
             }
 
             // AI extraction from call transcript
@@ -6561,14 +6613,14 @@ app.get('/api/allergies/:weddingId', async (req, res) => {
     res.json(data || []);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.post('/api/allergies', async (req, res) => {
+app.post('/api/allergies', validateBody(['wedding_id', 'guest_name', 'allergy_type', 'severity', 'notes', 'sort_order', 'is_important']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('allergy_registry').insert(req.body).select().single();
     if (error) throw error;
     res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.put('/api/allergies/:id', async (req, res) => {
+app.put('/api/allergies/:id', validateBody(['guest_name', 'allergy_type', 'severity', 'notes', 'sort_order', 'is_important']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('allergy_registry').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
@@ -6606,7 +6658,7 @@ app.get('/api/bedrooms/:weddingId', async (req, res) => {
     res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.put('/api/bedrooms/:id', async (req, res) => {
+app.put('/api/bedrooms/:id', validateBody(['guests', 'notes', 'room_name', 'room_description', 'sort_order']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('bedroom_assignments').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
@@ -6622,14 +6674,14 @@ app.get('/api/ceremony-order/:weddingId', async (req, res) => {
     res.json(data || []);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.post('/api/ceremony-order', async (req, res) => {
+app.post('/api/ceremony-order', validateBody(['wedding_id', 'name', 'role', 'sort_order', 'side', 'notes']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('ceremony_order').insert(req.body).select().single();
     if (error) throw error;
     res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.put('/api/ceremony-order/:id', async (req, res) => {
+app.put('/api/ceremony-order/:id', validateBody(['name', 'role', 'sort_order', 'side', 'notes']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('ceremony_order').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
@@ -6652,14 +6704,14 @@ app.get('/api/decor/:weddingId', async (req, res) => {
     res.json(data || []);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.post('/api/decor', async (req, res) => {
+app.post('/api/decor', validateBody(['wedding_id', 'space_name', 'item_name', 'quantity', 'source', 'goes_home_with', 'leaving_it', 'notes', 'sort_order']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('decor_inventory').insert(req.body).select().single();
     if (error) throw error;
     res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.put('/api/decor/:id', async (req, res) => {
+app.put('/api/decor/:id', validateBody(['space_name', 'item_name', 'quantity', 'source', 'goes_home_with', 'leaving_it', 'notes', 'sort_order']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('decor_inventory').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
@@ -6682,14 +6734,14 @@ app.get('/api/makeup/:weddingId', async (req, res) => {
     res.json(data || []);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.post('/api/makeup', async (req, res) => {
+app.post('/api/makeup', validateBody(['wedding_id', 'name', 'role', 'hair_time', 'makeup_time', 'notes', 'sort_order']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('makeup_schedule').insert(req.body).select().single();
     if (error) throw error;
     res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.put('/api/makeup/:id', async (req, res) => {
+app.put('/api/makeup/:id', validateBody(['name', 'role', 'hair_time', 'makeup_time', 'notes', 'sort_order']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('makeup_schedule').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
@@ -6712,14 +6764,14 @@ app.get('/api/shuttle/:weddingId', async (req, res) => {
     res.json(data || []);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.post('/api/shuttle', async (req, res) => {
+app.post('/api/shuttle', validateBody(['wedding_id', 'label', 'pickup_time', 'pickup_location', 'dropoff_time', 'dropoff_location', 'notes', 'sort_order', 'capacity']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('shuttle_schedule').insert(req.body).select().single();
     if (error) throw error;
     res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.put('/api/shuttle/:id', async (req, res) => {
+app.put('/api/shuttle/:id', validateBody(['label', 'pickup_time', 'pickup_location', 'dropoff_time', 'dropoff_location', 'notes', 'sort_order', 'capacity']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('shuttle_schedule').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
@@ -7128,7 +7180,7 @@ app.post('/api/bar-recipes/extract-url', async (req, res) => {
       .slice(0, 20000); // take much more — recipe content is rarely at the very start
 
     const message = await anthropic.messages.create({
-      model: 'claude-opus-4-6',
+      model: 'claude-haiku-4-5-20251001',
       max_tokens: 800,
       messages: [{
         role: 'user',
@@ -7158,7 +7210,7 @@ app.post('/api/bar-recipes/extract-upload', upload.single('file'), async (req, r
     const mediaType = isPdf ? 'application/pdf' : file.mimetype;
 
     const message = await anthropic.messages.create({
-      model: 'claude-opus-4-6',
+      model: 'claude-haiku-4-5-20251001',
       max_tokens: 800,
       messages: [{
         role: 'user',
@@ -7515,7 +7567,7 @@ app.get('/api/rsvp/:slug/search', async (req, res) => {
       .from('wedding_guests')
       .select('id, first_name, last_name, rsvp, plus_one_name, plus_one_rsvp')
       .eq('wedding_id', settings.wedding_id)
-      .or(`first_name.ilike.%${q}%,last_name.ilike.%${q}%`);
+      .or(`first_name.ilike.%${q.replace(/%/g, '\\%').replace(/_/g, '\\_')}%,last_name.ilike.%${q.replace(/%/g, '\\%').replace(/_/g, '\\_')}%`);
     if (ge) throw ge;
 
     const results = (guests || [])

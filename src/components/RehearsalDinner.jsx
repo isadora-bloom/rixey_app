@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
+import { API_URL } from '../config/api'
+import { Button, Input } from './ui'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 function ToggleGroup({ options, value, onChange }) {
   return (
@@ -171,12 +172,11 @@ export default function RehearsalDinner({ weddingId, userId }) {
         </Field>
 
         <Field label="Food notes">
-          <input
+          <Input
             type="text"
             value={form.food_notes}
             onChange={e => set('food_notes', e.target.value)}
             placeholder="Who's catering? Any details?"
-            className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
           />
         </Field>
       </div>
@@ -195,12 +195,11 @@ export default function RehearsalDinner({ weddingId, userId }) {
 
         {form.location === 'Other' && (
           <Field label="Location details">
-            <input
+            <Input
               type="text"
               value={form.location_notes}
               onChange={e => set('location_notes', e.target.value)}
               placeholder="Where exactly?"
-              className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
             />
           </Field>
         )}
@@ -235,25 +234,25 @@ export default function RehearsalDinner({ weddingId, userId }) {
 
         {form.high_chairs_needed === 'Yes' && (
           <Field label="How many high chairs?">
-            <input
+            <Input
               type="number"
               min="1"
               value={form.high_chairs_count}
               onChange={e => set('high_chairs_count', e.target.value)}
               placeholder="e.g. 2"
-              className="w-28 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
+              className="w-28"
             />
           </Field>
         )}
 
         <Field label="Approximate guest count">
-          <input
+          <Input
             type="number"
             min="1"
             value={form.guest_count}
             onChange={e => set('guest_count', e.target.value)}
             placeholder="e.g. 40"
-            className="w-28 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
+            className="w-28"
           />
         </Field>
       </div>
@@ -319,13 +318,12 @@ export default function RehearsalDinner({ weddingId, userId }) {
         ) : (
           <span />
         )}
-        <button
+        <Button
           type="submit"
           disabled={saving}
-          className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
         >
           {saving ? 'Saving...' : 'Save'}
-        </button>
+        </Button>
       </div>
     </form>
   );

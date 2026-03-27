@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
+import { API_URL } from '../config/api'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 const FIELDS = [
   { key: 'venue_name',        label: 'Venue name',             placeholder: 'Rixey Manor',                type: 'text' },

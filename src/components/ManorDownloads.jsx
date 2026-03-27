@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
+import { API_URL } from '../config/api'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
 
 function publicUrl(storagePath) {

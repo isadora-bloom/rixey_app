@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
+import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 const CATEGORIES = ['Venue', 'Vendors', 'Attire & Beauty', 'Decor', 'Timeline', 'Guests', 'Other']
 
@@ -21,13 +22,16 @@ export default function PlanningChecklist({ weddingId, userId, compact = false, 
 
   const loadChecklist = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/checklist/${weddingId}`)
+      const response = await fetch(`${API_URL}/api/checklist/${weddingId}`, {
+        headers: await authHeaders()
+      })
       const data = await response.json()
 
       if (data.tasks && data.tasks.length === 0) {
         // Initialize default checklist if empty
         const initResponse = await fetch(`${API_URL}/api/checklist/initialize/${weddingId}`, {
-          method: 'POST'
+          method: 'POST',
+          headers: await authHeaders()
         })
         const initData = await initResponse.json()
         setTasks(initData.tasks || [])
@@ -44,7 +48,7 @@ export default function PlanningChecklist({ weddingId, userId, compact = false, 
     try {
       const response = await fetch(`${API_URL}/api/checklist/${taskId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({
           isCompleted: !currentCompleted,
           completedBy: userId,
@@ -68,7 +72,7 @@ export default function PlanningChecklist({ weddingId, userId, compact = false, 
     try {
       const response = await fetch(`${API_URL}/api/checklist`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({
           weddingId,
           taskText: newTask.text.trim(),
@@ -93,7 +97,8 @@ export default function PlanningChecklist({ weddingId, userId, compact = false, 
 
     try {
       const response = await fetch(`${API_URL}/api/checklist/${taskId}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: await authHeaders()
       })
       const data = await response.json()
       if (data.success) {

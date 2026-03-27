@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
+import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 const TABLE_SHAPES = [
   { id: 'round',       name: 'Round Tables',  icon: '⭕', description: '60" rounds, great for conversation', defaultSeats: 8 },
@@ -200,7 +201,9 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
 
   const loadTableSetup = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/tables/${weddingId}`)
+      const response = await fetch(`${API_URL}/api/tables/${weddingId}`, {
+        headers: await authHeaders()
+      })
       const data = await response.json()
       if (data.tables) {
         const t = data.tables
@@ -242,7 +245,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
     try {
       const res = await fetch(`${API_URL}/api/tables`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({
           weddingId,
           userId,

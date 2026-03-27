@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
+import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 export default function VendorChecklist({ weddingId, isAdmin = false }) {
   const [vendors, setVendors] = useState([])
@@ -27,7 +28,9 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
 
   const loadVendors = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/vendors/${weddingId}`)
+      const response = await fetch(`${API_URL}/api/vendors/${weddingId}`, {
+        headers: await authHeaders()
+      })
       const data = await response.json()
       setVendors(data.vendors || [])
       setVendorTypes(data.vendorTypes || [])
@@ -45,7 +48,7 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
     try {
       const response = await fetch(`${API_URL}/api/vendors`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({
           id: editingId,
           weddingId,
@@ -84,7 +87,7 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
     if (!confirm('Delete this vendor?')) return
 
     try {
-      await fetch(`${API_URL}/api/vendors/${id}`, { method: 'DELETE' })
+      await fetch(`${API_URL}/api/vendors/${id}`, { method: 'DELETE', headers: await authHeaders() })
       setVendors(vendors.filter(v => v.id !== id))
     } catch (error) {
       console.error('Error deleting vendor:', error)
@@ -97,8 +100,10 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
     formData.append('contract', file)
 
     try {
+      const token = (await authHeaders())['Authorization']
       const response = await fetch(`${API_URL}/api/vendors/${vendorId}/contract`, {
         method: 'POST',
+        headers: token ? { 'Authorization': token } : {},
         body: formData
       })
       const data = await response.json()
@@ -116,7 +121,8 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
 
     try {
       const response = await fetch(`${API_URL}/api/vendors/${vendorId}/contract`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: await authHeaders()
       })
       const data = await response.json()
       if (data.vendor) {

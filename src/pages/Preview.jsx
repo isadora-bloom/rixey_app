@@ -2,8 +2,8 @@ import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
+import { API_URL } from '../config/api'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 // ── Tiny SVG wrapper ───────────────────────────────────────────────
 function Ico({ children }) {
@@ -330,7 +330,7 @@ export default function Preview() {
 
       {/* Nav */}
       <nav className="flex items-center justify-between px-6 py-5 max-w-6xl mx-auto">
-        <img src="/rixey-manor-logo.png" alt="Rixey Manor" className="h-8" />
+        <img src="/rixey-manor-logo-optimized.png" alt="Rixey Manor" className="h-8" />
         <a href="/" className="text-sm font-medium text-sage-600 hover:text-sage-700 transition-colors">
           Sign in
         </a>

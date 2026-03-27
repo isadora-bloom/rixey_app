@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams } from 'react-router-dom'
+import { API_URL } from '../config/api'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 export default function VendorPortal() {
   const { token } = useParams()
@@ -124,7 +124,7 @@ export default function VendorPortal() {
       <header className="bg-white border-b border-cream-200 px-4 py-4">
         <div className="max-w-2xl mx-auto flex items-center justify-between">
           <div>
-            <img src="/rixey-manor-logo.png" alt="Rixey Manor" className="h-10 w-auto mb-1" />
+            <img src="/rixey-manor-logo-optimized.png" alt="Rixey Manor" className="h-10 w-auto mb-1" />
             <p className="text-sage-400 text-xs">Vendor Partner Portal</p>
           </div>
           {vendor.is_published && (
