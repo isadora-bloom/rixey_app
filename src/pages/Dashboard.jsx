@@ -915,6 +915,7 @@ export default function Dashboard() {
                   { key: 'budget', label: 'Budget', icon: '/icons/budget.svg', dot: !!budgetSummary },
                   { key: 'guests', label: 'Guest List', icon: '/icons/guest-care.svg' },
                   { key: 'vendor', label: 'Vendors', icon: '/icons/vendors.svg' },
+                  { key: 'preferred-vendors', label: 'Preferred Vendors', icon: '/icons/vendors.svg' },
                   { key: 'timeline', label: 'Timeline', icon: '/icons/timeline.svg', dot: !!timelineSummary },
                   { key: 'tables', label: 'Tables', icon: '/icons/tables.svg', dot: !!tableSummary },
                   { section: 'Day Of' },
@@ -935,7 +936,6 @@ export default function Dashboard() {
                   { key: 'photos', label: 'Photo Library', icon: '/icons/inspiration.svg' },
                   { key: 'wedding-party', label: 'Wedding Party', icon: '/icons/vendors.svg' },
                   { section: 'Rixey' },
-                  { key: 'preferred-vendors', label: 'Preferred Vendors', icon: '/icons/vendors.svg' },
                   { key: 'inspo', label: 'Inspiration', icon: '/icons/inspiration.svg' },
                   { key: 'borrow', label: 'Borrow Brochure', icon: '/icons/borrow-brochure.svg' },
                   { key: 'picks', label: 'Rixey Picks', icon: '/icons/rixey-picks.svg' },
@@ -1012,6 +1012,7 @@ export default function Dashboard() {
                   <option value="budget">💰 Budget</option>
                   <option value="guests">👥 Guest List</option>
                   <option value="vendor">📎 Vendors</option>
+                  <option value="preferred-vendors">⭐ Preferred Vendors</option>
                   <option value="timeline">📅 Timeline</option>
                   <option value="tables">🪑 Tables</option>
                 </optgroup>
@@ -1036,7 +1037,6 @@ export default function Dashboard() {
                   <option value="wedding-party">💐 Wedding Party</option>
                 </optgroup>
                 <optgroup label="Rixey">
-                  <option value="preferred-vendors">⭐ Preferred Vendors</option>
                   <option value="inspo">💡 Inspiration</option>
                   <option value="borrow">📦 Borrow Brochure</option>
                   <option value="picks">🛍 Rixey Picks</option>
