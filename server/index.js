@@ -86,12 +86,24 @@ const PUBLIC_ROUTES = [
   '/api/wedding-website/check-slug/', // slug availability check
 ];
 
-// Apply auth to all /api/ routes except public ones
+// Soft auth: attach user if token present, but never block.
+// Admin routes enforce strict auth via requireAdmin below.
 app.use('/api', (req, res, next) => {
   const fullPath = req.baseUrl + req.path;
   const isPublic = PUBLIC_ROUTES.some(prefix => fullPath.startsWith(prefix));
   if (isPublic) return next();
-  requireAuth(req, res, next);
+
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return next();
+  const token = authHeader.slice(7);
+  if (!token || token === 'undefined' || token === 'null') return next();
+
+  supabase.auth.getUser(token)
+    .then(({ data: { user } }) => {
+      if (user) { req.user = user; req.userId = user.id; }
+      next();
+    })
+    .catch(() => next());
 });
 
 // Admin-only route groups
