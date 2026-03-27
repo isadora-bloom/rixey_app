@@ -7574,9 +7574,31 @@ app.put('/api/wedding-website/:weddingId', async (req, res) => {
     }
     const payload = { ...filtered, wedding_id: req.params.weddingId, updated_at: new Date().toISOString() };
 
-    const { data, error } = existing
-      ? await supabaseAdmin.from('wedding_website_settings').update(payload).eq('wedding_id', req.params.weddingId).select().single()
-      : await supabaseAdmin.from('wedding_website_settings').insert(payload).select().single();
+    const save = async (p) => existing
+      ? await supabaseAdmin.from('wedding_website_settings').update(p).eq('wedding_id', req.params.weddingId).select().single()
+      : await supabaseAdmin.from('wedding_website_settings').insert(p).select().single();
+
+    let { data, error } = await save(payload);
+
+    // If columns don't exist yet, strip unknown fields and retry
+    if (error && error.message && error.message.includes('column')) {
+      console.warn('Website save: stripping unknown columns and retrying. Error:', error.message);
+      const safePayload = { wedding_id: req.params.weddingId, updated_at: new Date().toISOString() };
+      // Only include fields that definitely exist in the base schema
+      const BASE_COLS = [
+        'slug', 'published', 'welcome_message', 'our_story', 'dress_code',
+        'dress_code_note', 'ceremony_time', 'reception_time', 'registry_links',
+        'unplugged_ceremony', 'kids_policy', 'plus_one_policy', 'signature_cocktail',
+        'faq_items', 'show_story', 'show_wedding_party', 'show_dress_code',
+        'show_schedule', 'show_transport', 'show_accommodations', 'show_registry',
+        'show_faq', 'show_gallery', 'show_rsvp', 'rsvp_deadline', 'rsvp_note',
+      ];
+      for (const key of BASE_COLS) {
+        if (filtered[key] !== undefined) safePayload[key] = filtered[key];
+      }
+      ({ data, error } = await save(safePayload));
+    }
+
     if (error) throw error;
     res.json(data);
   } catch (err) {
