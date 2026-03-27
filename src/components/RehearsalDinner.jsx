@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 import { Button, Input } from './ui'
 
 
@@ -90,7 +91,7 @@ export default function RehearsalDinner({ weddingId, userId }) {
   useEffect(() => {
     async function fetchData() {
       try {
-        const res = await fetch(`${API_URL}/api/rehearsal-dinner/${weddingId}`);
+        const res = await fetch(`${API_URL}/api/rehearsal-dinner/${weddingId}`, { headers: await authHeaders() });
         if (res.ok) {
           const data = await res.json();
           if (data) {
@@ -116,7 +117,7 @@ export default function RehearsalDinner({ weddingId, userId }) {
     try {
       await fetch(`${API_URL}/api/rehearsal-dinner`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ weddingId, userId, ...form }),
       });
       setSaved(true);

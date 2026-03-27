@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
 
 export default function RecommendedVendorsAdmin() {
@@ -42,7 +43,7 @@ export default function RecommendedVendorsAdmin() {
       const url = filterCategory
         ? `${API_URL}/api/recommended-vendors?category=${encodeURIComponent(filterCategory)}`
         : `${API_URL}/api/recommended-vendors`
-      const response = await fetch(url)
+      const response = await fetch(url, { headers: await authHeaders() })
       const data = await response.json()
       setVendors(data.vendors || [])
       setCategories(data.categories || [])
@@ -63,7 +64,7 @@ export default function RecommendedVendorsAdmin() {
 
       const response = await fetch(url, {
         method: editingVendor ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify(formData)
       })
 
@@ -106,7 +107,7 @@ export default function RecommendedVendorsAdmin() {
     try {
       const res = await fetch(`${API_URL}/api/recommended-vendors/${vendor.id}/publish`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ is_published: !vendor.is_published }),
       })
       if (res.ok) await loadVendors()
@@ -127,7 +128,8 @@ export default function RecommendedVendorsAdmin() {
 
     try {
       await fetch(`${API_URL}/api/recommended-vendors/${id}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: await authHeaders()
       })
       await loadVendors()
     } catch (error) {

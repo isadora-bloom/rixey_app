@@ -14,6 +14,61 @@ const TAG_PALETTE = [
   '#C9748A', '#C4553A', '#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#6366f1', '#ec4899',
 ]
 
+// ─── CSV Helpers ────────────────────────────────────────────────────────────────
+
+/** Parse a single CSV line, handling quoted fields (commas inside quotes, doubled quotes) */
+function parseCSVLine(line) {
+  const fields = []
+  let current = ''
+  let inQuotes = false
+  let i = 0
+
+  while (i < line.length) {
+    const ch = line[i]
+    if (inQuotes) {
+      if (ch === '"') {
+        // Doubled quote → literal quote character
+        if (i + 1 < line.length && line[i + 1] === '"') {
+          current += '"'
+          i += 2
+          continue
+        }
+        // End of quoted field
+        inQuotes = false
+        i++
+        continue
+      }
+      current += ch
+      i++
+    } else {
+      if (ch === '"') {
+        inQuotes = true
+        i++
+        continue
+      }
+      if (ch === ',') {
+        fields.push(current.trim())
+        current = ''
+        i++
+        continue
+      }
+      current += ch
+      i++
+    }
+  }
+  fields.push(current.trim())
+  return fields
+}
+
+/** Quote a CSV field if it contains commas, quotes, or newlines */
+function csvEscape(value) {
+  const str = value == null ? '' : String(value)
+  if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+    return '"' + str.replace(/"/g, '""') + '"'
+  }
+  return str
+}
+
 function RsvpBadge({ rsvp }) {
   const opt = RSVP_OPTIONS.find(o => o.value === rsvp) || RSVP_OPTIONS[0]
   return (
@@ -602,11 +657,14 @@ export default function GuestList({ weddingId, userId }) {
     if (!file) return
     setCsvImporting(true)
     setCsvResult(null)
-    const text = await file.text()
-    const lines = text.trim().split('\n')
-    const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-z_]/g, ''))
+    let text = await file.text()
+    // Strip UTF-8 BOM if present
+    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1)
+    const lines = text.split('\n').filter(l => l.trim().length > 0)
+    if (lines.length < 2) { setCsvImporting(false); setCsvResult({ success: false, error: 'CSV has no data rows' }); e.target.value = ''; return }
+    const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z_]/g, ''))
     const guests = lines.slice(1).map(line => {
-      const values = line.split(',').map(v => v.trim().replace(/^"|"$/g, ''))
+      const values = parseCSVLine(line)
       const obj = {}
       headers.forEach((h, i) => { obj[h] = values[i] || '' })
       return obj
@@ -643,6 +701,43 @@ export default function GuestList({ weddingId, userId }) {
     setPlatedMeal(pm)
     setTagOptions(to)
     setMealOptions(mo)
+  }
+
+  const handleCsvExport = () => {
+    const tagLabels = tagOptions.map(t => t.label)
+    const headerCols = [
+      'first_name', 'last_name', 'email', 'phone', 'rsvp',
+      'dietary_restrictions', 'meal_choice', 'table_assignment',
+      'plus_one_name', 'notes',
+      ...tagLabels,
+    ]
+    const rows = [headerCols.map(csvEscape).join(',')]
+    guests.forEach(g => {
+      const row = [
+        csvEscape(g.first_name),
+        csvEscape(g.last_name),
+        csvEscape(g.email),
+        csvEscape(g.phone),
+        csvEscape(g.rsvp),
+        csvEscape(g.dietary_restrictions),
+        csvEscape(g.meal_choice),
+        csvEscape(g.table_assignment),
+        csvEscape(g.plus_one_name),
+        csvEscape(g.notes),
+        ...tagLabels.map(tl => csvEscape((g.tags || []).includes(tl) ? 'yes' : '')),
+      ]
+      rows.push(row.join(','))
+    })
+    const csv = rows.join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'guest-list-export.csv'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
   }
 
   // Assign a guest to a table inline (sends full guest object to preserve all fields)
@@ -847,6 +942,16 @@ export default function GuestList({ weddingId, userId }) {
                 Print by Table
               </button>
             )}
+            <button
+              onClick={handleCsvExport}
+              disabled={guests.length === 0}
+              className="flex items-center gap-1.5 border border-sage-300 text-sage-600 px-4 py-2 rounded-xl text-sm font-medium hover:bg-sage-50 disabled:opacity-50 transition"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Export CSV
+            </button>
             <button
               onClick={() => csvInputRef.current?.click()}
               disabled={csvImporting}

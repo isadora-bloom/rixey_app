@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
+import { Button, Input } from './ui'
 
 
 const ROLES = [
@@ -61,7 +63,7 @@ export default function MakeupSchedule({ weddingId, userId }) {
 
   async function fetchTimelineDeadline() {
     try {
-      const res = await fetch(`${API_URL}/api/timeline/${weddingId}`);
+      const res = await fetch(`${API_URL}/api/timeline/${weddingId}`, { headers: await authHeaders() });
       if (!res.ok) return;
       const data = await res.json();
       const events = data.timeline?.timeline_data?.events;
@@ -76,7 +78,7 @@ export default function MakeupSchedule({ weddingId, userId }) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_URL}/api/makeup/${weddingId}`);
+      const res = await fetch(`${API_URL}/api/makeup/${weddingId}`, { headers: await authHeaders() });
       if (!res.ok) throw new Error('Failed to load makeup schedule');
       const data = await res.json();
       setEntries(sortByTime(data));
@@ -93,7 +95,7 @@ export default function MakeupSchedule({ weddingId, userId }) {
     try {
       const res = await fetch(`${API_URL}/api/makeup`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({
           wedding_id: weddingId,
           participant_name: formData.participant_name.trim(),
@@ -120,7 +122,7 @@ export default function MakeupSchedule({ weddingId, userId }) {
   async function handleDelete(id) {
     if (!window.confirm('Remove this person from the schedule?')) return;
     try {
-      const res = await fetch(`${API_URL}/api/makeup/${id}`, { method: 'DELETE' });
+      const res = await fetch(`${API_URL}/api/makeup/${id}`, { method: 'DELETE', headers: await authHeaders() });
       if (!res.ok) throw new Error('Delete failed');
       setEntries(prev => prev.filter(e => e.id !== id));
     } catch (err) {
@@ -147,7 +149,7 @@ export default function MakeupSchedule({ weddingId, userId }) {
     try {
       const res = await fetch(`${API_URL}/api/makeup/${id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({
           participant_name: updated.participant_name,
           role: updated.role,
@@ -203,12 +205,12 @@ export default function MakeupSchedule({ weddingId, userId }) {
               : 'No one scheduled yet'}
           </p>
         </div>
-        <button
+        <Button
           onClick={() => { setShowForm(v => !v); setFormData(EMPTY_FORM); }}
-          className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50 shrink-0"
+          className="shrink-0"
         >
           {showForm ? 'Cancel' : '+ Add Person'}
-        </button>
+        </Button>
       </div>
 
       {/* Deadline + tip */}
@@ -232,12 +234,11 @@ export default function MakeupSchedule({ weddingId, userId }) {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             <div>
               <label className="block text-xs text-sage-500 mb-1">Name *</label>
-              <input
+              <Input
                 type="text"
                 value={formData.participant_name}
                 onChange={e => setFormData(f => ({ ...f, participant_name: e.target.value }))}
                 placeholder="Full name"
-                className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
               />
             </div>
             <div>
@@ -254,41 +255,37 @@ export default function MakeupSchedule({ weddingId, userId }) {
             </div>
             <div>
               <label className="block text-xs text-sage-500 mb-1">Hair Starts</label>
-              <input
+              <Input
                 type="time"
                 value={formData.hair_start_time}
                 onChange={e => setFormData(f => ({ ...f, hair_start_time: e.target.value }))}
-                className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
               />
             </div>
             <div>
               <label className="block text-xs text-sage-500 mb-1">Makeup Starts</label>
-              <input
+              <Input
                 type="time"
                 value={formData.makeup_start_time}
                 onChange={e => setFormData(f => ({ ...f, makeup_start_time: e.target.value }))}
-                className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
               />
             </div>
             <div className="sm:col-span-2 lg:col-span-1">
               <label className="block text-xs text-sage-500 mb-1">Notes</label>
-              <input
+              <Input
                 type="text"
                 value={formData.notes}
                 onChange={e => setFormData(f => ({ ...f, notes: e.target.value }))}
                 placeholder="Any notes…"
-                className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
               />
             </div>
           </div>
           <div className="mt-3 flex justify-end">
-            <button
+            <Button
               onClick={handleAdd}
               disabled={submitting || !formData.participant_name.trim()}
-              className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
             >
               {submitting ? 'Adding…' : 'Add to Schedule'}
-            </button>
+            </Button>
           </div>
         </div>
       )}

@@ -2,18 +2,26 @@ import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
 import { authHeaders } from '../utils/api'
 
+function useDebounce(value, delay = 500) {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delay)
+    return () => clearTimeout(timer)
+  }, [value, delay])
+  return debounced
+}
 
 const DEFAULT_CATEGORIES = {
-  catering:    { label: 'Catering / Food',      budgeted: 0, committed: 0 },
-  photography: { label: 'Photography',           budgeted: 0, committed: 0 },
-  videography: { label: 'Videography',           budgeted: 0, committed: 0 },
-  flowers:     { label: 'Flowers & Florals',     budgeted: 0, committed: 0 },
-  music:       { label: 'Music (DJ / Band)',      budgeted: 0, committed: 0 },
-  cake:        { label: 'Cake & Desserts',        budgeted: 0, committed: 0 },
-  officiant:   { label: 'Officiant',             budgeted: 0, committed: 0 },
-  hair_makeup: { label: 'Hair & Makeup',          budgeted: 0, committed: 0 },
-  attire:      { label: 'Attire & Accessories',  budgeted: 0, committed: 0 },
-  other:       { label: 'Other',                 budgeted: 0, committed: 0 },
+  catering:    { label: 'Catering / Food',      budgeted: 0, committed: 0, paid: 0 },
+  photography: { label: 'Photography',           budgeted: 0, committed: 0, paid: 0 },
+  videography: { label: 'Videography',           budgeted: 0, committed: 0, paid: 0 },
+  flowers:     { label: 'Flowers & Florals',     budgeted: 0, committed: 0, paid: 0 },
+  music:       { label: 'Music (DJ / Band)',      budgeted: 0, committed: 0, paid: 0 },
+  cake:        { label: 'Cake & Desserts',        budgeted: 0, committed: 0, paid: 0 },
+  officiant:   { label: 'Officiant',             budgeted: 0, committed: 0, paid: 0 },
+  hair_makeup: { label: 'Hair & Makeup',          budgeted: 0, committed: 0, paid: 0 },
+  attire:      { label: 'Attire & Accessories',  budgeted: 0, committed: 0, paid: 0 },
+  other:       { label: 'Other',                 budgeted: 0, committed: 0, paid: 0 },
 }
 
 function fmt(n) {
@@ -53,7 +61,7 @@ export default function BudgetTracker({ weddingId }) {
             merged[key] = { ...merged[key], ...val }
           } else {
             // Custom key saved previously
-            merged[key] = { label: val.label || key, budgeted: val.budgeted || 0, committed: val.committed || 0, isCustom: true }
+            merged[key] = { label: val.label || key, budgeted: val.budgeted || 0, committed: val.committed || 0, paid: val.paid || 0, isCustom: true }
           }
         })
         setCategories(merged)
@@ -91,13 +99,17 @@ export default function BudgetTracker({ weddingId }) {
     const key = `custom_${Date.now()}`
     setCategories(prev => ({
       ...prev,
-      [key]: { label: '', budgeted: 0, committed: 0, isCustom: true }
+      [key]: { label: '', budgeted: 0, committed: 0, paid: 0, isCustom: true }
     }))
   }
 
-  const totalBudgeted = Object.values(categories).reduce((s, c) => s + (c.budgeted || 0), 0)
-  const totalCommitted = Object.values(categories).reduce((s, c) => s + (c.committed || 0), 0)
-  const overallBudget = totalBudget || totalBudgeted
+  const debouncedCategories = useDebounce(categories, 500)
+  const debouncedTotalBudget = useDebounce(totalBudget, 500)
+
+  const totalBudgeted = Object.values(debouncedCategories).reduce((s, c) => s + (c.budgeted || 0), 0)
+  const totalCommitted = Object.values(debouncedCategories).reduce((s, c) => s + (c.committed || 0), 0)
+  const totalPaid = Object.values(debouncedCategories).reduce((s, c) => s + (c.paid || 0), 0)
+  const overallBudget = debouncedTotalBudget || totalBudgeted
   const overallPercent = overallBudget > 0 ? Math.min(100, Math.round((totalCommitted / overallBudget) * 100)) : 0
   const isOverall = totalCommitted > overallBudget && overallBudget > 0
 
@@ -165,16 +177,22 @@ export default function BudgetTracker({ weddingId }) {
               style={{ width: `${overallPercent}%` }}
             />
           </div>
+          <div className="flex justify-between text-xs mt-1.5 text-sage-500">
+            <span>${fmt(totalPaid)} paid</span>
+            <span>${fmt(totalCommitted - totalPaid)} remaining</span>
+          </div>
         </div>
       )}
 
       {/* Category rows */}
       <div>
         {/* Header — desktop only */}
-        <div className="hidden sm:grid sm:grid-cols-[1fr_100px_100px_60px_28px] gap-2 text-xs font-medium text-sage-500 uppercase tracking-wide mb-2 px-1">
+        <div className="hidden sm:grid sm:grid-cols-[1fr_100px_100px_100px_80px_60px_28px] gap-2 text-xs font-medium text-sage-500 uppercase tracking-wide mb-2 px-1">
           <span>Category</span>
           <span className="text-right">Budgeted</span>
           <span className="text-right">Committed</span>
+          <span className="text-right">Paid</span>
+          <span className="text-right">Remaining</span>
           <span className="text-right">%</span>
           <span></span>
         </div>
@@ -186,7 +204,7 @@ export default function BudgetTracker({ weddingId }) {
             return (
               <div key={key} className={`rounded-xl border p-3 ${isOver ? 'border-amber-300 bg-amber-50' : 'border-cream-200 bg-white'}`}>
                 {/* Desktop layout */}
-                <div className="hidden sm:grid sm:grid-cols-[1fr_100px_100px_60px_28px] gap-2 items-center">
+                <div className="hidden sm:grid sm:grid-cols-[1fr_100px_100px_100px_80px_60px_28px] gap-2 items-center">
                   {cat.isCustom ? (
                     <input
                       type="text"
@@ -220,6 +238,19 @@ export default function BudgetTracker({ weddingId }) {
                       }`}
                     />
                   </div>
+                  <div className="relative">
+                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-sage-400 text-xs">$</span>
+                    <input
+                      type="text"
+                      value={(cat.paid || 0) === 0 ? '' : cat.paid.toLocaleString('en-US')}
+                      onChange={(e) => updateCategory(key, 'paid', e.target.value)}
+                      placeholder="0"
+                      className="w-full pl-5 pr-1 py-1.5 rounded-lg border border-cream-200 text-right text-sm text-sage-700 focus:outline-none focus:ring-1 focus:ring-sage-300"
+                    />
+                  </div>
+                  <span className="text-right text-sm text-sage-500">
+                    {cat.committed > 0 ? `$${fmt(cat.committed - (cat.paid || 0))}` : '—'}
+                  </span>
                   <span className={`text-right text-sm font-medium ${isOver ? 'text-red-600' : 'text-sage-500'}`}>
                     {cat.budgeted > 0 ? `${catPercent}%` : '—'}
                   </span>
@@ -293,6 +324,25 @@ export default function BudgetTracker({ weddingId }) {
                           }`}
                         />
                       </div>
+                    </div>
+                    <div>
+                      <p className="text-xs text-sage-400 mb-1">Paid</p>
+                      <div className="relative">
+                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-sage-400 text-xs">$</span>
+                        <input
+                          type="text"
+                          value={(cat.paid || 0) === 0 ? '' : cat.paid.toLocaleString('en-US')}
+                          onChange={(e) => updateCategory(key, 'paid', e.target.value)}
+                          placeholder="0"
+                          className="w-full pl-5 pr-1 py-1.5 rounded-lg border border-cream-200 text-right text-sm text-sage-700 focus:outline-none focus:ring-1 focus:ring-sage-300"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-xs text-sage-400 mb-1">Remaining</p>
+                      <p className="py-1.5 text-right text-sm text-sage-600 font-medium">
+                        {cat.committed > 0 ? `$${fmt(cat.committed - (cat.paid || 0))}` : '—'}
+                      </p>
                     </div>
                   </div>
                 </div>

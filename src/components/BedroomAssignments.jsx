@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 import { Input } from './ui'
+import SaveIndicator from './ui/SaveIndicator'
 
 
 export default function BedroomAssignments({ weddingId, userId }) {
@@ -8,6 +10,7 @@ export default function BedroomAssignments({ weddingId, userId }) {
   const [loading, setLoading] = useState(true);
   const [savedRows, setSavedRows] = useState({});
   const [error, setError] = useState(null);
+  const [saveState, setSaveState] = useState('idle');
 
   useEffect(() => {
     if (!weddingId) return;
@@ -18,7 +21,7 @@ export default function BedroomAssignments({ weddingId, userId }) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_URL}/api/bedrooms/${weddingId}`);
+      const res = await fetch(`${API_URL}/api/bedrooms/${weddingId}`, { headers: await authHeaders() });
       if (!res.ok) throw new Error('Failed to load bedroom assignments');
       const data = await res.json();
       setRooms(data);
@@ -36,10 +39,11 @@ export default function BedroomAssignments({ weddingId, userId }) {
   }, []);
 
   const handleBlur = useCallback(async (room) => {
+    setSaveState('saving');
     try {
       const res = await fetch(`${API_URL}/api/bedrooms/${room.id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({
           friday_night: room.friday_night || '',
           saturday_night: room.saturday_night || '',
@@ -48,6 +52,7 @@ export default function BedroomAssignments({ weddingId, userId }) {
         }),
       });
       if (!res.ok) throw new Error('Save failed');
+      setSaveState('saved');
       setSavedRows(prev => ({ ...prev, [room.id]: true }));
       setTimeout(() => {
         setSavedRows(prev => {
@@ -57,6 +62,7 @@ export default function BedroomAssignments({ weddingId, userId }) {
         });
       }, 2000);
     } catch {
+      setSaveState('idle');
       // silently fail — user can retry on next blur
     }
   }, [userId]);
@@ -85,7 +91,10 @@ export default function BedroomAssignments({ weddingId, userId }) {
     <div className="p-6 max-w-5xl mx-auto">
       {/* Header */}
       <div className="mb-5">
-        <h2 className="text-xl font-semibold text-sage-700 mb-1">Bedroom Assignments</h2>
+        <div className="flex items-center gap-3">
+          <h2 className="text-xl font-semibold text-sage-700 mb-1">Bedroom Assignments</h2>
+          <SaveIndicator state={saveState} />
+        </div>
         <p className="text-sm text-sage-500">
           Assign guests to rooms for Friday and Saturday nights.
         </p>

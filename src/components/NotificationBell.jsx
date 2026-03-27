@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
 
 function timeAgo(dateStr) {
@@ -34,7 +35,7 @@ export default function NotificationBell({ recipientType, weddingId, extraItems 
       const url = recipientType === 'admin'
         ? `${API_URL}/api/notifications/admin`
         : `${API_URL}/api/notifications/client/${weddingId}`
-      const res = await fetch(url)
+      const res = await fetch(url, { headers: await authHeaders() })
       if (!res.ok) return
       const { notifications: data, unreadCount: count } = await res.json()
       setNotifications(data || [])
@@ -64,7 +65,7 @@ export default function NotificationBell({ recipientType, weddingId, extraItems 
     try {
       await fetch(`${API_URL}/api/notifications/read`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify(
           recipientType === 'admin'
             ? { recipientType: 'admin' }
@@ -82,7 +83,7 @@ export default function NotificationBell({ recipientType, weddingId, extraItems 
     try {
       await fetch(`${API_URL}/api/notifications/read`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ notificationId: id }),
       })
       setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n))

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
 
 export default function UpcomingMeetings({ weddings = [], filterWedding = null, compact = false }) {
@@ -15,7 +16,7 @@ export default function UpcomingMeetings({ weddings = [], filterWedding = null, 
 
   const loadEvents = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/calendly/events`)
+      const response = await fetch(`${API_URL}/api/calendly/events`, { headers: await authHeaders() })
       const data = await response.json()
 
       if (data.error) {

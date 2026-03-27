@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
 
 const FIELDS = [
@@ -27,7 +28,7 @@ export default function VenueSettings() {
 
   const load = async () => {
     try {
-      const res  = await fetch(`${API_URL}/api/venue-settings`)
+      const res  = await fetch(`${API_URL}/api/venue-settings`, { headers: await authHeaders() })
       const data = await res.json()
       setValues(data || {})
     } catch (err) {
@@ -41,7 +42,7 @@ export default function VenueSettings() {
     try {
       await fetch(`${API_URL}/api/venue-settings`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify(values),
       })
       setSaved(true)

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 import { Button, Input, ConfirmDialog } from './ui'
 
 
@@ -44,7 +45,7 @@ function ItemRow({ item, onDelete, onUpdate }) {
         try {
           const res = await fetch(`${API_URL}/api/decor/${item.id}`, {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
+            headers: await authHeaders(),
             body: JSON.stringify(updated),
           });
           if (!res.ok) throw new Error('Failed to update item');
@@ -312,7 +313,7 @@ export default function DecorInventory({ weddingId, userId }) {
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await fetch(`${API_URL}/api/decor/${weddingId}`);
+      const res = await fetch(`${API_URL}/api/decor/${weddingId}`, { headers: await authHeaders() });
       if (!res.ok) throw new Error('Failed to load decor inventory');
       const data = await res.json();
       setItems(data);
@@ -347,8 +348,8 @@ export default function DecorInventory({ weddingId, userId }) {
     const spaceName = confirmTarget;
     const spaceItems = items.filter((i) => i.space_name === spaceName);
     await Promise.all(
-      spaceItems.map((item) =>
-        fetch(`${API_URL}/api/decor/${item.id}`, { method: 'DELETE' }).catch(console.error)
+      spaceItems.map(async (item) =>
+        fetch(`${API_URL}/api/decor/${item.id}`, { method: 'DELETE', headers: await authHeaders() }).catch(console.error)
       )
     );
     setItems((prev) => prev.filter((i) => i.space_name !== spaceName));
@@ -377,7 +378,7 @@ export default function DecorInventory({ weddingId, userId }) {
       };
       const res = await fetch(`${API_URL}/api/decor`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error('Failed to add item');
@@ -390,7 +391,7 @@ export default function DecorInventory({ weddingId, userId }) {
 
   const handleDeleteItem = async (id) => {
     try {
-      const res = await fetch(`${API_URL}/api/decor/${id}`, { method: 'DELETE' });
+      const res = await fetch(`${API_URL}/api/decor/${id}`, { method: 'DELETE', headers: await authHeaders() });
       if (!res.ok) throw new Error('Failed to delete item');
       setItems((prev) => prev.filter((i) => i.id !== id));
     } catch (err) {

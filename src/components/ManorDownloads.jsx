@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
 
@@ -109,7 +110,8 @@ function UploadForm({ onUploaded }) {
     fd.append('title', title)
     fd.append('description', description)
     try {
-      const res  = await fetch(`${API_URL}/api/manor-assets`, { method: 'POST', body: fd })
+      const hdrs = await authHeaders()
+      const res  = await fetch(`${API_URL}/api/manor-assets`, { method: 'POST', headers: { 'Authorization': hdrs['Authorization'] }, body: fd })
       const data = await res.json()
       if (!res.ok) { setUploadError(data.error || 'Upload failed'); setUploading(false); return }
       onUploaded(data)
@@ -175,7 +177,7 @@ export default function ManorDownloads({ isAdmin = false }) {
 
   const load = async () => {
     try {
-      const res  = await fetch(`${API_URL}/api/manor-assets`)
+      const res  = await fetch(`${API_URL}/api/manor-assets`, { headers: await authHeaders() })
       const data = await res.json()
       setAssets(Array.isArray(data) ? data : [])
     } catch (err) { console.error(err) }
@@ -184,7 +186,7 @@ export default function ManorDownloads({ isAdmin = false }) {
 
   const handleUpdate = async (id, fields) => {
     await fetch(`${API_URL}/api/manor-assets/${id}`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      method: 'PUT', headers: await authHeaders(),
       body: JSON.stringify(fields),
     })
     setAssets(prev => prev.map(a => a.id === id ? { ...a, ...fields } : a))
@@ -192,7 +194,7 @@ export default function ManorDownloads({ isAdmin = false }) {
 
   const handleDelete = async (id) => {
     if (!confirm('Remove this asset?')) return
-    await fetch(`${API_URL}/api/manor-assets/${id}`, { method: 'DELETE' })
+    await fetch(`${API_URL}/api/manor-assets/${id}`, { method: 'DELETE', headers: await authHeaders() })
     setAssets(prev => prev.filter(a => a.id !== id))
   }
 

@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
+import { Button, Input } from './ui'
 
 
 // ── time helpers ──────────────────────────────────────────────────
@@ -112,11 +114,10 @@ function SuggestedSchedule({ onGenerateRuns }) {
             <h4 className="text-xs font-bold text-sage-500 uppercase tracking-wider">Pre-Ceremony</h4>
             <div>
               <label className="block text-xs font-medium text-sage-600 mb-1">Ceremony time</label>
-              <input
+              <Input
                 value={pre.ceremonyTime}
                 onChange={(e) => setPreField('ceremonyTime', e.target.value)}
                 placeholder="e.g. 4:00 PM"
-                className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
               />
             </div>
             <div>
@@ -140,21 +141,20 @@ function SuggestedSchedule({ onGenerateRuns }) {
             </div>
             <div>
               <label className="block text-xs font-medium text-sage-600 mb-1">Pickup location</label>
-              <input
+              <Input
                 value={pre.pickupLocation}
                 onChange={(e) => setPreField('pickupLocation', e.target.value)}
                 placeholder="e.g. Hampton Inn, Culpeper"
-                className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
               />
             </div>
-            <button
+            <Button
               type="button"
               disabled={!pre.ceremonyTime || generating === 'pre'}
               onClick={generatePreRuns}
-              className="w-full px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
+              className="w-full"
             >
               {generating === 'pre' ? 'Generating…' : 'Generate Pre-Ceremony Runs'}
-            </button>
+            </Button>
           </div>
 
           {/* End of night */}
@@ -162,11 +162,10 @@ function SuggestedSchedule({ onGenerateRuns }) {
             <h4 className="text-xs font-bold text-sage-500 uppercase tracking-wider">End of Night</h4>
             <div>
               <label className="block text-xs font-medium text-sage-600 mb-1">Event ends at</label>
-              <input
+              <Input
                 value={post.eventEndTime}
                 onChange={(e) => setPostField('eventEndTime', e.target.value)}
                 placeholder="e.g. 11:00 PM"
-                className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
               />
             </div>
             <div>
@@ -190,21 +189,20 @@ function SuggestedSchedule({ onGenerateRuns }) {
             </div>
             <div>
               <label className="block text-xs font-medium text-sage-600 mb-1">Dropoff location</label>
-              <input
+              <Input
                 value={post.dropoffLocation}
                 onChange={(e) => setPostField('dropoffLocation', e.target.value)}
                 placeholder="e.g. Hampton Inn, Culpeper"
-                className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
               />
             </div>
-            <button
+            <Button
               type="button"
               disabled={!post.eventEndTime || generating === 'post'}
               onClick={generatePostRuns}
-              className="w-full px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
+              className="w-full"
             >
               {generating === 'post' ? 'Generating…' : 'Generate End-of-Night Runs'}
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -234,7 +232,7 @@ export default function ShuttleSchedule({ weddingId, userId }) {
 
   async function fetchRuns() {
     try {
-      const res = await fetch(`${API_URL}/api/shuttle/${weddingId}`);
+      const res = await fetch(`${API_URL}/api/shuttle/${weddingId}`, { headers: await authHeaders() });
       const data = await res.json();
       setRuns(Array.isArray(data) ? data : []);
     } catch (err) {
@@ -253,7 +251,7 @@ export default function ShuttleSchedule({ weddingId, userId }) {
   async function addRun(data) {
     const res = await fetch(`${API_URL}/api/shuttle`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await authHeaders(),
       body: JSON.stringify({ wedding_id: weddingId, ...data }),
     });
     return await res.json();
@@ -323,7 +321,7 @@ export default function ShuttleSchedule({ weddingId, userId }) {
       const updated = { ...run, [field]: newValue };
       const res = await fetch(`${API_URL}/api/shuttle/${run.id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ ...updated, userId }),
       });
       const saved = await res.json();
@@ -344,7 +342,7 @@ export default function ShuttleSchedule({ weddingId, userId }) {
     try {
       await fetch(`${API_URL}/api/shuttle/${runId}`, {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ userId }),
       });
       setRuns((prev) => prev.filter((r) => r.id !== runId));
@@ -371,12 +369,12 @@ export default function ShuttleSchedule({ weddingId, userId }) {
             Coordinate guest transportation runs for your wedding day.
           </p>
         </div>
-        <button
+        <Button
           onClick={() => setShowForm((prev) => !prev)}
-          className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50 shrink-0"
+          className="shrink-0"
         >
           {showForm ? 'Cancel' : '+ Add Run'}
-        </button>
+        </Button>
       </div>
 
       {/* Advisory note */}
@@ -399,12 +397,11 @@ export default function ShuttleSchedule({ weddingId, userId }) {
 
           <div>
             <label className="block text-xs font-medium text-sage-600 mb-1">Run Label</label>
-            <input
+            <Input
               name="run_label"
               value={formData.run_label}
               onChange={handleFormChange}
               placeholder='e.g. "Run 1 — Pre-ceremony pickup"'
-              className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
             />
           </div>
 
@@ -413,24 +410,22 @@ export default function ShuttleSchedule({ weddingId, userId }) {
               <label className="block text-xs font-medium text-sage-600 mb-1">
                 Pickup Location
               </label>
-              <input
+              <Input
                 name="pickup_location"
                 value={formData.pickup_location}
                 onChange={handleFormChange}
                 placeholder="e.g. Hampton Inn, Culpeper"
                 required
-                className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
               />
             </div>
             <div>
               <label className="block text-xs font-medium text-sage-600 mb-1">Pickup Time</label>
-              <input
+              <Input
                 name="pickup_time"
                 value={formData.pickup_time}
                 onChange={handleFormChange}
                 placeholder="e.g. 3:45 PM"
                 required
-                className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
               />
             </div>
           </div>
@@ -440,24 +435,22 @@ export default function ShuttleSchedule({ weddingId, userId }) {
               <label className="block text-xs font-medium text-sage-600 mb-1">
                 Dropoff Location
               </label>
-              <input
+              <Input
                 name="dropoff_location"
                 value={formData.dropoff_location}
                 onChange={handleFormChange}
                 placeholder="e.g. Rixey Manor"
                 required
-                className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
               />
             </div>
             <div>
               <label className="block text-xs font-medium text-sage-600 mb-1">Dropoff Time</label>
-              <input
+              <Input
                 name="dropoff_time"
                 value={formData.dropoff_time}
                 onChange={handleFormChange}
                 placeholder="e.g. 4:10 PM"
                 required
-                className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
               />
             </div>
           </div>
@@ -467,44 +460,41 @@ export default function ShuttleSchedule({ weddingId, userId }) {
               <label className="block text-xs font-medium text-sage-600 mb-1">
                 Seat Count
               </label>
-              <input
+              <Input
                 name="seat_count"
                 type="number"
                 min="1"
                 value={formData.seat_count}
                 onChange={handleFormChange}
                 placeholder="e.g. 14"
-                className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
               />
             </div>
           </div>
 
           <div>
             <label className="block text-xs font-medium text-sage-600 mb-1">Notes</label>
-            <input
+            <Input
               name="notes"
               value={formData.notes}
               onChange={handleFormChange}
               placeholder="Any special instructions..."
-              className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
             />
           </div>
 
           <div className="flex gap-2 justify-end pt-1">
-            <button
+            <Button
               type="button"
+              variant="secondary"
               onClick={() => setShowForm(false)}
-              className="px-4 py-2 border border-cream-300 text-sage-600 rounded-lg text-sm hover:bg-cream-100"
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="submit"
               disabled={saving}
-              className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
             >
               {saving ? 'Saving...' : 'Add Run'}
-            </button>
+            </Button>
           </div>
         </form>
       )}

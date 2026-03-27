@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../../config/api'
+import { authHeaders } from '../../utils/api'
 
 export default function DirectMessagesPanel({ weddingId, weddingName }) {
   const [messages, setMessages] = useState([])
@@ -20,14 +21,14 @@ export default function DirectMessagesPanel({ weddingId, weddingName }) {
 
   const loadMessages = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/messages/${weddingId}`)
+      const response = await fetch(`${API_URL}/api/messages/${weddingId}`, { headers: await authHeaders() })
       const data = await response.json()
       setMessages(data.messages || [])
 
       // Mark client messages as read
       await fetch(`${API_URL}/api/messages/read/${weddingId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ senderType: 'client' })
       })
     } catch (err) {
@@ -44,7 +45,7 @@ export default function DirectMessagesPanel({ weddingId, weddingName }) {
     try {
       await fetch(`${API_URL}/api/messages`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({
           weddingId,
           senderType: 'admin',

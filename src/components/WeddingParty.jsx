@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
 
 // ── Role suggestions — no gender or family-structure assumptions ───────────────
@@ -386,12 +387,13 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
   const loadAll = async () => {
     setLoading(true)
     try {
+      const hdrs = await authHeaders()
       const [membersRes, guestsRes, photosRes, ceremonyRes, weddingRes] = await Promise.all([
-        fetch(`${API_URL}/api/wedding-party/${weddingId}`),
-        fetch(`${API_URL}/api/guests/${weddingId}`),
-        fetch(`${API_URL}/api/wedding-photos/${weddingId}`),
-        fetch(`${API_URL}/api/ceremony-order/${weddingId}`),
-        fetch(`${API_URL}/api/weddings/${weddingId}`),
+        fetch(`${API_URL}/api/wedding-party/${weddingId}`, { headers: hdrs }),
+        fetch(`${API_URL}/api/guests/${weddingId}`, { headers: hdrs }),
+        fetch(`${API_URL}/api/wedding-photos/${weddingId}`, { headers: hdrs }),
+        fetch(`${API_URL}/api/ceremony-order/${weddingId}`, { headers: hdrs }),
+        fetch(`${API_URL}/api/weddings/${weddingId}`, { headers: hdrs }),
       ])
 
       const [membersData, guestsData, photosData, ceremonyData, weddingData] = await Promise.all([
@@ -426,7 +428,7 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
     try {
       await fetch(`${API_URL}/api/weddings/${weddingId}/partners`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ partner1_name: p1Draft.trim(), partner2_name: p2Draft.trim() })
       })
       setPartner1(p1Draft.trim())
@@ -440,7 +442,7 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
   const handleAdd = async (form) => {
     const res = await fetch(`${API_URL}/api/wedding-party/${weddingId}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await authHeaders(),
       body: JSON.stringify({ ...form, sort_order: members.length })
     })
     if (res.ok) {
@@ -457,7 +459,7 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
   const handleUpdate = async (id, form) => {
     const res = await fetch(`${API_URL}/api/wedding-party/${id}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await authHeaders(),
       body: JSON.stringify(form)
     })
     if (res.ok) {
@@ -469,11 +471,11 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
 
   const handleDelete = async (id) => {
     const member = members.find(m => m.id === id)
-    await fetch(`${API_URL}/api/wedding-party/${id}`, { method: 'DELETE' })
+    await fetch(`${API_URL}/api/wedding-party/${id}`, { method: 'DELETE', headers: await authHeaders() })
     setMembers(prev => prev.filter(m => m.id !== id))
     // Return guest to available list
     if (member?.guest_id) {
-      const res = await fetch(`${API_URL}/api/guests/${weddingId}`)
+      const res = await fetch(`${API_URL}/api/guests/${weddingId}`, { headers: await authHeaders() })
       const data = await res.json()
       const guest = (data.guests || data).find(g => g.id === member.guest_id)
       if (guest) setGuests(prev => [...prev, guest])
@@ -487,7 +489,7 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
         const mapping = getCeremonyMapping(m.role)
         await fetch(`${API_URL}/api/ceremony-order`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: await authHeaders(),
           body: JSON.stringify({
             wedding_id: weddingId,
             section: mapping.section,
@@ -500,7 +502,7 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
         })
       }
       // Reload ceremony entries
-      const res = await fetch(`${API_URL}/api/ceremony-order/${weddingId}`)
+      const res = await fetch(`${API_URL}/api/ceremony-order/${weddingId}`, { headers: await authHeaders() })
       setExistingCeremony(await res.json())
       setSyncDone(true)
       setTimeout(() => setSyncDone(false), 3000)

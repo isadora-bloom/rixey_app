@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
 
 export default function ZoomCallback() {
@@ -19,11 +20,11 @@ export default function ZoomCallback() {
     }
 
     if (code) {
-      fetch(`${API_URL}/api/zoom/callback`, {
+      authHeaders().then(hdrs => fetch(`${API_URL}/api/zoom/callback`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: hdrs,
         body: JSON.stringify({ code })
-      })
+      }))
         .then(res => res.json())
         .then(data => {
           if (data.success) {

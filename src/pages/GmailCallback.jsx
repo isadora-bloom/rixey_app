@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
 
 export default function GmailCallback() {
@@ -20,11 +21,11 @@ export default function GmailCallback() {
 
     if (code) {
       // Exchange code for tokens
-      fetch(`${API_URL}/api/gmail/callback`, {
+      authHeaders().then(hdrs => fetch(`${API_URL}/api/gmail/callback`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: hdrs,
         body: JSON.stringify({ code })
-      })
+      }))
         .then(res => res.json())
         .then(data => {
           if (data.success) {

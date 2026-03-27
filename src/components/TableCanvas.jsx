@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Stage, Layer, Image as KonvaImage, Circle, Rect, Text, Group } from 'react-konva'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
 
 // Cropped image is 2893×1550. Barn measured: 718px = 40ft → 17.95 px/ft
@@ -222,7 +223,7 @@ export default function TableCanvas({ weddingId, isAdmin }) {
   const loadLayout = async () => {
     setLoading(true)
     try {
-      const res = await fetch(`${API_URL}/api/table-layout/${weddingId}`)
+      const res = await fetch(`${API_URL}/api/table-layout/${weddingId}`, { headers: await authHeaders() })
       const data = await res.json()
       if (data.layout) setElements(data.layout.elements || [])
     } catch (err) {
@@ -236,7 +237,7 @@ export default function TableCanvas({ weddingId, isAdmin }) {
     try {
       const res = await fetch(`${API_URL}/api/table-layout`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ weddingId, elements }),
       })
       const data = await res.json()

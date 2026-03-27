@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
 
 // ── Ingredient scaling → meaningful units ─────────────────────────────────────
@@ -413,10 +414,11 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
 
   const load = async () => {
     try {
+      const hdrs = await authHeaders()
       const [itemsRes, recipesRes, notesRes] = await Promise.all([
-        fetch(`${API_URL}/api/bar-shopping/${weddingId}`),
-        fetch(`${API_URL}/api/bar-recipes/${weddingId}`),
-        fetch(`${API_URL}/api/bar-notes/${weddingId}`),
+        fetch(`${API_URL}/api/bar-shopping/${weddingId}`, { headers: hdrs }),
+        fetch(`${API_URL}/api/bar-recipes/${weddingId}`, { headers: hdrs }),
+        fetch(`${API_URL}/api/bar-notes/${weddingId}`, { headers: hdrs }),
       ])
       setItems(await itemsRes.json() || [])
       setRecipes(await recipesRes.json() || [])
@@ -433,7 +435,7 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
       notesTimer.current = setTimeout(async () => {
         try {
           const res = await fetch(`${API_URL}/api/bar-notes/${weddingId}`, {
-            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            method: 'PUT', headers: await authHeaders(),
             body: JSON.stringify(next),
           })
           if (!res.ok) console.error('[BarPlanner] Notes save failed:', res.status)
@@ -451,7 +453,7 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
     if (!newItem.item_name.trim()) return
     try {
       const res = await fetch(`${API_URL}/api/bar-shopping/${weddingId}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: await authHeaders(),
         body: JSON.stringify({ ...newItem, sort_order: items.length }),
       })
       if (!res.ok) throw new Error(`Error ${res.status}`)
@@ -468,7 +470,7 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
   const toggleItem = async (id, checked) => {
     setItems(prev => prev.map(i => i.id === id ? { ...i, checked } : i))
     await fetch(`${API_URL}/api/bar-shopping/${id}`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      method: 'PUT', headers: await authHeaders(),
       body: JSON.stringify({ checked }),
     })
   }
@@ -476,14 +478,14 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
   const updateItem = async (id, fields) => {
     setItems(prev => prev.map(i => i.id === id ? { ...i, ...fields } : i))
     await fetch(`${API_URL}/api/bar-shopping/${id}`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      method: 'PUT', headers: await authHeaders(),
       body: JSON.stringify(fields),
     })
   }
 
   const deleteItem = async (id) => {
     setItems(prev => prev.filter(i => i.id !== id))
-    await fetch(`${API_URL}/api/bar-shopping/${id}`, { method: 'DELETE' })
+    await fetch(`${API_URL}/api/bar-shopping/${id}`, { method: 'DELETE', headers: await authHeaders() })
   }
 
   const clearList = async () => {
@@ -491,7 +493,7 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
     const snapshot = [...items]
     setItems([])
     for (const item of snapshot) {
-      await fetch(`${API_URL}/api/bar-shopping/${item.id}`, { method: 'DELETE' })
+      await fetch(`${API_URL}/api/bar-shopping/${item.id}`, { method: 'DELETE', headers: await authHeaders() })
     }
   }
 
@@ -499,7 +501,7 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
     // Replace only calculator-generated items; keep anything manually added
     const toRemove = items.filter(i => i.from_calculator)
     for (const item of toRemove) {
-      await fetch(`${API_URL}/api/bar-shopping/${item.id}`, { method: 'DELETE' })
+      await fetch(`${API_URL}/api/bar-shopping/${item.id}`, { method: 'DELETE', headers: await authHeaders() })
     }
     const added = []
     for (const item of calcPreview) {
@@ -508,7 +510,7 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
         ? { ...item, quantity: Math.ceil(item.quantity / 12), unit: 'cases of 12' }
         : item
       const res = await fetch(`${API_URL}/api/bar-shopping/${weddingId}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: await authHeaders(),
         body: JSON.stringify({ ...listItem, from_calculator: true, sort_order: items.length + added.length }),
       })
       added.push(await res.json())
@@ -529,14 +531,15 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
       let res
       if (recipeMode === 'url') {
         res = await fetch(`${API_URL}/api/bar-recipes/extract-url`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: await authHeaders(),
           body: JSON.stringify({ url: recipeUrl, name: recipeName }),
         })
       } else {
         const form = new FormData()
         form.append('file', recipeFile)
         form.append('name', recipeName)
-        res = await fetch(`${API_URL}/api/bar-recipes/extract-upload`, { method: 'POST', body: form })
+        const uploadHdrs = await authHeaders()
+        res = await fetch(`${API_URL}/api/bar-recipes/extract-upload`, { method: 'POST', headers: { 'Authorization': uploadHdrs['Authorization'] }, body: form })
       }
       const data = await res.json()
       if (data.ingredients) setEditableIngredients(data.ingredients)
@@ -563,7 +566,7 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
   const saveRecipe = async () => {
     const ingredients = (editableIngredients || []).filter(i => i.name.trim())
     const res = await fetch(`${API_URL}/api/bar-recipes/${weddingId}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: await authHeaders(),
       body: JSON.stringify({
         name: recipeName, source_type: recipeMode,
         source_url: recipeMode === 'url' ? recipeUrl : null,
@@ -578,7 +581,7 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
 
   const deleteRecipe = async (id) => {
     setRecipes(prev => prev.filter(r => r.id !== id))
-    await fetch(`${API_URL}/api/bar-recipes/${id}`, { method: 'DELETE' })
+    await fetch(`${API_URL}/api/bar-recipes/${id}`, { method: 'DELETE', headers: await authHeaders() })
   }
 
   const addRecipeToList = async (recipe) => {
@@ -588,7 +591,7 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
         ? scaleIngredient(ing.quantity, ing.unit, ing.category, guests)
         : { qty: ing.quantity, unit: ing.unit, note: null }
       const res = await fetch(`${API_URL}/api/bar-shopping/${weddingId}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: await authHeaders(),
         body: JSON.stringify({
           item_name: ing.name, quantity: scaled.qty, unit: scaled.unit,
           category: ing.category || 'other',

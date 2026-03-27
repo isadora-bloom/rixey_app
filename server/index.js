@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import multer from 'multer';
 import { google } from 'googleapis';
 import { Resend } from 'resend';
+import rateLimit from 'express-rate-limit';
 import { requireAuth, requireAdmin } from './middleware/auth.js';
 import { validateBody } from './middleware/validate.js';
 // PDF parsing removed - using Claude vision for all documents
@@ -37,6 +38,38 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 app.use(express.json());
+
+// ============ RATE LIMITING ============
+
+// General rate limiter: 100 requests per 15 minutes per IP
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later' }
+});
+
+// Stricter rate limiter for AI/chat endpoints: 20 requests per 15 minutes per IP
+const aiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later' }
+});
+
+// Apply general rate limiter to all routes
+app.use(generalLimiter);
+
+// Apply stricter AI rate limiter to chat/AI endpoints
+app.use('/api/chat', aiLimiter);
+app.use('/api/chat-with-file', aiLimiter);
+app.use('/api/welcome', aiLimiter);
+app.use('/api/sage-preview', aiLimiter);
+app.use('/api/ask-contracts', aiLimiter);
+app.use('/api/bar-recipes/extract-url', aiLimiter);
+app.use('/api/bar-recipes/extract-upload', aiLimiter);
 
 // Health check endpoint for Railway (public)
 app.get('/', (req, res) => {
@@ -300,6 +333,61 @@ const oauth2Client = new google.auth.OAuth2(
 );
 
 const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+
+// Helper: load Gmail tokens, refresh if expired, save new tokens back to Supabase
+async function loadAndRefreshGmailTokens() {
+  const { data: tokens, error: fetchError } = await supabaseAdmin
+    .from('gmail_tokens')
+    .select('*')
+    .limit(1)
+    .single();
+
+  if (fetchError || !tokens) {
+    return null;
+  }
+
+  oauth2Client.setCredentials({
+    access_token: tokens.access_token,
+    refresh_token: tokens.refresh_token,
+    expiry_date: tokens.expiry_date
+  });
+
+  // Check if the token is expired or will expire within the next 5 minutes
+  const now = Date.now();
+  const expiryDate = tokens.expiry_date;
+  const bufferMs = 5 * 60 * 1000; // 5-minute buffer
+
+  if (expiryDate && now >= expiryDate - bufferMs) {
+    console.log('Gmail access token expired or expiring soon, refreshing...');
+    try {
+      const { credentials } = await oauth2Client.refreshAccessToken();
+      console.log('Gmail token refreshed successfully, new expiry:', credentials.expiry_date);
+
+      oauth2Client.setCredentials(credentials);
+
+      // Save refreshed tokens back to Supabase
+      const { error: updateError } = await supabaseAdmin
+        .from('gmail_tokens')
+        .update({
+          access_token: credentials.access_token,
+          expiry_date: credentials.expiry_date,
+          // Only update refresh_token if a new one was issued
+          ...(credentials.refresh_token ? { refresh_token: credentials.refresh_token } : {})
+        })
+        .eq('id', tokens.id);
+
+      if (updateError) {
+        console.error('Failed to save refreshed Gmail tokens:', updateError.message);
+      }
+    } catch (refreshErr) {
+      console.error('Gmail token refresh failed:', refreshErr.message);
+      // If refresh fails, the connection is effectively dead
+      return null;
+    }
+  }
+
+  return tokens;
+}
 
 // System prompt for Sage
 const SAGE_SYSTEM_PROMPT = `You are Sage, the friendly planning assistant for couples getting married at Rixey Manor. You're warm, practical, and reassuring—like a knowledgeable best friend who's helped hundreds of couples plan their wedding weekends.
@@ -2259,25 +2347,15 @@ app.post('/api/gmail/callback', async (req, res) => {
 // Check Gmail connection status
 app.get('/api/gmail/status', async (req, res) => {
   try {
-    const { data: tokens, error: fetchError } = await supabaseAdmin
-      .from('gmail_tokens')
-      .select('*')
-      .limit(1)
-      .single();
+    const tokens = await loadAndRefreshGmailTokens();
 
-    console.log('Gmail status check - tokens found:', !!tokens, fetchError?.message || '');
+    console.log('Gmail status check - tokens found:', !!tokens);
 
     if (!tokens) {
       return res.json({ connected: false });
     }
 
-    oauth2Client.setCredentials({
-      access_token: tokens.access_token,
-      refresh_token: tokens.refresh_token,
-      expiry_date: tokens.expiry_date
-    });
-
-    // Test the connection
+    // Test the connection (tokens are already set and refreshed by the helper)
     try {
       await gmail.users.getProfile({ userId: 'me' });
       console.log('Gmail connection verified');
@@ -2295,22 +2373,12 @@ app.get('/api/gmail/status', async (req, res) => {
 // Fetch and process emails from registered client email addresses
 app.post('/api/gmail/sync', async (req, res) => {
   try {
-    // Load tokens
-    const { data: tokens } = await supabaseAdmin
-      .from('gmail_tokens')
-      .select('*')
-      .limit(1)
-      .single();
+    // Load tokens (with automatic refresh if expired)
+    const tokens = await loadAndRefreshGmailTokens();
 
     if (!tokens) {
       return res.status(400).json({ error: 'Gmail not connected' });
     }
-
-    oauth2Client.setCredentials({
-      access_token: tokens.access_token,
-      refresh_token: tokens.refresh_token,
-      expiry_date: tokens.expiry_date
-    });
 
     // Get all weddings with profiles (registered client emails)
     // Use supabaseAdmin to bypass RLS
@@ -3814,7 +3882,7 @@ app.get('/api/inspo/:weddingId', async (req, res) => {
 // Upload inspo image
 app.post('/api/inspo', upload.single('image'), async (req, res) => {
   try {
-    const { weddingId, caption, uploadedBy } = req.body;
+    const { weddingId, caption, uploadedBy, category } = req.body;
     const file = req.file;
 
     if (!file || !weddingId) {
@@ -3879,7 +3947,8 @@ app.post('/api/inspo', upload.single('image'), async (req, res) => {
         image_url: signedUrlData.signedUrl,
         caption: finalCaption || null,
         uploaded_by: uploadedBy || null,
-        display_order: count || 0
+        display_order: count || 0,
+        category: category || null
       })
       .select()
       .single();

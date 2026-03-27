@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
 import { authHeaders } from '../utils/api'
+import SaveIndicator from './ui/SaveIndicator'
 const SaveIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
 const CheckIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
 
@@ -117,6 +118,7 @@ export default function WeddingDetails({ weddingId, userId }) {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [saveError, setSaveError] = useState(null)
+  const [saveState, setSaveState] = useState('idle')
 
   useEffect(() => {
     if (!weddingId) return
@@ -148,6 +150,7 @@ export default function WeddingDetails({ weddingId, userId }) {
   const handleSave = async () => {
     setSaving(true)
     setSaveError(null)
+    setSaveState('saving')
     try {
       const res = await fetch(`${API_URL}/api/wedding-details`, {
         method: 'POST',
@@ -159,10 +162,12 @@ export default function WeddingDetails({ weddingId, userId }) {
         throw new Error(body.error || `Error ${res.status}`)
       }
       setSaved(true)
+      setSaveState('saved')
       setTimeout(() => setSaved(false), 2500)
     } catch (err) {
       console.error(err)
       setSaveError('Save failed — please try again.')
+      setSaveState('idle')
     } finally {
       setSaving(false)
     }
@@ -346,12 +351,7 @@ export default function WeddingDetails({ weddingId, userId }) {
 
       {/* Sticky save bar */}
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-cream-200 px-6 py-3 flex items-center justify-end gap-3 z-20 lg:pl-64">
-        {saved && (
-          <span className="flex items-center gap-1.5 text-sm text-sage-600">
-            <CheckIcon />
-            Saved
-          </span>
-        )}
+        <SaveIndicator state={saveState} />
         {saveError && (
           <span className="text-sm text-red-600">{saveError}</span>
         )}

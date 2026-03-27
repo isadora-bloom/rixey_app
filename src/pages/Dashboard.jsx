@@ -15,7 +15,6 @@ import StaffingCalculator from '../components/StaffingCalculator'
 import BudgetTracker from '../components/BudgetTracker'
 import BorrowCatalog from '../components/BorrowCatalog'
 import ManorDownloads from '../components/ManorDownloads'
-import NotificationBell from '../components/NotificationBell'
 import GuestCareNotes from '../components/GuestCareNotes'
 import StorefrontBrowser from '../components/StorefrontBrowser'
 import WeddingDetails from '../components/WeddingDetails'
@@ -37,14 +36,9 @@ import BarPlanner from '../components/BarPlanner'
 import SectionFinaliser from '../components/SectionFinaliser'
 import { API_URL } from '../config/api'
 import { authHeaders } from '../utils/api'
-
-
-// Sections that can be finalised in the pre-wedding period
-const FINALISABLE = new Set([
-  'timeline', 'ceremony-order', 'guests', 'table-map', 'vendor',
-  'makeup', 'shuttle', 'rehearsal', 'bedrooms', 'decor',
-  'allergies', 'staffing', 'bar', 'tables', 'guestcare',
-])
+import DashboardChat from './dashboard/DashboardChat'
+import DashboardNav, { FINALISABLE } from './dashboard/DashboardNav'
+import DashboardHeader from './dashboard/DashboardHeader'
 
 // Countdown component
 function WeddingCountdown({ weddingDate }) {
@@ -701,125 +695,17 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-cream-50">
-      {/* Header */}
-      <header className="bg-white border-b border-cream-200 sticky top-0 z-40">
-        <div className="max-w-6xl mx-auto px-4 py-3 sm:py-4 flex items-center justify-between">
-          <div className="flex-1 min-w-0">
-            <button onClick={() => setActiveSection('chat')} className="inline-block">
-              <img src="/icons/icon-192x192.png" alt="Rixey Manor" className="h-9 w-auto" />
-            </button>
-            <button
-              onClick={() => setShowEditProfile(true)}
-              className="text-sage-400 text-sm hover:text-sage-600 transition flex items-center gap-1"
-            >
-              {profile?.name || user?.email}
-              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-              </svg>
-            </button>
-          </div>
-
-          {/* Header Actions */}
-          <div className="flex items-center gap-2 sm:gap-4">
-            {/* Google Sheets Link */}
-            {wedding?.google_sheets_link && (
-              <a
-                href={wedding.google_sheets_link}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-green-50 text-green-700 rounded-lg hover:bg-green-100 transition text-sm font-medium"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7" />
-                </svg>
-                Spreadsheet
-              </a>
-            )}
-
-            {/* Notification Bell */}
-            {wedding?.id && (
-              <NotificationBell
-                recipientType="client"
-                weddingId={wedding.id}
-              />
-            )}
-
-            {/* Mobile menu button */}
-            <button
-              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="lg:hidden p-2 text-sage-500 hover:text-sage-700"
-            >
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-              </svg>
-            </button>
-
-            <button
-              onClick={handleSignOut}
-              className="hidden sm:block text-sage-500 hover:text-sage-700 text-sm font-medium transition"
-            >
-              Sign Out
-            </button>
-          </div>
-        </div>
-
-        {/* Mobile menu */}
-        {mobileMenuOpen && (
-          <div className="lg:hidden border-t border-cream-200 bg-white px-4 py-3 space-y-2">
-            {wedding?.google_sheets_link && (
-              <a
-                href={wedding.google_sheets_link}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-2 px-3 py-2 rounded-lg text-green-700 bg-green-50 hover:bg-green-100"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7" />
-                </svg>
-                Planning Spreadsheet <span className="text-green-500 text-xs">↗</span>
-              </a>
-            )}
-            <a
-              href="https://members.isadoraandco.com/offers/hWX4WHcQ"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-2 px-3 py-2 rounded-lg text-amber-700 bg-amber-50 hover:bg-amber-100"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-              </svg>
-              Planning Course <span className="text-amber-500 text-xs">(FREE: RIXEYFAMILY)</span>
-            </a>
-            {resourceLinks.map((link) => (
-              link.href.startsWith('/') ? (
-                <button
-                  key={link.name}
-                  onClick={() => { navigate(link.href); setMobileMenuOpen(false) }}
-                  className="block w-full text-left px-3 py-2 rounded-lg text-sage-600 hover:bg-sage-50"
-                >
-                  {link.name}
-                </button>
-              ) : (
-                <a
-                  key={link.name}
-                  href={link.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="block px-3 py-2 rounded-lg text-sage-600 hover:bg-sage-50"
-                >
-                  {link.name} <span className="text-sage-400 text-xs">↗</span>
-                </a>
-              )
-            ))}
-            <button
-              onClick={handleSignOut}
-              className="block w-full text-left px-3 py-2 rounded-lg text-red-600 hover:bg-red-50"
-            >
-              Sign Out
-            </button>
-          </div>
-        )}
-      </header>
+      <DashboardHeader
+        user={user}
+        profile={profile}
+        wedding={wedding}
+        setActiveSection={setActiveSection}
+        setShowEditProfile={setShowEditProfile}
+        handleSignOut={handleSignOut}
+        mobileMenuOpen={mobileMenuOpen}
+        setMobileMenuOpen={setMobileMenuOpen}
+        resourceLinks={resourceLinks}
+      />
 
       <main className="max-w-7xl mx-auto px-4 py-4 sm:py-6">
         {/* Onboarding Checklist for new users */}
@@ -898,297 +784,43 @@ export default function Dashboard() {
         {/* Main Layout */}
         <div className="grid lg:grid-cols-[220px_1fr] gap-4 sm:gap-6">
 
-          {/* Compact Nav Sidebar — desktop only */}
-          <div className="hidden lg:block lg:order-1">
-            <div className="bg-white rounded-2xl shadow-sm border border-cream-200 overflow-hidden lg:sticky lg:top-24">
-              <div className="px-4 pt-5 pb-3 flex justify-center border-b border-cream-200">
-                <img src="/rixey-manor-logo-optimized.png" alt="Rixey Manor" className="h-16 w-auto" />
-              </div>
-              <nav className="p-2">
-                {[
-                  { key: 'chat', label: 'Chat with Sage', icon: '/icons/sage-chat.svg' },
-                  { section: 'Get Started' },
-                  { key: 'worksheets', label: 'Worksheets', icon: '/icons/checklist.svg' },
-                  { key: 'wedding-details', label: 'Wedding Details', icon: '/icons/overview.svg' },
-                  { key: 'checklist', label: 'Checklist', icon: '/icons/checklist.svg' },
-                  { section: 'Plan' },
-                  { key: 'budget', label: 'Budget', icon: '/icons/budget.svg', dot: !!budgetSummary },
-                  { key: 'guests', label: 'Guest List', icon: '/icons/guest-care.svg' },
-                  { key: 'vendor', label: 'Vendors', icon: '/icons/vendors.svg' },
-                  { key: 'preferred-vendors', label: 'Preferred Vendors', icon: '/icons/vendors.svg' },
-                  { key: 'timeline', label: 'Timeline', icon: '/icons/timeline.svg', dot: !!timelineSummary },
-                  { key: 'tables', label: 'Tables', icon: '/icons/tables.svg', dot: !!tableSummary },
-                  { section: 'Day Of' },
-                  { key: 'ceremony-order', label: 'Ceremony Order', icon: '/icons/timeline.svg' },
-                  { key: 'table-map', label: 'Table Map', icon: '/icons/tables.svg' },
-                  { key: 'staffing', label: 'Staffing Guide', icon: '/icons/staffing-guide.svg' },
-                  { key: 'bar', label: 'Bar Planner', icon: '/icons/staffing-guide.svg' },
-                  { key: 'makeup', label: 'Hair & Makeup', icon: '/icons/upload-photo-of-you-two.svg' },
-                  { key: 'shuttle', label: 'Shuttle Schedule', icon: '/icons/book-a-meeting.svg' },
-                  { key: 'rehearsal', label: 'Rehearsal Dinner', icon: '/icons/meetings.svg' },
-                  { key: 'bedrooms', label: 'Bedroom Assignments', icon: '/icons/direct-messages.svg' },
-                  { key: 'decor', label: 'Decor Inventory', icon: '/icons/inspiration.svg' },
-                  { section: 'Your Guests' },
-                  { key: 'allergies', label: 'Allergy Registry', icon: '/icons/guest-care.svg' },
-                  { key: 'guestcare', label: 'Guest Care Notes', icon: '/icons/guest-care.svg' },
-                  { section: 'Your Website' },
-                  { key: 'website-builder', label: 'Build Your Website', icon: '/icons/resources.svg' },
-                  { key: 'photos', label: 'Photo Library', icon: '/icons/inspiration.svg' },
-                  { key: 'wedding-party', label: 'Wedding Party', icon: '/icons/vendors.svg' },
-                  { section: 'Rixey' },
-                  { key: 'inspo', label: 'Inspiration', icon: '/icons/inspiration.svg' },
-                  { key: 'borrow', label: 'Borrow Brochure', icon: '/icons/borrow-brochure.svg' },
-                  { key: 'picks', label: 'Rixey Picks', icon: '/icons/rixey-picks.svg' },
-                  { key: 'downloads', label: 'Manor Downloads', icon: '/icons/resources.svg' },
-                  { section: 'Connect' },
-                  { key: 'inbox', label: 'Inbox', icon: '/icons/inbox.svg' },
-                  { key: 'booking', label: 'Book a Meeting', icon: '/icons/book-a-meeting.svg' },
-                  { key: 'resources', label: 'Resources', icon: '/icons/resources.svg' },
-                ].map((item, idx) => {
-                  if (item.section) {
-                    return (
-                      <p key={idx} className="text-xs font-semibold text-sage-400 uppercase tracking-wide px-3 pt-3 pb-1">
-                        {item.section}
-                      </p>
-                    )
-                  }
-                  return (
-                    <button
-                      key={item.key}
-                      onClick={() => setActiveSection(item.key)}
-                      className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition ${
-                        activeSection === item.key
-                          ? 'bg-sage-100 text-sage-700 font-medium'
-                          : 'text-sage-500 hover:bg-cream-50 hover:text-sage-700'
-                      }`}
-                    >
-                      <span className="flex items-center gap-2">
-                        <img src={item.icon} className="w-5 h-5 flex-shrink-0" alt="" />
-                        <span>{item.label}</span>
-                      </span>
-                      {/* Finalisation ticks — last 6 weeks only */}
-                      {isPreWedding && FINALISABLE.has(item.key) ? (
-                        <span className="flex items-center gap-0.5 shrink-0">
-                          {[
-                            finalisations[item.key]?.couple_finalised,
-                            finalisations[item.key]?.staff_finalised,
-                          ].map((done, i) => (
-                            <span
-                              key={i}
-                              className={`w-3 h-3 rounded-full border flex items-center justify-center ${
-                                done ? 'bg-sage-500 border-sage-500' : 'border-cream-400 bg-white'
-                              }`}
-                            >
-                              {done && <span className="text-white text-[7px] leading-none">✓</span>}
-                            </span>
-                          ))}
-                        </span>
-                      ) : (
-                        item.dot && <span className="w-1.5 h-1.5 rounded-full bg-sage-400 flex-shrink-0" />
-                      )}
-                    </button>
-                  )
-                })}
-              </nav>
-            </div>
-          </div>
+          <DashboardNav
+            activeSection={activeSection}
+            setActiveSection={setActiveSection}
+            budgetSummary={budgetSummary}
+            timelineSummary={timelineSummary}
+            tableSummary={tableSummary}
+            finalisations={finalisations}
+            isPreWedding={isPreWedding}
+          />
 
           {/* Main Content */}
           <div ref={contentRef} className={`order-1 lg:order-2 ${isPreWedding && FINALISABLE.has(activeSection) ? 'pb-24' : ''}`}>
-            {/* Mobile: section dropdown */}
-            <div className="lg:hidden mb-3">
-              <select
-                value={activeSection}
-                onChange={e => setActiveSection(e.target.value)}
-                className="w-full p-3 border border-cream-200 rounded-xl bg-white text-sage-700 font-medium focus:outline-none focus:ring-2 focus:ring-sage-300"
-              >
-                <option value="chat">💬 Chat with Sage</option>
-                <optgroup label="Get Started">
-                  <option value="worksheets">📋 Worksheets</option>
-                  <option value="wedding-details">💍 Wedding Details</option>
-                  <option value="checklist">✅ Checklist</option>
-                </optgroup>
-                <optgroup label="Plan">
-                  <option value="budget">💰 Budget</option>
-                  <option value="guests">👥 Guest List</option>
-                  <option value="vendor">📎 Vendors</option>
-                  <option value="preferred-vendors">⭐ Preferred Vendors</option>
-                  <option value="timeline">📅 Timeline</option>
-                  <option value="tables">🪑 Tables</option>
-                </optgroup>
-                <optgroup label="Day Of">
-                  <option value="ceremony-order">🎶 Ceremony Order</option>
-                  <option value="table-map">🗺 Table Map</option>
-                  <option value="staffing">🙋 Staffing Guide</option>
-                  <option value="bar">🍹 Bar Planner</option>
-                  <option value="makeup">💄 Hair &amp; Makeup</option>
-                  <option value="shuttle">🚌 Shuttle Schedule</option>
-                  <option value="rehearsal">🍽 Rehearsal Dinner</option>
-                  <option value="bedrooms">🛏 Bedroom Assignments</option>
-                  <option value="decor">🌿 Decor Inventory</option>
-                </optgroup>
-                <optgroup label="Your Guests">
-                  <option value="allergies">⚕️ Allergy Registry</option>
-                  <option value="guestcare">💝 Guest Care Notes</option>
-                </optgroup>
-                <optgroup label="Your Website">
-                  <option value="website-builder">🌐 Build Your Website</option>
-                  <option value="photos">📷 Photo Library</option>
-                  <option value="wedding-party">💐 Wedding Party</option>
-                </optgroup>
-                <optgroup label="Rixey">
-                  <option value="inspo">💡 Inspiration</option>
-                  <option value="borrow">📦 Borrow Brochure</option>
-                  <option value="picks">🛍 Rixey Picks</option>
-                </optgroup>
-                <optgroup label="Connect">
-                  <option value="inbox">📬 Inbox</option>
-                  <option value="booking">📞 Book a Meeting</option>
-                  <option value="resources">🔗 Resources</option>
-                </optgroup>
-              </select>
-            </div>
 
             <div className="bg-white rounded-2xl shadow-sm border border-cream-200 overflow-hidden">
 
               {/* Chat section */}
               {activeSection === 'chat' && (
-                <div className="flex flex-col h-[450px] sm:h-[550px] lg:h-[650px]">
-                  {/* Chat Header */}
-                  <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-cream-200 shrink-0">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 sm:w-10 sm:h-10 bg-sage-100 rounded-full flex items-center justify-center">
-                        <span className="text-sage-600 font-serif text-base sm:text-lg">S</span>
-                      </div>
-                      <div>
-                        <h2 className="font-serif text-lg sm:text-xl text-sage-700">Chat with Sage</h2>
-                        <p className="text-sage-400 text-xs sm:text-sm">Your personal wedding planning assistant</p>
-                      </div>
-                    </div>
-                  </div>
-
-              {/* Messages */}
-              <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
-                {loadingMessages ? (
-                  <div className="space-y-4">
-                    {[1, 2, 3].map(i => (
-                      <div key={i} className={`flex ${i % 2 === 0 ? 'justify-end' : 'justify-start'}`}>
-                        {i % 2 !== 0 && <div className="w-8 h-8 bg-cream-200 rounded-full mr-2 flex-shrink-0 animate-pulse" />}
-                        <div className={`h-12 rounded-2xl animate-pulse bg-cream-200 ${i % 2 === 0 ? 'w-2/3' : 'w-3/4'}`} />
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  messages.map((message) => (
-                    <div
-                      key={message.id}
-                      className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}
-                    >
-                      {message.sender !== 'user' && (
-                        <div className="w-6 h-6 sm:w-8 sm:h-8 bg-sage-100 rounded-full flex items-center justify-center mr-2 flex-shrink-0 mt-1">
-                          <span className="text-sage-600 font-serif text-xs sm:text-sm">S</span>
-                        </div>
-                      )}
-                      <div
-                        className={`max-w-[85%] sm:max-w-[80%] px-3 sm:px-4 py-2 sm:py-3 rounded-2xl ${
-                          message.sender === 'user'
-                            ? 'bg-sage-600 text-white rounded-br-md'
-                            : message.is_team_note
-                              ? 'bg-amber-50 border border-amber-200 text-sage-800 rounded-bl-md'
-                              : 'bg-cream-100 text-sage-800 rounded-bl-md'
-                        }`}
-                      >
-                        {message.is_team_note && (
-                          <p className="text-xs text-amber-600 font-medium mb-1">★ Team note</p>
-                        )}
-                        <p className="whitespace-pre-wrap text-sm sm:text-base">{message.content}</p>
-                        <p className={`text-xs mt-1 ${message.sender === 'user' ? 'text-sage-200' : 'text-sage-400'}`}>
-                          {new Date(message.created_at).toLocaleString()}
-                        </p>
-                      </div>
-                    </div>
-                  ))
-                )}
-                {sending && (
-                  <div className="flex justify-start">
-                    <div className="w-6 h-6 sm:w-8 sm:h-8 bg-sage-100 rounded-full flex items-center justify-center mr-2 flex-shrink-0 mt-1">
-                      <span className="text-sage-600 font-serif text-xs sm:text-sm">S</span>
-                    </div>
-                    <div className="bg-cream-100 text-sage-500 px-4 py-3 rounded-2xl rounded-bl-md">
-                      <div className="flex gap-1">
-                        <span className="animate-bounce">.</span>
-                        <span className="animate-bounce" style={{ animationDelay: '0.1s' }}>.</span>
-                        <span className="animate-bounce" style={{ animationDelay: '0.2s' }}>.</span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                {retryState && !sending && (
-                  <div className="flex justify-start">
-                    <div className="w-6 h-6 sm:w-8 sm:h-8 bg-sage-100 rounded-full flex items-center justify-center mr-2 flex-shrink-0 mt-1">
-                      <span className="text-sage-600 font-serif text-xs sm:text-sm">S</span>
-                    </div>
-                    <div className="bg-amber-50 border border-amber-200 text-sage-700 px-4 py-3 rounded-2xl rounded-bl-md max-w-[85%] sm:max-w-[80%]">
-                      <p className="text-sm">Having trouble connecting. Retrying in {retryState.secondsLeft}s…</p>
-                      <button
-                        onClick={() => setRetryState(prev => prev ? { ...prev, secondsLeft: 0 } : null)}
-                        className="text-xs text-sage-500 underline mt-1 hover:text-sage-700"
-                      >
-                        Try now
-                      </button>
-                    </div>
-                  </div>
-                )}
-                <div ref={messagesEndRef} />
-              </div>
-
-              {/* Message Input */}
-              <form onSubmit={selectedFile ? sendWithFile : sendMessage} className="p-3 sm:p-4 border-t border-cream-200 shrink-0">
-                {selectedFile && (
-                  <div className="mb-2 flex items-center gap-2 px-3 py-2 bg-sage-50 rounded-lg text-sm">
-                    <svg className="w-4 h-4 text-sage-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                    </svg>
-                    <span className="flex-1 truncate text-sage-700">{selectedFile.name}</span>
-                    <button type="button" onClick={clearSelectedFile} className="text-sage-500 hover:text-sage-700">
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </button>
-                  </div>
-                )}
-                <div className="flex gap-2 sm:gap-3">
-                  <input type="file" ref={fileInputRef} onChange={handleFileSelect} accept=".pdf,image/*" className="hidden" />
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={sending}
-                    className="px-3 py-2 sm:py-3 rounded-xl border border-cream-300 hover:bg-cream-100 transition disabled:opacity-50 text-sage-600"
-                    title="Upload contract or image"
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
-                    </svg>
-                  </button>
-                  <input
-                    id="sage-input"
-                    type="text"
-                    value={newMessage}
-                    onChange={(e) => setNewMessage(e.target.value)}
-                    placeholder={selectedFile ? "Add a message about this file..." : "Ask Sage anything..."}
-                    disabled={sending}
-                    className="flex-1 px-3 sm:px-4 py-2 sm:py-3 rounded-xl border border-cream-300 focus:outline-none focus:ring-2 focus:ring-sage-300 focus:border-sage-400 transition bg-cream-50 disabled:opacity-50 text-sm sm:text-base"
-                  />
-                  <button
-                    type="submit"
-                    disabled={sending || (!newMessage.trim() && !selectedFile)}
-                    className="px-4 sm:px-6 py-2 sm:py-3 bg-sage-600 text-white rounded-xl font-medium hover:bg-sage-700 transition disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base"
-                  >
-                    {uploadingFile ? '...' : 'Send'}
-                  </button>
-                </div>
-              </form>
-                </div>
+                <DashboardChat
+                  messages={messages}
+                  loadingMessages={loadingMessages}
+                  sending={sending}
+                  newMessage={newMessage}
+                  setNewMessage={setNewMessage}
+                  sendMessage={sendMessage}
+                  selectedFile={selectedFile}
+                  setSelectedFile={setSelectedFile}
+                  sendWithFile={sendWithFile}
+                  handleFileSelect={handleFileSelect}
+                  clearSelectedFile={clearSelectedFile}
+                  uploadingFile={uploadingFile}
+                  retryState={retryState}
+                  setRetryState={setRetryState}
+                  chatContainerRef={chatContainerRef}
+                  messagesEndRef={messagesEndRef}
+                  fileInputRef={fileInputRef}
+                  user={user}
+                />
               )}
 
 

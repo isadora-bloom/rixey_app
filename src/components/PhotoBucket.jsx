@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
 
 // ── Tag definitions ────────────────────────────────────────────────────────────
@@ -261,7 +262,7 @@ export default function PhotoBucket({ weddingId, readOnly = false }) {
 
   const loadPhotos = async () => {
     try {
-      const res = await fetch(`${API_URL}/api/wedding-photos/${weddingId}`)
+      const res = await fetch(`${API_URL}/api/wedding-photos/${weddingId}`, { headers: await authHeaders() })
       const data = await res.json()
       setPhotos(Array.isArray(data) ? data : [])
     } catch (err) {
@@ -272,7 +273,7 @@ export default function PhotoBucket({ weddingId, readOnly = false }) {
 
   const loadGuestNames = async () => {
     try {
-      const res = await fetch(`${API_URL}/api/guests/${weddingId}`)
+      const res = await fetch(`${API_URL}/api/guests/${weddingId}`, { headers: await authHeaders() })
       const data = await res.json()
       const guests = data.guests || data || []
       // Prioritise wedding party tagged guests first, then all
@@ -294,8 +295,10 @@ export default function PhotoBucket({ weddingId, readOnly = false }) {
         const formData = new FormData()
         formData.append('photo', file)
         formData.append('tags', JSON.stringify([]))
+        const hdrs = await authHeaders()
         const res = await fetch(`${API_URL}/api/wedding-photos/${weddingId}/upload`, {
           method: 'POST',
+          headers: { 'Authorization': hdrs['Authorization'] },
           body: formData
         })
         if (res.ok) {
@@ -313,7 +316,7 @@ export default function PhotoBucket({ weddingId, readOnly = false }) {
     try {
       const res = await fetch(`${API_URL}/api/wedding-photos/${photoId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify(updates)
       })
       if (res.ok) {
@@ -328,7 +331,7 @@ export default function PhotoBucket({ weddingId, readOnly = false }) {
 
   const handleDelete = async (photoId) => {
     try {
-      await fetch(`${API_URL}/api/wedding-photos/${photoId}`, { method: 'DELETE' })
+      await fetch(`${API_URL}/api/wedding-photos/${photoId}`, { method: 'DELETE', headers: await authHeaders() })
       setPhotos(prev => prev.filter(p => p.id !== photoId))
       if (selectedPhoto?.id === photoId) setSelectedPhoto(null)
     } catch (err) {

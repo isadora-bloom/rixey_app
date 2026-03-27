@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
+const CATEGORIES = ['All', 'Flowers', 'Decor', 'Table Settings', 'Cake & Dessert', 'Ceremony', 'Reception', 'Attire', 'Other']
 
 export default function InspoGallery({ weddingId, userId, isAdmin = false }) {
   const [images, setImages] = useState([])
@@ -10,6 +12,8 @@ export default function InspoGallery({ weddingId, userId, isAdmin = false }) {
   const [selectedImage, setSelectedImage] = useState(null)
   const [editingCaption, setEditingCaption] = useState(null)
   const [captionText, setCaptionText] = useState('')
+  const [activeCategory, setActiveCategory] = useState('All')
+  const [uploadCategory, setUploadCategory] = useState('Other')
   const fileInputRef = useRef(null)
 
   useEffect(() => {
@@ -20,7 +24,7 @@ export default function InspoGallery({ weddingId, userId, isAdmin = false }) {
 
   const loadImages = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/inspo/${weddingId}`)
+      const response = await fetch(`${API_URL}/api/inspo/${weddingId}`, { headers: await authHeaders() })
       const data = await response.json()
       setImages(data.images || [])
       setMaxImages(data.maxImages || 20)
@@ -40,11 +44,14 @@ export default function InspoGallery({ weddingId, userId, isAdmin = false }) {
     const formData = new FormData()
     formData.append('image', file)
     formData.append('weddingId', weddingId)
+    formData.append('category', uploadCategory)
     if (userId) formData.append('uploadedBy', userId)
 
     try {
+      const hdrs = await authHeaders()
       const response = await fetch(`${API_URL}/api/inspo`, {
         method: 'POST',
+        headers: { 'Authorization': hdrs['Authorization'] },
         body: formData
       })
       const data = await response.json()
@@ -67,7 +74,7 @@ export default function InspoGallery({ weddingId, userId, isAdmin = false }) {
     try {
       const response = await fetch(`${API_URL}/api/inspo/${id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ caption: captionText })
       })
       const data = await response.json()
@@ -85,7 +92,7 @@ export default function InspoGallery({ weddingId, userId, isAdmin = false }) {
     if (!confirm('Delete this image?')) return
 
     try {
-      await fetch(`${API_URL}/api/inspo/${id}`, { method: 'DELETE' })
+      await fetch(`${API_URL}/api/inspo/${id}`, { method: 'DELETE', headers: await authHeaders() })
       setImages(images.filter(img => img.id !== id))
       if (selectedImage?.id === id) {
         setSelectedImage(null)
@@ -99,6 +106,12 @@ export default function InspoGallery({ weddingId, userId, isAdmin = false }) {
     return <div className="text-sage-400 text-center py-4">Loading gallery...</div>
   }
 
+  const filteredImages = activeCategory === 'All'
+    ? images
+    : activeCategory === 'Other'
+      ? images.filter(img => !img.category || img.category === 'Other')
+      : images.filter(img => img.category === activeCategory)
+
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -107,24 +120,59 @@ export default function InspoGallery({ weddingId, userId, isAdmin = false }) {
           {images.length} / {maxImages} images
         </p>
         {images.length < maxImages && (
-          <label className={`text-sm px-3 py-1 bg-sage-100 text-sage-700 rounded-lg hover:bg-sage-200 cursor-pointer ${
-            uploading ? 'opacity-50 cursor-not-allowed' : ''
-          }`}>
-            <input
-              type="file"
-              ref={fileInputRef}
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => {
-                if (e.target.files?.[0]) {
-                  handleUpload(e.target.files[0])
-                }
-              }}
-              disabled={uploading}
-            />
-            {uploading ? 'Uploading...' : '+ Add Image'}
-          </label>
+          <div className="flex items-center gap-2">
+            <select
+              value={uploadCategory}
+              onChange={(e) => setUploadCategory(e.target.value)}
+              className="text-xs border border-cream-200 rounded-lg px-2 py-1 text-sage-600 focus:outline-none focus:border-sage-400"
+            >
+              {CATEGORIES.filter(c => c !== 'All').map(cat => (
+                <option key={cat} value={cat}>{cat}</option>
+              ))}
+            </select>
+            <label className={`text-sm px-3 py-1 bg-sage-100 text-sage-700 rounded-lg hover:bg-sage-200 cursor-pointer ${
+              uploading ? 'opacity-50 cursor-not-allowed' : ''
+            }`}>
+              <input
+                type="file"
+                ref={fileInputRef}
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  if (e.target.files?.[0]) {
+                    handleUpload(e.target.files[0])
+                  }
+                }}
+                disabled={uploading}
+              />
+              {uploading ? 'Uploading...' : '+ Add Image'}
+            </label>
+          </div>
         )}
+      </div>
+
+      {/* Category filter pills */}
+      <div className="flex gap-2 overflow-x-auto pb-1 -mx-4 px-4 sm:mx-0 sm:px-0 sm:flex-wrap sm:overflow-visible">
+        {CATEGORIES.map(cat => (
+          <button
+            key={cat}
+            onClick={() => setActiveCategory(cat)}
+            className={`px-3 py-1.5 rounded-full text-sm font-medium transition whitespace-nowrap ${
+              activeCategory === cat
+                ? 'bg-sage-600 text-white'
+                : 'bg-cream-100 text-sage-600 hover:bg-cream-200'
+            }`}
+          >
+            {cat}
+            {cat !== 'All' && (
+              <span className={`ml-1.5 text-xs ${activeCategory === cat ? 'text-sage-200' : 'text-sage-400'}`}>
+                {cat === 'Other'
+                  ? images.filter(i => !i.category || i.category === 'Other').length
+                  : images.filter(i => i.category === cat).length}
+              </span>
+            )}
+          </button>
+        ))}
       </div>
 
       {/* Image Grid */}
@@ -136,9 +184,13 @@ export default function InspoGallery({ weddingId, userId, isAdmin = false }) {
           <p className="text-sage-400 text-sm">No inspiration images yet</p>
           <p className="text-sage-400 text-xs mt-1">Add photos that inspire your vision</p>
         </div>
+      ) : filteredImages.length === 0 ? (
+        <div className="text-center py-8 text-sage-400 text-sm">
+          No images in this category yet.
+        </div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-          {images.map(image => (
+          {filteredImages.map(image => (
             <div
               key={image.id}
               className="relative aspect-square rounded-lg overflow-hidden bg-cream-100 group cursor-pointer"

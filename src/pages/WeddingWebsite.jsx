@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
 
 // ── Theme tokens ──────────────────────────────────────────────────────────────
@@ -134,7 +135,7 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
     const timer = setTimeout(async () => {
       setSearching(true)
       try {
-        const res = await fetch(`${API_URL}/api/rsvp/${slug}/search?q=${encodeURIComponent(query)}`)
+        const res = await fetch(`${API_URL}/api/rsvp/${slug}/search?q=${encodeURIComponent(query)}`, { headers: await authHeaders() })
         const data = await res.json()
         setResults(Array.isArray(data) ? data : [])
       } catch {}
@@ -173,7 +174,7 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
       }
       const res = await fetch(`${API_URL}/api/rsvp/${slug}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify(payload),
       })
       if (!res.ok) throw new Error()
@@ -411,7 +412,7 @@ export default function WeddingWebsite() {
   const [notFound, setNotFound] = useState(false)
 
   useEffect(() => {
-    fetch(`${API_URL}/api/w/${slug}`)
+    authHeaders().then(hdrs => fetch(`${API_URL}/api/w/${slug}`, { headers: hdrs }))
       .then(r => { if (!r.ok) throw new Error(); return r.json() })
       .then(d => { setData(d); setLoading(false) })
       .catch(() => { setNotFound(true); setLoading(false) })

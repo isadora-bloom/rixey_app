@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
+import { Button, Input } from './ui'
 
 const APP_URL = import.meta.env.VITE_APP_URL || window.location.origin
 
@@ -85,7 +87,7 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
 
   const loadSettings = async () => {
     try {
-      const res  = await fetch(`${API_URL}/api/wedding-website/${weddingId}`)
+      const res  = await fetch(`${API_URL}/api/wedding-website/${weddingId}`, { headers: await authHeaders() })
       const data = await res.json()
       if (data && data.wedding_id) {
         setSettings(data)
@@ -138,7 +140,7 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
     try {
       await fetch(`${API_URL}/api/wedding-website/${weddingId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify(payload),
       })
       if (publishOverride !== undefined) setPublished(publishOverride)
@@ -178,13 +180,12 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
           {saved && (
             <span className="text-xs text-green-600 font-medium">Saved ✓</span>
           )}
-          <button
+          <Button
             onClick={() => handleSave()}
             disabled={saving}
-            className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
           >
             {saving ? 'Saving…' : 'Save'}
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -255,10 +256,10 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
             <label className="block text-sm font-medium text-sage-600 mb-1">Your website address</label>
             <div className="flex items-center gap-2">
               <span className="text-sage-400 text-sm flex-shrink-0">{APP_URL}/w/</span>
-              <input
+              <Input
                 value={slug}
                 onChange={e => setSlug(slugify(e.target.value))}
-                className="flex-1 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
+                className="flex-1"
                 placeholder="sarah-and-alex"
               />
             </div>
@@ -319,11 +320,10 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
       <CollapsibleSection title="Welcome & Our Story" hint="The first words guests see" defaultOpen>
         <div>
           <label className="block text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1">Welcome message</label>
-          <input
+          <Input
             value={welcomeMsg}
             onChange={e => setWelcomeMsg(e.target.value)}
             placeholder="We can't wait to celebrate with you…"
-            className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
           />
         </div>
         <div>
@@ -386,11 +386,10 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
         </div>
         <div>
           <label className="block text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1">Additional note</label>
-          <input
+          <Input
             value={dressCodeNote}
             onChange={e => setDressCodeNote(e.target.value)}
             placeholder="e.g. Ladies, avoid stilettos on the lawn · Please avoid white"
-            className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
           />
         </div>
         <p className="text-xs text-sage-400">Photos tagged <span className="font-mono bg-cream-100 px-1 rounded">dress-code</span> + <span className="font-mono bg-cream-100 px-1 rounded">website</span> will appear here automatically</p>
@@ -432,15 +431,15 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
       <CollapsibleSection title="Policies" hint="Kids, plus ones, questions">
         <div>
           <label className="block text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1">Signature cocktail</label>
-          <input value={signatureCocktail} onChange={e => setSignatureCocktail(e.target.value)} placeholder="e.g. Aperol Spritz" className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+          <Input value={signatureCocktail} onChange={e => setSignatureCocktail(e.target.value)} placeholder="e.g. Aperol Spritz" />
         </div>
         <div>
           <label className="block text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1">Children</label>
-          <input value={kidsPolicy} onChange={e => setKidsPolicy(e.target.value)} placeholder="e.g. Children are welcome · Adults-only event" className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+          <Input value={kidsPolicy} onChange={e => setKidsPolicy(e.target.value)} placeholder="e.g. Children are welcome · Adults-only event" />
         </div>
         <div>
           <label className="block text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1">Plus ones</label>
-          <input value={plusOnePolicy} onChange={e => setPlusOnePolicy(e.target.value)} placeholder="e.g. Please check your invitation" className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+          <Input value={plusOnePolicy} onChange={e => setPlusOnePolicy(e.target.value)} placeholder="e.g. Please check your invitation" />
         </div>
       </CollapsibleSection>
 
@@ -536,13 +535,12 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
         <p className="text-xs text-sage-400">
           Getting there, venue info, and accommodations are always included and pre-filled by Rixey
         </p>
-        <button
+        <Button
           onClick={() => handleSave()}
           disabled={saving}
-          className="px-6 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
         >
           {saving ? 'Saving…' : saved ? 'Saved ✓' : 'Save changes'}
-        </button>
+        </Button>
       </div>
     </div>
   )

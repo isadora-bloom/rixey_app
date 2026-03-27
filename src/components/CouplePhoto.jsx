@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
 
 export default function CouplePhoto({ weddingId, userId, compact = false }) {
@@ -16,7 +17,7 @@ export default function CouplePhoto({ weddingId, userId, compact = false }) {
 
   const loadPhoto = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/couple-photo/${weddingId}`)
+      const response = await fetch(`${API_URL}/api/couple-photo/${weddingId}`, { headers: await authHeaders() })
       const data = await response.json()
       setPhoto(data.photo)
     } catch (error) {
@@ -33,8 +34,10 @@ export default function CouplePhoto({ weddingId, userId, compact = false }) {
     if (userId) formData.append('uploadedBy', userId)
 
     try {
+      const hdrs = await authHeaders()
       const response = await fetch(`${API_URL}/api/couple-photo`, {
         method: 'POST',
+        headers: { 'Authorization': hdrs['Authorization'] },
         body: formData
       })
       const data = await response.json()
@@ -55,7 +58,7 @@ export default function CouplePhoto({ weddingId, userId, compact = false }) {
     if (!confirm('Remove your couple photo?')) return
 
     try {
-      await fetch(`${API_URL}/api/couple-photo/${weddingId}`, { method: 'DELETE' })
+      await fetch(`${API_URL}/api/couple-photo/${weddingId}`, { method: 'DELETE', headers: await authHeaders() })
       setPhoto(null)
     } catch (error) {
       console.error('Error deleting photo:', error)

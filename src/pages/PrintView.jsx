@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
 
 // All timeline event definitions (mirrored from TimelineBuilder for rendering)
@@ -117,25 +118,26 @@ export default function PrintView() {
   useEffect(() => {
     async function fetchAll() {
       try {
+        const hdrs = await authHeaders()
         const [
           weddingsRes, timelineRes, tablesRes, staffingRes,
           ceremonyRes, bedroomsRes, rehearsalRes, shuttleRes,
           makeupRes, decorRes, vendorsRes, allergiesRes,
           detailsRes,
         ] = await Promise.all([
-          fetch(`${API_URL}/api/admin/weddings`),
-          fetch(`${API_URL}/api/timeline/${weddingId}`),
-          fetch(`${API_URL}/api/tables/${weddingId}`),
-          fetch(`${API_URL}/api/staffing/${weddingId}`),
-          fetch(`${API_URL}/api/ceremony-order/${weddingId}`),
-          fetch(`${API_URL}/api/bedrooms/${weddingId}`),
-          fetch(`${API_URL}/api/rehearsal-dinner/${weddingId}`),
-          fetch(`${API_URL}/api/shuttle/${weddingId}`),
-          fetch(`${API_URL}/api/makeup/${weddingId}`),
-          fetch(`${API_URL}/api/decor/${weddingId}`),
-          fetch(`${API_URL}/api/vendors/${weddingId}`),
-          fetch(`${API_URL}/api/allergies/${weddingId}`),
-          fetch(`${API_URL}/api/wedding-details/${weddingId}`),
+          fetch(`${API_URL}/api/admin/weddings`, { headers: hdrs }),
+          fetch(`${API_URL}/api/timeline/${weddingId}`, { headers: hdrs }),
+          fetch(`${API_URL}/api/tables/${weddingId}`, { headers: hdrs }),
+          fetch(`${API_URL}/api/staffing/${weddingId}`, { headers: hdrs }),
+          fetch(`${API_URL}/api/ceremony-order/${weddingId}`, { headers: hdrs }),
+          fetch(`${API_URL}/api/bedrooms/${weddingId}`, { headers: hdrs }),
+          fetch(`${API_URL}/api/rehearsal-dinner/${weddingId}`, { headers: hdrs }),
+          fetch(`${API_URL}/api/shuttle/${weddingId}`, { headers: hdrs }),
+          fetch(`${API_URL}/api/makeup/${weddingId}`, { headers: hdrs }),
+          fetch(`${API_URL}/api/decor/${weddingId}`, { headers: hdrs }),
+          fetch(`${API_URL}/api/vendors/${weddingId}`, { headers: hdrs }),
+          fetch(`${API_URL}/api/allergies/${weddingId}`, { headers: hdrs }),
+          fetch(`${API_URL}/api/wedding-details/${weddingId}`, { headers: hdrs }),
         ])
 
         const weddingsData = await weddingsRes.json()
@@ -180,7 +182,7 @@ export default function PrintView() {
       try {
         const res = await fetch(`${API_URL}/api/notes-highlights`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: await authHeaders(),
           body: JSON.stringify({ weddingId }),
         })
         const data = await res.json()

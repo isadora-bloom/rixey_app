@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
 
 const ONBOARDING_STEPS = [
@@ -114,7 +115,7 @@ export default function OnboardingChecklist({ weddingId, weddingDate, onAction, 
 
   const loadProgress = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/onboarding/${weddingId}`)
+      const response = await fetch(`${API_URL}/api/onboarding/${weddingId}`, { headers: await authHeaders() })
       const data = await response.json()
       setProgress(data.progress)
       setDismissed(data.progress?.onboarding_dismissed || false)
@@ -128,7 +129,7 @@ export default function OnboardingChecklist({ weddingId, weddingDate, onAction, 
     try {
       await fetch(`${API_URL}/api/onboarding/${weddingId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ onboarding_dismissed: true })
       })
       setDismissed(true)

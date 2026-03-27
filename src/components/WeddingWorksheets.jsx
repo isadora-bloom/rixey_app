@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
+import { Button, Input } from './ui'
 
 
 const PRIORITY_CATS = [
@@ -67,15 +69,16 @@ function SectionCard({ title, isOpen, onToggle, hasData, children }) {
   )
 }
 
-function SaveButton({ onClick, label = 'Save draft', saving, saved, className = '' }) {
+function SaveButton({ onClick, label = 'Save draft', saving, saved, variant = 'secondary', className = '' }) {
   return (
-    <button
+    <Button
       onClick={onClick}
       disabled={saving}
-      className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-60 ${className}`}
+      variant={variant}
+      className={className}
     >
       {saving ? 'Saving…' : saved ? '✓ Saved' : label}
-    </button>
+    </Button>
   )
 }
 
@@ -120,7 +123,7 @@ export default function WeddingWorksheets({ weddingId, userId }) {
   // Load data
   useEffect(() => {
     if (!weddingId) return
-    fetch(`${API_URL}/api/worksheets/${weddingId}`)
+    authHeaders().then(hdrs => fetch(`${API_URL}/api/worksheets/${weddingId}`, { headers: hdrs }))
       .then(r => r.json())
       .then(({ worksheets: ws }) => {
         setWorksheets(ws || {})
@@ -177,7 +180,7 @@ export default function WeddingWorksheets({ weddingId, userId }) {
       }
       await fetch(`${API_URL}/api/worksheets/${weddingId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ section: 'worksheet_priorities', data: sectionData, notify }),
       })
       if (notify) {
@@ -198,7 +201,7 @@ export default function WeddingWorksheets({ weddingId, userId }) {
     try {
       await fetch(`${API_URL}/api/worksheets/${weddingId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ section: 'worksheet_guest_rules', data: guestRules }),
       })
       showSaved(setGuestSaved)
@@ -214,13 +217,13 @@ export default function WeddingWorksheets({ weddingId, userId }) {
     try {
       await fetch(`${API_URL}/api/worksheets/${weddingId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ section: 'worksheet_budget_alignment', data: { ...budget, total: budgetTotal } }),
       })
       // Also update main budget total
       await fetch(`${API_URL}/api/budget/${weddingId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ total_budget: budgetTotal }),
       })
       showSaved(setBudgetSaved)
@@ -445,13 +448,12 @@ export default function WeddingWorksheets({ weddingId, userId }) {
 
           {/* Buttons */}
           <div className="flex flex-wrap items-center gap-3 pt-2">
-            <button
+            <Button
               onClick={() => savePriorities(true)}
               disabled={submitting || submitted}
-              className="px-5 py-2 bg-sage-600 hover:bg-sage-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-60"
             >
               {submitting ? 'Sending…' : submitted ? '✓ Sent to Rixey team' : 'Save & Send to Rixey Team'}
-            </button>
+            </Button>
             <SaveButton
               onClick={() => savePriorities(false)}
               saving={prioritiesSaving}
@@ -475,20 +477,20 @@ export default function WeddingWorksheets({ weddingId, userId }) {
           <div>
             <label className="block text-sm font-medium text-sage-700 mb-2">Our realistic guest count range</label>
             <div className="flex items-center gap-3">
-              <input
+              <Input
                 type="number"
                 value={guestRules.count_min}
                 onChange={e => setGuestRules(r => ({ ...r, count_min: e.target.value }))}
                 placeholder="75"
-                className="border border-cream-200 rounded-lg px-3 py-2 text-sage-700 w-24 focus:outline-none focus:border-sage-400"
+                className="w-24"
               />
               <span className="text-sage-500 text-sm">to</span>
-              <input
+              <Input
                 type="number"
                 value={guestRules.count_max}
                 onChange={e => setGuestRules(r => ({ ...r, count_max: e.target.value }))}
                 placeholder="120"
-                className="border border-cream-200 rounded-lg px-3 py-2 text-sage-700 w-24 focus:outline-none focus:border-sage-400"
+                className="w-24"
               />
               <span className="text-sage-500 text-sm">guests</span>
             </div>
@@ -497,12 +499,12 @@ export default function WeddingWorksheets({ weddingId, userId }) {
           <div>
             <label className="block text-sm font-medium text-sage-700 mb-1">Our contracted maximum</label>
             <p className="text-xs text-sage-400 mb-2">Per your contract with Rixey Manor</p>
-            <input
+            <Input
               type="number"
               value={guestRules.count_contracted}
               onChange={e => setGuestRules(r => ({ ...r, count_contracted: e.target.value }))}
               placeholder="150"
-              className="border border-cream-200 rounded-lg px-3 py-2 text-sage-700 w-32 focus:outline-none focus:border-sage-400"
+              className="w-32"
             />
           </div>
 
@@ -518,12 +520,12 @@ export default function WeddingWorksheets({ weddingId, userId }) {
               ].map(({ key, label, placeholder }) => (
                 <div key={key} className="flex flex-col sm:flex-row sm:items-center gap-2">
                   <label className="text-sm text-sage-600 w-36 flex-shrink-0">{label}:</label>
-                  <input
+                  <Input
                     type="text"
                     value={guestRules[key]}
                     onChange={e => setGuestRules(r => ({ ...r, [key]: e.target.value }))}
                     placeholder={placeholder}
-                    className="flex-1 border border-cream-200 rounded-lg px-3 py-2 text-sage-700 text-sm focus:outline-none focus:border-sage-400"
+                    className="flex-1"
                   />
                 </div>
               ))}
@@ -560,12 +562,11 @@ export default function WeddingWorksheets({ weddingId, userId }) {
                 <label className="block text-xs text-sage-500 mb-1">Savings I can contribute now</label>
                 <div className="flex items-center gap-1">
                   <span className="text-sage-500 text-sm">$</span>
-                  <input
+                  <Input
                     type="number"
                     value={budget.p1_savings}
                     onChange={e => setBudget(b => ({ ...b, p1_savings: e.target.value }))}
                     placeholder="0"
-                    className="border border-cream-200 rounded-lg px-3 py-2 text-sage-700 w-full focus:outline-none focus:border-sage-400"
                   />
                 </div>
               </div>
@@ -573,12 +574,11 @@ export default function WeddingWorksheets({ weddingId, userId }) {
                 <label className="block text-xs text-sage-500 mb-1">Amount I'll save by wedding date</label>
                 <div className="flex items-center gap-1">
                   <span className="text-sage-500 text-sm">$</span>
-                  <input
+                  <Input
                     type="number"
                     value={budget.p1_future}
                     onChange={e => setBudget(b => ({ ...b, p1_future: e.target.value }))}
                     placeholder="0"
-                    className="border border-cream-200 rounded-lg px-3 py-2 text-sage-700 w-full focus:outline-none focus:border-sage-400"
                   />
                 </div>
               </div>
@@ -591,12 +591,11 @@ export default function WeddingWorksheets({ weddingId, userId }) {
                 <label className="block text-xs text-sage-500 mb-1">Savings I can contribute now</label>
                 <div className="flex items-center gap-1">
                   <span className="text-sage-500 text-sm">$</span>
-                  <input
+                  <Input
                     type="number"
                     value={budget.p2_savings}
                     onChange={e => setBudget(b => ({ ...b, p2_savings: e.target.value }))}
                     placeholder="0"
-                    className="border border-cream-200 rounded-lg px-3 py-2 text-sage-700 w-full focus:outline-none focus:border-sage-400"
                   />
                 </div>
               </div>
@@ -604,12 +603,11 @@ export default function WeddingWorksheets({ weddingId, userId }) {
                 <label className="block text-xs text-sage-500 mb-1">Amount I'll save by wedding date</label>
                 <div className="flex items-center gap-1">
                   <span className="text-sage-500 text-sm">$</span>
-                  <input
+                  <Input
                     type="number"
                     value={budget.p2_future}
                     onChange={e => setBudget(b => ({ ...b, p2_future: e.target.value }))}
                     placeholder="0"
-                    className="border border-cream-200 rounded-lg px-3 py-2 text-sage-700 w-full focus:outline-none focus:border-sage-400"
                   />
                 </div>
               </div>
@@ -620,12 +618,12 @@ export default function WeddingWorksheets({ weddingId, userId }) {
             <label className="block text-sm font-medium text-sage-700 mb-1">Confirmed family contributions</label>
             <div className="flex items-center gap-1">
               <span className="text-sage-500 text-sm">$</span>
-              <input
+              <Input
                 type="number"
                 value={budget.family}
                 onChange={e => setBudget(b => ({ ...b, family: e.target.value }))}
                 placeholder="0"
-                className="border border-cream-200 rounded-lg px-3 py-2 text-sage-700 w-40 focus:outline-none focus:border-sage-400"
+                className="w-40"
               />
             </div>
           </div>

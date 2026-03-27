@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
 
 const CATEGORIES = [
@@ -39,7 +40,7 @@ export default function BorrowCatalog({ onAskSage, weddingId, isAdmin, refreshKe
   const loadItems = async () => {
     setLoading(true)
     try {
-      const res = await fetch(`${API_URL}/api/borrow-catalog`)
+      const res = await fetch(`${API_URL}/api/borrow-catalog`, { headers: await authHeaders() })
       const data = await res.json()
       setItems(data.items || data || [])
     } catch (err) {
@@ -50,7 +51,7 @@ export default function BorrowCatalog({ onAskSage, weddingId, isAdmin, refreshKe
 
   const loadSelections = async () => {
     try {
-      const res = await fetch(`${API_URL}/api/borrow-selections/${weddingId}`)
+      const res = await fetch(`${API_URL}/api/borrow-selections/${weddingId}`, { headers: await authHeaders() })
       const data = await res.json()
       setSelectedIds(new Set((data.selections || []).map(s => s.item_id)))
     } catch (err) {
@@ -75,7 +76,7 @@ export default function BorrowCatalog({ onAskSage, weddingId, isAdmin, refreshKe
     try {
       await fetch(`${API_URL}/api/borrow-selections`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ weddingId, itemId: item.id, selected: nowSelected })
       })
     } catch (err) {

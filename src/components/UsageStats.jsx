@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
 
 export default function UsageStats({ weddingId, weddings = [] }) {
@@ -18,7 +19,7 @@ export default function UsageStats({ weddingId, weddings = [] }) {
 
   const loadAllStats = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/usage/stats`)
+      const response = await fetch(`${API_URL}/api/usage/stats`, { headers: await authHeaders() })
       const data = await response.json()
       setStats(data.stats || [])
     } catch (err) {
@@ -30,7 +31,7 @@ export default function UsageStats({ weddingId, weddings = [] }) {
   const loadWeddingUsage = async (id) => {
     setLoading(true)
     try {
-      const response = await fetch(`${API_URL}/api/usage/${id}`)
+      const response = await fetch(`${API_URL}/api/usage/${id}`, { headers: await authHeaders() })
       const data = await response.json()
       setWeddingDetails(data)
     } catch (err) {

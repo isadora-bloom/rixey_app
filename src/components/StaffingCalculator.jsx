@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
+import { Button, Card } from './ui'
 
 const STAFF_RATE = 350 // 2026 rate
 
@@ -40,7 +42,7 @@ export default function StaffingCalculator({ guestCount: initialGuestCount, wedd
 
     const loadStaffing = async () => {
       try {
-        const res = await fetch(`${API_URL}/api/staffing/${weddingId}`)
+        const res = await fetch(`${API_URL}/api/staffing/${weddingId}`, { headers: await authHeaders() })
         const data = await res.json()
         if (data.staffing?.answers) {
           setAnswers(prev => ({ ...prev, ...data.staffing.answers }))
@@ -186,7 +188,7 @@ export default function StaffingCalculator({ guestCount: initialGuestCount, wedd
 
       await fetch(`${API_URL}/api/staffing`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({
           weddingId,
           userId,
@@ -549,7 +551,7 @@ export default function StaffingCalculator({ guestCount: initialGuestCount, wedd
         <div className="space-y-5">
           {/* Friday */}
           {friday.total > 0 && (
-            <div className="bg-white rounded-xl border border-amber-200 p-4">
+            <Card compact className="border-amber-200">
               <h4 className="font-medium text-amber-800 flex items-center justify-between mb-3">
                 <span className="flex items-center gap-2">
                   <span className="text-xl">🌅</span> Friday Night
@@ -587,11 +589,11 @@ export default function StaffingCalculator({ guestCount: initialGuestCount, wedd
                   Friday: ${(friday.total * STAFF_RATE).toLocaleString()}
                 </p>
               </div>
-            </div>
+            </Card>
           )}
 
           {/* Saturday */}
-          <div className="bg-white rounded-xl border border-sage-200 p-4">
+          <Card compact className="border-sage-200">
             <h4 className="font-medium text-sage-800 flex items-center justify-between mb-3">
               <span className="flex items-center gap-2">
                 <span className="text-xl">💒</span> Saturday (Wedding Day)
@@ -638,10 +640,10 @@ export default function StaffingCalculator({ guestCount: initialGuestCount, wedd
                 Saturday: ${(saturday.total * STAFF_RATE).toLocaleString()}
               </p>
             </div>
-          </div>
+          </Card>
 
           {/* Total */}
-          <div className="bg-sage-50 rounded-xl border border-sage-200 p-4">
+          <Card compact className="bg-sage-50 border-sage-200">
             <div className="flex justify-between items-center">
               <div>
                 <p className="font-medium text-sage-800">Weekend Total</p>
@@ -652,7 +654,7 @@ export default function StaffingCalculator({ guestCount: initialGuestCount, wedd
                 <p className="text-sage-600 font-medium">${totalCost.toLocaleString()}</p>
               </div>
             </div>
-          </div>
+          </Card>
 
           {/* Disclaimer */}
           <div className="bg-cream-50 rounded-lg p-4 border border-cream-200">
@@ -690,18 +692,19 @@ export default function StaffingCalculator({ guestCount: initialGuestCount, wedd
       {/* Navigation */}
       <div className="flex justify-between mt-6 pt-4 border-t border-cream-200">
         {step > 0 ? (
-          <button
+          <Button
+            variant="ghost"
             onClick={() => setStep(step - 1)}
-            className="px-4 py-2 text-sage-600 hover:text-sage-800"
           >
             ← Back
-          </button>
+          </Button>
         ) : (
           <div />
         )}
 
         {step < steps.length - 1 ? (
-          <button
+          <Button
+            size="lg"
             onClick={() => {
               const nextStep = step + 1
               setStep(nextStep)
@@ -710,10 +713,9 @@ export default function StaffingCalculator({ guestCount: initialGuestCount, wedd
                 saveStaffing()
               }
             }}
-            className="px-6 py-2 bg-sage-600 text-white rounded-lg hover:bg-sage-700"
           >
             Continue →
-          </button>
+          </Button>
         ) : (
           <>
             <div className="flex items-center gap-3">
@@ -725,26 +727,26 @@ export default function StaffingCalculator({ guestCount: initialGuestCount, wedd
                   Saved!
                 </span>
               )}
-              <button
+              <Button
                 onClick={() => setStep(0)}
-                className="px-6 py-2 bg-sage-600 text-white rounded-lg hover:bg-sage-700"
               >
                 Start Over
-              </button>
+              </Button>
             </div>
 
             {/* Bottom Save Button on Summary */}
             {weddingId && (
               <div className="sticky bottom-0 bg-gradient-to-t from-white via-white to-transparent pt-4 pb-2 mt-6">
-                <button
+                <Button
                   onClick={saveStaffing}
                   disabled={saving}
-                  className={`w-full px-5 py-3 rounded-lg font-medium transition text-lg ${
-                    saved ? 'bg-green-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'
-                  } disabled:opacity-50 shadow-lg`}
+                  size="lg"
+                  className={`w-full text-lg shadow-lg ${
+                    saved ? 'bg-green-500 hover:bg-green-600' : ''
+                  }`}
                 >
                   {saved ? '✓ Staffing Guide Saved!' : saving ? 'Saving...' : 'Save Staffing Guide'}
-                </button>
+                </Button>
               </div>
             )}
           </>

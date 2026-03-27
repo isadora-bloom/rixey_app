@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
 import { authHeaders } from '../utils/api'
 
@@ -157,6 +157,8 @@ function Toggle({ on, onToggle, label, sublabel }) {
 
 export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false }) {
   const [guestCount, setGuestCount]         = useState(100)
+  const [sliderValue, setSliderValue]       = useState(100)
+  const sliderTimerRef                      = useRef(null)
   const [tableShape, setTableShape]         = useState('round')
   const [guestsPerTable, setGuestsPerTable] = useState(8)
   const [rectTableCount, setRectTableCount] = useState(0)
@@ -208,6 +210,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
       if (data.tables) {
         const t = data.tables
         setGuestCount(t.guest_count || 100)
+        setSliderValue(t.guest_count || 100)
         setTableShape(t.table_shape || 'round')
         setGuestsPerTable(t.guests_per_table || 8)
         setSweetheartTable(t.sweetheart_table ?? true)
@@ -240,6 +243,10 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
   }
 
   const saveTableSetup = async (draft = false) => {
+    // Flush any pending slider debounce so we save the latest value
+    if (sliderTimerRef.current) clearTimeout(sliderTimerRef.current)
+    const guestCountToSave = sliderValue
+    setGuestCount(guestCountToSave)
     setSaving(true)
     setSaveError(null)
     try {
@@ -249,7 +256,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
         body: JSON.stringify({
           weddingId,
           userId,
-          guestCount,
+          guestCount: guestCountToSave,
           tableShape,
           guestsPerTable,
           headTable,
@@ -311,6 +318,12 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
   const linensNeeded  = totalTables + cocktailTables + extraTablesLinenCount
   const napkinsNeeded = guestCount + 10
 
+  const handleSliderChange = (val) => {
+    setSliderValue(val)
+    if (sliderTimerRef.current) clearTimeout(sliderTimerRef.current)
+    sliderTimerRef.current = setTimeout(() => setGuestCount(val), 300)
+  }
+
   if (loading) return <div className="text-sage-400 text-center py-8">Loading table setup…</div>
 
   // Client view when setup is still a draft
@@ -361,11 +374,12 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
       <div className="bg-sage-50 rounded-xl p-4">
         <label className="block text-sage-700 font-medium mb-2">Total Guest Count</label>
         <div className="flex items-center gap-4">
-          <input type="range" min="20" max="300" value={guestCount}
-            onChange={e => setGuestCount(Number(e.target.value))}
+          <input type="range" min="20" max="300" value={sliderValue}
+            onInput={e => setSliderValue(Number(e.target.value))}
+            onChange={e => handleSliderChange(Number(e.target.value))}
             className="flex-1 h-2 bg-sage-200 rounded-lg appearance-none cursor-pointer" />
-          <input type="number" min="1" max="500" value={guestCount}
-            onChange={e => setGuestCount(Number(e.target.value))}
+          <input type="number" min="1" max="500" value={sliderValue}
+            onChange={e => { const v = Number(e.target.value); setSliderValue(v); setGuestCount(v); }}
             className="w-20 px-3 py-2 border border-sage-200 rounded-lg text-center font-medium" />
           <span className="text-sage-500">guests</span>
         </div>

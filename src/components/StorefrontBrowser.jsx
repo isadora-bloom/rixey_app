@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
 
 const CATEGORIES = ['All', 'Partyware & Serving', 'Guest Experience', 'Décor & Lighting']
@@ -33,7 +34,7 @@ export default function StorefrontBrowser() {
   const [search, setSearch] = useState('')
 
   useEffect(() => {
-    fetch(`${API_URL}/api/storefront`)
+    authHeaders().then(hdrs => fetch(`${API_URL}/api/storefront`, { headers: hdrs }))
       .then(r => r.json())
       .then(({ items }) => setItems(items || []))
       .catch(console.error)

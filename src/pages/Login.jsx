@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext'
 import { supabase } from '../lib/supabase'
 import { API_URL } from '../config/api'
 import { authHeaders } from '../utils/api'
+import { createWeddingAccount } from '../utils/createWedding'
 
 
 const ROLE_OPTIONS = [
@@ -18,16 +19,6 @@ const ROLE_OPTIONS = [
   { value: 'maid-of-honor', label: 'Maid of Honor', isCouple: false },
   { value: 'vip', label: 'VIP Guest', isCouple: false },
 ]
-
-// Generate a random 6-character event code
-function generateEventCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-  let code = ''
-  for (let i = 0; i < 6; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length))
-  }
-  return code
-}
 
 export default function Login() {
   const [isSignUp, setIsSignUp] = useState(false)
@@ -147,62 +138,61 @@ export default function Login() {
         finalWeddingDate = wedding.wedding_date
       }
 
-      const { data, error: signUpError } = await signUp(email, password)
-
-      if (signUpError) {
-        setError(signUpError.message)
-        setLoading(false)
-        return
-      }
-
-      if (data?.user) {
-        // If no existing wedding, create one (only if couple and has date)
-        if (!weddingId && weddingDate && isCouple) {
-          const newEventCode = generateEventCode()
-          const { data: newWedding, error: weddingCreateError } = await supabase
-            .from('weddings')
-            .insert([{
-              event_code: newEventCode,
-              couple_names: coupleNames.trim() || null,
-              wedding_date: weddingDate,
-              created_by: data.user.id
-            }])
-            .select()
-            .single()
-
-          if (weddingCreateError) {
-            console.error('Wedding creation error:', weddingCreateError)
-          } else {
-            weddingId = newWedding.id
-            // Create admin notification for new wedding (via server to bypass RLS)
-            await fetch(`${API_URL}/api/admin/notifications`, {
-              method: 'POST',
-              headers: await authHeaders(),
-              body: JSON.stringify({
-                type: 'new_wedding',
-                message: `New wedding created: ${coupleNames || 'Unknown'} on ${weddingDate}. Event code: ${newEventCode}. Please add HoneyBook and Google Sheets links.`,
-                wedding_id: newWedding.id,
-                user_id: data.user.id
-              })
-            })
-
-            // Initialize default planning checklist for the new wedding
-            try {
-              await fetch(`${API_URL}/api/checklist/initialize/${newWedding.id}`, {
-                method: 'POST',
-                headers: await authHeaders()
-              })
-              console.log('Default checklist initialized for new wedding')
-            } catch (checklistErr) {
-              console.error('Checklist initialization error:', checklistErr)
-            }
-          }
+      // If joining an existing wedding (via event code), just create auth + profile
+      if (weddingId) {
+        const { data, error: signUpError } = await signUp(email, password)
+        if (signUpError) {
+          setError(signUpError.message)
+          setLoading(false)
+          return
         }
-
-        // Create profile
-        const { error: profileError } = await supabase
-          .from('profiles')
-          .insert([{
+        if (data?.user) {
+          const { error: profileError } = await supabase
+            .from('profiles')
+            .insert([{
+              id: data.user.id,
+              name: name.trim(),
+              email: email,
+              phone: phone.trim() || null,
+              role: role,
+              custom_role_term: role === 'couple-custom' ? customRoleTerm.trim() : null,
+              wedding_date: finalWeddingDate || null,
+              wedding_id: weddingId,
+            }])
+          if (profileError) console.error('Profile creation error:', profileError)
+        }
+      } else if (weddingDate && isCouple) {
+        // Creating a brand-new wedding — use the shared utility
+        try {
+          await createWeddingAccount({
+            email,
+            password,
+            coupleNames,
+            weddingDate,
+            role,
+            customRoleTerm,
+            name: name.trim(),
+            phone: phone.trim(),
+            supabase,
+            API_URL,
+            authHeaders,
+            signUp,
+          })
+        } catch (err) {
+          setError(err.message || 'Something went wrong creating your account.')
+          setLoading(false)
+          return
+        }
+      } else {
+        // Edge case: non-couple without event code, just create auth + profile
+        const { data, error: signUpError } = await signUp(email, password)
+        if (signUpError) {
+          setError(signUpError.message)
+          setLoading(false)
+          return
+        }
+        if (data?.user) {
+          await supabase.from('profiles').insert([{
             id: data.user.id,
             name: name.trim(),
             email: email,
@@ -210,11 +200,8 @@ export default function Login() {
             role: role,
             custom_role_term: role === 'couple-custom' ? customRoleTerm.trim() : null,
             wedding_date: finalWeddingDate || null,
-            wedding_id: weddingId
+            wedding_id: null,
           }])
-
-        if (profileError) {
-          console.error('Profile creation error:', profileError)
         }
       }
 

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
 
 export default function VendorPortal() {
@@ -17,7 +18,7 @@ export default function VendorPortal() {
   const photoInputRef = useRef()
 
   useEffect(() => {
-    fetch(`${API_URL}/api/vendor-portal/${token}`)
+    authHeaders().then(hdrs => fetch(`${API_URL}/api/vendor-portal/${token}`, { headers: hdrs }))
       .then(r => r.json())
       .then(d => {
         if (!d.vendor) { setNotFound(true); return }
@@ -45,7 +46,7 @@ export default function VendorPortal() {
     try {
       const res = await fetch(`${API_URL}/api/vendor-portal/${token}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify(form),
       })
       const data = await res.json()
@@ -67,7 +68,8 @@ export default function VendorPortal() {
     const fd = new FormData()
     fd.append('photo', file)
     try {
-      const res = await fetch(`${API_URL}/api/vendor-portal/${token}/photos`, { method: 'POST', body: fd })
+      const hdrs = await authHeaders()
+      const res = await fetch(`${API_URL}/api/vendor-portal/${token}/photos`, { method: 'POST', headers: { 'Authorization': hdrs['Authorization'] }, body: fd })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Upload failed')
       setPhotos(data.photos)
@@ -83,7 +85,7 @@ export default function VendorPortal() {
     try {
       const res = await fetch(`${API_URL}/api/vendor-portal/${token}/photos`, {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ url }),
       })
       const data = await res.json()

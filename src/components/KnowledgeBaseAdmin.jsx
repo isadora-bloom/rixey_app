@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
 import { authHeaders } from '../utils/api'
+import { Button, Input, ConfirmDialog } from './ui'
 
 
 // Splits text and wraps matched parts in a highlight span
@@ -39,6 +40,7 @@ export default function KnowledgeBaseAdmin() {
   const [showAdd, setShowAdd] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [filterCategory, setFilterCategory] = useState('all')
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null)
 
   // Form state
   const [formData, setFormData] = useState({
@@ -103,8 +105,6 @@ export default function KnowledgeBaseAdmin() {
   }
 
   const handleDelete = async (id) => {
-    if (!confirm('Delete this knowledge base entry?')) return
-
     try {
       await fetch(`${API_URL}/api/knowledge-base/${id}`, {
         method: 'DELETE',
@@ -161,12 +161,11 @@ export default function KnowledgeBaseAdmin() {
           <h2 className="font-serif text-xl text-sage-700">Knowledge Base</h2>
           <p className="text-sage-500 text-sm">{entries.length} entries - This is what Sage knows</p>
         </div>
-        <button
+        <Button
           onClick={() => setShowAdd(true)}
-          className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700"
         >
           + Add Entry
-        </button>
+        </Button>
       </div>
 
       {/* Add/Edit Form */}
@@ -179,12 +178,11 @@ export default function KnowledgeBaseAdmin() {
           <div className="grid md:grid-cols-3 gap-4 mb-4">
             <div>
               <label className="block text-sm font-medium text-sage-600 mb-1">Title</label>
-              <input
+              <Input
                 type="text"
                 value={formData.title}
                 onChange={(e) => setFormData({ ...formData, title: e.target.value })}
                 required
-                className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm"
                 placeholder="e.g., Catering Options"
               />
             </div>
@@ -208,11 +206,10 @@ export default function KnowledgeBaseAdmin() {
             </div>
             <div>
               <label className="block text-sm font-medium text-sage-600 mb-1">Subcategory (optional)</label>
-              <input
+              <Input
                 type="text"
                 value={formData.subcategory}
                 onChange={(e) => setFormData({ ...formData, subcategory: e.target.value })}
-                className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm"
                 placeholder="e.g., Breakfast"
               />
             </div>
@@ -231,20 +228,19 @@ export default function KnowledgeBaseAdmin() {
           </div>
 
           <div className="flex gap-2">
-            <button
+            <Button
               type="submit"
               disabled={saving}
-              className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
             >
               {saving ? 'Saving...' : editingId ? 'Update Entry' : 'Add Entry'}
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant="ghost"
               onClick={resetForm}
-              className="px-4 py-2 text-sage-600 text-sm hover:text-sage-800"
             >
               Cancel
-            </button>
+            </Button>
           </div>
         </form>
       )}
@@ -252,12 +248,12 @@ export default function KnowledgeBaseAdmin() {
       {/* Search & Filter */}
       <div className="flex flex-col sm:flex-row gap-3 mb-4">
         <div className="relative flex-1">
-          <input
+          <Input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search knowledge base..."
-            className="w-full pl-9 pr-4 py-2 border border-cream-300 rounded-lg text-sm"
+            className="pl-9"
           />
           <svg className="w-4 h-4 text-sage-400 absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -351,7 +347,7 @@ export default function KnowledgeBaseAdmin() {
                     </svg>
                   </button>
                   <button
-                    onClick={() => handleDelete(entry.id)}
+                    onClick={() => setConfirmDeleteId(entry.id)}
                     className="p-1 text-red-400 hover:text-red-600 rounded hover:bg-red-50"
                     title="Delete"
                   >
@@ -365,6 +361,16 @@ export default function KnowledgeBaseAdmin() {
           ))}
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmDeleteId !== null}
+        onClose={() => setConfirmDeleteId(null)}
+        onConfirm={() => handleDelete(confirmDeleteId)}
+        title="Delete entry?"
+        message="This will permanently remove this knowledge base entry."
+        confirmLabel="Delete"
+        danger
+      />
     </div>
   )
 }

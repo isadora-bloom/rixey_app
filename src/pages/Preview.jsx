@@ -2,7 +2,9 @@ import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
-import { API_URL } from '../config/api'
+import { API_URL } from '../config/api';
+import { authHeaders } from '../utils/api';
+import { createWeddingAccount } from '../utils/createWedding';
 
 
 // ── Tiny SVG wrapper ───────────────────────────────────────────────
@@ -83,7 +85,7 @@ function SageDemo() {
     try {
       const res = await fetch(`${API_URL}/api/sage-preview`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ message: q, conversationHistory }),
       });
       // Guard against HTML error pages (Railway/Vercel errors)
@@ -208,42 +210,22 @@ function SignUpForm() {
     }
     setLoading(true);
     try {
-      const { data, error: signUpError } = await signUp(form.email, form.password);
-      if (signUpError) { setError(signUpError.message); setLoading(false); return; }
-
-      const userId = data?.user?.id;
-      if (!userId) { setError('Something went wrong creating your account.'); setLoading(false); return; }
-
-      // Create the wedding record
-      const eventCode = Array.from({ length: 6 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('');
-      const { data: wedding } = await supabase
-        .from('weddings')
-        .insert([{ event_code: eventCode, couple_names: form.names.trim() || null, wedding_date: form.weddingDate, created_by: userId }])
-        .select().single();
-
-      // Create profile
-      await supabase.from('profiles').insert([{
-        id: userId,
-        name: form.names.trim() || form.email,
+      await createWeddingAccount({
         email: form.email,
+        password: form.password,
+        coupleNames: form.names,
+        weddingDate: form.weddingDate,
         role: 'couple-bride',
-        wedding_date: form.weddingDate,
-        wedding_id: wedding?.id || null,
-      }]);
-
-      // Initialise checklist
-      if (wedding?.id) {
-        fetch(`${API_URL}/api/checklist/initialize/${wedding.id}`, { method: 'POST' }).catch(() => {});
-        fetch(`${API_URL}/api/admin/notifications`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ type: 'new_wedding', message: `New wedding: ${form.names || form.email} on ${form.weddingDate}. Code: ${eventCode}.`, wedding_id: wedding.id, user_id: userId }),
-        }).catch(() => {});
-      }
+        name: form.names.trim() || form.email,
+        supabase,
+        API_URL,
+        authHeaders: () => Promise.resolve({ 'Content-Type': 'application/json' }),
+        signUp,
+      });
 
       navigate('/dashboard');
     } catch (err) {
-      setError('Something went wrong. Please try again.');
+      setError(err.message || 'Something went wrong. Please try again.');
     } finally {
       setLoading(false);
     }

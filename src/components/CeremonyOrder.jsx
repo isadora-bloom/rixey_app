@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
+import SaveIndicator from './ui/SaveIndicator'
+import { Button } from './ui'
 
 
 const SECTIONS = [
@@ -72,10 +75,11 @@ function buildUpdates(steps) {
 }
 
 async function persistUpdates(updates) {
+  const hdrs = await authHeaders();
   await Promise.all(updates.map(({ id, sort_order }) =>
     fetch(`${API_URL}/api/ceremony-order/${id}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: hdrs,
       body: JSON.stringify({ sort_order }),
     })
   ));
@@ -231,16 +235,15 @@ function AddPersonForm({ onAdd, onCancel }) {
         />
       </div>
       <div className="flex gap-2">
-        <button
+        <Button
           onClick={handleSubmit}
           disabled={saving || !name.trim()}
-          className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
         >
           {saving ? 'Adding…' : 'Add to end'}
-        </button>
-        <button onClick={onCancel} className="px-4 py-2 bg-cream-200 text-gray-700 rounded-lg text-sm hover:bg-cream-300">
+        </Button>
+        <Button variant="secondary" onClick={onCancel}>
           Cancel
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -248,7 +251,7 @@ function AddPersonForm({ onAdd, onCancel }) {
 
 // ── Section Builder ───────────────────────────────────────────────────────────
 
-function SectionBuilder({ section, sectionEntries, onAdd, onDelete, onReorder }) {
+function SectionBuilder({ section, sectionEntries, onAdd, onDelete, onReorder, onSaveStateChange }) {
   const [draggingId, setDraggingId] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
 
@@ -259,7 +262,13 @@ function SectionBuilder({ section, sectionEntries, onAdd, onDelete, onReorder })
     const updates = buildUpdates(newSteps);
     onReorder(updates);
     setDraggingId(null);
-    await persistUpdates(updates);
+    onSaveStateChange?.('saving');
+    try {
+      await persistUpdates(updates);
+      onSaveStateChange?.('saved');
+    } catch {
+      onSaveStateChange?.('idle');
+    }
   };
 
   const handleDropOnStep = async (targetStepIdx) => {
@@ -382,11 +391,12 @@ export default function CeremonyOrder({ weddingId }) {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [saveState, setSaveState] = useState('idle');
 
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await fetch(`${API_URL}/api/ceremony-order/${weddingId}`);
+      const res = await fetch(`${API_URL}/api/ceremony-order/${weddingId}`, { headers: await authHeaders() });
       if (!res.ok) throw new Error('Failed to load');
       const data = await res.json();
       setEntries(Array.isArray(data) ? data : []);
@@ -412,26 +422,32 @@ export default function CeremonyOrder({ weddingId }) {
       sort_order: maxOrder + 1,
       side: 'center',
     };
+    setSaveState('saving');
     try {
       const res = await fetch(`${API_URL}/api/ceremony-order`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error('Failed to add');
       const newEntry = await res.json();
       setEntries(prev => [...prev, newEntry]);
+      setSaveState('saved');
     } catch (err) {
       console.error(err);
+      setSaveState('idle');
     }
   };
 
   const handleDelete = async (id) => {
+    setSaveState('saving');
     try {
-      await fetch(`${API_URL}/api/ceremony-order/${id}`, { method: 'DELETE' });
+      await fetch(`${API_URL}/api/ceremony-order/${id}`, { method: 'DELETE', headers: await authHeaders() });
       setEntries(prev => prev.filter(e => e.id !== id));
+      setSaveState('saved');
     } catch (err) {
       console.error(err);
+      setSaveState('idle');
     }
   };
 
@@ -462,7 +478,10 @@ export default function CeremonyOrder({ weddingId }) {
   return (
     <div className="space-y-8">
       <div>
-        <h2 className="text-xl font-semibold text-gray-900">Ceremony Order</h2>
+        <div className="flex items-center gap-3">
+          <h2 className="text-xl font-semibold text-gray-900">Ceremony Order</h2>
+          <SaveIndicator state={saveState} />
+        </div>
         <p className="text-sm text-sage-500 mt-0.5">
           Add people to each section, then drag to reorder. Drop a card onto another to walk together.
         </p>
@@ -482,6 +501,7 @@ export default function CeremonyOrder({ weddingId }) {
             onAdd={handleAdd}
             onDelete={handleDelete}
             onReorder={handleReorder}
+            onSaveStateChange={setSaveState}
           />
         </section>
       ))}

@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
+import { Button, Input, ConfirmDialog } from './ui'
 
 
 const CATEGORIES = ['Partyware & Serving', 'Guest Experience', 'Décor & Lighting']
@@ -53,7 +55,7 @@ export default function StorefrontAdmin() {
 
   const loadItems = async () => {
     try {
-      const res = await fetch(`${API_URL}/api/storefront/all`)
+      const res = await fetch(`${API_URL}/api/storefront/all`, { headers: await authHeaders() })
       const data = await res.json()
       setItems(data.items || [])
     } catch (err) {
@@ -88,7 +90,7 @@ export default function StorefrontAdmin() {
       const method = editingId ? 'PUT' : 'POST'
       const res = await fetch(url, {
         method,
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify(form),
       })
       const data = await res.json()
@@ -112,7 +114,7 @@ export default function StorefrontAdmin() {
     try {
       await fetch(`${API_URL}/api/storefront/${item.id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ ...item, is_active: !item.is_active }),
       })
       setItems(prev => prev.map(i => i.id === item.id ? { ...i, is_active: !i.is_active } : i))
@@ -123,7 +125,7 @@ export default function StorefrontAdmin() {
 
   const deleteItem = async (id) => {
     try {
-      await fetch(`${API_URL}/api/storefront/${id}`, { method: 'DELETE' })
+      await fetch(`${API_URL}/api/storefront/${id}`, { method: 'DELETE', headers: await authHeaders() })
       setItems(prev => prev.filter(i => i.id !== id))
       setConfirmDelete(null)
     } catch (err) {
@@ -160,12 +162,11 @@ export default function StorefrontAdmin() {
             {activeCount} of {items.length} items active · Clients see this as a curated shopping guide
           </p>
         </div>
-        <button
+        <Button
           onClick={() => { setShowForm(v => !v); setEditingId(null); setForm(EMPTY_FORM) }}
-          className="px-4 py-2 bg-sage-600 text-white rounded-xl text-sm font-medium hover:bg-sage-700 transition"
         >
           {showForm && !editingId ? 'Cancel' : '+ Add Item'}
-        </button>
+        </Button>
       </div>
 
       {/* Add/Edit Form */}
@@ -177,22 +178,20 @@ export default function StorefrontAdmin() {
           <div className="grid sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-medium text-sage-600 mb-1">Product Type *</label>
-              <input
+              <Input
                 type="text"
                 value={form.product_type}
                 onChange={e => setForm(f => ({ ...f, product_type: e.target.value }))}
                 placeholder="e.g. Disposable Champagne Flutes"
-                className="w-full px-3 py-2 border border-cream-200 rounded-lg text-sm text-sage-700 focus:outline-none focus:border-sage-400"
               />
             </div>
             <div>
               <label className="block text-xs font-medium text-sage-600 mb-1">Pick Name *</label>
-              <input
+              <Input
                 type="text"
                 value={form.pick_name}
                 onChange={e => setForm(f => ({ ...f, pick_name: e.target.value }))}
                 placeholder="e.g. Crystal-Cut Gold-Rim Flutes"
-                className="w-full px-3 py-2 border border-cream-200 rounded-lg text-sm text-sage-700 focus:outline-none focus:border-sage-400"
               />
             </div>
             <div>
@@ -227,32 +226,29 @@ export default function StorefrontAdmin() {
             </div>
             <div>
               <label className="block text-xs font-medium text-sage-600 mb-1">Affiliate Link</label>
-              <input
+              <Input
                 type="url"
                 value={form.affiliate_link}
                 onChange={e => setForm(f => ({ ...f, affiliate_link: e.target.value }))}
                 placeholder="https://amzn.to/…"
-                className="w-full px-3 py-2 border border-cream-200 rounded-lg text-sm text-sage-700 focus:outline-none focus:border-sage-400"
               />
             </div>
             <div>
               <label className="block text-xs font-medium text-sage-600 mb-1">Image URL</label>
-              <input
+              <Input
                 type="url"
                 value={form.image_url}
                 onChange={e => setForm(f => ({ ...f, image_url: e.target.value }))}
                 placeholder="https://…"
-                className="w-full px-3 py-2 border border-cream-200 rounded-lg text-sm text-sage-700 focus:outline-none focus:border-sage-400"
               />
             </div>
             <div>
               <label className="block text-xs font-medium text-sage-600 mb-1">Color Options</label>
-              <input
+              <Input
                 type="text"
                 value={form.color_options}
                 onChange={e => setForm(f => ({ ...f, color_options: e.target.value }))}
                 placeholder="Gold/Silver/Pink…"
-                className="w-full px-3 py-2 border border-cream-200 rounded-lg text-sm text-sage-700 focus:outline-none focus:border-sage-400"
               />
             </div>
             <div className="flex items-center gap-2">
@@ -281,19 +277,18 @@ export default function StorefrontAdmin() {
           )}
 
           <div className="flex items-center gap-3 mt-5">
-            <button
+            <Button
               onClick={saveItem}
               disabled={saving || !form.pick_name.trim() || !form.product_type.trim()}
-              className="px-5 py-2 bg-sage-600 text-white text-sm font-medium rounded-lg hover:bg-sage-700 disabled:opacity-50 transition"
             >
               {saving ? 'Saving…' : editingId ? 'Update Item' : 'Add Item'}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="ghost"
               onClick={() => { setShowForm(false); setEditingId(null); setForm(EMPTY_FORM) }}
-              className="px-4 py-2 text-sage-500 hover:text-sage-700 text-sm transition"
             >
               Cancel
-            </button>
+            </Button>
             {saveMsg && <span className="text-sm text-sage-500">{saveMsg}</span>}
           </div>
         </div>
@@ -301,12 +296,12 @@ export default function StorefrontAdmin() {
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3 mb-5">
-        <input
+        <Input
           type="text"
           value={search}
           onChange={e => setSearch(e.target.value)}
           placeholder="Search…"
-          className="px-3 py-1.5 border border-cream-200 rounded-lg text-sm text-sage-700 focus:outline-none focus:border-sage-400 w-36"
+          className="w-36"
         />
         <select
           value={filterCategory}
@@ -424,31 +419,14 @@ export default function StorefrontAdmin() {
                 </button>
 
                 {/* Delete */}
-                {confirmDelete === item.id ? (
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => deleteItem(item.id)}
-                      className="px-2 py-1 bg-red-600 text-white text-xs rounded-lg hover:bg-red-700 transition"
-                    >
-                      Delete
-                    </button>
-                    <button
-                      onClick={() => setConfirmDelete(null)}
-                      className="px-2 py-1 text-sage-400 text-xs hover:text-sage-600 transition"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => setConfirmDelete(item.id)}
-                    className="p-1.5 rounded-lg bg-cream-50 hover:bg-red-50 text-sage-400 hover:text-red-400 transition"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
-                  </button>
-                )}
+                <button
+                  onClick={() => setConfirmDelete(item.id)}
+                  className="p-1.5 rounded-lg bg-cream-50 hover:bg-red-50 text-sage-400 hover:text-red-400 transition"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </button>
               </div>
             </div>
           ))}
@@ -458,6 +436,16 @@ export default function StorefrontAdmin() {
           )}
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmDelete !== null}
+        onClose={() => setConfirmDelete(null)}
+        onConfirm={() => deleteItem(confirmDelete)}
+        title="Delete item?"
+        message="This will permanently remove this item from Rixey Picks."
+        confirmLabel="Delete"
+        danger
+      />
     </div>
   )
 }

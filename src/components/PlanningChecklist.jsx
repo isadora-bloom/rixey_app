@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
 import { authHeaders } from '../utils/api'
+import SaveIndicator from './ui/SaveIndicator'
 
 
 const CATEGORIES = ['Venue', 'Vendors', 'Attire & Beauty', 'Decor', 'Timeline', 'Guests', 'Other']
@@ -13,6 +14,7 @@ export default function PlanningChecklist({ weddingId, userId, compact = false, 
   const [saving, setSaving] = useState(false)
   const [filterCategory, setFilterCategory] = useState('all')
   const [showCompleted, setShowCompleted] = useState(false)
+  const [saveState, setSaveState] = useState('idle')
 
   useEffect(() => {
     if (weddingId) {
@@ -45,6 +47,7 @@ export default function PlanningChecklist({ weddingId, userId, compact = false, 
   }
 
   const handleToggle = async (taskId, currentCompleted) => {
+    setSaveState('saving')
     try {
       const response = await fetch(`${API_URL}/api/checklist/${taskId}`, {
         method: 'PUT',
@@ -59,8 +62,10 @@ export default function PlanningChecklist({ weddingId, userId, compact = false, 
       if (data.task) {
         setTasks(tasks.map(t => t.id === taskId ? data.task : t))
       }
+      setSaveState('saved')
     } catch (error) {
       console.error('Error toggling task:', error)
+      setSaveState('idle')
     }
   }
 
@@ -183,7 +188,10 @@ export default function PlanningChecklist({ weddingId, userId, compact = false, 
       {/* Header with Progress */}
       <div className="bg-sage-50 rounded-lg p-4">
         <div className="flex items-center justify-between mb-2">
-          <h3 className="font-medium text-sage-700">Progress</h3>
+          <div className="flex items-center gap-3">
+            <h3 className="font-medium text-sage-700">Progress</h3>
+            <SaveIndicator state={saveState} />
+          </div>
           <span className="text-2xl font-bold text-sage-600">{progressPercent}%</span>
         </div>
         <div className="h-3 bg-cream-200 rounded-full overflow-hidden">

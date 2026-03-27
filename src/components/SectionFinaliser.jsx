@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
 
 /**
@@ -45,7 +46,7 @@ export default function SectionFinaliser({
     try {
       await fetch(`${API_URL}/api/finalisations/${weddingId}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify({ section: sectionKey, party: role, value: !myDone }),
       })
       onFinalised?.(sectionKey, role, !myDone)

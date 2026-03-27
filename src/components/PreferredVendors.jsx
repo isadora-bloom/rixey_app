@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 
 
 export default function PreferredVendors() {
@@ -10,7 +11,7 @@ export default function PreferredVendors() {
   const [expandedId, setExpandedId] = useState(null)
 
   useEffect(() => {
-    fetch(`${API_URL}/api/vendor-directory`)
+    authHeaders().then(hdrs => fetch(`${API_URL}/api/vendor-directory`, { headers: hdrs }))
       .then(r => r.json())
       .then(d => {
         setVendors(d.vendors || [])
