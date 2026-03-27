@@ -1,8 +1,217 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
 
+
+// ── FadeIn wrapper (Intersection Observer) ───────────────────────────────────
+
+function FadeIn({ children, className = '' }) {
+  const ref = useRef(null)
+  const [visible, setVisible] = useState(false)
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) { setVisible(true); observer.unobserve(el) } },
+      { threshold: 0.1 }
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+
+  return (
+    <div
+      ref={ref}
+      className={className}
+      style={{
+        opacity: visible ? 1 : 0,
+        transform: visible ? 'translateY(0)' : 'translateY(20px)',
+        transition: 'opacity 0.6s ease, transform 0.6s ease',
+      }}
+    >
+      {children}
+    </div>
+  )
+}
+
+// ── Lightbox ─────────────────────────────────────────────────────────────────
+
+function Lightbox({ photos, index, onClose, onPrev, onNext }) {
+  useEffect(() => {
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = '' }
+  }, [])
+
+  useEffect(() => {
+    const handleKey = (e) => {
+      if (e.key === 'Escape') onClose()
+      if (e.key === 'ArrowLeft') onPrev()
+      if (e.key === 'ArrowRight') onNext()
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [onClose, onPrev, onNext])
+
+  const photo = photos[index]
+  if (!photo) return null
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ backgroundColor: 'rgba(0,0,0,0.9)' }}
+      onClick={onClose}
+    >
+      {/* Close button */}
+      <button
+        onClick={onClose}
+        className="absolute top-4 right-4 text-white/80 hover:text-white z-10 p-2"
+        aria-label="Close"
+      >
+        <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+
+      {/* Previous arrow */}
+      {photos.length > 1 && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onPrev() }}
+          className="absolute left-3 top-1/2 -translate-y-1/2 text-white/70 hover:text-white z-10 p-2"
+          aria-label="Previous photo"
+        >
+          <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+          </svg>
+        </button>
+      )}
+
+      {/* Next arrow */}
+      {photos.length > 1 && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onNext() }}
+          className="absolute right-3 top-1/2 -translate-y-1/2 text-white/70 hover:text-white z-10 p-2"
+          aria-label="Next photo"
+        >
+          <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+        </button>
+      )}
+
+      {/* Image */}
+      <div className="flex flex-col items-center max-w-[90vw] max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+        <img
+          src={photo.url}
+          alt={photo.caption || ''}
+          className="max-w-full max-h-[85vh] object-contain"
+        />
+        {photo.caption && (
+          <p className="text-white/80 text-sm mt-3 text-center px-4">{photo.caption}</p>
+        )}
+        {photos.length > 1 && (
+          <p className="text-white/40 text-xs mt-2">{index + 1} / {photos.length}</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Countdown Timer ──────────────────────────────────────────────────────────
+
+function CountdownTimer({ dateStr, theme }) {
+  const [now, setNow] = useState(new Date())
+
+  useEffect(() => {
+    const interval = setInterval(() => setNow(new Date()), 1000)
+    return () => clearInterval(interval)
+  }, [])
+
+  const target = new Date(dateStr + 'T00:00:00')
+  const diff = target - now
+
+  if (diff <= 0) return null // handled by parent ("We're married!" / "Today!")
+
+  const days = Math.floor(diff / 86400000)
+  const hours = Math.floor((diff % 86400000) / 3600000)
+  const minutes = Math.floor((diff % 3600000) / 60000)
+  const seconds = Math.floor((diff % 60000) / 1000)
+
+  const boxClass = theme === 'warm' || theme === 'romantic' || theme === 'rustic'
+    ? 'bg-white/15 backdrop-blur-sm border border-white/20 rounded-xl px-3 py-2 sm:px-4 sm:py-3 min-w-[60px]'
+    : 'border border-white/30 rounded px-3 py-2 sm:px-4 sm:py-3 min-w-[60px]'
+
+  const numClass = 'text-xl sm:text-2xl font-serif font-bold'
+  const labelClass = 'text-[10px] sm:text-xs uppercase tracking-wider text-white/60 mt-1'
+
+  return (
+    <div className="flex gap-2 sm:gap-3 justify-center mb-6">
+      {[
+        { value: days, label: 'Days' },
+        { value: hours, label: 'Hours' },
+        { value: minutes, label: 'Min' },
+        { value: seconds, label: 'Sec' },
+      ].map(({ value, label }) => (
+        <div key={label} className={`${boxClass} text-center`}>
+          <div className={numClass}>{String(value).padStart(2, '0')}</div>
+          <div className={labelClass}>{label}</div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ── StickyNav (mobile section jump links) ────────────────────────────────────
+
+function StickyNav({ sections, t }) {
+  const [show, setShow] = useState(false)
+
+  useEffect(() => {
+    const onScroll = () => {
+      setShow(window.scrollY > window.innerHeight * 0.8)
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
+
+  if (!show || sections.length < 4) return null
+
+  return (
+    <div
+      className="lg:hidden sticky top-0 z-30 backdrop-blur-md border-b"
+      style={{
+        backgroundColor: t === THEMES.warm ? 'rgba(253,250,246,0.92)'
+          : t === THEMES.romantic ? 'rgba(253,242,244,0.92)'
+          : t === THEMES.rustic ? 'rgba(245,240,232,0.92)'
+          : 'rgba(255,255,255,0.92)',
+        borderColor: 'rgba(0,0,0,0.06)',
+      }}
+    >
+      <div className="flex gap-1 px-3 py-2 overflow-x-auto scrollbar-hide">
+        {sections.map(({ id, label }) => (
+          <button
+            key={id}
+            onClick={() => {
+              const el = document.getElementById(id)
+              if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            }}
+            className={`whitespace-nowrap flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition ${
+              t === THEMES.warm
+                ? 'bg-sage-100/80 text-sage-700 hover:bg-sage-200'
+                : t === THEMES.romantic
+                  ? 'bg-rose-100/80 text-rose-700 hover:bg-rose-200'
+                  : t === THEMES.rustic
+                    ? 'bg-amber-100/80 text-amber-800 hover:bg-amber-200'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 // ── Theme tokens ──────────────────────────────────────────────────────────────
 
@@ -41,6 +250,76 @@ const THEMES = {
     btn:         'bg-gray-900 text-white hover:bg-gray-700 px-6 py-2.5 text-sm font-medium tracking-wide uppercase',
     accent:      'text-gray-900',
   },
+  romantic: {
+    page:        'bg-[#FDF2F4] text-rose-900 font-sans',
+    heroOverlay: 'bg-rose-900/60',
+    heroFallback:'bg-gradient-to-br from-rose-700 to-rose-900',
+    heroText:    'text-white',
+    section:     'bg-[#FDF2F4]',
+    altSection:  'bg-white',
+    heading:     'font-serif text-rose-900',
+    label:       'text-xs font-semibold uppercase tracking-widest text-rose-400',
+    body:        'text-rose-700 leading-relaxed',
+    card:        'bg-white border border-rose-200 rounded-2xl',
+    divider:     'border-rose-100',
+    badge:       'bg-rose-100 text-rose-800 rounded-full px-3 py-1 text-sm',
+    link:        'text-rose-600 hover:text-rose-800 underline underline-offset-2',
+    btn:         'bg-rose-600 text-white hover:bg-rose-700 rounded-full px-6 py-2.5 text-sm font-medium',
+    accent:      'text-rose-600',
+  },
+  modern: {
+    page:        'bg-white text-gray-900 font-sans',
+    heroOverlay: 'bg-black/75',
+    heroFallback:'bg-black',
+    heroText:    'text-white',
+    section:     'bg-white',
+    altSection:  'bg-gray-50',
+    heading:     'font-sans font-bold text-gray-900',
+    label:       'text-xs font-bold uppercase tracking-[0.25em] text-gray-400',
+    body:        'text-gray-500 leading-relaxed',
+    card:        'bg-white border border-gray-200 rounded-lg',
+    divider:     'border-gray-100',
+    badge:       'bg-gray-900 text-white px-3 py-1 text-sm rounded',
+    link:        'text-gray-900 hover:text-gray-600 underline underline-offset-4',
+    btn:         'bg-gray-900 text-white hover:bg-gray-800 px-6 py-2.5 text-sm font-bold tracking-wide',
+    accent:      'text-gray-900',
+  },
+  rustic: {
+    page:        'bg-[#F5F0E8] text-amber-900 font-sans',
+    heroOverlay: 'bg-amber-900/55',
+    heroFallback:'bg-gradient-to-br from-amber-800 to-amber-950',
+    heroText:    'text-white',
+    section:     'bg-[#F5F0E8]',
+    altSection:  'bg-[#FAF7F2]',
+    heading:     'font-serif text-amber-900',
+    label:       'text-xs font-semibold uppercase tracking-widest text-amber-600',
+    body:        'text-amber-800 leading-relaxed',
+    card:        'bg-[#FAF7F2] border border-amber-200 rounded-xl',
+    divider:     'border-amber-200',
+    badge:       'bg-amber-100 text-amber-900 rounded-full px-3 py-1 text-sm',
+    link:        'text-amber-700 hover:text-amber-900 underline underline-offset-2',
+    btn:         'bg-amber-800 text-white hover:bg-amber-900 rounded-full px-6 py-2.5 text-sm font-medium',
+    accent:      'text-amber-800',
+  },
+}
+
+// ── Font pairs ───────────────────────────────────────────────────────────────
+
+const FONT_PAIRS = {
+  classic:  { heading: "'Playfair Display', serif",   body: "'Lora', serif",            gfonts: 'Playfair+Display:wght@400;700&family=Lora:wght@400;500;600' },
+  modern:   { heading: "'Inter', sans-serif",         body: "'Inter', sans-serif",      gfonts: 'Inter:wght@400;500;600;700' },
+  elegant:  { heading: "'Cormorant Garamond', serif", body: "'Proza Libre', sans-serif", gfonts: 'Cormorant+Garamond:wght@400;600;700&family=Proza+Libre:wght@400;500;600' },
+  friendly: { heading: "'Josefin Sans', sans-serif",  body: "'Nunito', sans-serif",     gfonts: 'Josefin+Sans:wght@400;600;700&family=Nunito:wght@400;500;600' },
+}
+
+// ── Default hero pre-text per theme ──────────────────────────────────────────
+
+const DEFAULT_HERO_PRETEXT = {
+  warm:      'You are invited to celebrate',
+  editorial: 'The wedding of',
+  romantic:  'Together with their families',
+  modern:    'The wedding of',
+  rustic:    'Come celebrate with us',
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -75,6 +354,41 @@ function dressCodeLabel(code) {
   return map[code] || code
 }
 
+// ── Weather hints for Rixey Manor (Rapidan, VA) by month ────────────────────
+
+const RIXEY_WEATHER = {
+  1:  { emoji: '❄️', range: '30-45°F', note: 'Winter in the Blue Ridge — bundle up! Expect cold temperatures and possible frost.' },
+  2:  { emoji: '❄️', range: '32-48°F', note: 'Late winter — still chilly. Layers and a warm coat are a must.' },
+  3:  { emoji: '🌱', range: '40-58°F', note: 'Early spring — cool and unpredictable. Bring a jacket and layers.' },
+  4:  { emoji: '🌸', range: '50-68°F', note: 'Spring is blooming — mild days, cool evenings. A light layer is a good idea.' },
+  5:  { emoji: '🌿', range: '58-78°F', note: 'Late spring — warm and lovely. Light layers for the evening.' },
+  6:  { emoji: '☀️', range: '68-88°F', note: 'Summer is here — warm to hot days. Dress light and stay hydrated.' },
+  7:  { emoji: '☀️', range: '72-90°F', note: 'Peak summer — expect heat and humidity. Sunscreen and water are your friends.' },
+  8:  { emoji: '☀️', range: '70-88°F', note: 'Late summer — still warm and humid. Dress comfortably.' },
+  9:  { emoji: '🍂', range: '60-80°F', note: 'Early fall — warm days, cool evenings. A light jacket for after sunset.' },
+  10: { emoji: '🍁', range: '48-68°F', note: 'Peak foliage — crisp and beautiful. Bring a jacket or wrap.' },
+  11: { emoji: '🍂', range: '38-58°F', note: 'Late fall — getting cold. A warm coat will keep you comfortable.' },
+  12: { emoji: '❄️', range: '30-48°F', note: 'Winter — cold and cozy. Bundle up for the trip to the countryside.' },
+}
+
+// ── Rixey Manor drive times ─────────────────────────────────────────────────
+
+const RIXEY_DRIVE_TIMES = [
+  { from: 'Washington, DC', time: '~2 hours' },
+  { from: 'Richmond', time: '~1.5 hours' },
+  { from: 'Charlottesville', time: '~45 minutes' },
+]
+
+// ── Things to Do type emoji mapping ─────────────────────────────────────────
+
+const THINGS_TO_DO_EMOJI = {
+  restaurant: '🍽️',
+  winery: '🍷',
+  activity: '🏃',
+  attraction: '🏛️',
+  shopping: '🛍️',
+}
+
 // ── Divider ───────────────────────────────────────────────────────────────────
 
 function Divider({ t }) {
@@ -87,6 +401,29 @@ function Divider({ t }) {
       </div>
     )
   }
+  if (t === THEMES.romantic) {
+    return (
+      <div className="flex items-center justify-center py-6 gap-2">
+        <div className="w-12 h-px bg-rose-200" />
+        <svg viewBox="0 0 20 20" className="w-4 h-4 text-rose-300" fill="currentColor">
+          <path d="M10 18s-7.5-5.5-7.5-10a4.5 4.5 0 019 0 4.5 4.5 0 019 0c0 4.5-7.5 10-7.5 10z" transform="translate(-1.5,0) scale(0.95)"/>
+        </svg>
+        <div className="w-12 h-px bg-rose-200" />
+      </div>
+    )
+  }
+  if (t === THEMES.modern) {
+    return <div className="border-t-2 border-gray-900 w-12 mx-auto my-6" />
+  }
+  if (t === THEMES.rustic) {
+    return (
+      <div className="flex items-center justify-center py-6 gap-3">
+        <div className="w-16 h-px bg-amber-300" />
+        <span className="text-amber-400 text-xs">&#10045;</span>
+        <div className="w-16 h-px bg-amber-300" />
+      </div>
+    )
+  }
   return <div className="border-t border-gray-200 my-2" />
 }
 
@@ -95,7 +432,9 @@ function Divider({ t }) {
 function Section({ t, alt, children, id }) {
   return (
     <section id={id} className={`py-16 px-6 ${alt ? t.altSection : t.section}`}>
-      <div className="max-w-3xl mx-auto">{children}</div>
+      <FadeIn>
+        <div className="max-w-3xl mx-auto">{children}</div>
+      </FadeIn>
     </section>
   )
 }
@@ -135,7 +474,7 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
     const timer = setTimeout(async () => {
       setSearching(true)
       try {
-        const res = await fetch(`${API_URL}/api/rsvp/${slug}/search?q=${encodeURIComponent(query)}`, { headers: await authHeaders() })
+        const res = await fetch(`${API_URL}/api/rsvp/${slug}/search?q=${encodeURIComponent(query)}`)
         const data = await res.json()
         setResults(Array.isArray(data) ? data : [])
       } catch {}
@@ -174,7 +513,7 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
       }
       const res = await fetch(`${API_URL}/api/rsvp/${slug}`, {
         method: 'POST',
-        headers: await authHeaders(),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       })
       if (!res.ok) throw new Error()
@@ -392,7 +731,7 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
               type="button"
               onClick={handleSubmit}
               disabled={submitting}
-              className={`w-full py-3 ${t.btn} disabled:opacity-50`}
+              className={`w-full py-3 ${t.btn} ww-btn disabled:opacity-50`}
             >
               {submitting ? 'Sending…' : 'Confirm RSVP'}
             </button>
@@ -411,12 +750,48 @@ export default function WeddingWebsite() {
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
 
+  // Password gate state
+  const [passwordInput, setPasswordInput] = useState('')
+  const [passwordError, setPasswordError] = useState(false)
+  const [passwordUnlocked, setPasswordUnlocked] = useState(() => {
+    return sessionStorage.getItem(`wedding_pw_${slug}`) === 'unlocked'
+  })
+
+  // Lightbox state
+  const [lightboxOpen, setLightboxOpen] = useState(false)
+  const [lightboxIndex, setLightboxIndex] = useState(0)
+
+  const openLightbox = useCallback((index) => {
+    setLightboxIndex(index)
+    setLightboxOpen(true)
+  }, [])
+
+  const closeLightbox = useCallback(() => setLightboxOpen(false), [])
+
+  const prevPhoto = useCallback(() => {
+    setLightboxIndex(i => i <= 0 ? i : i - 1)
+  }, [])
+
+  const nextPhoto = useCallback((max) => {
+    setLightboxIndex(i => i >= max - 1 ? i : i + 1)
+  }, [])
+
   useEffect(() => {
-    authHeaders().then(hdrs => fetch(`${API_URL}/api/w/${slug}`, { headers: hdrs }))
+    fetch(`${API_URL}/api/w/${slug}`)
       .then(r => { if (!r.ok) throw new Error(); return r.json() })
       .then(d => { setData(d); setLoading(false) })
       .catch(() => { setNotFound(true); setLoading(false) })
   }, [slug])
+
+  const handlePasswordSubmit = () => {
+    if (data && passwordInput === data.settings.access_password) {
+      setPasswordUnlocked(true)
+      setPasswordError(false)
+      sessionStorage.setItem(`wedding_pw_${slug}`, 'unlocked')
+    } else {
+      setPasswordError(true)
+    }
+  }
 
   if (loading) {
     return (
@@ -437,6 +812,39 @@ export default function WeddingWebsite() {
     )
   }
 
+  // Password gate
+  if (data.settings.access_password && !passwordUnlocked) {
+    return (
+      <div className="min-h-screen bg-[#FDFAF6] flex items-center justify-center px-6">
+        <div className="bg-white border border-cream-200 rounded-2xl p-8 max-w-sm w-full text-center shadow-sm">
+          <div className="text-3xl mb-4">🔒</div>
+          <h2 className="font-serif text-2xl text-sage-800 mb-2">This wedding website is password protected</h2>
+          <p className="text-sage-500 text-sm mb-6">Enter the password from your invitation to continue.</p>
+          <input
+            type="password"
+            value={passwordInput}
+            onChange={e => { setPasswordInput(e.target.value); setPasswordError(false) }}
+            onKeyDown={e => e.key === 'Enter' && handlePasswordSubmit()}
+            placeholder="Password"
+            className={`w-full border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 mb-3 ${
+              passwordError ? 'border-red-300 focus:ring-red-300' : 'border-cream-300 focus:ring-sage-300'
+            }`}
+            autoFocus
+          />
+          {passwordError && (
+            <p className="text-red-500 text-xs mb-3">Incorrect password. Please try again.</p>
+          )}
+          <button
+            onClick={handlePasswordSubmit}
+            className="w-full bg-sage-600 text-white hover:bg-sage-700 rounded-full px-6 py-2.5 text-sm font-medium transition"
+          >
+            Enter
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   const { settings, wedding, photos, party, shuttle, accommodations, wedding_details, venue, meal_options } = data
   const t = THEMES[settings.theme || 'warm']
   const days = daysUntil(wedding.wedding_date)
@@ -449,8 +857,60 @@ export default function WeddingWebsite() {
     ? `${partners[0]} & ${partners[1]}`
     : wedding.couple_names || ''
 
+  // Font pair
+  const fontPair = FONT_PAIRS[settings.font_pair] || null
+  const fontStyle = fontPair ? { '--ww-heading-font': fontPair.heading, '--ww-body-font': fontPair.body } : {}
+
+  // Accent color overrides
+  const accentColor = settings.accent_color || null
+  const accentOverrides = accentColor ? { '--ww-accent': accentColor } : {}
+
+  // Hero pre-text
+  const heroPretext = settings.hero_pretext || DEFAULT_HERO_PRETEXT[settings.theme || 'warm'] || 'You are invited to celebrate'
+
+  // Build visible sections list for StickyNav
+  const visibleSections = []
+  if (settings.show_story && settings.our_story) visibleSections.push({ id: 'story', label: 'Our Story' })
+  if (settings.the_proposal) visibleSections.push({ id: 'proposal', label: 'Proposal' })
+  if (settings.show_schedule && (settings.ceremony_time || settings.reception_time)) visibleSections.push({ id: 'schedule', label: 'The Day' })
+  if (settings.show_wedding_party && party.length > 0) visibleSections.push({ id: 'party', label: 'Wedding Party' })
+  if (settings.show_dress_code && settings.dress_code) visibleSections.push({ id: 'dresscode', label: 'Dress Code' })
+  visibleSections.push({ id: 'venue', label: 'Getting There' })
+  if (settings.show_transport && shuttle.length > 0) visibleSections.push({ id: 'transport', label: 'Transport' })
+  if (settings.show_accommodations && accommodations.length > 0) visibleSections.push({ id: 'stay', label: 'Stay' })
+  if (settings.show_things_to_do && settings.things_to_do?.length > 0) visibleSections.push({ id: 'thingstodo', label: 'Things to Do' })
+  if (settings.show_registry && settings.registry_links?.length > 0) visibleSections.push({ id: 'registry', label: 'Registry' })
+  if (settings.kids_policy || settings.plus_one_policy || settings.signature_cocktail) visibleSections.push({ id: 'details', label: 'Details' })
+  if (settings.show_faq && settings.faq_items?.length > 0) visibleSections.push({ id: 'faq', label: 'FAQ' })
+  if (settings.show_rsvp !== false) visibleSections.push({ id: 'rsvp', label: 'RSVP' })
+  if (settings.show_gallery && galleryPhotos.length > 0) visibleSections.push({ id: 'gallery', label: 'Gallery' })
+
   return (
-    <div className={`min-h-screen ${t.page}`}>
+    <div
+      data-ww=""
+      className={`min-h-screen ${t.page}`}
+      style={{ ...fontStyle, ...accentOverrides, ...(fontPair ? { fontFamily: fontPair.body } : {}) }}
+    >
+      {/* Google Fonts */}
+      {fontPair && (
+        <link
+          rel="stylesheet"
+          href={`https://fonts.googleapis.com/css2?family=${fontPair.gfonts}&display=swap`}
+        />
+      )}
+
+      {/* Accent color + font pair style overrides */}
+      <style>{[
+        accentColor && `
+          [data-ww] .ww-btn { background-color: ${accentColor} !important; border-color: ${accentColor} !important; }
+          [data-ww] .ww-btn:hover { filter: brightness(0.9); }
+          [data-ww] .ww-badge { background-color: ${accentColor}20 !important; color: ${accentColor} !important; }
+          [data-ww] .ww-accent { color: ${accentColor} !important; }
+        `,
+        fontPair && `
+          [data-ww] .font-serif, [data-ww] [class*="font-serif"] { font-family: var(--ww-heading-font) !important; }
+        `,
+      ].filter(Boolean).join('\n')}</style>
 
       {/* ── Hero ────────────────────────────────────────────────────────── */}
       <div className="relative min-h-screen flex flex-col items-center justify-center text-center px-6">
@@ -460,6 +920,8 @@ export default function WeddingWebsite() {
               src={heroPhoto.url}
               alt=""
               className="absolute inset-0 w-full h-full object-cover"
+              fetchpriority="high"
+              style={{ aspectRatio: '16 / 9' }}
             />
             <div className={`absolute inset-0 ${t.heroOverlay}`} />
           </>
@@ -468,17 +930,21 @@ export default function WeddingWebsite() {
         )}
 
         <div className={`relative z-10 ${t.heroText}`}>
-          {settings.theme === 'warm' ? (
-            <p className="text-sm font-medium tracking-[0.3em] uppercase text-white/70 mb-4">
-              You are invited to celebrate
-            </p>
-          ) : (
-            <p className="text-xs tracking-[0.4em] uppercase text-white/60 mb-6">
-              The wedding of
-            </p>
-          )}
+          <p className={`uppercase mb-4 ${
+            settings.theme === 'warm' || settings.theme === 'romantic' || settings.theme === 'rustic'
+              ? 'text-sm font-medium tracking-[0.3em] text-white/70'
+              : 'text-xs tracking-[0.4em] text-white/60 mb-6'
+          }`}>
+            {heroPretext}
+          </p>
 
-          <h1 className={`font-serif mb-4 ${settings.theme === 'warm' ? 'text-5xl sm:text-7xl' : 'text-4xl sm:text-6xl font-light'}`}>
+          <h1 className={`font-serif mb-4 ${
+            settings.theme === 'modern'
+              ? 'text-4xl sm:text-6xl font-bold'
+              : settings.theme === 'editorial'
+                ? 'text-4xl sm:text-6xl font-light'
+                : 'text-5xl sm:text-7xl'
+          }`} style={fontPair ? { fontFamily: fontPair.heading } : {}}>
             {displayNames}
           </h1>
 
@@ -489,13 +955,17 @@ export default function WeddingWebsite() {
             {venue.venue_name || 'The Venue'}{venue.address_line2 ? ` · ${venue.address_line2}` : ''}
           </p>
 
-          {days !== null && days > 0 && (
+          {/* Countdown timer (replaces simple "X days to go" pill when >1 day) */}
+          {days !== null && days > 1 && (
+            <CountdownTimer dateStr={wedding.wedding_date} theme={settings.theme} />
+          )}
+          {days === 1 && (
             <div className={`inline-block px-6 py-3 rounded-full text-sm mb-6 ${
               settings.theme === 'warm'
                 ? 'bg-white/20 backdrop-blur-sm text-white border border-white/30'
                 : 'border border-white/40 text-white/80'
             }`}>
-              {days === 1 ? 'Tomorrow!' : `${days} days to go`}
+              Tomorrow!
             </div>
           )}
           {days !== null && days <= 0 && (
@@ -523,12 +993,25 @@ export default function WeddingWebsite() {
         </div>
       </div>
 
+      {/* ── Sticky mobile section nav ─────────────────────────────────── */}
+      <StickyNav sections={visibleSections} t={t} />
+
       {/* ── Our Story ───────────────────────────────────────────────────── */}
       {settings.show_story && settings.our_story && (
         <Section t={t} id="story">
           <SectionHeading t={t} label="How it started" title="Our Story" />
           <p className={`${t.body} text-center max-w-2xl mx-auto text-lg whitespace-pre-line`}>
             {settings.our_story}
+          </p>
+        </Section>
+      )}
+
+      {/* ── The Proposal ──────────────────────────────────────────────── */}
+      {settings.the_proposal && (
+        <Section t={t} alt id="proposal">
+          <SectionHeading t={t} label="The moment" title="The Proposal" />
+          <p className={`${t.body} text-center max-w-2xl mx-auto text-lg whitespace-pre-line`}>
+            {settings.the_proposal}
           </p>
         </Section>
       )}
@@ -566,6 +1049,9 @@ export default function WeddingWebsite() {
       )}
 
       {/* ── Wedding Party ────────────────────────────────────────────────── */}
+      {/* NOTE: Wedding party blurbs (m.blurb) are managed in the Wedding Party
+          section of the client dashboard (WeddingPartyBuilder component).
+          They flow through as party[].blurb and are rendered below each member. */}
       {settings.show_wedding_party && party.length > 0 && (
         <Section t={t} id="party">
           <SectionHeading t={t} label="The people standing beside us" title="Wedding Party" />
@@ -593,6 +1079,8 @@ export default function WeddingWebsite() {
                           <img
                             src={portrait.url}
                             alt={m.member_name}
+                            loading="lazy"
+                            decoding="async"
                             className={`w-28 h-28 object-cover mx-auto mb-3 ${settings.theme === 'warm' ? 'rounded-full border-4 border-cream-200' : 'border border-gray-200'}`}
                           />
                         ) : (
@@ -620,7 +1108,7 @@ export default function WeddingWebsite() {
         <Section t={t} alt id="dresscode">
           <SectionHeading t={t} label="What to wear" title="Dress Code" />
           <div className="text-center">
-            <span className={`${t.badge} text-lg px-6 py-2 inline-block mb-4`}>
+            <span className={`${t.badge} ww-badge text-lg px-6 py-2 inline-block mb-4`}>
               {dressCodeLabel(settings.dress_code)}
             </span>
             {settings.dress_code_note && (
@@ -630,7 +1118,7 @@ export default function WeddingWebsite() {
           {dressCodePhotos.length > 0 && (
             <div className={`grid grid-cols-2 sm:grid-cols-3 gap-3 mt-8`}>
               {dressCodePhotos.slice(0, 6).map(p => (
-                <img key={p.id} src={p.url} alt={p.caption || ''} className={`aspect-square object-cover w-full ${settings.theme === 'warm' ? 'rounded-xl' : ''}`} />
+                <img key={p.id} src={p.url} alt={p.caption || ''} loading="lazy" decoding="async" className={`aspect-square object-cover w-full ${settings.theme === 'warm' ? 'rounded-xl' : ''}`} />
               ))}
             </div>
           )}
@@ -653,7 +1141,7 @@ export default function WeddingWebsite() {
               href={venue.google_maps_url}
               target="_blank"
               rel="noopener noreferrer"
-              className={`inline-block ${t.btn} mb-6`}
+              className={`inline-block ${t.btn} ww-btn mb-6`}
             >
               Open in Maps
             </a>
@@ -689,6 +1177,58 @@ export default function WeddingWebsite() {
             )}
           </div>
         </div>
+
+        {/* Map embed — uses the venue's Google Maps URL in an iframe */}
+        {venue.google_maps_url && (
+          <div className="max-w-lg mx-auto mt-6">
+            <iframe
+              src={venue.google_maps_url}
+              title={`Map to ${venue.venue_name || 'the venue'}`}
+              className="w-full h-64 rounded-xl border border-gray-200"
+              style={{ border: 0 }}
+              allowFullScreen=""
+              loading="lazy"
+              referrerPolicy="no-referrer-when-downgrade"
+            />
+          </div>
+        )}
+
+        {/* Driving directions — Rixey Manor specific */}
+        {venue.venue_name?.includes('Rixey') && (
+          <div className="max-w-lg mx-auto mt-6">
+            <p className={`text-sm font-medium ${t.accent} mb-3`}>Getting Here</p>
+            <div className="space-y-2">
+              {RIXEY_DRIVE_TIMES.map(d => (
+                <div key={d.from} className="flex items-center gap-2">
+                  <span className="text-sm">🚗</span>
+                  <p className={`${t.body} text-sm`}>
+                    From {d.from} — <span className="font-medium">{d.time}</span>
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Weather / season hint — Rixey Manor specific */}
+        {venue.venue_name?.includes('Rixey') && wedding.wedding_date && (() => {
+          const month = new Date(wedding.wedding_date + 'T00:00:00').getMonth() + 1
+          const weather = RIXEY_WEATHER[month]
+          if (!weather) return null
+          return (
+            <div className={`max-w-lg mx-auto mt-6 ${t.card} p-4`}>
+              <div className="flex items-start gap-3">
+                <span className="text-xl flex-shrink-0">{weather.emoji}</span>
+                <div>
+                  <p className={`text-sm font-medium ${t.accent}`}>
+                    Expect {weather.range} in {new Date(wedding.wedding_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'long' })}
+                  </p>
+                  <p className={`${t.body} text-sm mt-0.5`}>{weather.note}</p>
+                </div>
+              </div>
+            </div>
+          )
+        })()}
       </Section>
 
       {/* ── Transportation ───────────────────────────────────────────────── */}
@@ -733,13 +1273,52 @@ export default function WeddingWebsite() {
               <div key={a.id} className={`${t.card} p-5`}>
                 <div className="flex items-start justify-between gap-2 mb-2">
                   <p className={`${t.heading} text-base`}>{a.name}</p>
-                  <span className={`${t.badge} text-xs flex-shrink-0`}>{a.booking_platform}</span>
+                  <span className={`${t.badge} ww-badge text-xs flex-shrink-0`}>{a.booking_platform}</span>
                 </div>
                 <div className={`space-y-1 ${t.body} text-sm`}>
                   {a.sleeps && <p>Sleeps {a.sleeps}</p>}
                   {a.distance && <p>{a.distance} from the Manor</p>}
                   {a.price_per_night && <p>From ${a.price_per_night}/night</p>}
                   {a.availability && <p className="italic">{a.availability}</p>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
+
+      {/* ── Things to Do ──────────────────────────────────────────────── */}
+      {settings.show_things_to_do && settings.things_to_do?.length > 0 && (
+        <Section t={t} alt id="thingstodo">
+          <SectionHeading t={t} label="While you're here" title="Things to Do Nearby" />
+          <div className="grid sm:grid-cols-2 gap-4">
+            {settings.things_to_do.filter(item => item.name).map((item, i) => (
+              <div key={i} className={`${t.card} p-5`}>
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <p className={`${t.heading} text-base`}>{item.name}</p>
+                  {item.type && (
+                    <span className={`${t.badge} ww-badge text-xs flex-shrink-0`}>
+                      {THINGS_TO_DO_EMOJI[item.type?.toLowerCase()] || '📍'} {item.type}
+                    </span>
+                  )}
+                </div>
+                {item.description && (
+                  <p className={`${t.body} text-sm mb-2`}>{item.description}</p>
+                )}
+                <div className="flex items-center gap-3">
+                  {item.distance && (
+                    <p className={`${t.body} text-xs`}>{item.distance}</p>
+                  )}
+                  {item.url && (
+                    <a
+                      href={item.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={`${t.link} text-xs`}
+                    >
+                      Visit website
+                    </a>
+                  )}
                 </div>
               </div>
             ))}
@@ -758,7 +1337,7 @@ export default function WeddingWebsite() {
                 href={r.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className={`${t.btn} inline-block`}
+                className={`${t.btn} ww-btn inline-block`}
               >
                 {r.label || 'View Registry'}
               </a>
@@ -834,11 +1413,17 @@ export default function WeddingWebsite() {
         <Section t={t} id="gallery">
           <SectionHeading t={t} label="Photos" title="Gallery" />
           <div className={`grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3`}>
-            {galleryPhotos.map(p => (
-              <div key={p.id} className="relative aspect-square overflow-hidden group">
+            {galleryPhotos.map((p, idx) => (
+              <div
+                key={p.id}
+                className="relative aspect-square overflow-hidden group cursor-pointer"
+                onClick={() => openLightbox(idx)}
+              >
                 <img
                   src={p.url}
                   alt={p.caption || ''}
+                  loading="lazy"
+                  decoding="async"
                   className={`w-full h-full object-cover transition-transform duration-500 group-hover:scale-105 ${settings.theme === 'warm' ? 'rounded-xl' : ''}`}
                 />
                 {p.caption && (
@@ -852,8 +1437,24 @@ export default function WeddingWebsite() {
         </Section>
       )}
 
+      {/* ── Gallery Lightbox ──────────────────────────────────────────── */}
+      {lightboxOpen && galleryPhotos.length > 0 && (
+        <Lightbox
+          photos={galleryPhotos}
+          index={lightboxIndex}
+          onClose={closeLightbox}
+          onPrev={prevPhoto}
+          onNext={() => nextPhoto(galleryPhotos.length)}
+        />
+      )}
+
       {/* ── Footer ──────────────────────────────────────────────────────── */}
       <footer className={`py-10 px-6 text-center border-t ${t.divider}`}>
+        {settings.footer_message && (
+          <p className={`${t.body} italic max-w-md mx-auto mb-4`}>
+            "{settings.footer_message}"
+          </p>
+        )}
         <p className={`font-serif text-2xl ${t.heading} mb-1`}>{displayNames}</p>
         <p className={`${t.body} text-sm`}>{formatDate(wedding.wedding_date)} · {venue.venue_name || 'The Venue'}</p>
         {venue.footer_credit && (

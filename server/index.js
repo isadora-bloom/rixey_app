@@ -7535,6 +7535,27 @@ app.put('/api/wedding-website/:weddingId', async (req, res) => {
   }
 });
 
+// ── Check slug availability ───────────────────────────────────────────────────
+app.get('/api/wedding-website/check-slug/:slug', async (req, res) => {
+  try {
+    const { slug } = req.params;
+    const excludeWeddingId = req.query.exclude; // pass ?exclude=weddingId to skip own row
+    let query = supabaseAdmin
+      .from('wedding_website_settings')
+      .select('wedding_id')
+      .eq('slug', slug);
+    if (excludeWeddingId) {
+      query = query.neq('wedding_id', excludeWeddingId);
+    }
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json({ available: !data || data.length === 0 });
+  } catch (err) {
+    console.error('Check slug error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Venue settings ────────────────────────────────────────────────────────────
 app.get('/api/venue-settings', async (req, res) => {
   try {
