@@ -41,10 +41,10 @@ app.use(express.json());
 
 // ============ RATE LIMITING ============
 
-// General rate limiter: 100 requests per 15 minutes per IP
+// General rate limiter: 500 requests per 15 minutes per IP
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: 500,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later' }
@@ -79,11 +79,11 @@ app.get('/', (req, res) => {
 // ============ AUTH MIDDLEWARE ============
 // Public routes that skip auth (matched by path prefix)
 const PUBLIC_ROUTES = [
-  '/',                        // health check
   '/api/w/',                  // public wedding websites
   '/api/rsvp/',               // public RSVP
   '/api/vendor-portal/',      // token-based vendor portal
   '/api/vendor-directory',    // public vendor directory
+  '/api/wedding-website/check-slug/', // slug availability check
 ];
 
 // Apply auth to all /api/ routes except public ones
@@ -7501,6 +7501,27 @@ app.delete('/api/wedding-party/:id', async (req, res) => {
 });
 
 // --- Website settings ---
+// ── Check slug availability (must be before :weddingId catch-all) ─────────────
+app.get('/api/wedding-website/check-slug/:slug', async (req, res) => {
+  try {
+    const { slug } = req.params;
+    const excludeWeddingId = req.query.exclude;
+    let query = supabaseAdmin
+      .from('wedding_website_settings')
+      .select('wedding_id')
+      .eq('slug', slug);
+    if (excludeWeddingId) {
+      query = query.neq('wedding_id', excludeWeddingId);
+    }
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json({ available: !data || data.length === 0 });
+  } catch (err) {
+    console.error('Check slug error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/wedding-website/:weddingId', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
@@ -7551,26 +7572,7 @@ app.put('/api/wedding-website/:weddingId', async (req, res) => {
   }
 });
 
-// ── Check slug availability ───────────────────────────────────────────────────
-app.get('/api/wedding-website/check-slug/:slug', async (req, res) => {
-  try {
-    const { slug } = req.params;
-    const excludeWeddingId = req.query.exclude; // pass ?exclude=weddingId to skip own row
-    let query = supabaseAdmin
-      .from('wedding_website_settings')
-      .select('wedding_id')
-      .eq('slug', slug);
-    if (excludeWeddingId) {
-      query = query.neq('wedding_id', excludeWeddingId);
-    }
-    const { data, error } = await query;
-    if (error) throw error;
-    res.json({ available: !data || data.length === 0 });
-  } catch (err) {
-    console.error('Check slug error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
+// (check-slug moved above :weddingId routes to prevent param collision)
 
 // ── Venue settings ────────────────────────────────────────────────────────────
 app.get('/api/venue-settings', async (req, res) => {
