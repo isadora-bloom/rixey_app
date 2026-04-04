@@ -6184,19 +6184,21 @@ app.post('/api/tables', async (req, res) => {
 
     // Log activity
     await logActivity(weddingId, userId, 'tables_updated', `${guestCount} guests, ${tableShape} tables`);
-    notifyAdminOfActivity(weddingId, 'tables_updated', `${guestCount} guests, ${tableShape} tables`);
 
-    // Floor plan alert — not rate-limited, always fires on save
-    try {
-      const { data: wedding } = await supabaseAdmin.from('weddings').select('couple_names').eq('id', weddingId).single();
-      const couple = wedding?.couple_names || 'Your couple';
-      await createNotification(
-        weddingId, 'admin', 'floor_plan_needed',
-        `📐 Floor plan needed — ${couple}`,
-        `${couple} saved their table setup (${guestCount} guests, ${tableShape} tables). Build their floor plan.`
-      );
-    } catch (notifErr) {
-      console.error('[Tables] Floor plan notification error:', notifErr.message);
+    // Only notify admin when couple sends (not on draft saves)
+    if (!isDraft) {
+      notifyAdminOfActivity(weddingId, 'tables_updated', `${guestCount} guests, ${tableShape} tables`);
+      try {
+        const { data: wedding } = await supabaseAdmin.from('weddings').select('couple_names').eq('id', weddingId).single();
+        const couple = wedding?.couple_names || 'Your couple';
+        await createNotification(
+          weddingId, 'admin', 'floor_plan_needed',
+          `📐 Floor plan needed — ${couple}`,
+          `${couple} saved their table setup (${guestCount} guests, ${tableShape} tables). Build their floor plan.`
+        );
+      } catch (notifErr) {
+        console.error('[Tables] Floor plan notification error:', notifErr.message);
+      }
     }
 
     res.json({ tables: data });

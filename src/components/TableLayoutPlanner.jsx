@@ -326,14 +326,6 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
 
   if (loading) return <div className="text-sage-400 text-center py-8">Loading table setup…</div>
 
-  // Client view when setup is still a draft
-  if (!isAdmin && isDraft) {
-    return (
-      <div className="bg-cream-50 rounded-2xl border border-cream-200 p-12 text-center">
-        <p className="text-sage-500 text-sm">We're working on your table setup — we'll let you know when it's ready to review.</p>
-      </div>
-    )
-  }
 
   return (
     <div className="space-y-6">
@@ -362,10 +354,16 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
               </button>
             </>
           ) : (
-            <button onClick={() => saveTableSetup(false)} disabled={saving}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition ${saveError ? 'bg-red-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'} disabled:opacity-50`}>
-              {saving ? 'Saving…' : saveError ? 'Retry' : 'Save Setup'}
-            </button>
+            <>
+              <button onClick={() => saveTableSetup(true)} disabled={saving}
+                className="px-3 py-2 rounded-lg text-sm font-medium border border-sage-300 text-sage-700 hover:bg-sage-50 transition disabled:opacity-50">
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+              <button onClick={() => saveTableSetup(false)} disabled={saving}
+                className={`px-3 py-2 rounded-lg text-sm font-medium transition ${saveError ? 'bg-red-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'} disabled:opacity-50`}>
+                {saving ? 'Saving…' : saveError ? 'Retry' : 'Send to Rixey'}
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -786,25 +784,40 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
       </div>
 
       {/* Floor plan note + save */}
-      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
-        <div className="flex items-start gap-3">
-          <span className="text-xl mt-0.5">📐</span>
-          <div>
-            <p className="text-sm font-medium text-amber-800">We'll build your floor plan</p>
-            <p className="text-sm text-amber-700">Once you save, we'll be alerted and will build your custom floor plan. We'll still customise it with you — this just gives us everything we need to get started.</p>
+      {!isAdmin && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
+          <div className="flex items-start gap-3">
+            <span className="text-xl mt-0.5">📐</span>
+            <div>
+              <p className="text-sm font-medium text-amber-800">We'll build your floor plan</p>
+              <p className="text-sm text-amber-700">Save your progress anytime. When you're ready, hit "Send to Rixey" and we'll build your custom floor plan. We'll still customise it with you — this just gives us everything we need to get started.</p>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
-      {/* Bottom Save Button */}
+      {/* Bottom Save Buttons */}
       <div className="sticky bottom-0 bg-gradient-to-t from-white via-white to-transparent pt-4 pb-2">
         {saveError && (
           <p className="text-center text-sm text-red-600 mb-2">{saveError}</p>
         )}
-        <button onClick={saveTableSetup} disabled={saving}
-          className={`w-full px-5 py-3 rounded-lg font-medium transition text-lg ${saved ? 'bg-green-500 text-white' : saveError ? 'bg-red-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'} disabled:opacity-50 shadow-lg`}>
-          {saved ? '✓ Table Setup Saved!' : saving ? 'Saving…' : saveError ? 'Save failed — tap to retry' : 'Save Table Setup'}
-        </button>
+        {isAdmin ? (
+          <button onClick={saveTableSetup} disabled={saving}
+            className={`w-full px-5 py-3 rounded-lg font-medium transition text-lg ${saved ? 'bg-green-500 text-white' : saveError ? 'bg-red-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'} disabled:opacity-50 shadow-lg`}>
+            {saved ? '✓ Table Setup Saved!' : saving ? 'Saving…' : saveError ? 'Save failed — tap to retry' : 'Save Table Setup'}
+          </button>
+        ) : (
+          <div className="flex gap-3">
+            <button onClick={() => saveTableSetup(true)} disabled={saving}
+              className="flex-1 px-5 py-3 rounded-lg font-medium transition text-lg border border-sage-300 text-sage-700 hover:bg-sage-50 disabled:opacity-50 shadow-lg">
+              {saving ? 'Saving…' : saved && isDraft ? '✓ Saved!' : 'Save'}
+            </button>
+            <button onClick={() => saveTableSetup(false)} disabled={saving}
+              className={`flex-1 px-5 py-3 rounded-lg font-medium transition text-lg ${saved && !isDraft ? 'bg-green-500 text-white' : saveError ? 'bg-red-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'} disabled:opacity-50 shadow-lg`}>
+              {saved && !isDraft ? '✓ Sent to Rixey!' : saving ? 'Saving…' : saveError ? 'Save failed — tap to retry' : 'Send to Rixey'}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )
