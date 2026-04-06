@@ -1,4 +1,5 @@
 // Sidebar navigation (desktop) + mobile dropdown for Dashboard
+import { useNavigate } from 'react-router-dom'
 
 const FINALISABLE = new Set([
   'timeline', 'ceremony-order', 'guests', 'table-map', 'vendor',
@@ -16,7 +17,7 @@ const NAV_ITEMS = [
   { key: 'budget', label: 'Budget', icon: '/icons/budget.svg', dotKey: 'budget' },
   { key: 'guests', label: 'Guest List', icon: '/icons/guest-care.svg' },
   { key: 'vendor', label: 'Vendors', icon: '/icons/vendors.svg' },
-  { key: 'preferred-vendors', label: 'Preferred Vendors', icon: '/icons/vendors.svg' },
+  { key: 'preferred-vendors', label: 'Vendor Directory', icon: '/icons/vendors.svg', href: '/vendors' },
   { key: 'timeline', label: 'Timeline', icon: '/icons/timeline.svg', dotKey: 'timeline' },
   { key: 'tables', label: 'Tables', icon: '/icons/tables.svg', dotKey: 'tables' },
   { section: 'Day Of' },
@@ -64,6 +65,8 @@ export default function DashboardNav({
     tables: !!tableSummary,
   }
 
+  const navigate = useNavigate()
+
   return (
     <>
       {/* Desktop sidebar */}
@@ -84,7 +87,7 @@ export default function DashboardNav({
               return (
                 <button
                   key={item.key}
-                  onClick={() => setActiveSection(item.key)}
+                  onClick={() => item.href ? navigate(item.href) : setActiveSection(item.key)}
                   className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition ${
                     activeSection === item.key
                       ? 'bg-sage-100 text-sage-700 font-medium'
@@ -126,7 +129,11 @@ export default function DashboardNav({
       <div className="lg:hidden mb-3">
         <select
           value={activeSection}
-          onChange={e => setActiveSection(e.target.value)}
+          onChange={e => {
+            const val = e.target.value
+            if (val === 'preferred-vendors') { navigate('/vendors'); return }
+            setActiveSection(val)
+          }}
           className="w-full p-3 border border-cream-200 rounded-xl bg-white text-sage-700 font-medium focus:outline-none focus:ring-2 focus:ring-sage-300"
         >
           <option value="chat">💬 Chat with Sage</option>
@@ -139,7 +146,7 @@ export default function DashboardNav({
             <option value="budget">💰 Budget</option>
             <option value="guests">👥 Guest List</option>
             <option value="vendor">📎 Vendors</option>
-            <option value="preferred-vendors">⭐ Preferred Vendors</option>
+            <option value="preferred-vendors">⭐ Vendor Directory</option>
             <option value="timeline">📅 Timeline</option>
             <option value="tables">🪑 Tables</option>
           </optgroup>
