@@ -2,8 +2,19 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
+const DEV_API_TARGET = process.env.VITE_DEV_API_TARGET || 'https://rixeyapp-production.up.railway.app'
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  server: {
+    proxy: {
+      '/api': {
+        target: DEV_API_TARGET,
+        changeOrigin: true,
+        secure: true,
+      },
+    },
+  },
   build: {
     rollupOptions: {
       output: {

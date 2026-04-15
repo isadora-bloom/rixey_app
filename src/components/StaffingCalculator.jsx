@@ -5,7 +5,7 @@ import { Button, Card } from './ui'
 
 const STAFF_RATE = 350 // 2026 rate
 
-export default function StaffingCalculator({ guestCount: initialGuestCount, weddingId, userId }) {
+export default function StaffingCalculator({ guestCount: initialGuestCount, weddingId, userId, isAdmin = false }) {
   const [step, setStep] = useState(0)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -46,13 +46,17 @@ export default function StaffingCalculator({ guestCount: initialGuestCount, wedd
         const data = await res.json()
         if (data.staffing?.answers) {
           setAnswers(prev => ({ ...prev, ...data.staffing.answers }))
+          // Admin view jumps straight to the summary so the client's
+          // actual choices and estimate are visible without clicking
+          // through the wizard.
+          if (isAdmin) setStep(5)
         }
       } catch (err) {
         console.error('Failed to load staffing:', err)
       }
     }
     loadStaffing()
-  }, [weddingId])
+  }, [weddingId, isAdmin])
 
   const updateAnswer = (key, value) => {
     setAnswers(prev => ({ ...prev, [key]: value }))
