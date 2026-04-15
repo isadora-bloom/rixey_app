@@ -71,6 +71,13 @@ export function AuthProvider({ children }) {
         localStorage.setItem('rixey_session_only', 'true')
       }
       sessionStorage.setItem('rixey_tab_active', 'true')
+      // Set user synchronously so ProtectedRoute sees it before navigate runs.
+      // Without this, onAuthStateChange races the navigate() and bounces users
+      // back to /.
+      if (data?.user) {
+        setUser(data.user)
+        await loadProfile(data.user.id)
+      }
     }
     return { data, error }
   }
