@@ -146,8 +146,8 @@ function Toggle({ on, onToggle, label, sublabel }) {
         <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${on ? 'translate-x-5' : 'translate-x-0.5'}`} />
       </button>
       <div>
-        <p className={`text-sm ${on ? 'text-sage-700 font-medium' : 'text-sage-500'}`}>{label}</p>
-        {sublabel && <p className="text-xs text-sage-400">{sublabel}</p>}
+        <p className={`text-sm ${on ? 'text-sage-700 font-medium' : 'text-sage-700'}`}>{label}</p>
+        {sublabel && <p className="text-xs text-sage-600">{sublabel}</p>}
       </div>
     </label>
   )
@@ -324,17 +324,29 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
     sliderTimerRef.current = setTimeout(() => setGuestCount(val), 300)
   }
 
-  if (loading) return <div className="text-sage-400 text-center py-8">Loading table setup…</div>
+  if (loading) return <div className="text-sage-600 text-center py-8">Loading table setup…</div>
 
+  const selectedExtraTables = EXTRA_TABLES.flatMap(cat => cat.tables)
+    .filter(t => extraTables[t.id]?.selected)
+    .map(t => ({
+      name: t.name,
+      count: t.hasCount ? (extraTables[t.id]?.count || 1) : 1,
+    }))
+  const linenRows = getLinenSizes({
+    tableShape, tablesNeeded, rectTableCount, cocktailTables,
+    headTable, headTablePeople, headTableSided, sweetheartTable,
+    extraTablesLinenCount,
+  })
 
   return (
-    <div className="space-y-6">
+    <>
+    <div className="space-y-6 tlp-screen-only">
 
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h2 className="font-serif text-xl text-sage-700">Table & Seating Planner</h2>
-          <p className="text-sage-500 text-sm">
+          <p className="text-sage-700 text-sm">
             {isAdmin && isDraft && <span className="text-amber-600 font-medium">In progress — not visible to client · </span>}
             Calculate tables, linens, and layout
           </p>
@@ -342,6 +354,10 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
         <div className="flex items-center gap-2 flex-shrink-0">
           {saveError && <span className="text-red-500 text-xs">{saveError}</span>}
           {saved && <span className="text-green-600 text-xs">✓ Saved</span>}
+          <button onClick={() => window.print()} type="button"
+            className="px-3 py-2 rounded-lg text-sm font-medium border border-sage-300 text-sage-700 hover:bg-sage-50 transition">
+            Print
+          </button>
           {isAdmin ? (
             <>
               <button onClick={() => saveTableSetup(true)} disabled={saving}
@@ -379,7 +395,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
           <input type="number" min="1" max="500" value={sliderValue}
             onChange={e => { const v = Number(e.target.value); setSliderValue(v); setGuestCount(v); }}
             className="w-20 px-3 py-2 border border-sage-200 rounded-lg text-center font-medium" />
-          <span className="text-sage-500">guests</span>
+          <span className="text-sage-700">guests</span>
         </div>
       </div>
 
@@ -393,7 +409,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
               className={`p-4 rounded-xl border-2 text-center transition ${tableShape === shape.id ? 'border-sage-600 bg-sage-50' : 'border-cream-200 bg-white hover:border-sage-300'}`}>
               <span className="text-3xl block mb-1">{shape.icon}</span>
               <span className="font-medium text-sage-800 text-sm">{shape.name}</span>
-              <p className="text-sage-400 text-xs mt-1">{shape.description}</p>
+              <p className="text-sage-600 text-xs mt-1">{shape.description}</p>
             </button>
           ))}
         </div>
@@ -407,7 +423,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
           {[6, 8, 10, 12].map(n => <option key={n} value={n}>{n} guests</option>)}
         </select>
         {(tableShape === 'rectangular' || tableShape === 'mixed') && (
-          <p className="text-xs text-sage-400 italic">We assume 6 guests per rectangular table.</p>
+          <p className="text-xs text-sage-600 italic">We assume 6 guests per rectangular table.</p>
         )}
       </div>
 
@@ -435,7 +451,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
           <span className="text-2xl">💕</span>
           <div>
             <p className="font-medium text-sage-800">Sweetheart Table</p>
-            <p className="text-sage-500 text-sm">Just for the two of you</p>
+            <p className="text-sage-700 text-sm">Just for the two of you</p>
           </div>
         </label>
 
@@ -447,7 +463,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
             <span className="text-2xl">👑</span>
             <div>
               <p className="font-medium text-sage-800">Head Table</p>
-              <p className="text-sage-500 text-sm">Long table for wedding party</p>
+              <p className="text-sage-700 text-sm">Long table for wedding party</p>
             </div>
           </label>
 
@@ -468,13 +484,13 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
                   ].map(opt => (
                     <button key={opt.key} onClick={() => setHeadTableSided(opt.key)}
                       className={`flex-1 px-3 py-2 rounded-xl border-2 text-left transition ${headTableSided === opt.key ? 'border-sage-500 bg-sage-50' : 'border-cream-200 hover:border-sage-300'}`}>
-                      <p className={`text-sm font-medium ${headTableSided === opt.key ? 'text-sage-700' : 'text-sage-500'}`}>{opt.label}</p>
-                      <p className="text-xs text-sage-400">{opt.desc}</p>
+                      <p className={`text-sm font-medium ${headTableSided === opt.key ? 'text-sage-700' : 'text-sage-700'}`}>{opt.label}</p>
+                      <p className="text-xs text-sage-600">{opt.desc}</p>
                     </button>
                   ))}
                 </div>
               </div>
-              <p className="text-xs text-sage-400">
+              <p className="text-xs text-sage-600">
                 That's <strong>{htCount} × 6ft table{htCount !== 1 ? 's' : ''}</strong> pushed together for your head table.
               </p>
             </div>
@@ -488,7 +504,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
           <span className="text-2xl">👶</span>
           <div className="flex-1">
             <p className="font-medium text-sage-800">Kids Table</p>
-            <p className="text-sage-500 text-sm">Separate table for children</p>
+            <p className="text-sage-700 text-sm">Separate table for children</p>
           </div>
           {kidsTable && (
             <input type="number" min={1} max={20} value={kidsCount}
@@ -502,7 +518,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
           <span className="text-2xl">🍸</span>
           <div className="flex-1">
             <p className="font-medium text-sage-800">Cocktail Tables</p>
-            <p className="text-sage-500 text-sm">High-tops for mingling — Rixey has 5</p>
+            <p className="text-sage-700 text-sm">High-tops for mingling — Rixey has 5</p>
           </div>
           <input type="number" min={0} max={5} value={Math.min(5, cocktailTables)}
             onChange={e => setCocktailTables(Math.min(5, Math.max(0, Number(e.target.value))))}
@@ -531,7 +547,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
                     title={c.name} />
                 ))}
               </div>
-              <p className="text-sage-500 text-xs mt-1">Selected: {LINEN_COLORS.find(c => c.id === color)?.name}</p>
+              <p className="text-sage-700 text-xs mt-1">Selected: {LINEN_COLORS.find(c => c.id === color)?.name}</p>
             </div>
           ))}
         </div>
@@ -542,9 +558,9 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
         <div className="bg-cream-50 px-4 py-3 border-b border-cream-200 flex items-center justify-between">
           <div>
             <h3 className="font-medium text-sage-700">Tablecloth Sizes</h3>
-            <p className="text-sage-500 text-xs mt-0.5">All linens are floor length</p>
+            <p className="text-sage-700 text-xs mt-0.5">All linens are floor length</p>
           </div>
-          <label className="flex items-center gap-2 text-xs text-sage-500 cursor-pointer">
+          <label className="flex items-center gap-2 text-xs text-sage-700 cursor-pointer">
             <input type="checkbox" checked={linenVenueChoice} onChange={e => setLinenVenueChoice(e.target.checked)}
               className="rounded border-sage-300 text-sage-600" />
             Leave to Rixey
@@ -555,7 +571,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
           <div className="p-4 space-y-5">
             {/* Size guide */}
             <div>
-              <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">What to order</p>
+              <p className="text-xs font-semibold text-sage-700 uppercase tracking-wide mb-3">What to order</p>
               <div className="bg-white border border-cream-200 rounded-xl divide-y divide-cream-100">
                 {getLinenSizes({ tableShape, tablesNeeded, rectTableCount,
                   cocktailTables, headTable, headTablePeople, headTableSided,
@@ -564,7 +580,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
                   <div key={i} className="flex items-center justify-between px-4 py-3">
                     <div>
                       <p className="text-sm font-semibold text-sage-700">{row.label}</p>
-                      <p className="text-xs text-sage-400">{row.note}</p>
+                      <p className="text-xs text-sage-600">{row.note}</p>
                     </div>
                     <span className="text-lg font-bold text-sage-600 ml-4 flex-shrink-0">×{row.qty}</span>
                   </div>
@@ -573,24 +589,24 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
                   <div className="flex items-center justify-between px-4 py-3">
                     <div>
                       <p className="text-sm font-semibold text-sage-700">Match your dining tables</p>
-                      <p className="text-xs text-sage-400">Additional / specialty tables needing cloths</p>
+                      <p className="text-xs text-sage-600">Additional / specialty tables needing cloths</p>
                     </div>
                     <span className="text-lg font-bold text-sage-600 ml-4 flex-shrink-0">×{extraTablesLinenCount}</span>
                   </div>
                 )}
               </div>
-              <p className="text-xs text-sage-400 mt-2">Total tablecloths needed: <strong>{linensNeeded}</strong></p>
+              <p className="text-xs text-sage-600 mt-2">Total tablecloths needed: <strong>{linensNeeded}</strong></p>
             </div>
 
             {/* Runner */}
             <div>
-              <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">Table runner / overlay</p>
+              <p className="text-xs font-semibold text-sage-700 uppercase tracking-wide mb-3">Table runner / overlay</p>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 {RUNNER_STYLES.map(r => (
                   <button key={r.key} onClick={() => setRunnerStyle(r.key)}
                     className={`p-3 rounded-xl border-2 text-left transition ${runnerStyle === r.key ? 'border-sage-500 bg-sage-50' : 'border-cream-200 hover:border-sage-300'}`}>
-                    <p className={`text-sm font-medium ${runnerStyle === r.key ? 'text-sage-700' : 'text-sage-500'}`}>{r.label}</p>
-                    {r.desc && <p className="text-xs text-sage-400 mt-0.5">{r.desc}</p>}
+                    <p className={`text-sm font-medium ${runnerStyle === r.key ? 'text-sage-700' : 'text-sage-700'}`}>{r.label}</p>
+                    {r.desc && <p className="text-xs text-sage-600 mt-0.5">{r.desc}</p>}
                   </button>
                 ))}
               </div>
@@ -598,7 +614,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
 
             {/* Chargers */}
             <div>
-              <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">Charger plates</p>
+              <p className="text-xs font-semibold text-sage-700 uppercase tracking-wide mb-3">Charger plates</p>
               <Toggle on={chargersOn} onToggle={() => setChargersOn(v => !v)}
                 label="Add charger plates"
                 sublabel={chargersOn ? `${guestCount} chargers needed` : 'Decorative base plates under the dinner plate'} />
@@ -606,21 +622,21 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
 
             {/* Linen notes */}
             <div>
-              <label className="block text-xs font-semibold text-sage-500 uppercase tracking-wide mb-2">Linen notes</label>
+              <label className="block text-xs font-semibold text-sage-700 uppercase tracking-wide mb-2">Linen notes</label>
               <textarea value={linenNotes} onChange={e => setLinenNotes(e.target.value)}
                 placeholder="Specific linen requests, rental company, any constraints…"
                 rows={2} className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 resize-none" />
             </div>
           </div>
         ) : (
-          <p className="px-4 py-3 text-sm text-sage-400 italic">Rixey will select appropriate linens for your table style and colour scheme.</p>
+          <p className="px-4 py-3 text-sm text-sage-600 italic">Rixey will select appropriate linens for your table style and colour scheme.</p>
         )}
       </div>
 
       {/* Layout Preferences */}
       <div className="bg-cream-50 rounded-xl p-4 space-y-4">
         <h3 className="font-medium text-sage-700">Layout Preferences</h3>
-        <p className="text-sage-400 text-xs -mt-2">This helps us build your floor plan — the more detail the better.</p>
+        <p className="text-sage-600 text-xs -mt-2">This helps us build your floor plan — the more detail the better.</p>
 
         {/* Checkered dance floor */}
         <div>
@@ -629,7 +645,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
             label="We'd like to rent a chequered dance floor"
             sublabel={checkeredDanceFloor ? 'We recommend 12×12 or 12×16 ft — we\'ll confirm the size with you' : undefined} />
           {checkeredDanceFloor && (
-            <p className="text-xs text-sage-400 mt-2 ml-13 pl-0.5">Popular sizes at Rixey are 12×12 ft and 12×16 ft.</p>
+            <p className="text-xs text-sage-600 mt-2 ml-13 pl-0.5">Popular sizes at Rixey are 12×12 ft and 12×16 ft.</p>
           )}
         </div>
 
@@ -659,13 +675,13 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
       <div className="border border-cream-200 rounded-xl overflow-hidden">
         <div className="bg-cream-50 px-4 py-3 border-b border-cream-200">
           <h3 className="font-medium text-sage-700">Additional Tables</h3>
-          <p className="text-sage-500 text-sm">Select any specialty tables you'll need</p>
+          <p className="text-sage-700 text-sm">Select any specialty tables you'll need</p>
         </div>
         <div className="divide-y divide-cream-100">
           {EXTRA_TABLES.map(category => (
             <div key={category.category} className="p-4">
               <h4 className="font-medium text-sage-700 mb-1">{category.category}</h4>
-              {category.note && <p className="text-sage-400 text-xs mb-3 italic">{category.note}</p>}
+              {category.note && <p className="text-sage-600 text-xs mb-3 italic">{category.note}</p>}
               <div className="space-y-2">
                 {category.tables.map(table => {
                   const ts = extraTables[table.id] || { selected: false, count: 1, notes: '' }
@@ -684,7 +700,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
                         <span className="text-xl">{table.icon}</span>
                         <div className="flex-1">
                           <p className={`text-sm ${ts.selected ? 'font-medium text-sage-800' : 'text-sage-600'}`}>{table.name}</p>
-                          {table.description && <p className="text-sage-400 text-xs">{table.description}</p>}
+                          {table.description && <p className="text-sage-600 text-xs">{table.description}</p>}
                         </div>
                         {table.hasCount && ts.selected && (
                           <input type="number" min="1" max="10" value={ts.count || 1}
@@ -692,7 +708,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
                             className="w-14 px-2 py-1 border border-sage-200 rounded text-center text-sm" />
                         )}
                         {table.needsLinen && ts.selected && (
-                          <span className="text-xs text-sage-400 bg-sage-100 px-2 py-0.5 rounded">+ linen</span>
+                          <span className="text-xs text-sage-600 bg-sage-100 px-2 py-0.5 rounded">+ linen</span>
                         )}
                       </label>
                     </div>
@@ -820,5 +836,86 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
         )}
       </div>
     </div>
+
+    {/* A4 print layout — hidden on screen, filled on window.print() */}
+    <div className="tlp-print-only">
+      <h1>Table &amp; Seating Plan</h1>
+      <p>Generated {new Date().toLocaleDateString()}</p>
+
+      <div className="tlp-grid">
+        <div className="tlp-stat"><span className="n">{guestCount}</span><span className="l">Guests</span></div>
+        <div className="tlp-stat"><span className="n">{totalTables}</span><span className="l">Guest Tables</span></div>
+        <div className="tlp-stat"><span className="n">{linensNeeded}</span><span className="l">Tablecloths</span></div>
+        <div className="tlp-stat"><span className="n">{napkinsNeeded}</span><span className="l">Napkins</span></div>
+      </div>
+
+      <h2>Table Setup</h2>
+      <table>
+        <tbody>
+          <tr><th>Table style</th><td>{TABLE_SHAPES.find(s => s.id === tableShape)?.name || tableShape}</td></tr>
+          <tr><th>Guests per table</th><td>{guestsPerTable}</td></tr>
+          <tr><th>Seated dining tables</th><td>{tablesNeeded}</td></tr>
+          {tableShape === 'mixed' && (
+            <tr><th>Mix</th><td>{rectTableCount} rectangular, {Math.max(0, tablesNeeded - rectTableCount)} round</td></tr>
+          )}
+          {sweetheartTable && <tr><th>Sweetheart table</th><td>Yes (seats 2)</td></tr>}
+          {headTable && <tr><th>Head table</th><td>{headTablePeople} people, {headTableSided === 'two' ? 'both sides' : 'one side'} — {htCount} × 6ft table{htCount !== 1 ? 's' : ''}</td></tr>}
+          {kidsTable && <tr><th>Kids table</th><td>{kidsCount} children</td></tr>}
+          {cocktailTables > 0 && <tr><th>Cocktail tables</th><td>{cocktailTables}</td></tr>}
+        </tbody>
+      </table>
+
+      <h2>Linens</h2>
+      {linenVenueChoice ? (
+        <p>Rixey to choose linens for the couple.</p>
+      ) : (
+        <>
+          <table>
+            <tbody>
+              <tr><th>Tablecloth colour</th><td>{LINEN_COLORS.find(c => c.id === linenColor)?.name}</td></tr>
+              <tr><th>Napkin colour</th><td>{LINEN_COLORS.find(c => c.id === napkinColor)?.name}</td></tr>
+              <tr><th>Runner / overlay</th><td>{RUNNER_STYLES.find(r => r.key === runnerStyle)?.label || '—'}</td></tr>
+              <tr><th>Charger plates</th><td>{chargersOn ? `Yes — ${guestCount} needed` : 'No'}</td></tr>
+            </tbody>
+          </table>
+          <h3>Tablecloth sizes to order</h3>
+          <table>
+            <thead><tr><th>Size</th><th>Quantity</th><th>For</th></tr></thead>
+            <tbody>
+              {linenRows.map((r, i) => (
+                <tr key={i}><td>{r.label}</td><td>{r.qty}</td><td>{r.note}</td></tr>
+              ))}
+              {extraTablesLinenCount > 0 && (
+                <tr><td>Match dining</td><td>{extraTablesLinenCount}</td><td>Additional tables</td></tr>
+              )}
+            </tbody>
+          </table>
+          {linenNotes && (<><h3>Linen notes</h3><p>{linenNotes}</p></>)}
+        </>
+      )}
+
+      <h2>Layout</h2>
+      <table>
+        <tbody>
+          <tr><th>Dance floor</th><td>{checkeredDanceFloor ? 'Chequered rental (12×12 or 12×16 ft)' : 'House floor'}</td></tr>
+          <tr><th>Lounge area</th><td>{loungeArea ? 'Yes (~10×12 ft)' : 'No'}</td></tr>
+        </tbody>
+      </table>
+
+      {selectedExtraTables.length > 0 && (
+        <>
+          <h2>Additional Tables</h2>
+          <ul>
+            {selectedExtraTables.map((t, i) => (
+              <li key={i}>{t.name}{t.count > 1 ? ` × ${t.count}` : ''}</li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {centerpieceNotes && (<><h2>Centrepieces</h2><p>{centerpieceNotes}</p></>)}
+      {layoutNotes && (<><h2>Layout Notes</h2><p>{layoutNotes}</p></>)}
+    </div>
+    </>
   )
 }

@@ -73,3 +73,31 @@
     font-size: 16px !important; /* Prevents zoom on iOS */
   }
 }
+
+/* Print-only content (Table Layout Planner A4 export, etc.) */
+.tlp-print-only { display: none; }
+
+@media print {
+  @page { size: A4; margin: 1.5cm; }
+  html, body { background: #fff !important; color: #000 !important; }
+  .tlp-screen-only { display: none !important; }
+  .tlp-print-only { display: block !important; }
+  .tlp-print-only * { color: #000 !important; }
+  .tlp-print-only h1 { font-size: 22pt; margin: 0 0 4pt 0; }
+  .tlp-print-only h2 { font-size: 14pt; margin: 14pt 0 4pt 0; border-bottom: 1px solid #000; padding-bottom: 2pt; }
+  .tlp-print-only h3 { font-size: 11pt; margin: 8pt 0 2pt 0; }
+  .tlp-print-only p, .tlp-print-only li, .tlp-print-only td, .tlp-print-only th {
+    font-size: 10pt; line-height: 1.45;
+  }
+  .tlp-print-only table { width: 100%; border-collapse: collapse; margin-top: 4pt; }
+  .tlp-print-only th, .tlp-print-only td { border: 1px solid #000; padding: 4pt 6pt; text-align: left; }
+  .tlp-print-only th { background: #eee; }
+  .tlp-print-only .tlp-grid {
+    display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 8pt; margin-top: 6pt;
+  }
+  .tlp-print-only .tlp-stat {
+    border: 1px solid #000; padding: 6pt; text-align: center;
+  }
+  .tlp-print-only .tlp-stat .n { font-size: 20pt; font-weight: 700; display: block; }
+  .tlp-print-only .tlp-stat .l { font-size: 9pt; text-transform: uppercase; letter-spacing: 0.5pt; }
+}
