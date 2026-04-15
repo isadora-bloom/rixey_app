@@ -1344,7 +1344,7 @@ export default function AdminWeddingProfile({
               )}
 
               {activeTab === 'bar' && (
-                <BarPlanner weddingId={viewingWedding.id} guestCount={viewingWedding.guest_count} weddingDate={viewingWedding.wedding_date} coupleNames={viewingWedding.couple_names} />
+                <BarPlanner weddingId={viewingWedding.id} guestCount={viewingWedding.guest_count} weddingDate={viewingWedding.wedding_date} coupleNames={viewingWedding.couple_names} isAdmin />
               )}
 
               {activeTab === 'budget' && (

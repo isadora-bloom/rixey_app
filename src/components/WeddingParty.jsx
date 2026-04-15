@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
 import { authHeaders } from '../utils/api'
+import { supabase } from '../lib/supabase'
 
 
 // ── Role suggestions — no gender or family-structure assumptions ───────────────
@@ -388,35 +389,48 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
     setLoading(true)
     try {
       const hdrs = await authHeaders()
-      const [membersRes, guestsRes, photosRes, ceremonyRes, weddingRes] = await Promise.all([
+      const [membersRes, guestsRes, photosRes, ceremonyRes] = await Promise.all([
         fetch(`${API_URL}/api/wedding-party/${weddingId}`, { headers: hdrs }),
         fetch(`${API_URL}/api/guests/${weddingId}`, { headers: hdrs }),
         fetch(`${API_URL}/api/wedding-photos/${weddingId}`, { headers: hdrs }),
         fetch(`${API_URL}/api/ceremony-order/${weddingId}`, { headers: hdrs }),
-        fetch(`${API_URL}/api/weddings/${weddingId}`, { headers: hdrs }),
       ])
 
-      const [membersData, guestsData, photosData, ceremonyData, weddingData] = await Promise.all([
-        membersRes.json(),
-        guestsRes.json(),
-        photosRes.json(),
-        ceremonyRes.json(),
-        weddingRes.json(),
+      const safeJson = async (res) => {
+        if (!res.ok) return null
+        try { return await res.json() } catch { return null }
+      }
+
+      const [membersData, guestsData, photosData, ceremonyData] = await Promise.all([
+        safeJson(membersRes),
+        safeJson(guestsRes),
+        safeJson(photosRes),
+        safeJson(ceremonyRes),
       ])
 
       setMembers(Array.isArray(membersData) ? membersData : [])
 
-      const guestList = guestsData.guests || guestsData || []
+      const guestList = guestsData?.guests || guestsData || []
       // Exclude guests already in wedding party
       const memberGuestIds = new Set((Array.isArray(membersData) ? membersData : []).map(m => m.guest_id).filter(Boolean))
-      setGuests(guestList.filter(g => !memberGuestIds.has(g.id)))
+      setGuests(Array.isArray(guestList) ? guestList.filter(g => !memberGuestIds.has(g.id)) : [])
 
       setPhotos(Array.isArray(photosData) ? photosData : [])
       setExistingCeremony(Array.isArray(ceremonyData) ? ceremonyData : [])
 
-      if (weddingData && !p1Prop) {
-        setPartner1(weddingData.partner1_name || '')
-        setPartner2(weddingData.partner2_name || '')
+      // Partner names come straight from Supabase — the backend doesn't
+      // expose a GET /api/weddings/:id route, and the prior code was
+      // 404-ing, returning an HTML page, and crashing loadAll on .json().
+      if (!p1Prop) {
+        const { data: weddingRow } = await supabase
+          .from('weddings')
+          .select('partner1_name, partner2_name')
+          .eq('id', weddingId)
+          .single()
+        if (weddingRow) {
+          setPartner1(weddingRow.partner1_name || '')
+          setPartner2(weddingRow.partner2_name || '')
+        }
       }
     } catch (err) {
       console.error('Failed to load wedding party:', err)

@@ -349,8 +349,10 @@ function ShoppingRow({ item, onToggle, onDelete, onUpdate }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function BarPlanner({ weddingId, guestCount: guestCountProp, weddingDate, coupleNames }) {
-  const [tab, setTab]     = useState('calculator')
+export default function BarPlanner({ weddingId, guestCount: guestCountProp, weddingDate, coupleNames, isAdmin = false }) {
+  // Admin lands on the shopping list so they immediately see what the
+  // couple has actually bought, not an empty calculator.
+  const [tab, setTab]     = useState(isAdmin ? 'list' : 'calculator')
   const [items, setItems] = useState([])
   const [recipes, setRecipes] = useState([])
   const [loading, setLoading] = useState(true)
