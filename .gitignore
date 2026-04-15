@@ -30,3 +30,10 @@ dist-ssr
 
 # Server logs
 server/*.log
+
+.vercel
+.env*.local
+
+# Playwright
+test-results/
+playwright-report/
