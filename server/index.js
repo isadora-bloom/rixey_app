@@ -2099,6 +2099,26 @@ Return ONLY a valid JSON array like: [{"category": "vendor", "content": "Caterer
   }
 });
 
+// List all contracts for a wedding (extracted docs + vendor contract URLs)
+app.get('/api/contracts/:weddingId', async (req, res) => {
+  try {
+    const { weddingId } = req.params;
+    const [{ data: contracts }, { data: vendors }] = await Promise.all([
+      supabaseAdmin.from('contracts')
+        .select('id, filename, file_type, extracted_text, created_at')
+        .eq('wedding_id', weddingId)
+        .order('created_at', { ascending: false }),
+      supabaseAdmin.from('vendor_checklist')
+        .select('id, vendor_type, vendor_name, contract_url, contract_date')
+        .eq('wedding_id', weddingId)
+        .eq('contract_uploaded', true),
+    ]);
+    res.json({ contracts: contracts || [], vendorContracts: vendors || [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Ask questions about contracts AND planning notes
 app.post('/api/ask-contracts', async (req, res) => {
   try {
