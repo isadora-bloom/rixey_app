@@ -181,6 +181,7 @@ export default function TableCanvas({ weddingId, isAdmin }) {
   const [stageH, setStageH] = useState(480)
   const [zoom, setZoom]   = useState(null) // null = not yet calculated
   const [pos, setPos]     = useState({ x: 0, y: 0 })
+  const [planRotation, setPlanRotation] = useState(0) // 0, 90, 180, 270
 
   const [floorImg, setFloorImg]   = useState(null)
   const [elements, setElements]   = useState([])
@@ -200,20 +201,26 @@ export default function TableCanvas({ weddingId, isAdmin }) {
     img.onload = () => setFloorImg(img)
   }, [])
 
+  // Effective image dimensions based on rotation
+  const isLandscape = planRotation % 180 === 0
+  const effectiveW = isLandscape ? IMAGE_W : IMAGE_H
+  const effectiveH = isLandscape ? IMAGE_H : IMAGE_W
+
   // Size stage to container width (maintain image aspect ratio)
   useEffect(() => {
     const update = () => {
       if (!containerRef.current) return
       const w = containerRef.current.offsetWidth
-      const h = Math.round(w * IMAGE_H / IMAGE_W)
+      const h = Math.round(w * effectiveH / effectiveW)
       setStageW(w)
       setStageH(h)
-      setZoom(prev => prev ?? w / IMAGE_W) // set fit-scale on first load only
+      setZoom(w / effectiveW)
+      setPos({ x: 0, y: 0 })
     }
     update()
     window.addEventListener('resize', update)
     return () => window.removeEventListener('resize', update)
-  }, [])
+  }, [planRotation]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load saved layout
   useEffect(() => {
@@ -251,7 +258,7 @@ export default function TableCanvas({ weddingId, isAdmin }) {
     setSaving(false)
   }
 
-  const fitScale = stageW / IMAGE_W
+  const fitScale = stageW / effectiveW
   const currentZoom = zoom ?? fitScale
 
   // Place new element in centre of current viewport
@@ -333,6 +340,8 @@ export default function TableCanvas({ weddingId, isAdmin }) {
     setPos({ x: 0, y: 0 })
   }
 
+  const rotatePlan = () => setPlanRotation(r => (r + 90) % 360)
+
   const exportPng = () => {
     const uri = stageRef.current.toDataURL({ pixelRatio: 2 })
     const a = document.createElement('a')
@@ -407,6 +416,9 @@ export default function TableCanvas({ weddingId, isAdmin }) {
 
           {/* Canvas controls (admin) */}
           <div className="flex items-center gap-2 pt-1 border-t border-cream-100">
+            <button onClick={rotatePlan} className="text-xs px-3 py-1.5 rounded-lg border border-cream-200 text-sage-500 hover:bg-cream-50 transition">
+              Rotate 90°
+            </button>
             <button onClick={fitToScreen} className="text-xs px-3 py-1.5 rounded-lg border border-cream-200 text-sage-500 hover:bg-cream-50 transition">
               Fit Screen
             </button>
@@ -438,6 +450,9 @@ export default function TableCanvas({ weddingId, isAdmin }) {
       {/* ── Client canvas controls (view only) ── */}
       {!isAdmin && (
         <div className="flex items-center gap-2 mb-3">
+          <button onClick={rotatePlan} className="text-xs px-3 py-1.5 rounded-lg border border-cream-200 text-sage-500 hover:bg-cream-50 transition">
+            Rotate 90°
+          </button>
           <button onClick={fitToScreen} className="text-xs px-3 py-1.5 rounded-lg border border-cream-200 text-sage-500 hover:bg-cream-50 transition">
             Fit Screen
           </button>
@@ -533,21 +548,37 @@ export default function TableCanvas({ weddingId, isAdmin }) {
             onClick={e => { if (e.target === e.target.getStage()) setSelectedId(null) }}
           >
             <Layer>
-              {floorImg && (
-                <KonvaImage image={floorImg} x={0} y={0} width={IMAGE_W} height={IMAGE_H} />
-              )}
+              <Group
+                rotation={planRotation}
+                offsetX={IMAGE_W / 2}
+                offsetY={IMAGE_H / 2}
+                x={effectiveW / 2}
+                y={effectiveH / 2}
+              >
+                {floorImg && (
+                  <KonvaImage image={floorImg} x={0} y={0} width={IMAGE_W} height={IMAGE_H} />
+                )}
+              </Group>
             </Layer>
             <Layer>
-              {elements.map(el => (
-                <TableEl
-                  key={el.id}
-                  el={el}
-                  isSelected={selectedId === el.id}
-                  isAdmin={isAdmin}
-                  onSelect={setSelectedId}
-                  onMove={moveElement}
-                />
-              ))}
+              <Group
+                rotation={planRotation}
+                offsetX={IMAGE_W / 2}
+                offsetY={IMAGE_H / 2}
+                x={effectiveW / 2}
+                y={effectiveH / 2}
+              >
+                {elements.map(el => (
+                  <TableEl
+                    key={el.id}
+                    el={el}
+                    isSelected={selectedId === el.id}
+                    isAdmin={isAdmin}
+                    onSelect={setSelectedId}
+                    onMove={moveElement}
+                  />
+                ))}
+              </Group>
             </Layer>
           </Stage>
         )}
