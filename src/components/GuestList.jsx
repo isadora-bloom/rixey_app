@@ -669,8 +669,9 @@ export default function GuestList({ weddingId, userId }) {
       headers.forEach((h, i) => { obj[h] = values[i] || '' })
       return obj
     }).filter(g => g.first_name || g.firstname || g.name)
-    // Normalise "name" column into first/last
+    // Normalise columns into the guest schema
     const normalised = guests.map(g => {
+      // Name handling
       if (!g.first_name && g.name) {
         const parts = g.name.split(' ')
         g.first_name = parts[0]
@@ -678,6 +679,34 @@ export default function GuestList({ weddingId, userId }) {
       }
       if (!g.first_name && g.firstname) g.first_name = g.firstname
       if (!g.last_name && g.lastname) g.last_name = g.lastname
+
+      // Phone: handle "phone_number" alias
+      if (!g.phone && g.phone_number) g.phone = g.phone_number
+
+      // RSVP: normalise "Accepted"/"Declined" to yes/no/pending
+      if (g.rsvp) {
+        const r = g.rsvp.trim().toLowerCase()
+        if (r === 'accepted' || r === 'attending' || r === 'yes') g.rsvp = 'yes'
+        else if (r === 'declined' || r === 'not attending' || r === 'no') g.rsvp = 'no'
+        else if (r === 'maybe' || r === 'tentative') g.rsvp = 'maybe'
+        else g.rsvp = 'pending'
+      }
+
+      // Build tags from known columns
+      const tags = []
+      // Rehearsal dinner
+      const rehearsalRsvp = g.rehersal_rsvp || g.rehearsal_rsvp || ''
+      const invitedRehearsal = g.invited_to_rehersal || g.invited_to_rehearsal || ''
+      if (rehearsalRsvp.trim().toLowerCase() === 'accepted' || invitedRehearsal.trim().toLowerCase() === 'yes') {
+        tags.push('Rehearsal Dinner')
+      }
+      // Shuttle
+      const shuttle = g.shuttle || ''
+      if (shuttle.trim().toLowerCase() === 'yes') {
+        tags.push('Shuttle')
+      }
+      g.tags = tags
+
       return g
     })
     try {

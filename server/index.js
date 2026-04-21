@@ -7109,9 +7109,26 @@ app.post('/api/guests/bulk', async (req, res) => {
       address: g.address || null,
       rsvp: g.rsvp || 'pending',
       dietary_restrictions: g.dietary_restrictions || g.dietary || null,
-      tags: [],
+      tags: Array.isArray(g.tags) ? g.tags : [],
+      notes: g.notes || null,
       updated_at: new Date().toISOString(),
     })).filter(g => g.first_name.trim());
+    // Auto-create any tag options that don't exist yet
+    const allTags = [...new Set(rows.flatMap(r => r.tags))].filter(Boolean);
+    if (allTags.length > 0) {
+      const { data: existingTags } = await supabaseAdmin
+        .from('guest_tag_options')
+        .select('label')
+        .eq('wedding_id', weddingId);
+      const existingLabels = new Set((existingTags || []).map(t => t.label));
+      const newTags = allTags.filter(t => !existingLabels.has(t));
+      if (newTags.length > 0) {
+        await supabaseAdmin.from('guest_tag_options').insert(
+          newTags.map(label => ({ wedding_id: weddingId, label, color: '#9CA3AF' }))
+        );
+      }
+    }
+
     const { data, error } = await supabaseAdmin
       .from('wedding_guests')
       .insert(rows)
