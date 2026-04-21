@@ -465,9 +465,6 @@ export default function AdminWeddingProfile({
               {/* Overview Tab */}
               {activeTab === 'overview' && (
                 <div className="space-y-5">
-                  {/* Communication Pulse */}
-                  <CommunicationPulse pulse={weddingPulse} />
-
                   {/* Stats Row */}
                   <div className="grid grid-cols-4 gap-2 sm:gap-3">
                     <div className="bg-sage-50 rounded-xl p-2 sm:p-3 text-center">
