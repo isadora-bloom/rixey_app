@@ -429,9 +429,9 @@ function Divider({ t }) {
 
 // ── Section wrapper ───────────────────────────────────────────────────────────
 
-function Section({ t, alt, children, id }) {
+function Section({ t, alt, children, id, style }) {
   return (
-    <section id={id} className={`py-16 px-6 ${alt ? t.altSection : t.section}`}>
+    <section id={id} className={`py-16 px-6 ${alt ? t.altSection : t.section}`} style={style}>
       <FadeIn>
         <div className="max-w-3xl mx-auto">{children}</div>
       </FadeIn>
@@ -886,22 +886,35 @@ export default function WeddingWebsite() {
   // Hero pre-text
   const heroPretext = settings.hero_pretext || DEFAULT_HERO_PRETEXT[settings.theme || 'warm'] || 'You are invited to celebrate'
 
-  // Build visible sections list for StickyNav
-  const visibleSections = []
-  if (settings.show_story && settings.our_story) visibleSections.push({ id: 'story', label: 'Our Story' })
-  if (settings.show_proposal !== false && settings.the_proposal) visibleSections.push({ id: 'proposal', label: 'Proposal' })
-  if (settings.show_schedule && (settings.ceremony_time || settings.reception_time)) visibleSections.push({ id: 'schedule', label: 'The Day' })
-  if (settings.show_wedding_party && party.length > 0) visibleSections.push({ id: 'party', label: 'Wedding Party' })
-  if (settings.show_dress_code && settings.dress_code) visibleSections.push({ id: 'dresscode', label: 'Dress Code' })
-  visibleSections.push({ id: 'venue', label: 'Getting There' })
-  if (settings.show_transport && shuttle.length > 0) visibleSections.push({ id: 'transport', label: 'Transport' })
-  if (settings.show_accommodations && accommodations.length > 0) visibleSections.push({ id: 'stay', label: 'Stay' })
-  if (settings.show_things_to_do && settings.things_to_do?.length > 0) visibleSections.push({ id: 'thingstodo', label: 'Things to Do' })
-  if (settings.show_registry && settings.registry_links?.length > 0) visibleSections.push({ id: 'registry', label: 'Registry' })
-  if (settings.kids_policy || settings.plus_one_policy || settings.signature_cocktail) visibleSections.push({ id: 'details', label: 'Details' })
-  if (settings.show_faq && settings.faq_items?.length > 0) visibleSections.push({ id: 'faq', label: 'FAQ' })
-  if (settings.show_rsvp !== false) visibleSections.push({ id: 'rsvp', label: 'RSVP' })
-  if (settings.show_gallery && galleryPhotos.length > 0) visibleSections.push({ id: 'gallery', label: 'Gallery' })
+  // Section order: map toggle key to its position in the couple's saved order
+  const DEFAULT_ORDER = [
+    'show_story','show_proposal','show_schedule','show_wedding_party',
+    'show_dress_code','show_transport','show_accommodations',
+    'show_things_to_do','show_registry','show_faq','show_rsvp','show_gallery'
+  ]
+  const order = settings.section_order?.length ? settings.section_order : DEFAULT_ORDER
+  const sectionPos = (key) => {
+    const idx = order.indexOf(key)
+    return idx >= 0 ? idx : 99
+  }
+
+  // Build visible sections list for StickyNav (sorted by section_order)
+  const navCandidates = []
+  if (settings.show_story && settings.our_story) navCandidates.push({ id: 'story', label: 'Our Story', key: 'show_story' })
+  if (settings.show_proposal !== false && settings.the_proposal) navCandidates.push({ id: 'proposal', label: 'Proposal', key: 'show_proposal' })
+  if (settings.show_schedule && (settings.ceremony_time || settings.reception_time)) navCandidates.push({ id: 'schedule', label: 'The Day', key: 'show_schedule' })
+  if (settings.show_wedding_party && party.length > 0) navCandidates.push({ id: 'party', label: 'Wedding Party', key: 'show_wedding_party' })
+  if (settings.show_dress_code && settings.dress_code) navCandidates.push({ id: 'dresscode', label: 'Dress Code', key: 'show_dress_code' })
+  navCandidates.push({ id: 'venue', label: 'Getting There', key: '_venue' })
+  if (settings.show_transport && shuttle.length > 0) navCandidates.push({ id: 'transport', label: 'Transport', key: 'show_transport' })
+  if (settings.show_accommodations && accommodations.length > 0) navCandidates.push({ id: 'stay', label: 'Stay', key: 'show_accommodations' })
+  if (settings.show_things_to_do && settings.things_to_do?.length > 0) navCandidates.push({ id: 'thingstodo', label: 'Things to Do', key: 'show_things_to_do' })
+  if (settings.show_registry && settings.registry_links?.length > 0) navCandidates.push({ id: 'registry', label: 'Registry', key: 'show_registry' })
+  if (settings.kids_policy || settings.plus_one_policy || settings.signature_cocktail) navCandidates.push({ id: 'details', label: 'Details', key: '_details' })
+  if (settings.show_faq && settings.faq_items?.length > 0) navCandidates.push({ id: 'faq', label: 'FAQ', key: 'show_faq' })
+  if (settings.show_rsvp !== false) navCandidates.push({ id: 'rsvp', label: 'RSVP', key: 'show_rsvp' })
+  if (settings.show_gallery && galleryPhotos.length > 0) navCandidates.push({ id: 'gallery', label: 'Gallery', key: 'show_gallery' })
+  const visibleSections = navCandidates.sort((a, b) => sectionPos(a.key) - sectionPos(b.key))
 
   return (
     <div
@@ -1011,12 +1024,15 @@ export default function WeddingWebsite() {
         </div>
       </div>
 
-      {/* ── Sticky mobile section nav ─────────────────────────────────── */}
+      {/* ── Sticky section nav ────────────────────────────────────────── */}
       <StickyNav sections={visibleSections} t={t} />
+
+      {/* ── Sections (flex container respects couple's chosen order) ──── */}
+      <div className="flex flex-col">
 
       {/* ── Our Story ───────────────────────────────────────────────────── */}
       {settings.show_story && settings.our_story && (
-        <Section t={t} id="story">
+        <Section t={t} id="story" style={{ order: sectionPos('show_story') }}>
           <SectionHeading t={t} label="How it started" title="Our Story" />
           <p className={`${t.body} text-center max-w-2xl mx-auto text-lg whitespace-pre-line`}>
             {settings.our_story}
@@ -1026,7 +1042,7 @@ export default function WeddingWebsite() {
 
       {/* ── The Proposal ──────────────────────────────────────────────── */}
       {settings.show_proposal !== false && settings.the_proposal && (
-        <Section t={t} alt id="proposal">
+        <Section t={t} alt id="proposal" style={{ order: sectionPos('show_proposal') }}>
           <SectionHeading t={t} label="The moment" title="The Proposal" />
           <p className={`${t.body} text-center max-w-2xl mx-auto text-lg whitespace-pre-line`}>
             {settings.the_proposal}
@@ -1036,7 +1052,7 @@ export default function WeddingWebsite() {
 
       {/* ── The Day ─────────────────────────────────────────────────────── */}
       {settings.show_schedule && (settings.ceremony_time || settings.reception_time) && (
-        <Section t={t} alt id="schedule">
+        <Section t={t} alt id="schedule" style={{ order: sectionPos('show_schedule') }}>
           <SectionHeading t={t} label={formatDate(wedding.wedding_date)} title="The Day" />
           <div className="grid sm:grid-cols-2 gap-6 max-w-lg mx-auto">
             {settings.ceremony_time && (
@@ -1071,7 +1087,7 @@ export default function WeddingWebsite() {
           section of the client dashboard (WeddingPartyBuilder component).
           They flow through as party[].blurb and are rendered below each member. */}
       {settings.show_wedding_party && party.length > 0 && (
-        <Section t={t} id="party">
+        <Section t={t} id="party" style={{ order: sectionPos('show_wedding_party') }}>
           <SectionHeading t={t} label="The people standing beside us" title="Wedding Party" />
 
           {/* Group by group_label */}
@@ -1123,7 +1139,7 @@ export default function WeddingWebsite() {
 
       {/* ── Dress Code ───────────────────────────────────────────────────── */}
       {settings.show_dress_code && settings.dress_code && (
-        <Section t={t} alt id="dresscode">
+        <Section t={t} alt id="dresscode" style={{ order: sectionPos('show_dress_code') }}>
           <SectionHeading t={t} label="What to wear" title="Dress Code" />
           <div className="text-center">
             <span className={`${t.badge} ww-badge text-lg px-6 py-2 inline-block mb-4`}>
@@ -1144,7 +1160,7 @@ export default function WeddingWebsite() {
       )}
 
       {/* ── Getting There ────────────────────────────────────────────────── */}
-      <Section t={t} id="venue">
+      <Section t={t} id="venue" style={{ order: 50 }}>
         <SectionHeading t={t} label={venue.venue_name || 'The Venue'} title="Getting There" />
         <div className={`${t.card} p-6 sm:p-8 max-w-lg mx-auto text-center`}>
           <p className={`${t.heading} text-xl mb-1`}>{venue.venue_name || 'The Venue'}</p>
@@ -1251,7 +1267,7 @@ export default function WeddingWebsite() {
 
       {/* ── Transportation ───────────────────────────────────────────────── */}
       {settings.show_transport && shuttle.length > 0 && (
-        <Section t={t} alt id="transport">
+        <Section t={t} alt id="transport" style={{ order: sectionPos('show_transport') }}>
           <SectionHeading t={t} label="Getting around" title="Transportation" />
           <div className="space-y-4 max-w-lg mx-auto">
             {shuttle.map((run, i) => (
@@ -1284,7 +1300,7 @@ export default function WeddingWebsite() {
 
       {/* ── Where to Stay ────────────────────────────────────────────────── */}
       {settings.show_accommodations && accommodations.length > 0 && (
-        <Section t={t} id="stay">
+        <Section t={t} id="stay" style={{ order: sectionPos('show_accommodations') }}>
           <SectionHeading t={t} label="Places to rest" title="Where to Stay" />
           <div className="grid sm:grid-cols-2 gap-4">
             {accommodations.map(a => (
@@ -1307,7 +1323,7 @@ export default function WeddingWebsite() {
 
       {/* ── Things to Do ──────────────────────────────────────────────── */}
       {settings.show_things_to_do && settings.things_to_do?.length > 0 && (
-        <Section t={t} alt id="thingstodo">
+        <Section t={t} alt id="thingstodo" style={{ order: sectionPos('show_things_to_do') }}>
           <SectionHeading t={t} label="While you're here" title="Things to Do Nearby" />
           <div className="grid sm:grid-cols-2 gap-4">
             {settings.things_to_do.filter(item => item.name).map((item, i) => (
@@ -1346,7 +1362,7 @@ export default function WeddingWebsite() {
 
       {/* ── Registry ────────────────────────────────────────────────────── */}
       {settings.show_registry && settings.registry_links?.length > 0 && (
-        <Section t={t} alt id="registry">
+        <Section t={t} alt id="registry" style={{ order: sectionPos('show_registry') }}>
           <SectionHeading t={t} label="If you'd like to give a gift" title="Registry" />
           <div className="flex flex-wrap gap-4 justify-center">
             {settings.registry_links.filter(r => r.url).map((r, i) => (
@@ -1366,7 +1382,7 @@ export default function WeddingWebsite() {
 
       {/* ── Policies ────────────────────────────────────────────────────── */}
       {(settings.kids_policy || settings.plus_one_policy || settings.signature_cocktail) && (
-        <Section t={t} id="details">
+        <Section t={t} id="details" style={{ order: 51 }}>
           <SectionHeading t={t} label="Good to know" title="A few details" />
           <div className="space-y-4 max-w-lg mx-auto">
             {settings.signature_cocktail && (
@@ -1402,7 +1418,7 @@ export default function WeddingWebsite() {
 
       {/* ── FAQ ─────────────────────────────────────────────────────────── */}
       {settings.show_faq && settings.faq_items?.length > 0 && (
-        <Section t={t} alt id="faq">
+        <Section t={t} alt id="faq" style={{ order: sectionPos('show_faq') }}>
           <SectionHeading t={t} label="Questions?" title="FAQ" />
           <div className="max-w-lg mx-auto space-y-5">
             {settings.faq_items.filter(f => f.question).map((item, i) => (
@@ -1417,6 +1433,7 @@ export default function WeddingWebsite() {
 
       {/* ── RSVP ────────────────────────────────────────────────────────── */}
       {settings.show_rsvp !== false && (
+        <div style={{ order: sectionPos('show_rsvp') }}>
         <RsvpSection
           t={t}
           slug={slug}
@@ -1424,11 +1441,12 @@ export default function WeddingWebsite() {
           platedMeal={wedding.plated_meal}
           mealOptions={meal_options || []}
         />
+        </div>
       )}
 
       {/* ── Gallery ─────────────────────────────────────────────────────── */}
       {settings.show_gallery && galleryPhotos.length > 0 && (
-        <Section t={t} id="gallery">
+        <Section t={t} id="gallery" style={{ order: sectionPos('show_gallery') }}>
           <SectionHeading t={t} label="Photos" title="Gallery" />
           <div className={`grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3`}>
             {galleryPhotos.map((p, idx) => (
@@ -1455,7 +1473,9 @@ export default function WeddingWebsite() {
         </Section>
       )}
 
-      {/* ── Gallery Lightbox ──────────────────────────────────────────── */}
+      </div>{/* close flex-col section order container */}
+
+      {/* ── Gallery Lightbox ─────────────────────────────���────────────── */}
       {lightboxOpen && galleryPhotos.length > 0 && (
         <Lightbox
           photos={galleryPhotos}
