@@ -28,6 +28,7 @@ import TableCanvas from '../../components/TableCanvas'
 import UsageStats from '../../components/UsageStats'
 import DirectMessagesPanel from './DirectMessagesPanel'
 import ContractPanel from './ContractPanel'
+import WeddingCompleteness from './WeddingCompleteness'
 import { ESCALATION_KEYWORDS, getLastActivity, getCategoryIcon, getCategoryLabel } from './adminUtils'
 
 export default function AdminWeddingProfile({
@@ -328,6 +329,7 @@ export default function AdminWeddingProfile({
                 {[
                   { tab: 'overview', label: 'Overview', icon: '/icons/overview.svg' },
                   { section: 'Planning' },
+                  { tab: 'completeness', label: 'File Completeness', icon: '/icons/checklist.svg' },
                   { tab: 'notes', label: 'Planning Notes', icon: '/icons/planning-notes.svg', badge: planningNotes.filter(n => n.status === 'pending').length },
                   { tab: 'wedding-details', label: 'Wedding Details', icon: '/icons/overview.svg' },
                   { tab: 'allergies', label: 'Allergy Registry', icon: '/icons/guest-care.svg' },
@@ -416,6 +418,7 @@ export default function AdminWeddingProfile({
                   className="w-full p-3 border border-cream-200 rounded-lg bg-cream-50 text-sage-700 font-medium focus:outline-none focus:ring-2 focus:ring-sage-300"
                 >
                   <option value="overview">Overview</option>
+                  <option value="completeness">File Completeness</option>
                   <option value="notes">
                     Planning Notes {planningNotes.filter(n => n.status === 'pending').length > 0 ? `(${planningNotes.filter(n => n.status === 'pending').length})` : ''}
                   </option>
@@ -449,6 +452,15 @@ export default function AdminWeddingProfile({
                   <option value="api-usage">API Usage</option>
                 </select>
               </div>
+
+              {/* File Completeness Tab */}
+              {activeTab === 'completeness' && (
+                <WeddingCompleteness
+                  weddingId={viewingWedding.id}
+                  wedding={viewingWedding}
+                  onSwitchTab={setActiveTab}
+                />
+              )}
 
               {/* Overview Tab */}
               {activeTab === 'overview' && (
