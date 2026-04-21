@@ -82,7 +82,8 @@ function TableEl({ el, isSelected, isAdmin, onSelect, onMove }) {
   const h = ft(el.feetH)
   const haloExtra = ft(CHAIR_CLEARANCE_FT)
   const isTable = el.type === 'round' || el.type === 'rect'
-  const fontSize = Math.max(14, ft(0.7))
+  const fontSize = Math.max(16, ft(0.85))
+  const seatsFontSize = Math.max(13, ft(0.65))
   const strokeColor = isSelected ? '#C9748A' : '#55555566'
   const strokeWidth = isSelected ? ft(0.12) : ft(0.06)
 
@@ -152,7 +153,8 @@ function TableEl({ el, isSelected, isAdmin, onSelect, onMove }) {
         width={w}
         align="center"
         fontSize={fontSize}
-        fill="#333"
+        fontStyle="bold"
+        fill="#000"
         listening={false}
       />
       {el.capacity > 0 && (
@@ -162,8 +164,9 @@ function TableEl({ el, isSelected, isAdmin, onSelect, onMove }) {
           y={fontSize * 0.35}
           width={w}
           align="center"
-          fontSize={Math.max(11, ft(0.52))}
-          fill="#888"
+          fontSize={seatsFontSize}
+          fontStyle="bold"
+          fill="#333"
           listening={false}
         />
       )}
@@ -193,6 +196,11 @@ export default function TableCanvas({ weddingId, isAdmin }) {
   // Toolbar UI state
   const [showRectPicker, setShowRectPicker] = useState(false)
   const [blockPrompt, setBlockPrompt]       = useState(null) // preset being configured
+
+  // Crop-export state
+  const [cropMode, setCropMode] = useState(false)
+  const [cropStart, setCropStart] = useState(null)
+  const [cropRect, setCropRect]   = useState(null)
 
   // Load floor plan image
   useEffect(() => {
@@ -343,11 +351,61 @@ export default function TableCanvas({ weddingId, isAdmin }) {
   const rotatePlan = () => setPlanRotation(r => (r + 90) % 360)
 
   const exportPng = () => {
-    const uri = stageRef.current.toDataURL({ pixelRatio: 2 })
+    const uri = stageRef.current.toDataURL({ pixelRatio: 4 })
     const a = document.createElement('a')
     a.download = 'table-layout.png'
     a.href = uri
     a.click()
+  }
+
+  // Crop-export: download just the selected region at high res
+  const exportCrop = (rect) => {
+    // rect is in stage (screen) coords. Convert to content coords for toDataURL.
+    const uri = stageRef.current.toDataURL({
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height,
+      pixelRatio: 4,
+    })
+    const a = document.createElement('a')
+    a.download = 'table-layout-crop.png'
+    a.href = uri
+    a.click()
+    setCropMode(false)
+    setCropRect(null)
+    setCropStart(null)
+  }
+
+  const handleCropMouseDown = (e) => {
+    if (!cropMode) return
+    const stage = stageRef.current
+    const pointer = stage.getPointerPosition()
+    setCropStart(pointer)
+    setCropRect(null)
+  }
+
+  const handleCropMouseMove = (e) => {
+    if (!cropMode || !cropStart) return
+    const stage = stageRef.current
+    const pointer = stage.getPointerPosition()
+    setCropRect({
+      x: Math.min(cropStart.x, pointer.x),
+      y: Math.min(cropStart.y, pointer.y),
+      width: Math.abs(pointer.x - cropStart.x),
+      height: Math.abs(pointer.y - cropStart.y),
+    })
+  }
+
+  const handleCropMouseUp = () => {
+    if (!cropMode || !cropRect) return
+    if (cropRect.width > 10 && cropRect.height > 10) {
+      exportCrop(cropRect)
+    } else {
+      // Too small, cancel
+      setCropRect(null)
+      setCropStart(null)
+    }
   }
 
   const selectedEl = elements.find(e => e.id === selectedId)
@@ -438,6 +496,12 @@ export default function TableCanvas({ weddingId, isAdmin }) {
               <button onClick={exportPng} className="text-xs px-3 py-1.5 rounded-lg border border-cream-200 text-sage-600 hover:bg-cream-50 transition">
                 Export PNG
               </button>
+              <button
+                onClick={() => { setCropMode(m => !m); setCropRect(null); setCropStart(null) }}
+                className={`text-xs px-3 py-1.5 rounded-lg border transition ${cropMode ? 'border-sage-500 bg-sage-50 text-sage-700' : 'border-cream-200 text-sage-600 hover:bg-cream-50'}`}
+              >
+                {cropMode ? 'Cancel Crop' : 'Crop & Export'}
+              </button>
               <button onClick={save} disabled={saving}
                 className="text-xs px-4 py-1.5 rounded-lg bg-sage-600 text-white hover:bg-sage-700 disabled:opacity-50 transition">
                 {saving ? 'Saving…' : saved ? '✓ Saved' : 'Save Layout'}
@@ -465,6 +529,12 @@ export default function TableCanvas({ weddingId, isAdmin }) {
           <span className="text-xs text-sage-400">{Math.round(currentZoom / fitScale * 100)}%</span>
           <button onClick={exportPng} className="ml-auto text-xs px-3 py-1.5 rounded-lg border border-cream-200 text-sage-600 hover:bg-cream-50 transition">
             Export PNG
+          </button>
+          <button
+            onClick={() => { setCropMode(m => !m); setCropRect(null); setCropStart(null) }}
+            className={`text-xs px-3 py-1.5 rounded-lg border transition ${cropMode ? 'border-sage-500 bg-sage-50 text-sage-700' : 'border-cream-200 text-sage-600 hover:bg-cream-50'}`}
+          >
+            {cropMode ? 'Cancel Crop' : 'Crop & Export'}
           </button>
         </div>
       )}
@@ -523,64 +593,102 @@ export default function TableCanvas({ weddingId, isAdmin }) {
       )}
 
       {/* ── Canvas ── */}
-      <div ref={containerRef} className="border border-cream-200 rounded-xl overflow-hidden bg-[#f9f6f2] cursor-grab active:cursor-grabbing select-none">
+      <div ref={containerRef}
+        className={`border border-cream-200 rounded-xl overflow-hidden bg-[#f9f6f2] select-none relative ${
+          cropMode ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'
+        }`}
+      >
         {loading ? (
           <div className="h-80 flex items-center justify-center">
             <p className="text-sage-400 text-sm">Loading floor plan…</p>
           </div>
         ) : (
-          <Stage
-            ref={stageRef}
-            width={stageW}
-            height={stageH}
-            scaleX={currentZoom}
-            scaleY={currentZoom}
-            x={pos.x}
-            y={pos.y}
-            draggable
-            onWheel={handleWheel}
-            onDragEnd={e => {
-              // Only update pos when the stage itself was dragged, not a child element
-              if (e.target === stageRef.current) {
-                setPos({ x: stageRef.current.x(), y: stageRef.current.y() })
-              }
-            }}
-            onClick={e => { if (e.target === e.target.getStage()) setSelectedId(null) }}
-          >
-            <Layer>
-              <Group
-                rotation={planRotation}
-                offsetX={IMAGE_W / 2}
-                offsetY={IMAGE_H / 2}
-                x={effectiveW / 2}
-                y={effectiveH / 2}
-              >
-                {floorImg && (
-                  <KonvaImage image={floorImg} x={0} y={0} width={IMAGE_W} height={IMAGE_H} />
-                )}
-              </Group>
-            </Layer>
-            <Layer>
-              <Group
-                rotation={planRotation}
-                offsetX={IMAGE_W / 2}
-                offsetY={IMAGE_H / 2}
-                x={effectiveW / 2}
-                y={effectiveH / 2}
-              >
-                {elements.map(el => (
-                  <TableEl
-                    key={el.id}
-                    el={el}
-                    isSelected={selectedId === el.id}
-                    isAdmin={isAdmin}
-                    onSelect={setSelectedId}
-                    onMove={moveElement}
-                  />
-                ))}
-              </Group>
-            </Layer>
-          </Stage>
+          <>
+            <Stage
+              ref={stageRef}
+              width={stageW}
+              height={stageH}
+              scaleX={currentZoom}
+              scaleY={currentZoom}
+              x={pos.x}
+              y={pos.y}
+              draggable={!cropMode}
+              onWheel={handleWheel}
+              onMouseDown={handleCropMouseDown}
+              onMouseMove={handleCropMouseMove}
+              onMouseUp={handleCropMouseUp}
+              onDragEnd={e => {
+                if (e.target === stageRef.current) {
+                  setPos({ x: stageRef.current.x(), y: stageRef.current.y() })
+                }
+              }}
+              onClick={e => { if (!cropMode && e.target === e.target.getStage()) setSelectedId(null) }}
+            >
+              <Layer>
+                <Group
+                  rotation={planRotation}
+                  offsetX={IMAGE_W / 2}
+                  offsetY={IMAGE_H / 2}
+                  x={effectiveW / 2}
+                  y={effectiveH / 2}
+                >
+                  {floorImg && (
+                    <KonvaImage image={floorImg} x={0} y={0} width={IMAGE_W} height={IMAGE_H} />
+                  )}
+                </Group>
+              </Layer>
+              <Layer>
+                <Group
+                  rotation={planRotation}
+                  offsetX={IMAGE_W / 2}
+                  offsetY={IMAGE_H / 2}
+                  x={effectiveW / 2}
+                  y={effectiveH / 2}
+                >
+                  {elements.map(el => (
+                    <TableEl
+                      key={el.id}
+                      el={el}
+                      isSelected={selectedId === el.id}
+                      isAdmin={isAdmin}
+                      onSelect={setSelectedId}
+                      onMove={moveElement}
+                    />
+                  ))}
+                </Group>
+              </Layer>
+              {/* Crop selection overlay rendered in Konva so it exports cleanly */}
+              {cropMode && cropRect && (
+                <Layer listening={false}>
+                  {/* Dim everything outside the selection */}
+                  <Rect x={0} y={0} width={stageW} height={cropRect.y}
+                    fill="rgba(0,0,0,0.35)" scaleX={1/currentZoom} scaleY={1/currentZoom} />
+                  <Rect x={0} y={(cropRect.y + cropRect.height) / currentZoom} width={stageW} height={stageH}
+                    fill="rgba(0,0,0,0.35)" scaleX={1/currentZoom} scaleY={1/currentZoom} />
+                  <Rect x={0} y={cropRect.y / currentZoom} width={cropRect.x / currentZoom} height={cropRect.height / currentZoom}
+                    fill="rgba(0,0,0,0.35)" />
+                  <Rect x={(cropRect.x + cropRect.width) / currentZoom} y={cropRect.y / currentZoom}
+                    width={(stageW - cropRect.x - cropRect.width) / currentZoom} height={cropRect.height / currentZoom}
+                    fill="rgba(0,0,0,0.35)" />
+                </Layer>
+              )}
+            </Stage>
+            {/* HTML overlay for crop rectangle border (not baked into export) */}
+            {cropMode && cropRect && (
+              <div
+                className="absolute border-2 border-dashed border-white pointer-events-none"
+                style={{
+                  left: cropRect.x, top: cropRect.y,
+                  width: cropRect.width, height: cropRect.height,
+                }}
+              />
+            )}
+            {cropMode && (
+              <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-sage-800/80 text-white text-xs px-4 py-2 rounded-full pointer-events-none">
+                Click and drag to select area, then it will download
+              </div>
+            )}
+          </>
         )}
       </div>
 
