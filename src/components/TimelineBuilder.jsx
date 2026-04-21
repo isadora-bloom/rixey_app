@@ -46,7 +46,7 @@ const CEREMONY_EVENTS = [
 ]
 
 const COCKTAIL_EVENTS = [
-  { id: 'cocktail-hour', name: 'Cocktail Hour', icon: '🥂', defaultDuration: 50, description: 'Drinks and appetizers while photos happen', chain: 'cocktail' },
+  { id: 'cocktail-hour', name: 'Cocktail Hour', icon: '🥂', defaultDuration: 60, description: 'Drinks and appetizers while photos happen', chain: 'cocktail' },
   { id: 'remaining-photos', name: 'Remaining Photos', icon: '📸', defaultDuration: 15, description: 'Quick additional photos during cocktail hour', tips: 'Even with first look, some photos may happen here' },
   { id: 'couple-break', name: 'B&G Take A Break', icon: '😮‍💨', defaultDuration: 15, description: 'Couple gets a breather, snack, and moment together' },
   { id: 'sunset-photos', name: 'Sunset / Golden Hour Photos', icon: '🌅', defaultDuration: 20, description: 'Sneak away for magic hour shots', autoTime: true },
@@ -176,13 +176,15 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, isAdmi
   const timeToMinutes = (time) => {
     if (!time) return 0
     const [hours, mins] = time.split(':').map(Number)
+    if (isNaN(hours) || isNaN(mins)) return 0
     return hours * 60 + mins
   }
 
-  // Convert minutes from midnight to time string
+  // Convert minutes from midnight to time string (handles negatives safely)
   const minutesToTime = (minutes) => {
-    const h = Math.floor(minutes / 60) % 24
-    const m = minutes % 60
+    const normalized = ((minutes % 1440) + 1440) % 1440
+    const h = Math.floor(normalized / 60)
+    const m = normalized % 60
     return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`
   }
 
@@ -285,17 +287,10 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, isAdmi
 
     // ========== CALCULATE TIME NEEDED BEFORE CEREMONY ==========
     // Base time: just enough for guests to arrive (15 min)
-    // Add "Put Bride Away" time only if that event is included
+    // NOTE: hide-bride and travel-to-church are placed at fixed offsets
+    // from ceremony time, not sequentially in the prep chain, so they
+    // are NOT included in this backward sum.
     let timeNeededBeforeCeremony = 15 // Minimal buffer for guest arrival
-
-    if (isIncluded('hide-bride')) {
-      timeNeededBeforeCeremony += getDuration('hide-bride') || 30
-    }
-
-    // Add travel time if off-site
-    if (offSite && isIncluded('travel-to-church')) {
-      timeNeededBeforeCeremony += getDuration('travel-to-church')
-    }
 
     // If FIRST LOOK: Add photo time before ceremony
     if (firstLook) {
@@ -304,11 +299,16 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, isAdmi
         if (isIncluded(id)) timeNeededBeforeCeremony += getDuration(id)
       })
 
-      // Add first look events
-      const firstLookChain = ['first-look-dad', 'first-look-groom', 'private-vows']
+      // Add first look events (groom + private vows only; dad is always pre-ceremony)
+      const firstLookChain = ['first-look-groom', 'private-vows']
       firstLookChain.forEach(id => {
         if (isIncluded(id)) timeNeededBeforeCeremony += getDuration(id)
       })
+    }
+
+    // First look with dad is always pre-ceremony regardless of first-look toggle
+    if (isIncluded('first-look-dad')) {
+      timeNeededBeforeCeremony += getDuration('first-look-dad')
     }
 
     // Add bride prep time (always needed)
@@ -334,7 +334,8 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, isAdmi
     })
 
     // ========== WORK FORWARD FROM HAIR & MAKEUP ==========
-    const hairMakeupDoneTime = ceremonyMinutes - timeNeededBeforeCeremony
+    // Floor at 6:00 AM so the timeline never produces absurd pre-dawn times
+    const hairMakeupDoneTime = Math.max(360, ceremonyMinutes - timeNeededBeforeCeremony)
 
     if (shouldCalculate('hair-makeup-done')) {
       calculated['hair-makeup-done'].time = minutesToTime(hairMakeupDoneTime)
@@ -420,10 +421,18 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, isAdmi
       currentTime += getDuration('details-photos')
     }
 
+    // ========== FIRST LOOK WITH DAD — always pre-ceremony ==========
+    if (isIncluded('first-look-dad')) {
+      if (shouldCalculate('first-look-dad')) {
+        calculated['first-look-dad'].time = minutesToTime(currentTime)
+      }
+      currentTime += getDuration('first-look-dad')
+    }
+
     // ========== FIRST LOOK PATH: Photos before ceremony ==========
     if (firstLook) {
-      // First look events
-      const firstLookChain = ['first-look-dad', 'first-look-groom', 'private-vows']
+      // First look with groom + private vows
+      const firstLookChain = ['first-look-groom', 'private-vows']
       firstLookChain.forEach(id => {
         if (isIncluded(id)) {
           if (shouldCalculate(id)) {
@@ -650,7 +659,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, isAdmi
     })
 
     // Dinner starts after before-dinner formalities
-    if (!calculated['dinner']?.manualTime) {
+    if (calculated['dinner'] && !calculated['dinner'].manualTime) {
       calculated['dinner'].time = minutesToTime(beforeDinnerTime)
     }
 
@@ -906,8 +915,9 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, isAdmi
         [id]: {
           ...prev[id],
           [field]: value,
-          // Mark as manual if they're changing the time
-          ...(field === 'time' ? { manualTime: true } : {})
+          // Mark as manual if they're changing the time or duration
+          ...(field === 'time' ? { manualTime: true } : {}),
+          ...(field === 'duration' ? { manualDuration: true } : {})
         }
       }
 
