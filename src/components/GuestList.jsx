@@ -793,6 +793,46 @@ export default function GuestList({ weddingId, userId }) {
     }
   }
 
+  const printFullList = () => {
+    const guestRows = sorted.map(g => `
+      <tr>
+        <td style="padding:4px 8px;white-space:nowrap">${g.first_name} ${g.last_name || ''}</td>
+        <td style="padding:4px 8px">${g.rsvp === 'yes' ? 'Accepted' : g.rsvp === 'no' ? 'Declined' : g.rsvp === 'maybe' ? 'Maybe' : 'Pending'}</td>
+        <td style="padding:4px 8px;font-size:11px">${g.phone || ''}</td>
+        <td style="padding:4px 8px;font-size:11px">${g.email || ''}</td>
+        <td style="padding:4px 8px;font-size:11px;max-width:200px">${g.address || ''}</td>
+        <td style="padding:4px 8px">${g.dietary_restrictions || ''}</td>
+        <td style="padding:4px 8px">${(g.tags || []).join(', ')}</td>
+        <td style="padding:4px 8px">${g.table_assignment || ''}</td>
+        <td style="padding:4px 8px">${g.plus_one_name || ''}</td>
+        <td style="padding:4px 8px;font-size:11px">${g.notes || ''}</td>
+      </tr>`).join('')
+
+    const html = `<!DOCTYPE html><html><head><title>Guest List</title>
+      <style>body{font-family:sans-serif;padding:20px;font-size:12px}
+      h1{font-size:18px;margin-bottom:4px}
+      .stats{color:#666;font-size:13px;margin-bottom:16px}
+      table{width:100%;border-collapse:collapse}
+      th{text-align:left;padding:4px 8px;font-size:10px;color:#666;border-bottom:2px solid #333;text-transform:uppercase}
+      td{border-bottom:1px solid #eee}
+      @media print{button{display:none}@page{size:landscape;margin:1cm}}</style></head>
+      <body>
+      <h1>Guest List</h1>
+      <p class="stats">${totalPeople} total people | ${confirmed} confirmed | ${declined} declined | ${pending + maybe} pending</p>
+      <table>
+        <thead><tr>
+          <th>Name</th><th>RSVP</th><th>Phone</th><th>Email</th><th>Address</th><th>Dietary</th><th>Tags</th><th>Table</th><th>Plus One</th><th>Notes</th>
+        </tr></thead>
+        <tbody>${guestRows}</tbody>
+      </table>
+      </body></html>`
+
+    const w = window.open('', '_blank')
+    w.document.write(html)
+    w.document.close()
+    w.print()
+  }
+
   const printByTable = () => {
     // Group assigned guests by table, sorted by table label
     const groups = {}
@@ -960,14 +1000,21 @@ export default function GuestList({ weddingId, userId }) {
               </svg>
             </button>
             <input ref={csvInputRef} type="file" accept=".csv" className="hidden" onChange={handleCsvUpload} />
+            <button
+              onClick={printFullList}
+              disabled={guests.length === 0}
+              className="flex items-center gap-1.5 border border-sage-300 text-sage-600 px-4 py-2 rounded-xl text-sm font-medium hover:bg-sage-50 disabled:opacity-50 transition"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+              </svg>
+              Print Guest List
+            </button>
             {tableOptions.length > 0 && (
               <button
                 onClick={printByTable}
                 className="flex items-center gap-1.5 border border-sage-300 text-sage-600 px-4 py-2 rounded-xl text-sm font-medium hover:bg-sage-50 transition"
               >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
-                </svg>
                 Print by Table
               </button>
             )}
@@ -1099,6 +1146,7 @@ export default function GuestList({ weddingId, userId }) {
                   {[
                     { label: 'Name', field: 'name' },
                     { label: 'RSVP', field: 'rsvp' },
+                    { label: 'Address', field: null },
                     ...(tableOptions.length > 0 ? [{ label: 'Table', field: 'table' }] : []),
                     { label: 'Tags', field: null },
                     ...(platedMeal ? [{ label: 'Meal', field: 'meal' }] : []),
@@ -1121,12 +1169,25 @@ export default function GuestList({ weddingId, userId }) {
                   <tr key={guest.id} className="border-b border-cream-100 hover:bg-cream-50/60 transition">
                     <td className="px-4 py-3">
                       <p className="font-medium text-sage-800">{guest.first_name} {guest.last_name}</p>
+                      {guest.phone && (
+                        <p className="text-xs text-sage-500 mt-0.5">{guest.phone}</p>
+                      )}
+                      {guest.email && (
+                        <p className="text-xs text-sage-400 truncate max-w-[200px]">{guest.email}</p>
+                      )}
                       {guest.notes && (
-                        <p className="text-xs text-sage-400 truncate max-w-[200px] mt-0.5">{guest.notes}</p>
+                        <p className="text-xs text-sage-400 truncate max-w-[200px] mt-0.5 italic">{guest.notes}</p>
                       )}
                     </td>
                     <td className="px-4 py-3">
                       <RsvpBadge rsvp={guest.rsvp} />
+                    </td>
+                    <td className="px-4 py-3 text-xs text-sage-600 max-w-[180px]">
+                      {guest.address ? (
+                        <span className="line-clamp-2">{guest.address}</span>
+                      ) : (
+                        <span className="text-sage-300">--</span>
+                      )}
                     </td>
                     {tableOptions.length > 0 && (
                       <td className="px-4 py-3">
