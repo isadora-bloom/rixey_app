@@ -7742,6 +7742,16 @@ app.get('/api/w/:slug', async (req, res) => {
 
     if (error || !settings) return res.status(404).json({ error: 'Wedding website not found' });
 
+    // Password-protected: return minimal data until password is verified
+    if (settings.access_password && !previewWeddingId && req.query.pw !== settings.access_password) {
+      const { data: w } = await supabaseAdmin.from('weddings').select('couple_names,wedding_date').eq('id', settings.wedding_id).single();
+      return res.json({
+        passwordRequired: true,
+        settings: { theme: settings.theme, accent_color: settings.accent_color, font_pair: settings.font_pair },
+        wedding: w || {},
+      });
+    }
+
     const weddingId = settings.wedding_id;
 
     const [weddingRes, photosRes, partyRes, shuttleRes, accomRes, detailsRes, venueRes, mealOptionsRes] = await Promise.all([
@@ -7755,8 +7765,10 @@ app.get('/api/w/:slug', async (req, res) => {
       supabaseAdmin.from('guest_meal_options').select('id, label').eq('wedding_id', weddingId).order('created_at'),
     ]);
 
+    // Never send the password to the client
+    const { access_password: _pw, ...safeSettings } = settings;
     res.json({
-      settings,
+      settings: safeSettings,
       wedding: weddingRes.data || {},
       photos: photosRes.data || [],
       party: partyRes.data || [],

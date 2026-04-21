@@ -123,9 +123,11 @@ function CountdownTimer({ dateStr, theme }) {
   const [now, setNow] = useState(new Date())
 
   useEffect(() => {
-    const interval = setInterval(() => setNow(new Date()), 1000)
+    const msLeft = new Date(dateStr + 'T00:00:00') - new Date()
+    const tick = msLeft > 0 && msLeft < 86400000 ? 1000 : 60000
+    const interval = setInterval(() => setNow(new Date()), tick)
     return () => clearInterval(interval)
-  }, [])
+  }, [dateStr])
 
   const target = new Date(dateStr + 'T00:00:00')
   const diff = target - now
@@ -780,35 +782,53 @@ export default function WeddingWebsite() {
 
   const closeLightbox = useCallback(() => setLightboxOpen(false), [])
 
-  const prevPhoto = useCallback(() => {
-    setLightboxIndex(i => i <= 0 ? i : i - 1)
+  const prevPhoto = useCallback((max) => {
+    setLightboxIndex(i => i <= 0 ? max - 1 : i - 1)
   }, [])
 
   const nextPhoto = useCallback((max) => {
-    setLightboxIndex(i => i >= max - 1 ? i : i + 1)
+    setLightboxIndex(i => i >= max - 1 ? 0 : i + 1)
   }, [])
 
-  useEffect(() => {
-    // Support preview mode: /w/slug?preview=weddingId bypasses published check
+  const fetchSite = (pw) => {
     const params = new URLSearchParams(window.location.search)
     const preview = params.get('preview')
-    const apiUrl = preview
+    let apiUrl = preview
       ? `${API_URL}/api/w/${slug}?preview=${preview}`
       : `${API_URL}/api/w/${slug}`
-    fetch(apiUrl)
-      .then(r => { if (!r.ok) throw new Error(); return r.json() })
-      .then(d => { setData(d); setLoading(false) })
+    if (pw) apiUrl += `${apiUrl.includes('?') ? '&' : '?'}pw=${encodeURIComponent(pw)}`
+    return fetch(apiUrl).then(r => { if (!r.ok) throw new Error(); return r.json() })
+  }
+
+  useEffect(() => {
+    const savedPw = sessionStorage.getItem(`wedding_pw_${slug}`)
+    fetchSite(savedPw || undefined)
+      .then(d => {
+        if (d.passwordRequired) {
+          setData(d)
+          setLoading(false)
+        } else {
+          setData(d)
+          setPasswordUnlocked(true)
+          setLoading(false)
+        }
+      })
       .catch(() => { setNotFound(true); setLoading(false) })
   }, [slug])
 
   const handlePasswordSubmit = () => {
-    if (data && passwordInput === data.settings.access_password) {
-      setPasswordUnlocked(true)
-      setPasswordError(false)
-      sessionStorage.setItem(`wedding_pw_${slug}`, 'unlocked')
-    } else {
-      setPasswordError(true)
-    }
+    setPasswordError(false)
+    fetchSite(passwordInput)
+      .then(d => {
+        if (d.passwordRequired) {
+          setPasswordError(true)
+        } else {
+          setData(d)
+          setPasswordUnlocked(true)
+          sessionStorage.setItem(`wedding_pw_${slug}`, passwordInput)
+        }
+      })
+      .catch(() => setPasswordError(true))
   }
 
   if (loading) {
@@ -830,8 +850,8 @@ export default function WeddingWebsite() {
     )
   }
 
-  // Password gate
-  if (data.settings.access_password && !passwordUnlocked) {
+  // Password gate - server withholds full data until password verified
+  if (data.passwordRequired && !passwordUnlocked) {
     return (
       <div className="min-h-screen bg-[#FDFAF6] flex items-center justify-center px-6">
         <div className="bg-white border border-cream-200 rounded-2xl p-8 max-w-sm w-full text-center shadow-sm">
@@ -1212,18 +1232,32 @@ export default function WeddingWebsite() {
           </div>
         </div>
 
-        {/* Map embed — uses the venue's Google Maps URL in an iframe */}
+        {/* Map embed — only works with Google Maps Embed URLs, otherwise shows a link */}
         {venue.google_maps_url && (
           <div className="max-w-lg mx-auto mt-6">
-            <iframe
-              src={venue.google_maps_url}
-              title={`Map to ${venue.venue_name || 'the venue'}`}
-              className="w-full h-64 rounded-xl border border-gray-200"
-              style={{ border: 0 }}
-              allowFullScreen=""
-              loading="lazy"
-              referrerPolicy="no-referrer-when-downgrade"
-            />
+            {venue.google_maps_url.includes('/embed') ? (
+              <iframe
+                src={venue.google_maps_url}
+                title={`Map to ${venue.venue_name || 'the venue'}`}
+                className="w-full h-64 rounded-xl border border-gray-200"
+                style={{ border: 0 }}
+                allowFullScreen=""
+                loading="lazy"
+                referrerPolicy="no-referrer-when-downgrade"
+              />
+            ) : (
+              <a
+                href={venue.google_maps_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`block w-full h-48 rounded-xl border border-gray-200 bg-cream-50 flex items-center justify-center hover:bg-cream-100 transition`}
+              >
+                <div className="text-center">
+                  <span className="text-3xl block mb-2">📍</span>
+                  <p className={`${t.accent} font-medium text-sm`}>View on Google Maps</p>
+                </div>
+              </a>
+            )}
           </div>
         )}
 
@@ -1481,7 +1515,7 @@ export default function WeddingWebsite() {
           photos={galleryPhotos}
           index={lightboxIndex}
           onClose={closeLightbox}
-          onPrev={prevPhoto}
+          onPrev={() => prevPhoto(galleryPhotos.length)}
           onNext={() => nextPhoto(galleryPhotos.length)}
         />
       )}

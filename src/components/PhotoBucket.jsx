@@ -449,7 +449,7 @@ export default function PhotoBucket({ weddingId, readOnly = false }) {
               <p className="text-sage-500 font-medium">Upload your photos</p>
               <p className="text-sage-400 text-sm mt-1">Engagement photos, wedding party portraits, venue inspiration — tag them to control where they appear</p>
             </div>
-            {!readOnly && <p className="text-sage-400 text-xs">Click to browse or drag & drop</p>}
+            {!readOnly && <p className="text-sage-400 text-xs">Click to browse and upload photos</p>}
           </div>
         ) : (
           <div className={`grid gap-2 ${selectedPhoto ? 'grid-cols-2 sm:grid-cols-3' : 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5'}`}>
