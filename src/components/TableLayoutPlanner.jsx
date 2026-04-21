@@ -384,6 +384,19 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
         </div>
       </div>
 
+      {/* Quick summary — visible without scrolling */}
+      <div className="bg-sage-600 text-white rounded-xl px-4 py-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-5">
+            <span className="text-sm"><strong className="text-lg">{totalTables}</strong> guest tables</span>
+            <span className="text-sm"><strong className="text-lg">{cocktailTables + extraTablesCount}</strong> other</span>
+            <span className="text-sm"><strong className="text-lg">{linensNeeded}</strong> cloths</span>
+            <span className="text-sm"><strong className="text-lg">{napkinsNeeded}</strong> napkins</span>
+          </div>
+          <span className="text-sage-200 text-xs">{guestCount} guests · {TABLE_SHAPES.find(s => s.id === tableShape)?.name}</span>
+        </div>
+      </div>
+
       {/* Guest Count */}
       <div className="bg-sage-50 rounded-xl p-4">
         <label className="block text-sage-700 font-medium mb-2">Total Guest Count</label>
