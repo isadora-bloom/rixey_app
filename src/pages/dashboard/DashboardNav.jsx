@@ -22,6 +22,7 @@ const NAV_ITEMS = [
   { key: 'tables', label: 'Tables', icon: '/icons/tables.svg', dotKey: 'tables' },
   { section: 'Day Of' },
   { key: 'ceremony-order', label: 'Ceremony Order', icon: '/icons/timeline.svg' },
+  { key: 'ceremony-chairs', label: 'Ceremony Chairs', icon: '/icons/tables.svg' },
   { key: 'table-map', label: 'Table Map', icon: '/icons/tables.svg' },
   { key: 'staffing', label: 'Staffing Guide', icon: '/icons/staffing-guide.svg' },
   { key: 'bar', label: 'Bar Planner', icon: '/icons/staffing-guide.svg' },
@@ -152,6 +153,7 @@ export default function DashboardNav({
           </optgroup>
           <optgroup label="Day Of">
             <option value="ceremony-order">🎶 Ceremony Order</option>
+            <option value="ceremony-chairs">🪑 Ceremony Chairs</option>
             <option value="table-map">🗺 Table Map</option>
             <option value="staffing">🙋 Staffing Guide</option>
             <option value="bar">🍹 Bar Planner</option>

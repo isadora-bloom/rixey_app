@@ -21,6 +21,7 @@ import WeddingDetails from '../components/WeddingDetails'
 import AllergyRegistry from '../components/AllergyRegistry'
 import BedroomAssignments from '../components/BedroomAssignments'
 import CeremonyOrder from '../components/CeremonyOrder'
+import CeremonyChairPlan from '../components/CeremonyChairPlan'
 import DecorInventory from '../components/DecorInventory'
 import MakeupSchedule from '../components/MakeupSchedule'
 import ShuttleSchedule from '../components/ShuttleSchedule'
@@ -987,6 +988,11 @@ export default function Dashboard() {
               {activeSection === 'ceremony-order' && profile?.wedding_id && (
                 <div className="p-4 sm:p-6">
                   <CeremonyOrder weddingId={profile.wedding_id} userId={user?.id} />
+                </div>
+              )}
+              {activeSection === 'ceremony-chairs' && profile?.wedding_id && (
+                <div className="p-4 sm:p-6">
+                  <CeremonyChairPlan weddingId={profile.wedding_id} userId={user?.id} />
                 </div>
               )}
               {activeSection === 'decor' && profile?.wedding_id && (

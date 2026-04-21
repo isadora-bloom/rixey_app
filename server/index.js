@@ -6946,6 +6946,41 @@ app.post('/api/table-layout', async (req, res) => {
   }
 });
 
+// ─── Ceremony Chair Plan ──────────────────────────────────────────────────────
+
+app.get('/api/ceremony-plan/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('table_layouts')
+      .select('ceremony_plan')
+      .eq('wedding_id', req.params.weddingId)
+      .single();
+    if (error && error.code !== 'PGRST116') throw error;
+    res.json({ plan: data?.ceremony_plan || { rows: [] } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/ceremony-plan/:weddingId', async (req, res) => {
+  try {
+    const { plan } = req.body;
+    const { data, error } = await supabaseAdmin
+      .from('table_layouts')
+      .upsert({
+        wedding_id: req.params.weddingId,
+        ceremony_plan: plan || { rows: [] },
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'wedding_id' })
+      .select('ceremony_plan')
+      .single();
+    if (error) throw error;
+    res.json({ plan: data.ceremony_plan });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Guest Management ──────────────────────────────────────────────────────────
 
 // GET all guests for a wedding

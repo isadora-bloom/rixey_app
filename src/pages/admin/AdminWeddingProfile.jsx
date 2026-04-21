@@ -16,6 +16,7 @@ import WeddingDetails from '../../components/WeddingDetails'
 import AllergyRegistry from '../../components/AllergyRegistry'
 import BedroomAssignments from '../../components/BedroomAssignments'
 import CeremonyOrder from '../../components/CeremonyOrder'
+import CeremonyChairPlan from '../../components/CeremonyChairPlan'
 import DecorInventory from '../../components/DecorInventory'
 import MakeupSchedule from '../../components/MakeupSchedule'
 import ShuttleSchedule from '../../components/ShuttleSchedule'
@@ -331,6 +332,7 @@ export default function AdminWeddingProfile({
                   { tab: 'wedding-details', label: 'Wedding Details', icon: '/icons/overview.svg' },
                   { tab: 'allergies', label: 'Allergy Registry', icon: '/icons/guest-care.svg' },
                   { tab: 'ceremony-order', label: 'Ceremony Order', icon: '/icons/timeline.svg' },
+                  { tab: 'ceremony-chairs', label: 'Ceremony Chairs', icon: '/icons/tables.svg' },
                   { tab: 'decor', label: 'Decor Inventory', icon: '/icons/inspiration.svg' },
                   { tab: 'makeup', label: 'Hair & Makeup', icon: '/icons/upload-photo-of-you-two.svg' },
                   { tab: 'shuttle', label: 'Shuttle Schedule', icon: '/icons/book-a-meeting.svg' },
@@ -427,6 +429,7 @@ export default function AdminWeddingProfile({
                   <option value="meetings">Meetings</option>
                   <option value="direct-messages">Direct Messages</option>
                   <option value="table-map">Table Map</option>
+                  <option value="ceremony-chairs">Ceremony Chairs</option>
                   <option value="timeline">Timeline</option>
                   <option value="tables">Tables</option>
                   <option value="staffing">Staffing Guide</option>
@@ -1137,6 +1140,10 @@ export default function AdminWeddingProfile({
 
               {activeTab === 'ceremony-order' && (
                 <CeremonyOrder weddingId={viewingWedding.id} userId={null} />
+              )}
+
+              {activeTab === 'ceremony-chairs' && (
+                <CeremonyChairPlan weddingId={viewingWedding.id} userId={null} isAdmin />
               )}
 
               {activeTab === 'decor' && (
