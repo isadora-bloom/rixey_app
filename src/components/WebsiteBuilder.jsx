@@ -102,6 +102,9 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
   // RSVP analytics
   const [rsvpCounts, setRsvpCounts] = useState({ total: 0, yes: 0, no: 0, pending: 0 })
 
+  // Data readiness counts for dependent sections
+  const [dataCounts, setDataCounts] = useState({ party: 0, shuttle: 0, photos: 0, websitePhotos: 0, heroPhoto: false })
+
   // Slug collision check
   const [slugStatus, setSlugStatus] = useState('idle') // 'idle' | 'checking' | 'available' | 'taken'
 
@@ -144,20 +147,38 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
 
   useEffect(() => { loadSettings() }, [weddingId])
 
-  // Fetch RSVP counts from guest list
+  // Fetch data readiness counts for dependent sections + RSVP
   useEffect(() => {
     if (!weddingId) return
     ;(async () => {
       try {
-        const res = await fetch(`${API_URL}/api/guests/${weddingId}`, { headers: await authHeaders() })
-        const data = await res.json()
-        const guests = data.guests || []
+        const hdrs = await authHeaders()
+        const [guestsRes, partyRes, shuttleRes, photosRes] = await Promise.all([
+          fetch(`${API_URL}/api/guests/${weddingId}`, { headers: hdrs }),
+          fetch(`${API_URL}/api/wedding-party/${weddingId}`, { headers: hdrs }),
+          fetch(`${API_URL}/api/shuttle/${weddingId}`, { headers: hdrs }),
+          fetch(`${API_URL}/api/wedding-photos/${weddingId}`, { headers: hdrs }),
+        ])
+        const safeJson = async (r) => { try { return r.ok ? await r.json() : null } catch { return null } }
+        const [gData, pData, sData, phData] = await Promise.all([
+          safeJson(guestsRes), safeJson(partyRes), safeJson(shuttleRes), safeJson(photosRes),
+        ])
+        const guests = gData?.guests || gData || []
+        const party = Array.isArray(pData) ? pData : []
+        const shuttles = Array.isArray(sData) ? sData : []
+        const photos = Array.isArray(phData) ? phData : []
         const yes = guests.filter(g => g.rsvp === 'yes').length
-        const no  = guests.filter(g => g.rsvp === 'no').length
-        const pending = guests.length - yes - no
-        setRsvpCounts({ total: guests.length, yes, no, pending })
+        const no = guests.filter(g => g.rsvp === 'no').length
+        setRsvpCounts({ total: guests.length, yes, no, pending: guests.length - yes - no })
+        setDataCounts({
+          party: party.filter(m => m.include_on_website !== false).length,
+          shuttle: shuttles.length,
+          photos: photos.length,
+          websitePhotos: photos.filter(p => p.tags?.includes('website')).length,
+          heroPhoto: photos.some(p => p.tags?.includes('hero')),
+        })
       } catch (err) {
-        console.error('Failed to load RSVP counts:', err)
+        console.error('Failed to load data counts:', err)
       }
     })()
   }, [weddingId])
@@ -378,6 +399,15 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
           <p className="font-medium text-sage-700">Setup</p>
         </div>
         <div className="p-5 space-y-5">
+
+          {/* Hero photo guidance */}
+          <div className={`rounded-lg px-4 py-3 text-sm border ${dataCounts.heroPhoto ? 'bg-green-50 border-green-200 text-green-700' : 'bg-amber-50 border-amber-200 text-amber-700'}`}>
+            {dataCounts.heroPhoto ? (
+              <p>Your hero photo is set. To change it, go to <strong>Photo Library</strong> and tag a different photo "hero".</p>
+            ) : (
+              <p>Upload a photo to <strong>Photo Library</strong> and tag it <strong>"hero"</strong> to set the main image at the top of your website. Photos tagged <strong>"website"</strong> will appear in the gallery section.</p>
+            )}
+          </div>
 
           {/* Theme picker */}
           <div>
@@ -606,6 +636,7 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
             placeholder="How you met, the first date, what made you know…"
             className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 resize-none"
           />
+          <p className="text-xs text-sage-400 mt-1">Use blank lines between paragraphs. Your line breaks will be preserved on the website.</p>
         </div>
         <div>
           <label className="block text-xs font-semibold text-sage-500 uppercase tracking-wide mb-1">The proposal</label>
@@ -616,6 +647,7 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
             placeholder="Where it happened, who was there, the ring…"
             className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 resize-none"
           />
+          <p className="text-xs text-sage-400 mt-1">Use blank lines between paragraphs.</p>
         </div>
       </CollapsibleSection>
 
@@ -937,7 +969,25 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
                   </div>
                   <div>
                     <p className="text-sm font-medium text-sage-700 group-hover:text-sage-900">{toggle.label}</p>
-                    <p className="text-xs text-sage-400">{toggle.note}</p>
+                    <p className="text-xs text-sage-400">
+                      {key === 'show_wedding_party' ? (
+                        dataCounts.party > 0
+                          ? <span className="text-green-600">{dataCounts.party} member{dataCounts.party !== 1 ? 's' : ''} ready</span>
+                          : <span className="text-amber-600">No party members added yet</span>
+                      ) : key === 'show_transport' ? (
+                        dataCounts.shuttle > 0
+                          ? <span className="text-green-600">{dataCounts.shuttle} shuttle run{dataCounts.shuttle !== 1 ? 's' : ''}</span>
+                          : <span className="text-amber-600">No shuttle runs set up</span>
+                      ) : key === 'show_gallery' ? (
+                        dataCounts.websitePhotos > 0
+                          ? <span className="text-green-600">{dataCounts.websitePhotos} photo{dataCounts.websitePhotos !== 1 ? 's' : ''} tagged "website"</span>
+                          : <span className="text-amber-600">Tag photos "website" in Photo Library</span>
+                      ) : key === 'show_rsvp' ? (
+                        rsvpCounts.total > 0
+                          ? <span className="text-green-600">{rsvpCounts.total} guests, {rsvpCounts.yes} confirmed</span>
+                          : <span className="text-amber-600">Add guests first so they can RSVP</span>
+                      ) : toggle.note}
+                    </p>
                   </div>
                 </div>
                 <div
