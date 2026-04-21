@@ -101,6 +101,15 @@ export default function CeremonyChairPlan({ weddingId, userId, isAdmin = false }
 
   if (loading) return <div className="text-sage-500 text-center py-8">Loading ceremony plan...</div>
 
+  // Client view: show placeholder until admin has built a plan
+  if (!isAdmin && rows.length === 0) {
+    return (
+      <div className="bg-cream-50 rounded-2xl border border-cream-200 p-12 text-center">
+        <p className="text-sage-500 text-sm">Your ceremony seating plan will appear here once your coordinator has set it up.</p>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6 max-w-3xl">
       {/* Header */}
@@ -110,8 +119,8 @@ export default function CeremonyChairPlan({ weddingId, userId, isAdmin = false }
           <p className="text-sage-600 text-sm">Visual seating layout for the ceremony</p>
         </div>
         <div className="flex items-center gap-2">
-          {saved && <span className="text-green-600 text-xs">Saved</span>}
-          {saving && <span className="text-sage-400 text-xs">Saving...</span>}
+          {isAdmin && saved && <span className="text-green-600 text-xs">Saved</span>}
+          {isAdmin && saving && <span className="text-sage-400 text-xs">Saving...</span>}
         </div>
       </div>
 
@@ -207,8 +216,8 @@ export default function CeremonyChairPlan({ weddingId, userId, isAdmin = false }
         )}
       </div>
 
-      {/* Row editor */}
-      <div className="border border-cream-200 rounded-xl overflow-hidden">
+      {/* Row editor — admin only */}
+      {isAdmin && <div className="border border-cream-200 rounded-xl overflow-hidden">
         <div className="bg-cream-50 px-4 py-3 border-b border-cream-200 flex items-center justify-between">
           <h3 className="font-medium text-sage-700">Edit Rows</h3>
           <div className="flex gap-2">
@@ -297,10 +306,10 @@ export default function CeremonyChairPlan({ weddingId, userId, isAdmin = false }
             ))}
           </div>
         )}
-      </div>
+      </div>}
 
-      {/* Bulk actions */}
-      {rows.length > 0 && (
+      {/* Bulk actions — admin only */}
+      {isAdmin && rows.length > 0 && (
         <div className="flex items-center gap-3 flex-wrap">
           <span className="text-xs text-sage-500">Set all rows to:</span>
           {[4, 5, 6, 7, 8, 10].map(n => (
