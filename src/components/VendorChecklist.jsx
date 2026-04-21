@@ -14,7 +14,11 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
     vendorName: '',
     vendorContact: '',
     notes: '',
-    isBooked: false
+    isBooked: false,
+    arrivalTime: '',
+    departureTime: '',
+    workedHereBefore: null,
+    instagram: '',
   })
   const [saving, setSaving] = useState(false)
   const [uploadingContract, setUploadingContract] = useState(null)
@@ -77,7 +81,11 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
       vendorName: vendor.vendor_name || '',
       vendorContact: vendor.vendor_contact || '',
       notes: vendor.notes || '',
-      isBooked: vendor.is_booked
+      isBooked: vendor.is_booked,
+      arrivalTime: vendor.arrival_time || '',
+      departureTime: vendor.departure_time || '',
+      workedHereBefore: vendor.worked_here_before ?? null,
+      instagram: vendor.instagram || '',
     })
     setEditingId(vendor.id)
     setShowAddForm(true)
@@ -139,7 +147,11 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
       vendorName: '',
       vendorContact: '',
       notes: '',
-      isBooked: false
+      isBooked: false,
+      arrivalTime: '',
+      departureTime: '',
+      workedHereBefore: null,
+      instagram: '',
     })
     setEditingId(null)
     setShowAddForm(false)
@@ -208,6 +220,29 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
               className="w-full px-3 py-2 rounded-lg border border-cream-300 text-sm"
             />
           </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-sage-600 mb-1">Arrival Time</label>
+              <input type="text" value={formData.arrivalTime}
+                onChange={(e) => setFormData({ ...formData, arrivalTime: e.target.value })}
+                placeholder="e.g. 11:00 AM"
+                className="w-full px-3 py-2 rounded-lg border border-cream-300 text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-sage-600 mb-1">Departure Time</label>
+              <input type="text" value={formData.departureTime}
+                onChange={(e) => setFormData({ ...formData, departureTime: e.target.value })}
+                placeholder="e.g. 8:00 PM"
+                className="w-full px-3 py-2 rounded-lg border border-cream-300 text-sm" />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-sage-600 mb-1">Instagram</label>
+            <input type="text" value={formData.instagram}
+              onChange={(e) => setFormData({ ...formData, instagram: e.target.value })}
+              placeholder="@handle"
+              className="w-full px-3 py-2 rounded-lg border border-cream-300 text-sm" />
+          </div>
           <div>
             <label className="block text-xs font-medium text-sage-600 mb-1">Notes</label>
             <textarea
@@ -218,15 +253,18 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
               className="w-full px-3 py-2 rounded-lg border border-cream-300 text-sm"
             />
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-4 flex-wrap">
             <label className="flex items-center gap-2 text-sm text-sage-700">
-              <input
-                type="checkbox"
-                checked={formData.isBooked}
+              <input type="checkbox" checked={formData.isBooked}
                 onChange={(e) => setFormData({ ...formData, isBooked: e.target.checked })}
-                className="rounded border-cream-300"
-              />
+                className="rounded border-cream-300" />
               Booked/Confirmed
+            </label>
+            <label className="flex items-center gap-2 text-sm text-sage-700">
+              <input type="checkbox" checked={formData.workedHereBefore === true}
+                onChange={(e) => setFormData({ ...formData, workedHereBefore: e.target.checked ? true : null })}
+                className="rounded border-cream-300" />
+              Worked here before
             </label>
           </div>
           <div className="flex gap-2">
@@ -285,6 +323,19 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
                   )}
                   {vendor.vendor_contact && (
                     <p className="text-sage-500 text-sm">{vendor.vendor_contact}</p>
+                  )}
+                  {(vendor.arrival_time || vendor.departure_time) && (
+                    <p className="text-sage-500 text-xs mt-1">
+                      {vendor.arrival_time && `Arrives ${vendor.arrival_time}`}
+                      {vendor.arrival_time && vendor.departure_time && ' · '}
+                      {vendor.departure_time && `Departs ${vendor.departure_time}`}
+                    </p>
+                  )}
+                  {vendor.instagram && (
+                    <p className="text-sage-400 text-xs">{vendor.instagram}</p>
+                  )}
+                  {vendor.worked_here_before && (
+                    <span className="text-xs text-sage-400">Worked here before</span>
                   )}
                   {vendor.notes && (
                     <p className="text-sage-500 text-xs mt-1">{vendor.notes}</p>

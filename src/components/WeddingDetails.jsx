@@ -7,23 +7,46 @@ const CheckIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="no
 
 
 const defaultDetails = {
+  // The Basics
   wedding_colors: '',
   partner1_social: '',
   partner2_social: '',
+  partner1_parents: '',
+  partner1_parents_met: null,
+  partner2_parents: '',
+  partner2_parents_met: null,
+  wedding_party_count_1: '',
+  wedding_party_count_2: '',
   dogs_coming: null,
   dogs_description: '',
+  dog_sitter_name: '',
+  dog_sitter_time: '',
+  // Contract terms
+  contract_checkin: '',
+  contract_checkout: '',
+  contract_max_rehearsal: '',
+  contract_max_wedding: '',
+  contract_overnights: '',
+  contract_rehearsal_hours: '',
+  contract_wedding_hours: '',
+  // Ceremony
   ceremony_location: null,
   arbor_choice: null,
   unity_table: null,
   ceremony_notes: '',
+  // Reception
   seating_method: '',
   providing_table_numbers: null,
   providing_charger_plates: null,
   providing_champagne_glasses: null,
   providing_cake_cutter: null,
+  providing_cake_cutter_notes: '',
   providing_cake_topper: null,
+  high_chairs_needed: null,
+  high_chairs_count: '',
   favors_description: '',
   reception_notes: '',
+  // Send-off
   send_off_type: null,
   send_off_notes: '',
 }
@@ -215,21 +238,105 @@ export default function WeddingDetails({ weddingId, userId }) {
           />
         </FieldRow>
 
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <FieldRow label="Partner 1's parents">
+            <input type="text" value={details.partner1_parents} onChange={setInput('partner1_parents')}
+              placeholder="e.g. Susan and Scott Gibney"
+              className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+            <div className="mt-1.5 flex items-center gap-2">
+              <span className="text-xs text-sage-500">Have we met them?</span>
+              <YesNoToggle value={details.partner1_parents_met} onChange={set('partner1_parents_met')} />
+            </div>
+          </FieldRow>
+          <FieldRow label="Partner 2's parents">
+            <input type="text" value={details.partner2_parents} onChange={setInput('partner2_parents')}
+              placeholder="e.g. Anja Putman, Jay Kennedy"
+              className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+            <div className="mt-1.5 flex items-center gap-2">
+              <span className="text-xs text-sage-500">Have we met them?</span>
+              <YesNoToggle value={details.partner2_parents_met} onChange={set('partner2_parents_met')} />
+            </div>
+          </FieldRow>
+        </div>
+
+        <FieldRow label="Wedding party count (per side)">
+          <div className="flex items-center gap-3">
+            <input type="number" min="0" max="20" value={details.wedding_party_count_1}
+              onChange={setInput('wedding_party_count_1')} placeholder="Side 1"
+              className="w-24 border border-cream-300 rounded-lg px-3 py-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-sage-300" />
+            <span className="text-sage-400">+</span>
+            <input type="number" min="0" max="20" value={details.wedding_party_count_2}
+              onChange={setInput('wedding_party_count_2')} placeholder="Side 2"
+              className="w-24 border border-cream-300 rounded-lg px-3 py-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-sage-300" />
+          </div>
+        </FieldRow>
+
         <FieldRow label="Are dogs coming?">
           <YesNoToggle value={details.dogs_coming} onChange={set('dogs_coming')} />
         </FieldRow>
 
         {details.dogs_coming === true && (
-          <FieldRow label="Breed & name">
-            <input
-              type="text"
-              value={details.dogs_description}
-              onChange={setInput('dogs_description')}
-              placeholder="e.g. Rosie the golden retriever"
-              className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
-            />
-          </FieldRow>
+          <>
+            <FieldRow label="Breed & name">
+              <input type="text" value={details.dogs_description} onChange={setInput('dogs_description')}
+                placeholder="e.g. Captain - Golden Retriever - 4 years old"
+                className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+            </FieldRow>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <FieldRow label="Dog sitter name">
+                <input type="text" value={details.dog_sitter_name} onChange={setInput('dog_sitter_name')}
+                  placeholder="e.g. Piper"
+                  className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+              </FieldRow>
+              <FieldRow label="Dog sitter time">
+                <input type="text" value={details.dog_sitter_time} onChange={setInput('dog_sitter_time')}
+                  placeholder="e.g. 3:45 PM - end of night"
+                  className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+              </FieldRow>
+            </div>
+          </>
         )}
+      </SectionCard>
+
+      {/* Contract Terms */}
+      <SectionCard title="Per Current Contract">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+          <FieldRow label="Check-in time">
+            <input type="text" value={details.contract_checkin} onChange={setInput('contract_checkin')}
+              placeholder="e.g. 3:00 PM Friday"
+              className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+          </FieldRow>
+          <FieldRow label="Check-out time">
+            <input type="text" value={details.contract_checkout} onChange={setInput('contract_checkout')}
+              placeholder="e.g. 1:00 PM Sunday"
+              className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+          </FieldRow>
+          <FieldRow label="Max rehearsal guests">
+            <input type="number" value={details.contract_max_rehearsal} onChange={setInput('contract_max_rehearsal')}
+              placeholder="e.g. 50"
+              className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+          </FieldRow>
+          <FieldRow label="Max wedding guests">
+            <input type="number" value={details.contract_max_wedding} onChange={setInput('contract_max_wedding')}
+              placeholder="e.g. 200"
+              className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+          </FieldRow>
+          <FieldRow label="Overnights booked">
+            <input type="number" value={details.contract_overnights} onChange={setInput('contract_overnights')}
+              placeholder="e.g. 2"
+              className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+          </FieldRow>
+          <FieldRow label="Rehearsal dinner hours">
+            <input type="text" value={details.contract_rehearsal_hours} onChange={setInput('contract_rehearsal_hours')}
+              placeholder="e.g. 4-10 PM"
+              className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+          </FieldRow>
+          <FieldRow label="Wedding day hours">
+            <input type="text" value={details.contract_wedding_hours} onChange={setInput('contract_wedding_hours')}
+              placeholder="e.g. 12-10 PM"
+              className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+          </FieldRow>
+        </div>
       </SectionCard>
 
       {/* Ceremony */}
@@ -298,11 +405,30 @@ export default function WeddingDetails({ weddingId, userId }) {
             value={details.providing_cake_cutter}
             onChange={set('providing_cake_cutter')}
           />
+          {details.providing_cake_cutter === true && (
+            <div className="px-4 pb-2">
+              <input type="text" value={details.providing_cake_cutter_notes} onChange={setInput('providing_cake_cutter_notes')}
+                placeholder="Details (e.g. Dad's sword, silver set, etc.)"
+                className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+            </div>
+          )}
           <SmallYesNoRow
             label="Providing cake topper"
             value={details.providing_cake_topper}
             onChange={set('providing_cake_topper')}
           />
+          <SmallYesNoRow
+            label="High chairs / booster seats needed"
+            value={details.high_chairs_needed}
+            onChange={set('high_chairs_needed')}
+          />
+          {details.high_chairs_needed === true && (
+            <div className="px-4 pb-2">
+              <input type="text" value={details.high_chairs_count} onChange={setInput('high_chairs_count')}
+                placeholder="How many, and at which table?"
+                className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
+            </div>
+          )}
         </div>
 
         <FieldRow label="Favors / guest gifts">

@@ -3631,23 +3631,30 @@ app.get('/api/vendors/:weddingId', async (req, res) => {
 // Create or update vendor
 app.post('/api/vendors', async (req, res) => {
   try {
-    const { id, weddingId, userId, vendorType, vendorName, vendorContact, notes, isBooked } = req.body;
+    const { id, weddingId, userId, vendorType, vendorName, vendorContact, notes, isBooked,
+            arrivalTime, departureTime, workedHereBefore, instagram } = req.body;
 
     if (!weddingId || !vendorType) {
       return res.status(400).json({ error: 'Wedding ID and vendor type required' });
     }
 
+    const vendorFields = {
+      vendor_type: vendorType,
+      vendor_name: vendorName || null,
+      vendor_contact: vendorContact || null,
+      notes: notes || null,
+      is_booked: isBooked || false,
+      arrival_time: arrivalTime || null,
+      departure_time: departureTime || null,
+      worked_here_before: workedHereBefore,
+      instagram: instagram || null,
+    };
+
     if (id) {
       // Update existing
       const { data, error } = await supabaseAdmin
         .from('vendor_checklist')
-        .update({
-          vendor_type: vendorType,
-          vendor_name: vendorName || null,
-          vendor_contact: vendorContact || null,
-          notes: notes || null,
-          is_booked: isBooked || false
-        })
+        .update(vendorFields)
         .eq('id', id)
         .select()
         .single();
@@ -3664,11 +3671,7 @@ app.post('/api/vendors', async (req, res) => {
         .from('vendor_checklist')
         .insert({
           wedding_id: weddingId,
-          vendor_type: vendorType,
-          vendor_name: vendorName || null,
-          vendor_contact: vendorContact || null,
-          notes: notes || null,
-          is_booked: isBooked || false
+          ...vendorFields,
         })
         .select()
         .single();
