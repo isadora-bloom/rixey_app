@@ -85,6 +85,7 @@ function PersonForm({ initial, guests, partner1, partner2, onSave, onCancel }) {
   const [custom, setCustom] = useState('')
   const [group, setGroup]   = useState(initial?.group_label || '')
   const [blurb, setBlurb]   = useState(initial?.blurb || '')
+  const [includeOnWebsite, setIncludeOnWebsite] = useState(initial?.include_on_website !== false)
   const [fromGuest, setFromGuest] = useState(null)
   const [saving, setSaving] = useState(false)
 
@@ -113,6 +114,7 @@ function PersonForm({ initial, guests, partner1, partner2, onSave, onCancel }) {
       group_label: group.trim() || null,
       blurb: blurb.trim() || null,
       guest_id: fromGuest?.id || initial?.guest_id || null,
+      include_on_website: includeOnWebsite,
     })
     setSaving(false)
   }
@@ -228,6 +230,12 @@ function PersonForm({ initial, guests, partner1, partner2, onSave, onCancel }) {
           className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 resize-none"
         />
       </div>
+
+      <label className="flex items-center gap-2 cursor-pointer">
+        <input type="checkbox" checked={includeOnWebsite} onChange={e => setIncludeOnWebsite(e.target.checked)}
+          className="w-4 h-4 rounded border-cream-300 text-sage-600" />
+        <span className="text-sm text-sage-700">Show on wedding website</span>
+      </label>
 
       <div className="flex gap-2">
         <button

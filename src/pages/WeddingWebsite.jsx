@@ -178,7 +178,7 @@ function StickyNav({ sections, t }) {
 
   return (
     <div
-      className="lg:hidden sticky top-0 z-30 backdrop-blur-md border-b"
+      className="sticky top-0 z-30 backdrop-blur-md border-b"
       style={{
         backgroundColor: t === THEMES.warm ? 'rgba(253,250,246,0.92)'
           : t === THEMES.romantic ? 'rgba(253,242,244,0.92)'
@@ -483,20 +483,32 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
     return () => clearTimeout(timer)
   }, [query, slug])
 
-  const selectGuest = (guest) => {
+  const selectGuest = async (guest) => {
     setSelected(guest)
     setResults([])
     setQuery('')
-    setForm({
-      rsvp: guest.rsvp !== 'pending' ? guest.rsvp : '',
-      meal_choice: '', dietary_restrictions: '',
-      plus_one_rsvp: guest.plus_one_rsvp !== 'pending' ? guest.plus_one_rsvp || '' : '',
-      plus_one_meal_choice: '', plus_one_dietary: '',
-    })
+    // Fetch this guest's current RSVP status (not included in search
+    // results to avoid leaking other guests' attendance info)
+    setForm({ rsvp: '', meal_choice: '', dietary_restrictions: '', plus_one_rsvp: '', plus_one_meal_choice: '', plus_one_dietary: '' })
+    try {
+      const res = await fetch(`${API_URL}/api/rsvp/${slug}/guest/${guest.id}`)
+      if (res.ok) {
+        const g = await res.json()
+        setForm({
+          rsvp: g.rsvp !== 'pending' ? g.rsvp : '',
+          meal_choice: g.meal_choice || '', dietary_restrictions: g.dietary_restrictions || '',
+          plus_one_rsvp: g.plus_one_rsvp !== 'pending' ? g.plus_one_rsvp || '' : '',
+          plus_one_meal_choice: g.plus_one_meal_choice || '', plus_one_dietary: g.plus_one_dietary || '',
+        })
+      }
+    } catch {}
   }
 
   const handleSubmit = async () => {
     if (!form.rsvp) return setError('Please select attending or not attending.')
+    if (platedMeal && form.rsvp === 'yes' && !form.meal_choice) return setError('Please select a meal choice.')
+    if (selected.plus_one_name && !form.plus_one_rsvp) return setError('Please confirm your plus one\'s attendance.')
+    if (platedMeal && form.plus_one_rsvp === 'yes' && !form.plus_one_meal_choice) return setError('Please select a meal for your plus one.')
     setError('')
     setSubmitting(true)
     try {
@@ -877,7 +889,7 @@ export default function WeddingWebsite() {
   // Build visible sections list for StickyNav
   const visibleSections = []
   if (settings.show_story && settings.our_story) visibleSections.push({ id: 'story', label: 'Our Story' })
-  if (settings.the_proposal) visibleSections.push({ id: 'proposal', label: 'Proposal' })
+  if (settings.show_proposal !== false && settings.the_proposal) visibleSections.push({ id: 'proposal', label: 'Proposal' })
   if (settings.show_schedule && (settings.ceremony_time || settings.reception_time)) visibleSections.push({ id: 'schedule', label: 'The Day' })
   if (settings.show_wedding_party && party.length > 0) visibleSections.push({ id: 'party', label: 'Wedding Party' })
   if (settings.show_dress_code && settings.dress_code) visibleSections.push({ id: 'dresscode', label: 'Dress Code' })
@@ -1013,7 +1025,7 @@ export default function WeddingWebsite() {
       )}
 
       {/* ── The Proposal ──────────────────────────────────────────────── */}
-      {settings.the_proposal && (
+      {settings.show_proposal !== false && settings.the_proposal && (
         <Section t={t} alt id="proposal">
           <SectionHeading t={t} label="The moment" title="The Proposal" />
           <p className={`${t.body} text-center max-w-2xl mx-auto text-lg whitespace-pre-line`}>

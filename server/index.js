@@ -7775,6 +7775,21 @@ app.get('/api/w/:slug', async (req, res) => {
 // ── Public RSVP endpoints ─────────────────────────────────────────────────────
 
 // Search guests by name (for the RSVP form on the public website)
+// Fetch a single guest's RSVP data (after they select themselves from search)
+app.get('/api/rsvp/:slug/guest/:guestId', async (req, res) => {
+  try {
+    const { data: guest, error } = await supabaseAdmin
+      .from('wedding_guests')
+      .select('rsvp, meal_choice, dietary_restrictions, plus_one_rsvp, plus_one_meal_choice, plus_one_dietary')
+      .eq('id', req.params.guestId)
+      .single();
+    if (error || !guest) return res.status(404).json({ error: 'Not found' });
+    res.json(guest);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/rsvp/:slug/search', async (req, res) => {
   try {
     const q = (req.query.q || '').trim();
@@ -7795,15 +7810,15 @@ app.get('/api/rsvp/:slug/search', async (req, res) => {
       .or(`first_name.ilike.%${q.replace(/%/g, '\\%').replace(/_/g, '\\_')}%,last_name.ilike.%${q.replace(/%/g, '\\%').replace(/_/g, '\\_')}%`);
     if (ge) throw ge;
 
+    // Only return names for search results — don't leak attendance
+    // status of other guests. RSVP status is shown after selection.
     const results = (guests || [])
       .filter(g => `${g.first_name} ${g.last_name || ''}`.toLowerCase().includes(q.toLowerCase()))
       .slice(0, 8)
       .map(g => ({
         id: g.id,
         name: [g.first_name, g.last_name].filter(Boolean).join(' '),
-        rsvp: g.rsvp,
-        plus_one_name: g.plus_one_name,
-        plus_one_rsvp: g.plus_one_rsvp,
+        plus_one_name: g.plus_one_name || null,
       }));
     res.json(results);
   } catch (err) {

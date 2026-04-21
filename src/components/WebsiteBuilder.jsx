@@ -11,6 +11,7 @@ function slugify(str) {
 
 const SECTION_TOGGLES = [
   { key: 'show_story',          label: 'Our Story',        note: 'Written by you below' },
+  { key: 'show_proposal',       label: 'The Proposal',     note: 'Written by you below' },
   { key: 'show_wedding_party',  label: 'Wedding Party',    note: 'From your wedding party list' },
   { key: 'show_dress_code',     label: 'Dress Code',       note: 'Set below' },
   { key: 'show_schedule',       label: 'The Day',          note: 'Ceremony & reception times' },
