@@ -78,7 +78,7 @@ const SECTIONS = [
       { label: 'Shuttles', check: d => d.vendorTypes.has('transportation') || d.vendorTypes.has('shuttle'), tab: 'vendors' },
       { label: 'Linens / Rentals', check: d => d.vendorTypes.has('rentals') || d.vendorTypes.has('linens'), tab: 'vendors' },
       { label: 'Cake / Dessert', check: d => d.vendorTypes.has('cake') || d.vendorTypes.has('dessert'), tab: 'vendors' },
-      { label: 'At least 1 contract uploaded', check: d => d.contractCount > 0, tab: 'contract-upload', valueLabel: d => d.contractCount > 0 ? `${d.contractCount} on file` : null },
+      { label: 'At least 1 contract uploaded', check: d => d.contractCount > 0, tab: 'contract-upload', valueLabel: d => d.contractCount > 0 ? `${d.contractCount} on file` : null, contractLinks: true },
     ],
   },
   {
@@ -157,8 +157,11 @@ export default function WeddingCompleteness({ weddingId, wedding, onSwitchTab })
         wedding,
         details: details || {},
         vendorTypes: new Set(vendorList.map(v => (v.vendor_type || '').toLowerCase())),
+        vendorList,
         vendorCount: vendorList.length,
         contractCount: (contractData.contracts?.length || 0) + (contractData.vendorContracts?.length || 0),
+        contracts: contractData.contracts || [],
+        vendorContracts: contractData.vendorContracts || [],
         guestCount: guestList.length,
         rsvpDone: guestList.filter(g => g.rsvp === 'yes').length,
         allergyCount: allergyList.length,
@@ -211,12 +214,48 @@ export default function WeddingCompleteness({ weddingId, wedding, onSwitchTab })
   }))
   const pct = totalChecks > 0 ? Math.round((totalDone / totalChecks) * 100) : 0
 
+  const printCompleteness = () => {
+    const sectionHtml = SECTIONS.map(sec => {
+      const items = sec.items.map(item => {
+        const done = item.check(data)
+        const val = item.valueLabel ? item.valueLabel(data) : ''
+        return `<tr>
+          <td style="padding:3px 8px">${done ? '✓' : '○'}</td>
+          <td style="padding:3px 8px">${item.label}</td>
+          <td style="padding:3px 8px;color:#888">${done && val ? val : done ? 'Done' : 'Missing'}</td>
+        </tr>`
+      }).join('')
+      return `<h3 style="margin:16px 0 4px;font-size:13px;border-bottom:1px solid #ccc;padding-bottom:2px">${sec.title}</h3>
+        <table style="width:100%;border-collapse:collapse;font-size:12px"><tbody>${items}</tbody></table>`
+    }).join('')
+
+    const html = `<!DOCTYPE html><html><head><title>Wedding File - ${wedding?.couple_names || 'Wedding'}</title>
+      <style>body{font-family:sans-serif;padding:24px;font-size:12px}
+      h1{font-size:18px;margin-bottom:2px}h2{font-size:14px;color:#666;margin-bottom:16px}
+      h3{font-size:13px}
+      @media print{@page{margin:1.5cm}}</style></head>
+      <body>
+      <h1>${wedding?.couple_names || 'Wedding'} - File Completeness</h1>
+      <h2>${pct}% complete - ${totalDone} of ${totalChecks} items</h2>
+      ${sectionHtml}
+      <p style="margin-top:24px;color:#999;font-size:10px">Generated ${new Date().toLocaleDateString()}</p>
+      </body></html>`
+    const w = window.open('', '_blank')
+    if (w) { w.document.write(html); w.document.close(); w.print() }
+  }
+
   return (
     <div className="space-y-5">
       {/* Progress bar */}
       <div className="bg-white rounded-xl border border-cream-200 p-5">
         <div className="flex items-center justify-between mb-2">
-          <h3 className="font-medium text-sage-800">Wedding File Completeness</h3>
+          <div className="flex items-center gap-3">
+            <h3 className="font-medium text-sage-800">Wedding File Completeness</h3>
+            <button onClick={printCompleteness}
+              className="text-xs px-3 py-1 rounded-lg border border-sage-200 text-sage-600 hover:bg-sage-50 transition">
+              Print
+            </button>
+          </div>
           <span className="text-lg font-bold text-sage-700">{pct}%</span>
         </div>
         <div className="w-full h-3 bg-cream-200 rounded-full overflow-hidden">
@@ -249,7 +288,8 @@ export default function WeddingCompleteness({ weddingId, wedding, onSwitchTab })
                 const isEditing = item.inlineField && inlineEdits[item.inlineField] !== undefined
 
                 return (
-                  <div key={item.label} className="flex items-center gap-3 px-5 py-2.5">
+                  <div key={item.label}>
+                  <div className="flex items-center gap-3 px-5 py-2.5">
                     {/* Status dot */}
                     <span className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 ${
                       isDone ? 'bg-green-100 text-green-600' : 'bg-cream-200 text-sage-400'
@@ -321,6 +361,26 @@ export default function WeddingCompleteness({ weddingId, wedding, onSwitchTab })
                         View
                       </button>
                     )}
+                  </div>
+                  {/* Contract links inline */}
+                  {item.contractLinks && isDone && data.vendorContracts?.length > 0 && (
+                    <div className="px-5 pb-2 -mt-1 flex flex-wrap gap-2">
+                      {data.vendorContracts.map(vc => (
+                        vc.contract_url && (
+                          <a key={vc.id} href={vc.contract_url} target="_blank" rel="noopener noreferrer"
+                            className="text-xs px-2 py-1 bg-sage-50 text-sage-700 rounded-lg hover:bg-sage-100 transition border border-sage-200">
+                            {vc.vendor_name || vc.vendor_type}
+                          </a>
+                        )
+                      ))}
+                      {data.contracts?.length > 0 && (
+                        <button onClick={() => onSwitchTab('contract-upload')}
+                          className="text-xs px-2 py-1 bg-sage-50 text-sage-700 rounded-lg hover:bg-sage-100 transition border border-sage-200">
+                          +{data.contracts.length} extracted
+                        </button>
+                      )}
+                    </div>
+                  )}
                   </div>
                 )
               })}
