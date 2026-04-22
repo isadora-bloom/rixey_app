@@ -32,6 +32,7 @@ const NAV_ITEMS = [
   { key: 'bedrooms', label: 'Bedroom Assignments', icon: '/icons/direct-messages.svg' },
   { key: 'decor', label: 'Decor Inventory', icon: '/icons/inspiration.svg' },
   { section: 'Your Guests' },
+  { key: 'rsvp-settings', label: 'RSVP Settings', icon: '/icons/checklist.svg' },
   { key: 'allergies', label: 'Allergy Registry', icon: '/icons/guest-care.svg' },
   { key: 'guestcare', label: 'Guest Care Notes', icon: '/icons/guest-care.svg' },
   { section: 'Your Website' },

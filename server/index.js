@@ -7842,7 +7842,7 @@ app.get('/api/rsvp/:slug/search', async (req, res) => {
 // Submit RSVP — writes back to wedding_guests
 app.post('/api/rsvp/:slug', async (req, res) => {
   try {
-    const { guest_id, rsvp, meal_choice, dietary_restrictions, plus_one_rsvp, plus_one_meal_choice, plus_one_dietary } = req.body;
+    const { guest_id, rsvp, meal_choice, dietary_restrictions, plus_one_rsvp, plus_one_meal_choice, plus_one_dietary, rsvp_extras } = req.body;
     if (!guest_id || !rsvp) return res.status(400).json({ error: 'guest_id and rsvp required' });
 
     // Verify guest belongs to this wedding via slug
@@ -7871,6 +7871,7 @@ app.post('/api/rsvp/:slug', async (req, res) => {
     if (plus_one_rsvp !== undefined) update.plus_one_rsvp = plus_one_rsvp;
     if (plus_one_meal_choice !== undefined) update.plus_one_meal_choice = plus_one_meal_choice;
     if (plus_one_dietary !== undefined) update.plus_one_dietary = plus_one_dietary;
+    if (rsvp_extras) update.rsvp_extras = rsvp_extras;
 
     const { error: ue } = await supabaseAdmin
       .from('wedding_guests')

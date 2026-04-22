@@ -453,14 +453,19 @@ function SectionHeading({ t, label, title }) {
 // ── RSVP Section ──────────────────────────────────────────────────────────────
 
 function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
+  const rsvpConfig = settings.rsvp_config?.fields || {}
+  const customQuestions = settings.rsvp_config?.custom_questions || []
+  const askField = (key, defaultVal = false) => rsvpConfig[key] !== undefined ? rsvpConfig[key] : defaultVal
+
   const [query, setQuery]         = useState('')
   const [results, setResults]     = useState([])
   const [searching, setSearching] = useState(false)
-  const [selected, setSelected]   = useState(null)   // { id, name, rsvp, plus_one_name, plus_one_rsvp }
+  const [selected, setSelected]   = useState(null)
   const [form, setForm]           = useState({
     rsvp: '', meal_choice: '', dietary_restrictions: '',
     plus_one_rsvp: '', plus_one_meal_choice: '', plus_one_dietary: '',
   })
+  const [extras, setExtras]       = useState({})
   const [submitting, setSubmitting] = useState(false)
   const [done, setDone]           = useState(false)
   const [error, setError]         = useState('')
@@ -525,6 +530,8 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
         if (platedMeal && form.plus_one_rsvp === 'yes') payload.plus_one_meal_choice = form.plus_one_meal_choice
         payload.plus_one_dietary = form.plus_one_dietary || null
       }
+      // Extra RSVP fields (phone, song request, accessibility, custom questions, etc.)
+      if (Object.keys(extras).length > 0) payload.rsvp_extras = extras
       const res = await fetch(`${API_URL}/api/rsvp/${slug}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -696,6 +703,101 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
                     className={inputClass}
                   />
                 </div>
+
+                {/* Dynamic extra fields from RSVP settings */}
+                {askField('ask_phone') && (
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${t.accent}`}>Phone number</label>
+                    <input type="tel" value={extras.phone || ''} onChange={e => setExtras(p => ({ ...p, phone: e.target.value }))}
+                      placeholder="(555) 123-4567" className={inputClass} />
+                  </div>
+                )}
+                {askField('ask_email') && (
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${t.accent}`}>Email address</label>
+                    <input type="email" value={extras.email || ''} onChange={e => setExtras(p => ({ ...p, email: e.target.value }))}
+                      placeholder="you@email.com" className={inputClass} />
+                  </div>
+                )}
+                {askField('ask_address') && (
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${t.accent}`}>Mailing address</label>
+                    <input type="text" value={extras.address || ''} onChange={e => setExtras(p => ({ ...p, address: e.target.value }))}
+                      placeholder="123 Main St, City, State ZIP" className={inputClass} />
+                  </div>
+                )}
+                {askField('ask_hotel') && (
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${t.accent}`}>Hotel preference</label>
+                    <input type="text" value={extras.hotel || ''} onChange={e => setExtras(p => ({ ...p, hotel: e.target.value }))}
+                      placeholder="Which hotel are you staying at?" className={inputClass} />
+                  </div>
+                )}
+                {askField('ask_shuttle') && (
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${t.accent}`}>Will you need shuttle service?</label>
+                    <div className="grid grid-cols-2 gap-3">
+                      {['Yes', 'No'].map(val => (
+                        <button key={val} type="button" onClick={() => setExtras(p => ({ ...p, shuttle: val }))}
+                          className={`py-2 rounded-lg text-sm font-medium border-2 transition ${
+                            extras.shuttle === val
+                              ? (t === THEMES.warm ? 'border-sage-500 bg-sage-500 text-white' : 'border-gray-900 bg-gray-900 text-white')
+                              : (t === THEMES.warm ? 'border-cream-300 text-sage-600' : 'border-gray-200 text-gray-600')
+                          }`}>{val}</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {askField('ask_accessibility') && (
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${t.accent}`}>Accessibility needs</label>
+                    <input type="text" value={extras.accessibility || ''} onChange={e => setExtras(p => ({ ...p, accessibility: e.target.value }))}
+                      placeholder="Wheelchair access, hearing loop, etc." className={inputClass} />
+                  </div>
+                )}
+                {askField('ask_song') && (
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${t.accent}`}>Song request</label>
+                    <input type="text" value={extras.song || ''} onChange={e => setExtras(p => ({ ...p, song: e.target.value }))}
+                      placeholder="What song gets you on the dance floor?" className={inputClass} />
+                  </div>
+                )}
+                {askField('ask_message') && (
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${t.accent}`}>Message for the couple</label>
+                    <textarea value={extras.message || ''} onChange={e => setExtras(p => ({ ...p, message: e.target.value }))}
+                      placeholder="A note, a wish, a memory..." rows={3}
+                      className={`${inputClass} resize-none`} />
+                  </div>
+                )}
+                {customQuestions.map((q, i) => (
+                  <div key={i}>
+                    <label className={`block text-sm font-medium mb-2 ${t.accent}`}>{q.label}</label>
+                    {q.type === 'boolean' ? (
+                      <div className="grid grid-cols-2 gap-3">
+                        {['Yes', 'No'].map(val => (
+                          <button key={val} type="button" onClick={() => setExtras(p => ({ ...p, [`custom_${i}`]: val }))}
+                            className={`py-2 rounded-lg text-sm font-medium border-2 transition ${
+                              extras[`custom_${i}`] === val
+                                ? (t === THEMES.warm ? 'border-sage-500 bg-sage-500 text-white' : 'border-gray-900 bg-gray-900 text-white')
+                                : (t === THEMES.warm ? 'border-cream-300 text-sage-600' : 'border-gray-200 text-gray-600')
+                            }`}>{val}</button>
+                        ))}
+                      </div>
+                    ) : q.type === 'select' ? (
+                      <select value={extras[`custom_${i}`] || ''} onChange={e => setExtras(p => ({ ...p, [`custom_${i}`]: e.target.value }))}
+                        className={inputClass}>
+                        <option value="">Select...</option>
+                        {(q.options || '').split(',').map(o => o.trim()).filter(Boolean).map(o => (
+                          <option key={o} value={o}>{o}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input type="text" value={extras[`custom_${i}`] || ''} onChange={e => setExtras(p => ({ ...p, [`custom_${i}`]: e.target.value }))}
+                        className={inputClass} />
+                    )}
+                  </div>
+                ))}
               </>
             )}
 

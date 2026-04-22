@@ -19,6 +19,7 @@ import GuestCareNotes from '../components/GuestCareNotes'
 import StorefrontBrowser from '../components/StorefrontBrowser'
 import WeddingDetails from '../components/WeddingDetails'
 import AllergyRegistry from '../components/AllergyRegistry'
+import RsvpSettings from '../components/RsvpSettings'
 import BedroomAssignments from '../components/BedroomAssignments'
 import CeremonyOrder from '../components/CeremonyOrder'
 import CeremonyChairPlan from '../components/CeremonyChairPlan'
@@ -38,6 +39,7 @@ import SectionFinaliser from '../components/SectionFinaliser'
 import { API_URL } from '../config/api'
 import { authHeaders } from '../utils/api'
 import DashboardChat from './dashboard/DashboardChat'
+import FloatingSage from '../components/FloatingSage'
 import DashboardNav, { FINALISABLE } from './dashboard/DashboardNav'
 import DashboardHeader from './dashboard/DashboardHeader'
 
@@ -980,6 +982,11 @@ export default function Dashboard() {
                   <TableCanvas weddingId={profile.wedding_id} />
                 </div>
               )}
+              {activeSection === 'rsvp-settings' && profile?.wedding_id && (
+                <div className="p-4 sm:p-6">
+                  <RsvpSettings weddingId={profile.wedding_id} />
+                </div>
+              )}
               {activeSection === 'allergies' && profile?.wedding_id && (
                 <div className="p-4 sm:p-6">
                   <AllergyRegistry weddingId={profile.wedding_id} userId={user?.id} />
@@ -1129,6 +1136,15 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+
+      {/* Floating Sage FAB */}
+      <FloatingSage
+        activeSection={activeSection}
+        onNavigateToChat={(prefill) => {
+          setActiveSection('chat')
+          if (prefill) setNewMessage(prefill)
+        }}
+      />
 
       {/* Edit Profile Modal */}
       {showEditProfile && (
