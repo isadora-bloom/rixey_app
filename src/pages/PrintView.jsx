@@ -85,8 +85,10 @@ export default function PrintView() {
   const [sections, setSections] = useState({
     timeline: true,
     tables: true,
+    seating: true,
     staffing: true,
     ceremony: true,
+    ceremonyChairs: true,
     bedrooms: true,
     rehearsal: true,
     shuttle: true,
@@ -94,6 +96,8 @@ export default function PrintView() {
     decor: true,
     vendors: true,
     allergies: true,
+    guestCare: true,
+    parents: true,
     details: true,
     highlights: true,
   })
@@ -112,6 +116,9 @@ export default function PrintView() {
   const [vendors, setVendors] = useState([])
   const [allergies, setAllergies] = useState([])
   const [weddingDetails, setWeddingDetails] = useState(null)
+  const [ceremonyChairs, setCeremonyChairs] = useState(null)
+  const [guestCare, setGuestCare] = useState([])
+  const [guests, setGuests] = useState([])
   const [highlights, setHighlights] = useState(null)
   const [loadingHighlights, setLoadingHighlights] = useState(true)
 
@@ -123,6 +130,7 @@ export default function PrintView() {
           weddingsRes, timelineRes, tablesRes, staffingRes,
           ceremonyRes, bedroomsRes, rehearsalRes, shuttleRes,
           makeupRes, decorRes, vendorsRes, allergiesRes,
+          ceremonyChairsRes, guestCareRes, guestsRes,
           detailsRes,
         ] = await Promise.all([
           fetch(`${API_URL}/api/admin/weddings`, { headers: hdrs }),
@@ -137,6 +145,9 @@ export default function PrintView() {
           fetch(`${API_URL}/api/decor/${weddingId}`, { headers: hdrs }),
           fetch(`${API_URL}/api/vendors/${weddingId}`, { headers: hdrs }),
           fetch(`${API_URL}/api/allergies/${weddingId}`, { headers: hdrs }),
+          fetch(`${API_URL}/api/ceremony-plan/${weddingId}`, { headers: hdrs }),
+          fetch(`${API_URL}/api/guest-care/${weddingId}`, { headers: hdrs }),
+          fetch(`${API_URL}/api/guests/${weddingId}`, { headers: hdrs }),
           fetch(`${API_URL}/api/wedding-details/${weddingId}`, { headers: hdrs }),
         ])
 
@@ -164,6 +175,11 @@ export default function PrintView() {
         setVendors(vd.vendors || [])
 
         setAllergies(await allergiesRes.json() || [])
+
+        try { const cp = await ceremonyChairsRes.json(); setCeremonyChairs(cp?.plan || null) } catch {}
+        try { const gc = await guestCareRes.json(); setGuestCare(Array.isArray(gc) ? gc : []) } catch {}
+        try { const gd = await guestsRes.json(); setGuests(gd?.guests || []) } catch {}
+
         setWeddingDetails(await detailsRes.json() || null)
 
       } catch (err) {
@@ -522,11 +538,15 @@ export default function PrintView() {
           ceremony: '💒 Ceremony',
           bedrooms: '🛏 Bedrooms',
           rehearsal: '🍽 Rehearsal',
+          seating: '🪑 Seating Chart',
+          ceremonyChairs: '🪑 Ceremony Chairs',
           shuttle: '🚌 Shuttle',
           makeup: '💄 Makeup',
           decor: '🌿 Decor',
           vendors: '📇 Vendors',
           allergies: '⚠️ Allergies',
+          guestCare: '💝 Guest Care',
+          parents: '👨‍👩‍👧 Parents',
           details: '📋 Details',
           highlights: '✨ Highlights',
         }).map(([key, label]) => (
@@ -875,6 +895,138 @@ export default function PrintView() {
                 <strong>Send-off notes:</strong> {weddingDetails.send_off_notes}
               </div>
             )}
+          </div>
+        )}
+
+        {/* CEREMONY CHAIRS */}
+        {sections.ceremonyChairs && ceremonyChairs?.rows?.length > 0 && (
+          <div className="print-section section-start">
+            <SectionHeader title="Ceremony Chair Plan" icon="🪑" />
+            <div style={{ fontSize: 12 }}>
+              <p style={{ marginBottom: 8 }}>
+                <strong>{ceremonyChairs.rows.reduce((s, r) => s + (r.left || 0) + (r.right || 0), 0)} total chairs</strong> across {ceremonyChairs.rows.length} rows
+              </p>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                <thead>
+                  <tr style={{ borderBottom: '2px solid #333' }}>
+                    <th style={{ textAlign: 'left', padding: '3px 6px' }}>Row</th>
+                    <th style={{ textAlign: 'center', padding: '3px 6px' }}>Left</th>
+                    <th style={{ textAlign: 'center', padding: '3px 6px' }}>Right</th>
+                    <th style={{ textAlign: 'center', padding: '3px 6px' }}>Total</th>
+                    <th style={{ textAlign: 'left', padding: '3px 6px' }}>Label</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ceremonyChairs.rows.map((row, i) => (
+                    <tr key={i} style={{ borderBottom: '1px solid #eee' }}>
+                      <td style={{ padding: '3px 6px' }}>R{i + 1}</td>
+                      <td style={{ textAlign: 'center', padding: '3px 6px' }}>{row.left}</td>
+                      <td style={{ textAlign: 'center', padding: '3px 6px' }}>{row.right}</td>
+                      <td style={{ textAlign: 'center', padding: '3px 6px', fontWeight: 600 }}>{(row.left || 0) + (row.right || 0)}</td>
+                      <td style={{ padding: '3px 6px', color: '#666' }}>{row.label || ''}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* SEATING BY TABLE */}
+        {sections.seating && guests.length > 0 && (
+          <div className="print-section section-start">
+            <SectionHeader title="Seating Chart" icon="🪑" />
+            {(() => {
+              const byTable = {}
+              const unassigned = []
+              guests.forEach(g => {
+                if (g.table_assignment) {
+                  if (!byTable[g.table_assignment]) byTable[g.table_assignment] = []
+                  byTable[g.table_assignment].push(g)
+                } else {
+                  unassigned.push(g)
+                }
+              })
+              return (
+                <div style={{ fontSize: 12 }}>
+                  {Object.entries(byTable).sort((a, b) => a[0].localeCompare(b[0])).map(([table, tableGuests]) => (
+                    <div key={table} style={{ marginBottom: 12 }}>
+                      <p style={{ fontWeight: 600, borderBottom: '1px solid #ccc', paddingBottom: 2, marginBottom: 4 }}>
+                        {table} <span style={{ fontWeight: 400, color: '#888' }}>({tableGuests.length} guest{tableGuests.length !== 1 ? 's' : ''})</span>
+                      </p>
+                      {tableGuests.map(g => (
+                        <p key={g.id} style={{ paddingLeft: 12, lineHeight: 1.6 }}>
+                          {g.first_name} {g.last_name || ''}
+                          {g.dietary_restrictions && <span style={{ color: '#c53030', marginLeft: 8, fontSize: 10 }}>⚠ {g.dietary_restrictions}</span>}
+                          {g.meal_choice && <span style={{ color: '#666', marginLeft: 8, fontSize: 10 }}>({g.meal_choice})</span>}
+                        </p>
+                      ))}
+                    </div>
+                  ))}
+                  {unassigned.length > 0 && (
+                    <div>
+                      <p style={{ fontWeight: 600, borderBottom: '1px solid #ccc', paddingBottom: 2, marginBottom: 4 }}>
+                        Unassigned <span style={{ fontWeight: 400, color: '#888' }}>({unassigned.length})</span>
+                      </p>
+                      {unassigned.map(g => (
+                        <p key={g.id} style={{ paddingLeft: 12, lineHeight: 1.6 }}>{g.first_name} {g.last_name || ''}</p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
+          </div>
+        )}
+
+        {/* GUEST CARE NOTES */}
+        {sections.guestCare && guestCare.length > 0 && (
+          <div className="print-section section-start">
+            <SectionHeader title="Guest Care Notes" icon="💝" />
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ borderBottom: '2px solid #333' }}>
+                  <th style={{ textAlign: 'left', padding: '4px 8px' }}>Guest</th>
+                  <th style={{ textAlign: 'left', padding: '4px 8px' }}>Category</th>
+                  <th style={{ textAlign: 'left', padding: '4px 8px' }}>Note</th>
+                </tr>
+              </thead>
+              <tbody>
+                {guestCare.map((n, i) => (
+                  <tr key={i} style={{ borderBottom: '1px solid #eee' }}>
+                    <td style={{ padding: '4px 8px' }}>{n.guest_name || '—'}</td>
+                    <td style={{ padding: '4px 8px' }}>{n.category || '—'}</td>
+                    <td style={{ padding: '4px 8px' }}>{n.content || n.note || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* PARENTS INFO */}
+        {sections.parents && weddingDetails && (weddingDetails.partner1_parents || weddingDetails.partner2_parents) && (
+          <div className="print-section section-start">
+            <SectionHeader title="Parents & Family" icon="👨‍👩‍👧" />
+            <div className="info-grid">
+              <DataRow label="Partner 1 Parents" value={weddingDetails.partner1_parents} />
+              {weddingDetails.partner1_parents_met !== null && (
+                <DataRow label="Have We Met Them?" value={weddingDetails.partner1_parents_met ? 'Yes' : 'No'} />
+              )}
+              <DataRow label="Partner 2 Parents" value={weddingDetails.partner2_parents} />
+              {weddingDetails.partner2_parents_met !== null && (
+                <DataRow label="Have We Met Them?" value={weddingDetails.partner2_parents_met ? 'Yes' : 'No'} />
+              )}
+              <DataRow label="Wedding Party (Side 1)" value={weddingDetails.wedding_party_count_1} />
+              <DataRow label="Wedding Party (Side 2)" value={weddingDetails.wedding_party_count_2} />
+              {weddingDetails.dogs_coming && (
+                <>
+                  <DataRow label="Dog" value={weddingDetails.dogs_description} />
+                  <DataRow label="Dog Sitter" value={weddingDetails.dog_sitter_name} />
+                  <DataRow label="Sitter Time" value={weddingDetails.dog_sitter_time} />
+                </>
+              )}
+            </div>
           </div>
         )}
 
