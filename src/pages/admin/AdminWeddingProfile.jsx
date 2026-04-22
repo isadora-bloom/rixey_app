@@ -6,7 +6,7 @@ import WebsiteBuilder from '../../components/WebsiteBuilder'
 import PhotoBucket from '../../components/PhotoBucket'
 import WeddingParty from '../../components/WeddingParty'
 import BarPlanner from '../../components/BarPlanner'
-import CommunicationPulse from '../../components/CommunicationPulse'
+// CommunicationPulse removed from overview — import kept for reference only
 import UpcomingMeetings from '../../components/UpcomingMeetings'
 import TimelineBuilder from '../../components/TimelineBuilder'
 import TableLayoutPlanner from '../../components/TableLayoutPlanner'

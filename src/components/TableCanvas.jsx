@@ -193,6 +193,9 @@ export default function TableCanvas({ weddingId, isAdmin }) {
   const [saving, setSaving]       = useState(false)
   const [saved, setSaved]         = useState(false)
 
+  // Table summary from the Tables planner (for admin reference on the map)
+  const [tableSummary, setTableSummary] = useState(null)
+
   // Toolbar UI state
   const [showRectPicker, setShowRectPicker] = useState(false)
   const [blockPrompt, setBlockPrompt]       = useState(null) // preset being configured
@@ -238,9 +241,17 @@ export default function TableCanvas({ weddingId, isAdmin }) {
   const loadLayout = async () => {
     setLoading(true)
     try {
-      const res = await fetch(`${API_URL}/api/table-layout/${weddingId}`, { headers: await authHeaders() })
-      const data = await res.json()
-      if (data.layout) setElements(data.layout.elements || [])
+      const hdrs = await authHeaders()
+      const [layoutRes, tablesRes] = await Promise.all([
+        fetch(`${API_URL}/api/table-layout/${weddingId}`, { headers: hdrs }),
+        fetch(`${API_URL}/api/tables/${weddingId}`, { headers: hdrs }),
+      ])
+      const layoutData = await layoutRes.json()
+      if (layoutData.layout) setElements(layoutData.layout.elements || [])
+      try {
+        const tablesData = await tablesRes.json()
+        if (tablesData.tables) setTableSummary(tablesData.tables)
+      } catch {}
     } catch (err) {
       console.error('Failed to load layout:', err)
     }
@@ -421,6 +432,34 @@ export default function TableCanvas({ weddingId, isAdmin }) {
 
   return (
     <div>
+      {/* ── Table summary from the Tables planner ── */}
+      {tableSummary && (() => {
+        const gc = tableSummary.guest_count || 0
+        const gpt = tableSummary.guests_per_table || 8
+        const seated = gc - (tableSummary.sweetheart_table ? 2 : 0)
+          - (tableSummary.head_table ? (tableSummary.head_table_size || 8) : 0)
+          - (tableSummary.kids_table ? (tableSummary.kids_count || 0) : 0)
+        const guestTables = Math.ceil(Math.max(0, seated) / gpt)
+        const ht = tableSummary.head_table ? Math.ceil((tableSummary.head_table_size || 8) / 3) : 0
+        const totalTables = guestTables + (tableSummary.sweetheart_table ? 1 : 0) + ht + (tableSummary.kids_table ? 1 : 0)
+        const ct = tableSummary.cocktail_tables || 0
+        const linens = totalTables + ct
+        const napkins = gc + 10
+        return (
+          <div className="mb-3 bg-sage-600 text-white rounded-xl px-4 py-3">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-5">
+                <span className="text-sm"><strong className="text-lg">{totalTables}</strong> guest tables</span>
+                <span className="text-sm"><strong className="text-lg">{ct}</strong> cocktail</span>
+                <span className="text-sm"><strong className="text-lg">{linens}</strong> cloths</span>
+                <span className="text-sm"><strong className="text-lg">{napkins}</strong> napkins</span>
+              </div>
+              <span className="text-sage-200 text-xs">{gc} guests · {tableSummary.table_shape || 'round'}</span>
+            </div>
+          </div>
+        )
+      })()}
+
       {/* ── Admin-only toolbar ── */}
       {isAdmin && (
         <div className="mb-3 space-y-2">
