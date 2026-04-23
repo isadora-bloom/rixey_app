@@ -6764,7 +6764,7 @@ app.get('/api/bedrooms/:weddingId', async (req, res) => {
     res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.put('/api/bedrooms/:id', validateBody(['guests', 'notes', 'room_name', 'room_description', 'sort_order']), async (req, res) => {
+app.put('/api/bedrooms/:id', validateBody(['guest_friday', 'guest_saturday', 'notes', 'room_name', 'room_description', 'sort_order']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('bedroom_assignments').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;

@@ -5,11 +5,12 @@ import { Input } from './ui'
 import SaveIndicator from './ui/SaveIndicator'
 
 
-export default function BedroomAssignments({ weddingId, userId }) {
+export default function BedroomAssignments({ weddingId }) {
   const [rooms, setRooms] = useState([]);
   const [loading, setLoading] = useState(true);
   const [savedRows, setSavedRows] = useState({});
-  const [error, setError] = useState(null);
+  const [fetchError, setFetchError] = useState(null);
+  const [saveError, setSaveError] = useState(null);
   const [saveState, setSaveState] = useState('idle');
 
   useEffect(() => {
@@ -19,14 +20,14 @@ export default function BedroomAssignments({ weddingId, userId }) {
 
   async function fetchRooms() {
     setLoading(true);
-    setError(null);
+    setFetchError(null);
     try {
       const res = await fetch(`${API_URL}/api/bedrooms/${weddingId}`, { headers: await authHeaders() });
       if (!res.ok) throw new Error('Failed to load bedroom assignments');
       const data = await res.json();
       setRooms(data);
     } catch (err) {
-      setError(err.message);
+      setFetchError(err.message);
     } finally {
       setLoading(false);
     }
@@ -40,18 +41,21 @@ export default function BedroomAssignments({ weddingId, userId }) {
 
   const handleBlur = useCallback(async (room) => {
     setSaveState('saving');
+    setSaveError(null);
     try {
       const res = await fetch(`${API_URL}/api/bedrooms/${room.id}`, {
         method: 'PUT',
         headers: await authHeaders(),
         body: JSON.stringify({
-          friday_night: room.friday_night || '',
-          saturday_night: room.saturday_night || '',
+          guest_friday: room.guest_friday || '',
+          guest_saturday: room.guest_saturday || '',
           notes: room.notes || '',
-          user_id: userId,
         }),
       });
-      if (!res.ok) throw new Error('Save failed');
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Save failed (${res.status})`);
+      }
       setSaveState('saved');
       setSavedRows(prev => ({ ...prev, [room.id]: true }));
       setTimeout(() => {
@@ -61,11 +65,11 @@ export default function BedroomAssignments({ weddingId, userId }) {
           return next;
         });
       }, 2000);
-    } catch {
+    } catch (err) {
       setSaveState('idle');
-      // silently fail — user can retry on next blur
+      setSaveError(`Couldn't save ${room.room_name}: ${err.message}. Your changes aren't saved, please try again.`);
     }
-  }, [userId]);
+  }, []);
 
   if (loading) {
     return (
@@ -73,10 +77,10 @@ export default function BedroomAssignments({ weddingId, userId }) {
     );
   }
 
-  if (error) {
+  if (fetchError) {
     return (
       <div className="p-6 text-rose-400 text-sm">
-        {error}{' '}
+        {fetchError}{' '}
         <button
           onClick={fetchRooms}
           className="underline text-sage-600 hover:text-sage-700"
@@ -108,6 +112,21 @@ export default function BedroomAssignments({ weddingId, userId }) {
         </p>
       </div>
 
+      {/* Save error banner */}
+      {saveError && (
+        <div className="mb-6 flex items-start gap-2 bg-rose-50 border border-rose-200 rounded-lg px-4 py-3">
+          <span className="text-rose-500 mt-0.5">&#9888;</span>
+          <p className="text-sm text-rose-700 flex-1">{saveError}</p>
+          <button
+            onClick={() => setSaveError(null)}
+            className="text-rose-500 hover:text-rose-700 text-sm"
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Desktop table */}
       <div className="hidden md:block overflow-hidden rounded-xl border border-cream-200 bg-white">
         <table className="w-full text-sm">
@@ -134,18 +153,18 @@ export default function BedroomAssignments({ weddingId, userId }) {
                 <td className="px-4 py-3 align-middle">
                   <Input
                     type="text"
-                    value={room.friday_night || ''}
+                    value={room.guest_friday || ''}
                     placeholder="Guest name(s)"
-                    onChange={e => handleChange(room.id, 'friday_night', e.target.value)}
+                    onChange={e => handleChange(room.id, 'guest_friday', e.target.value)}
                     onBlur={() => handleBlur(room)}
                   />
                 </td>
                 <td className="px-4 py-3 align-middle">
                   <Input
                     type="text"
-                    value={room.saturday_night || ''}
+                    value={room.guest_saturday || ''}
                     placeholder="Guest name(s)"
-                    onChange={e => handleChange(room.id, 'saturday_night', e.target.value)}
+                    onChange={e => handleChange(room.id, 'guest_saturday', e.target.value)}
                     onBlur={() => handleBlur(room)}
                   />
                 </td>
@@ -194,9 +213,9 @@ export default function BedroomAssignments({ weddingId, userId }) {
               <label className="block text-xs text-sage-500 font-medium">Friday Night</label>
               <Input
                 type="text"
-                value={room.friday_night || ''}
+                value={room.guest_friday || ''}
                 placeholder="Guest name(s)"
-                onChange={e => handleChange(room.id, 'friday_night', e.target.value)}
+                onChange={e => handleChange(room.id, 'guest_friday', e.target.value)}
                 onBlur={() => handleBlur(room)}
               />
             </div>
@@ -205,9 +224,9 @@ export default function BedroomAssignments({ weddingId, userId }) {
               <label className="block text-xs text-sage-500 font-medium">Saturday Night</label>
               <Input
                 type="text"
-                value={room.saturday_night || ''}
+                value={room.guest_saturday || ''}
                 placeholder="Guest name(s)"
-                onChange={e => handleChange(room.id, 'saturday_night', e.target.value)}
+                onChange={e => handleChange(room.id, 'guest_saturday', e.target.value)}
                 onBlur={() => handleBlur(room)}
               />
             </div>
