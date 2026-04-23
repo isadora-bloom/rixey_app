@@ -6719,14 +6719,14 @@ app.get('/api/allergies/:weddingId', async (req, res) => {
     res.json(data || []);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.post('/api/allergies', validateBody(['wedding_id', 'guest_name', 'allergy_type', 'severity', 'notes', 'sort_order', 'is_important']), async (req, res) => {
+app.post('/api/allergies', validateBody(['wedding_id', 'guest_name', 'allergy', 'severity', 'caterer_alerted', 'staying_overnight', 'notes', 'sort_order']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('allergy_registry').insert(req.body).select().single();
     if (error) throw error;
     res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.put('/api/allergies/:id', validateBody(['guest_name', 'allergy_type', 'severity', 'notes', 'sort_order', 'is_important']), async (req, res) => {
+app.put('/api/allergies/:id', validateBody(['guest_name', 'allergy', 'severity', 'caterer_alerted', 'staying_overnight', 'notes', 'sort_order']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('allergy_registry').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
@@ -6780,14 +6780,14 @@ app.get('/api/ceremony-order/:weddingId', async (req, res) => {
     res.json(data || []);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.post('/api/ceremony-order', validateBody(['wedding_id', 'name', 'role', 'sort_order', 'side', 'notes']), async (req, res) => {
+app.post('/api/ceremony-order', validateBody(['wedding_id', 'participant_name', 'role', 'section', 'side', 'walk_with', 'sort_order', 'notes']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('ceremony_order').insert(req.body).select().single();
     if (error) throw error;
     res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.put('/api/ceremony-order/:id', validateBody(['name', 'role', 'sort_order', 'side', 'notes']), async (req, res) => {
+app.put('/api/ceremony-order/:id', validateBody(['participant_name', 'role', 'section', 'side', 'walk_with', 'sort_order', 'notes']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('ceremony_order').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
@@ -6840,14 +6840,14 @@ app.get('/api/makeup/:weddingId', async (req, res) => {
     res.json(data || []);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.post('/api/makeup', validateBody(['wedding_id', 'name', 'role', 'hair_time', 'makeup_time', 'notes', 'sort_order']), async (req, res) => {
+app.post('/api/makeup', validateBody(['wedding_id', 'participant_name', 'role', 'hair_start_time', 'makeup_start_time', 'notes', 'sort_order']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('makeup_schedule').insert(req.body).select().single();
     if (error) throw error;
     res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.put('/api/makeup/:id', validateBody(['name', 'role', 'hair_time', 'makeup_time', 'notes', 'sort_order']), async (req, res) => {
+app.put('/api/makeup/:id', validateBody(['participant_name', 'role', 'hair_start_time', 'makeup_start_time', 'notes', 'sort_order']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('makeup_schedule').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
@@ -6870,14 +6870,14 @@ app.get('/api/shuttle/:weddingId', async (req, res) => {
     res.json(data || []);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.post('/api/shuttle', validateBody(['wedding_id', 'label', 'pickup_time', 'pickup_location', 'dropoff_time', 'dropoff_location', 'notes', 'sort_order', 'capacity']), async (req, res) => {
+app.post('/api/shuttle', validateBody(['wedding_id', 'run_label', 'pickup_time', 'pickup_location', 'dropoff_time', 'dropoff_location', 'notes', 'sort_order', 'seat_count']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('shuttle_schedule').insert(req.body).select().single();
     if (error) throw error;
     res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.put('/api/shuttle/:id', validateBody(['label', 'pickup_time', 'pickup_location', 'dropoff_time', 'dropoff_location', 'notes', 'sort_order', 'capacity']), async (req, res) => {
+app.put('/api/shuttle/:id', validateBody(['run_label', 'pickup_time', 'pickup_location', 'dropoff_time', 'dropoff_location', 'notes', 'sort_order', 'seat_count']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('shuttle_schedule').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
