@@ -53,6 +53,7 @@ export default function MakeupSchedule({ weddingId, userId }) {
   const [editingCell, setEditingCell] = useState(null); // { id, field }
   const [editValue, setEditValue] = useState('');
   const [error, setError] = useState(null);
+  const [saveError, setSaveError] = useState(null);
   const [hairMakeupDoneTime, setHairMakeupDoneTime] = useState(null);
 
   useEffect(() => {
@@ -146,6 +147,7 @@ export default function MakeupSchedule({ weddingId, userId }) {
     );
     setEditingCell(null);
 
+    setSaveError(null);
     try {
       const res = await fetch(`${API_URL}/api/makeup/${id}`, {
         method: 'PUT',
@@ -156,10 +158,12 @@ export default function MakeupSchedule({ weddingId, userId }) {
           hair_start_time: updated.hair_start_time || null,
           makeup_start_time: updated.makeup_start_time || null,
           notes: updated.notes,
-          user_id: userId,
         }),
       });
-      if (!res.ok) throw new Error('Save failed');
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Save failed (${res.status})`);
+      }
       setSavedRows(prev => ({ ...prev, [id]: true }));
       setTimeout(() => {
         setSavedRows(prev => {
@@ -168,10 +172,10 @@ export default function MakeupSchedule({ weddingId, userId }) {
           return next;
         });
       }, 2000);
-    } catch {
-      // silently fail
+    } catch (err) {
+      setSaveError(`Couldn't save change to ${updated.participant_name || 'entry'}: ${err.message}. The value shown isn't saved, please try again.`);
     }
-  }, [editingCell, editValue, userId]);
+  }, [editingCell, editValue]);
 
   if (loading) {
     return (
@@ -212,6 +216,21 @@ export default function MakeupSchedule({ weddingId, userId }) {
           {showForm ? 'Cancel' : '+ Add Person'}
         </Button>
       </div>
+
+      {/* Save error banner */}
+      {saveError && (
+        <div className="mb-5 flex items-start gap-2 bg-rose-50 border border-rose-200 rounded-lg px-4 py-3">
+          <span className="text-rose-500 mt-0.5">&#9888;</span>
+          <p className="text-sm text-rose-700 flex-1">{saveError}</p>
+          <button
+            onClick={() => setSaveError(null)}
+            className="text-rose-500 hover:text-rose-700 text-sm"
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Deadline + tip */}
       <div className="mb-5 bg-cream-50 border border-cream-200 rounded-lg px-4 py-3 space-y-1.5">

@@ -56,6 +56,7 @@ export default function AllergyRegistry({ weddingId, userId }) {
   const [formData, setFormData] = useState(emptyForm)
   const [editingId, setEditingId] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState(null)
   const [deletingId, setDeletingId] = useState(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [confirmTarget, setConfirmTarget] = useState(null)
@@ -114,6 +115,7 @@ export default function AllergyRegistry({ weddingId, userId }) {
   const handleSave = async () => {
     if (!formData.guest_name.trim() || !formData.allergy.trim()) return
     setSaving(true)
+    setSaveError(null)
     try {
       if (editingId) {
         const res = await fetch(`${API_URL}/api/allergies/${editingId}`, {
@@ -121,6 +123,10 @@ export default function AllergyRegistry({ weddingId, userId }) {
           headers: await authHeaders(),
           body: JSON.stringify({ ...formData, wedding_id: weddingId }),
         })
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}))
+          throw new Error(body.error || `Save failed (${res.status})`)
+        }
         const updated = await res.json()
         setAllergies((prev) =>
           prev.map((a) => (a.id === editingId ? { ...a, ...updated } : a))
@@ -135,12 +141,16 @@ export default function AllergyRegistry({ weddingId, userId }) {
             sort_order: allergies.length,
           }),
         })
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}))
+          throw new Error(body.error || `Save failed (${res.status})`)
+        }
         const created = await res.json()
         setAllergies((prev) => [...prev, created])
       }
       handleCancel()
     } catch (err) {
-      console.error(err)
+      setSaveError(`Couldn't save ${formData.guest_name || 'allergy'}: ${err.message}. Please try again.`)
     } finally {
       setSaving(false)
     }
@@ -182,6 +192,21 @@ export default function AllergyRegistry({ weddingId, userId }) {
           Share this list with your caterer before the wedding.
         </p>
       </div>
+
+      {/* Save error banner */}
+      {saveError && (
+        <div className="flex items-start gap-3 bg-rose-50 border border-rose-200 rounded-lg px-4 py-3">
+          <AlertTriangleIcon className="text-rose-500 mt-0.5 shrink-0" />
+          <p className="text-sm text-rose-700 flex-1">{saveError}</p>
+          <button
+            onClick={() => setSaveError(null)}
+            className="text-rose-500 hover:text-rose-700 shrink-0"
+            aria-label="Dismiss"
+          >
+            <XIcon />
+          </button>
+        </div>
+      )}
 
       {/* Header row */}
       <div className="flex items-center justify-between">
