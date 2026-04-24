@@ -286,14 +286,14 @@ export default function TableCanvas({ weddingId, isAdmin }) {
     y: (stageH / 2 - pos.y) / currentZoom,
   })
 
-  const addRound = (feetW, label, capacity) => {
+  const addRound = (feetW, label, capacity, color = '#F5EDE0') => {
     const c = viewCentre()
     setElements(prev => [...prev, {
       id: genId(), type: 'round',
       x: c.x, y: c.y,
       feetW, feetH: feetW,
       rotation: 0, label, capacity,
-      color: '#F5EDE0',
+      color,
     }])
   }
 
@@ -471,7 +471,7 @@ export default function TableCanvas({ weddingId, isAdmin }) {
               className="text-xs px-3 py-1.5 rounded-lg border border-cream-200 text-sage-600 hover:bg-cream-50 hover:border-sage-300 transition">
               ◯ 60" (8 seats)
             </button>
-            <button onClick={() => addRound(6, '72" Round', 10)}
+            <button onClick={() => addRound(6, '72" Round', 10, '#E8D0A4')}
               className="text-xs px-3 py-1.5 rounded-lg border border-cream-200 text-sage-600 hover:bg-cream-50 hover:border-sage-300 transition">
               ◯ 72" (10 seats)
             </button>
