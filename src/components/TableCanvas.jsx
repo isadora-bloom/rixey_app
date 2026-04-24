@@ -83,7 +83,7 @@ function TableEl({ el, isSelected, isAdmin, onSelect, onMove }) {
   const haloExtra = ft(CHAIR_CLEARANCE_FT)
   const isTable = el.type === 'round' || el.type === 'rect'
   const fontSize = Math.max(16, ft(0.85))
-  const seatsFontSize = Math.max(13, ft(0.65))
+  const seatsFontSize = Math.max(22, ft(1.25))
   const strokeColor = isSelected ? '#C9748A' : '#55555566'
   const strokeWidth = isSelected ? ft(0.12) : ft(0.06)
 
@@ -159,7 +159,7 @@ function TableEl({ el, isSelected, isAdmin, onSelect, onMove }) {
       />
       {el.capacity > 0 && (
         <Text
-          text={`${el.capacity} seats`}
+          text={`${el.capacity}`}
           x={-w / 2}
           y={fontSize * 0.35}
           width={w}
@@ -474,6 +474,14 @@ export default function TableCanvas({ weddingId, isAdmin }) {
             <button onClick={() => addRound(6, '72" Round', 10)}
               className="text-xs px-3 py-1.5 rounded-lg border border-cream-200 text-sage-600 hover:bg-cream-50 hover:border-sage-300 transition">
               ◯ 72" (10 seats)
+            </button>
+            <button onClick={() => addRound(2.5, 'Hightop', 4)}
+              className="text-xs px-3 py-1.5 rounded-lg border border-cream-200 text-sage-600 hover:bg-cream-50 hover:border-sage-300 transition">
+              ◯ Hightop 30"
+            </button>
+            <button onClick={() => addRound(2.5, 'Cake Table', 0)}
+              className="text-xs px-3 py-1.5 rounded-lg border border-cream-200 text-sage-600 hover:bg-cream-50 hover:border-sage-300 transition">
+              ◯ Cake Table 30"
             </button>
           </div>
 

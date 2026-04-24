@@ -188,7 +188,7 @@ export default function RehearsalDinner({ weddingId, userId }) {
 
         <Field label="Where will the rehearsal dinner be held?">
           <ToggleGroup
-            options={['Patio', 'Ballroom', 'Tent', 'Casual in the Manor', 'Kitchen', 'Other']}
+            options={['Patio', 'Ballroom', 'Casual in the Manor', 'Kitchen', 'Other']}
             value={form.location}
             onChange={v => set('location', v)}
           />

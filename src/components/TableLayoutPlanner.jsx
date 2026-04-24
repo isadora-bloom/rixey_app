@@ -440,6 +440,16 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
         )}
       </div>
 
+      {/* Chargers reminder */}
+      <div className={`rounded-xl px-4 py-3 text-sm flex items-start gap-2 ${chargersOn ? 'bg-amber-50 border border-amber-200 text-amber-800' : 'bg-cream-50 border border-cream-200 text-sage-600'}`}>
+        <span className="mt-0.5">{chargersOn ? '⚠️' : 'ℹ️'}</span>
+        <p className="flex-1">
+          {chargersOn
+            ? <><span className="font-semibold">Using chargers.</span> Plan for ~2 fewer seats per round table and limited centre decor space on rectangular tables (only ~6&quot; clear). Toggle below under <span className="font-medium">Charger plates</span>.</>
+            : <><span className="font-semibold">No chargers selected.</span> Chargers are optional. Adding them reduces seat count per table and limits centre-of-table decor on rectangles. Toggle below under <span className="font-medium">Charger plates</span>.</>}
+        </p>
+      </div>
+
       {/* Mixed split */}
       {tableShape === 'mixed' && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
@@ -631,6 +641,10 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
               <Toggle on={chargersOn} onToggle={() => setChargersOn(v => !v)}
                 label="Add charger plates"
                 sublabel={chargersOn ? `${guestCount} chargers needed` : 'Decorative base plates under the dinner plate'} />
+              <div className="mt-3 ml-13 pl-0.5 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800 space-y-1">
+                <p><span className="font-semibold">Heads up:</span> chargers reduce how many guests fit at a table. A 60&quot; round that seats 10 without chargers typically drops to 8 with chargers.</p>
+                <p>On rectangular tables, chargers also leave only about 6&quot; of centre space, which limits what decor you can run down the middle (runners and low florals work; tall arrangements get tight).</p>
+              </div>
             </div>
 
             {/* Linen notes */}

@@ -3,6 +3,14 @@ import { API_URL } from '../config/api'
 import { authHeaders } from '../utils/api'
 
 const DEFAULT_SIDES = 6
+const EMPTY_FRONT_ROWS = {
+  row1: { left: '', right: '' },
+  row2: { left: '', right: '', enabled: false },
+}
+
+function countNames(text) {
+  return (text || '').split('\n').map(s => s.trim()).filter(Boolean).length
+}
 
 export default function CeremonyChairPlan({ weddingId, userId, isAdmin = false }) {
   const [rows, setRows] = useState([])
@@ -10,6 +18,7 @@ export default function CeremonyChairPlan({ weddingId, userId, isAdmin = false }
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [aisleLabel, setAisleLabel] = useState('Aisle')
+  const [frontRows, setFrontRows] = useState(EMPTY_FRONT_ROWS)
   const saveTimer = useRef()
 
   useEffect(() => {
@@ -26,13 +35,23 @@ export default function CeremonyChairPlan({ weddingId, userId, isAdmin = false }
         setRows(data.plan.rows)
         if (data.plan.aisleLabel) setAisleLabel(data.plan.aisleLabel)
       }
+      if (data.plan?.frontRows) {
+        setFrontRows({
+          row1: { left: data.plan.frontRows.row1?.left || '', right: data.plan.frontRows.row1?.right || '' },
+          row2: {
+            left: data.plan.frontRows.row2?.left || '',
+            right: data.plan.frontRows.row2?.right || '',
+            enabled: !!data.plan.frontRows.row2?.enabled,
+          },
+        })
+      }
     } catch (err) {
       console.error('Failed to load ceremony plan:', err)
     }
     setLoading(false)
   }
 
-  const save = async (newRows, newAisleLabel) => {
+  const save = async (newRows, newAisleLabel, newFrontRows) => {
     clearTimeout(saveTimer.current)
     setSaved(false)
     setSaving(true)
@@ -40,7 +59,11 @@ export default function CeremonyChairPlan({ weddingId, userId, isAdmin = false }
       await fetch(`${API_URL}/api/ceremony-plan/${weddingId}`, {
         method: 'POST',
         headers: await authHeaders(),
-        body: JSON.stringify({ plan: { rows: newRows ?? rows, aisleLabel: newAisleLabel ?? aisleLabel } }),
+        body: JSON.stringify({ plan: {
+          rows: newRows ?? rows,
+          aisleLabel: newAisleLabel ?? aisleLabel,
+          frontRows: newFrontRows ?? frontRows,
+        } }),
       })
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
@@ -50,9 +73,27 @@ export default function CeremonyChairPlan({ weddingId, userId, isAdmin = false }
     setSaving(false)
   }
 
-  const autoSave = (newRows, newAisleLabel) => {
+  const autoSave = (newRows, newAisleLabel, newFrontRows) => {
     clearTimeout(saveTimer.current)
-    saveTimer.current = setTimeout(() => save(newRows, newAisleLabel), 1200)
+    saveTimer.current = setTimeout(() => save(newRows, newAisleLabel, newFrontRows), 1200)
+  }
+
+  const updateFrontRow = (rowKey, side, value) => {
+    const next = {
+      ...frontRows,
+      [rowKey]: { ...frontRows[rowKey], [side]: value },
+    }
+    setFrontRows(next)
+    autoSave(undefined, undefined, next)
+  }
+
+  const toggleRow2 = () => {
+    const next = {
+      ...frontRows,
+      row2: { ...frontRows.row2, enabled: !frontRows.row2.enabled },
+    }
+    setFrontRows(next)
+    autoSave(undefined, undefined, next)
   }
 
   const updateRow = (idx, field, value) => {
@@ -101,14 +142,10 @@ export default function CeremonyChairPlan({ weddingId, userId, isAdmin = false }
 
   if (loading) return <div className="text-sage-500 text-center py-8">Loading ceremony plan...</div>
 
-  // Client view: show placeholder until admin has built a plan
-  if (!isAdmin && rows.length === 0) {
-    return (
-      <div className="bg-cream-50 rounded-2xl border border-cream-200 p-12 text-center">
-        <p className="text-sage-500 text-sm">Your ceremony seating plan will appear here once your coordinator has set it up.</p>
-      </div>
-    )
-  }
+  const row1LeftCount = countNames(frontRows.row1.left)
+  const row1RightCount = countNames(frontRows.row1.right)
+  const row2LeftCount = countNames(frontRows.row2.left)
+  const row2RightCount = countNames(frontRows.row2.right)
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -119,31 +156,128 @@ export default function CeremonyChairPlan({ weddingId, userId, isAdmin = false }
           <p className="text-sage-600 text-sm">Visual seating layout for the ceremony</p>
         </div>
         <div className="flex items-center gap-2">
-          {isAdmin && saved && <span className="text-green-600 text-xs">Saved</span>}
-          {isAdmin && saving && <span className="text-sage-400 text-xs">Saving...</span>}
+          {saved && <span className="text-green-600 text-xs">Saved</span>}
+          {saving && <span className="text-sage-400 text-xs">Saving...</span>}
         </div>
       </div>
 
-      {/* Totals */}
-      <div className="bg-sage-600 text-white rounded-xl p-4">
-        <div className="grid grid-cols-3 gap-4 text-center">
-          <div>
-            <p className="text-2xl font-bold">{totalLeft}</p>
-            <p className="text-sage-200 text-sm">Left side</p>
-          </div>
-          <div>
-            <p className="text-3xl font-bold">{totalSeats}</p>
-            <p className="text-sage-200 text-sm">Total chairs</p>
-          </div>
-          <div>
-            <p className="text-2xl font-bold">{totalRight}</p>
-            <p className="text-sage-200 text-sm">Right side</p>
+      {/* Front row seating — who sits where */}
+      <div className="bg-white border border-cream-200 rounded-xl p-4 sm:p-5 space-y-4">
+        <div>
+          <h3 className="font-serif text-lg text-sage-700">Front row seating</h3>
+          <p className="text-sage-600 text-sm mt-1">
+            Who should sit in the front row? Immediate family usually — parents, siblings, grandparents.
+            Max 8 per side. The two sides don&apos;t need to match.
+          </p>
+        </div>
+
+        {/* Row 1 */}
+        <div className="space-y-3">
+          <p className="text-xs font-semibold text-sage-700 uppercase tracking-wide">Row 1 (front)</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-sage-500 mb-1">
+                Left side · <span className={row1LeftCount > 8 ? 'text-rose-500 font-medium' : 'text-sage-400'}>{row1LeftCount}/8</span>
+              </label>
+              <textarea
+                value={frontRows.row1.left}
+                onChange={e => updateFrontRow('row1', 'left', e.target.value)}
+                placeholder={'One name per line\ne.g. Mom\nDad\nGrandma Jean'}
+                rows={5}
+                className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 resize-none"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-sage-500 mb-1">
+                Right side · <span className={row1RightCount > 8 ? 'text-rose-500 font-medium' : 'text-sage-400'}>{row1RightCount}/8</span>
+              </label>
+              <textarea
+                value={frontRows.row1.right}
+                onChange={e => updateFrontRow('row1', 'right', e.target.value)}
+                placeholder={'One name per line'}
+                rows={5}
+                className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 resize-none"
+              />
+            </div>
           </div>
         </div>
-        <p className="text-sage-200 text-xs text-center mt-2">{rows.length} row{rows.length !== 1 ? 's' : ''}</p>
+
+        {/* Row 2 toggle + inputs */}
+        <div className="pt-2 border-t border-cream-100">
+          <label className="inline-flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={frontRows.row2.enabled}
+              onChange={toggleRow2}
+              className="w-4 h-4 rounded border-sage-300 text-sage-600"
+            />
+            <span className="text-sm text-sage-700">Also assign Row 2</span>
+          </label>
+
+          {frontRows.row2.enabled && (
+            <div className="mt-3 space-y-3">
+              <p className="text-xs font-semibold text-sage-700 uppercase tracking-wide">Row 2</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-sage-500 mb-1">
+                    Left side · <span className={row2LeftCount > 8 ? 'text-rose-500 font-medium' : 'text-sage-400'}>{row2LeftCount}/8</span>
+                  </label>
+                  <textarea
+                    value={frontRows.row2.left}
+                    onChange={e => updateFrontRow('row2', 'left', e.target.value)}
+                    placeholder={'One name per line'}
+                    rows={5}
+                    className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 resize-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-sage-500 mb-1">
+                    Right side · <span className={row2RightCount > 8 ? 'text-rose-500 font-medium' : 'text-sage-400'}>{row2RightCount}/8</span>
+                  </label>
+                  <textarea
+                    value={frontRows.row2.right}
+                    onChange={e => updateFrontRow('row2', 'right', e.target.value)}
+                    placeholder={'One name per line'}
+                    rows={5}
+                    className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 resize-none"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Visual layout */}
+      {/* Client-only placeholder when coordinator hasn't built the chair plan yet */}
+      {!isAdmin && rows.length === 0 && (
+        <div className="bg-cream-50 rounded-2xl border border-cream-200 p-12 text-center">
+          <p className="text-sage-500 text-sm">Your full ceremony seating plan will appear here once your coordinator has set it up.</p>
+        </div>
+      )}
+
+      {/* Totals — only once rows exist */}
+      {rows.length > 0 && (
+        <div className="bg-sage-600 text-white rounded-xl p-4">
+          <div className="grid grid-cols-3 gap-4 text-center">
+            <div>
+              <p className="text-2xl font-bold">{totalLeft}</p>
+              <p className="text-sage-200 text-sm">Left side</p>
+            </div>
+            <div>
+              <p className="text-3xl font-bold">{totalSeats}</p>
+              <p className="text-sage-200 text-sm">Total chairs</p>
+            </div>
+            <div>
+              <p className="text-2xl font-bold">{totalRight}</p>
+              <p className="text-sage-200 text-sm">Right side</p>
+            </div>
+          </div>
+          <p className="text-sage-200 text-xs text-center mt-2">{rows.length} row{rows.length !== 1 ? 's' : ''}</p>
+        </div>
+      )}
+
+      {/* Visual layout — admin always, couple only after rows exist */}
+      {(isAdmin || rows.length > 0) && (
       <div className="bg-cream-50 border border-cream-200 rounded-xl p-4 sm:p-6 overflow-x-auto">
         {rows.length === 0 ? (
           <p className="text-sage-400 text-sm text-center py-8">
@@ -215,6 +349,7 @@ export default function CeremonyChairPlan({ weddingId, userId, isAdmin = false }
           </div>
         )}
       </div>
+      )}
 
       {/* Row editor — admin only */}
       {isAdmin && <div className="border border-cream-200 rounded-xl overflow-hidden">
