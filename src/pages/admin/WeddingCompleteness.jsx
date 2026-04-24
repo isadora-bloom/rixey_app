@@ -41,6 +41,7 @@ const SECTIONS = [
       { label: 'Ceremony notes', check: d => !!d.details?.ceremony_notes, tab: 'wedding-details' },
       { label: 'Ceremony order (processional)', check: d => d.ceremonyCount > 0, tab: 'ceremony-order' },
       { label: 'Ceremony chair plan', check: d => d.ceremonyChairs > 0, tab: 'ceremony-chairs' },
+      { label: 'Front row seating', check: d => d.ceremonyFrontRowNames > 0, tab: 'ceremony-chairs', valueLabel: d => d.ceremonyFrontRowNames > 0 ? `${d.ceremonyFrontRowNames} names` : null },
     ],
   },
   {
@@ -177,6 +178,12 @@ export default function WeddingCompleteness({ weddingId, wedding, onSwitchTab })
         hasDecor: Array.isArray(decor) && decor.length > 0,
         ceremonyCount: Array.isArray(ceremony) ? ceremony.length : 0,
         ceremonyChairs: ceremonyPlan?.plan?.rows?.length || 0,
+        ceremonyFrontRowNames: (() => {
+          const fr = ceremonyPlan?.plan?.frontRows
+          if (!fr) return 0
+          const countLines = s => (s || '').split('\n').map(x => x.trim()).filter(Boolean).length
+          return countLines(fr.row1?.left) + countLines(fr.row1?.right)
+        })(),
       })
     } catch (err) {
       console.error('Completeness load error:', err)

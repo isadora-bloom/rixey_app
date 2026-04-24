@@ -616,6 +616,7 @@ export default function PrintView() {
                   <DataRow label="Guest Count" value={tables.guest_count} />
                   <DataRow label="Table Shape" value={tables.table_shape} />
                   <DataRow label="Guests per Table" value={tables.guests_per_table} />
+                  <DataRow label="Chargers" value={tables.chair_sash ? `Yes — ${tables.guest_count || ''} needed (reduces ~2 seats per round; ~6" centre space on rectangles)` : 'No'} />
                   <DataRow label="Linen Color" value={tables.linen_color} />
                   <DataRow label="Napkin Color" value={tables.napkin_color} />
                   <DataRow label="Head Table" value={tables.head_table ? `Yes — ${tables.head_table_size || ''} seats` : 'No'} />
@@ -899,38 +900,82 @@ export default function PrintView() {
         )}
 
         {/* CEREMONY CHAIRS */}
-        {sections.ceremonyChairs && ceremonyChairs?.rows?.length > 0 && (
+        {(() => {
+          const fr = ceremonyChairs?.frontRows
+          const splitNames = s => (s || '').split('\n').map(x => x.trim()).filter(Boolean)
+          const row1L = splitNames(fr?.row1?.left)
+          const row1R = splitNames(fr?.row1?.right)
+          const row2Enabled = !!fr?.row2?.enabled
+          const row2L = row2Enabled ? splitNames(fr?.row2?.left) : []
+          const row2R = row2Enabled ? splitNames(fr?.row2?.right) : []
+          const hasFrontRows = row1L.length + row1R.length + row2L.length + row2R.length > 0
+          const hasChairRows = ceremonyChairs?.rows?.length > 0
+          if (!sections.ceremonyChairs || (!hasChairRows && !hasFrontRows)) return null
+          return (
           <div className="print-section section-start">
             <SectionHeader title="Ceremony Chair Plan" icon="🪑" />
-            <div style={{ fontSize: 12 }}>
-              <p style={{ marginBottom: 8 }}>
-                <strong>{ceremonyChairs.rows.reduce((s, r) => s + (r.left || 0) + (r.right || 0), 0)} total chairs</strong> across {ceremonyChairs.rows.length} rows
-              </p>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
-                <thead>
-                  <tr style={{ borderBottom: '2px solid #333' }}>
-                    <th style={{ textAlign: 'left', padding: '3px 6px' }}>Row</th>
-                    <th style={{ textAlign: 'center', padding: '3px 6px' }}>Left</th>
-                    <th style={{ textAlign: 'center', padding: '3px 6px' }}>Right</th>
-                    <th style={{ textAlign: 'center', padding: '3px 6px' }}>Total</th>
-                    <th style={{ textAlign: 'left', padding: '3px 6px' }}>Label</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {ceremonyChairs.rows.map((row, i) => (
-                    <tr key={i} style={{ borderBottom: '1px solid #eee' }}>
-                      <td style={{ padding: '3px 6px' }}>R{i + 1}</td>
-                      <td style={{ textAlign: 'center', padding: '3px 6px' }}>{row.left}</td>
-                      <td style={{ textAlign: 'center', padding: '3px 6px' }}>{row.right}</td>
-                      <td style={{ textAlign: 'center', padding: '3px 6px', fontWeight: 600 }}>{(row.left || 0) + (row.right || 0)}</td>
-                      <td style={{ padding: '3px 6px', color: '#666' }}>{row.label || ''}</td>
+
+            {hasFrontRows && (
+              <div style={{ fontSize: 12, marginBottom: 14 }}>
+                <p style={{ fontWeight: 600, marginBottom: 6 }}>Front row seating</p>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                  <thead>
+                    <tr style={{ borderBottom: '2px solid #333' }}>
+                      <th style={{ textAlign: 'left', padding: '3px 6px', width: 70 }}>Row</th>
+                      <th style={{ textAlign: 'left', padding: '3px 6px' }}>Left side</th>
+                      <th style={{ textAlign: 'left', padding: '3px 6px' }}>Right side</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    <tr style={{ borderBottom: '1px solid #eee', verticalAlign: 'top' }}>
+                      <td style={{ padding: '4px 6px', fontWeight: 600 }}>Row 1</td>
+                      <td style={{ padding: '4px 6px' }}>{row1L.length ? row1L.join(', ') : <span style={{ color: '#aaa' }}>—</span>}</td>
+                      <td style={{ padding: '4px 6px' }}>{row1R.length ? row1R.join(', ') : <span style={{ color: '#aaa' }}>—</span>}</td>
+                    </tr>
+                    {row2Enabled && (
+                      <tr style={{ borderBottom: '1px solid #eee', verticalAlign: 'top' }}>
+                        <td style={{ padding: '4px 6px', fontWeight: 600 }}>Row 2</td>
+                        <td style={{ padding: '4px 6px' }}>{row2L.length ? row2L.join(', ') : <span style={{ color: '#aaa' }}>—</span>}</td>
+                        <td style={{ padding: '4px 6px' }}>{row2R.length ? row2R.join(', ') : <span style={{ color: '#aaa' }}>—</span>}</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {hasChairRows && (
+              <div style={{ fontSize: 12 }}>
+                <p style={{ marginBottom: 8 }}>
+                  <strong>{ceremonyChairs.rows.reduce((s, r) => s + (r.left || 0) + (r.right || 0), 0)} total chairs</strong> across {ceremonyChairs.rows.length} rows
+                </p>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                  <thead>
+                    <tr style={{ borderBottom: '2px solid #333' }}>
+                      <th style={{ textAlign: 'left', padding: '3px 6px' }}>Row</th>
+                      <th style={{ textAlign: 'center', padding: '3px 6px' }}>Left</th>
+                      <th style={{ textAlign: 'center', padding: '3px 6px' }}>Right</th>
+                      <th style={{ textAlign: 'center', padding: '3px 6px' }}>Total</th>
+                      <th style={{ textAlign: 'left', padding: '3px 6px' }}>Label</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ceremonyChairs.rows.map((row, i) => (
+                      <tr key={i} style={{ borderBottom: '1px solid #eee' }}>
+                        <td style={{ padding: '3px 6px' }}>R{i + 1}</td>
+                        <td style={{ textAlign: 'center', padding: '3px 6px' }}>{row.left}</td>
+                        <td style={{ textAlign: 'center', padding: '3px 6px' }}>{row.right}</td>
+                        <td style={{ textAlign: 'center', padding: '3px 6px', fontWeight: 600 }}>{(row.left || 0) + (row.right || 0)}</td>
+                        <td style={{ padding: '3px 6px', color: '#666' }}>{row.label || ''}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-        )}
+          )
+        })()}
 
         {/* SEATING BY TABLE */}
         {sections.seating && guests.length > 0 && (
