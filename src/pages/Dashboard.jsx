@@ -32,6 +32,7 @@ import TableCanvas from '../components/TableCanvas'
 import PreferredVendors from '../components/PreferredVendors'
 import WeddingWorksheets from '../components/WeddingWorksheets'
 import PhotoBucket from '../components/PhotoBucket'
+import DayOfMemories from '../components/DayOfMemories'
 import WeddingParty from '../components/WeddingParty'
 import WebsiteBuilder from '../components/WebsiteBuilder'
 import BarPlanner from '../components/BarPlanner'
@@ -937,6 +938,11 @@ export default function Dashboard() {
                 <div className="p-4 sm:p-6">
                   <ManorDownloads isAdmin={false} />
                 </div>
+              )}
+
+              {/* Day-of Memories section */}
+              {activeSection === 'day-of-memories' && profile?.wedding_id && (
+                <DayOfMemories weddingId={profile.wedding_id} isAdmin={false} />
               )}
 
               {/* Picks section */}

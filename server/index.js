@@ -27,6 +27,24 @@ const upload = multer({
   }
 });
 
+// Day-of media uploads — photos + videos delivered by the venue to the couple
+// after the wedding. Larger cap for phone videos; broader mime allowlist.
+const dayOfMediaUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB
+  fileFilter: (req, file, cb) => {
+    const allowed = [
+      'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'image/gif',
+      'video/mp4', 'video/quicktime', 'video/webm', 'video/x-msvideo',
+    ];
+    if (allowed.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`File type not allowed: ${file.mimetype}`));
+    }
+  }
+});
+
 const app = express();
 
 // CORS configuration for production and development
@@ -7527,6 +7545,106 @@ app.delete('/api/wedding-photos/:photoId', async (req, res) => {
       .from('wedding_photos')
       .delete()
       .eq('id', req.params.photoId);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Day-of Media (venue delivers photos/videos to couple after the wedding) ---
+app.get('/api/day-of-media/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('day_of_media')
+      .select('*')
+      .eq('wedding_id', req.params.weddingId)
+      .order('category')
+      .order('sort_order')
+      .order('created_at');
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/day-of-media/:weddingId/upload', dayOfMediaUpload.single('file'), async (req, res) => {
+  try {
+    const { weddingId } = req.params;
+    const { category, caption } = req.body;
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: 'No file provided' });
+    if (!['video_message', 'media'].includes(category)) {
+      return res.status(400).json({ error: 'Invalid category' });
+    }
+
+    const safeExt = (file.originalname.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const path = `${weddingId}/${category}/${Date.now()}-${Math.random().toString(36).slice(2)}.${safeExt}`;
+
+    const { error: uploadError } = await supabaseAdmin.storage
+      .from('day-of-media')
+      .upload(path, file.buffer, { contentType: file.mimetype, upsert: false });
+    if (uploadError) throw uploadError;
+
+    const { data: { publicUrl } } = supabaseAdmin.storage
+      .from('day-of-media')
+      .getPublicUrl(path);
+
+    const { data, error } = await supabaseAdmin
+      .from('day_of_media')
+      .insert({
+        wedding_id: weddingId,
+        category,
+        storage_path: path,
+        url: publicUrl,
+        filename: file.originalname,
+        mime_type: file.mimetype,
+        size_bytes: file.size,
+        caption: caption || null,
+      })
+      .select()
+      .single();
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    console.error('Day-of media upload error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/day-of-media/:id', validateBody(['caption', 'category', 'sort_order']), async (req, res) => {
+  try {
+    if (req.body.category && !['video_message', 'media'].includes(req.body.category)) {
+      return res.status(400).json({ error: 'Invalid category' });
+    }
+    const { data, error } = await supabaseAdmin
+      .from('day_of_media')
+      .update(req.body)
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/day-of-media/:id', async (req, res) => {
+  try {
+    const { data: item } = await supabaseAdmin
+      .from('day_of_media')
+      .select('storage_path')
+      .eq('id', req.params.id)
+      .single();
+    if (item?.storage_path) {
+      await supabaseAdmin.storage.from('day-of-media').remove([item.storage_path]);
+    }
+    const { error } = await supabaseAdmin
+      .from('day_of_media')
+      .delete()
+      .eq('id', req.params.id);
     if (error) throw error;
     res.json({ success: true });
   } catch (err) {

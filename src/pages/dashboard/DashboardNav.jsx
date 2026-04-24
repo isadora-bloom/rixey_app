@@ -44,6 +44,8 @@ const NAV_ITEMS = [
   { key: 'borrow', label: 'Borrow Brochure', icon: '/icons/borrow-brochure.svg' },
   { key: 'picks', label: 'Rixey Picks', icon: '/icons/rixey-picks.svg' },
   { key: 'downloads', label: 'Manor Downloads', icon: '/icons/resources.svg' },
+  { section: 'After the Day' },
+  { key: 'day-of-memories', label: 'Day-of Memories', icon: '/icons/inspiration.svg' },
   { section: 'Connect' },
   { key: 'inbox', label: 'Inbox', icon: '/icons/inbox.svg' },
   { key: 'booking', label: 'Book a Meeting', icon: '/icons/book-a-meeting.svg' },

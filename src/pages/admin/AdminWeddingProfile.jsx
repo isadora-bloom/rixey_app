@@ -15,6 +15,7 @@ import GuestCareNotes from '../../components/GuestCareNotes'
 import WeddingDetails from '../../components/WeddingDetails'
 import AllergyRegistry from '../../components/AllergyRegistry'
 import BedroomAssignments from '../../components/BedroomAssignments'
+import DayOfMemories from '../../components/DayOfMemories'
 import CeremonyOrder from '../../components/CeremonyOrder'
 import CeremonyChairPlan from '../../components/CeremonyChairPlan'
 import DecorInventory from '../../components/DecorInventory'
@@ -362,6 +363,8 @@ export default function AdminWeddingProfile({
                   { tab: 'website-builder', label: 'Website Builder', icon: '/icons/overview.svg' },
                   { tab: 'photo-library', label: 'Photo Library', icon: '/icons/inspiration.svg' },
                   { tab: 'wedding-party', label: 'Wedding Party', icon: '/icons/guest-care.svg' },
+                  { section: 'After the Day' },
+                  { tab: 'day-of-memories', label: 'Day-of Memories', icon: '/icons/inspiration.svg' },
                   { tab: 'activity', label: 'Recent Activity', icon: '/icons/recent-activity.svg', badge: activities.length },
                   { section: 'Admin' },
                   { tab: 'contract-upload', label: 'Upload Contract', icon: '/icons/upload-contract.svg' },
@@ -444,6 +447,7 @@ export default function AdminWeddingProfile({
                   <option value="website-builder">Website Builder</option>
                   <option value="photo-library">Photo Library</option>
                   <option value="wedding-party">Wedding Party</option>
+                  <option value="day-of-memories">Day-of Memories</option>
                   <option value="activity">
                     Recent Activity {activities.length > 0 ? `(${activities.length})` : ''}
                   </option>
@@ -1173,6 +1177,10 @@ export default function AdminWeddingProfile({
 
               {activeTab === 'bedrooms' && (
                 <BedroomAssignments weddingId={viewingWedding.id} userId={null} />
+              )}
+
+              {activeTab === 'day-of-memories' && (
+                <DayOfMemories weddingId={viewingWedding.id} isAdmin />
               )}
 
               {/* Vendors Tab */}
