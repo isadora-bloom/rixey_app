@@ -1,4 +1,3 @@
-import { PulseMeter } from '../../components/CommunicationPulse'
 import { getLastActivity } from './adminUtils'
 
 export default function AdminWeddingList({
@@ -6,14 +5,11 @@ export default function AdminWeddingList({
   displayedWeddings,
   allMessages,
   escalations,
-  pulses,
   couplePhotos,
   showArchived,
   setShowArchived,
   sortBy,
   setSortBy,
-  pulseFilter,
-  setPulseFilter,
   stats,
   editingWedding,
   setEditingWedding,
@@ -80,13 +76,7 @@ export default function AdminWeddingList({
     return true
   })
 
-  // Communication concerns from already-loaded pulse data
-  const concerns = Object.entries(pulses)
-    .filter(([, p]) => p.level === 'less')
-    .map(([wid]) => weddings.find(w => w.id === wid))
-    .filter(Boolean)
-
-  const hasAnything = last24h.signups.length > 0 || deduped.length > 0 || concerns.length > 0
+  const hasAnything = last24h.signups.length > 0 || deduped.length > 0
 
   return (
     <>
@@ -141,21 +131,6 @@ export default function AdminWeddingList({
                   </div>
                 )
               })}
-
-              {/* Communication concerns */}
-              {concerns.map(w => (
-                <div key={w.id}
-                  onClick={() => viewWeddingProfile(w)}
-                  className="flex items-center gap-3 px-4 py-2.5 bg-slate-50 hover:bg-slate-100 cursor-pointer transition border-l-2 border-slate-300">
-                  <span className="text-base">📉</span>
-                  <div className="flex-1 min-w-0">
-                    <span className="text-sm font-medium text-sage-800">{w.couple_names}</span>
-                    <span className="text-sm text-slate-600"> is communicating less than usual</span>
-                    <span className="text-xs text-slate-400 ml-2">· {pulses[w.id]?.score ?? 0} touchpoints this month, expected {pulses[w.id]?.expected?.min}–{pulses[w.id]?.expected?.max}</span>
-                  </div>
-                  <PulseMeter level="less" />
-                </div>
-              ))}
 
             </div>
           )}
@@ -249,31 +224,6 @@ export default function AdminWeddingList({
                 {showArchived ? 'Archived Weddings' : 'Active Weddings'}
               </h2>
               <div className="flex items-center gap-3 flex-wrap">
-                {!showArchived && Object.keys(pulses).length > 0 && (
-                  <div className="flex items-center gap-1 bg-cream-50 rounded-lg p-1">
-                    {[
-                      { key: 'all', label: 'All' },
-                      { key: 'less', label: 'Quieter' },
-                      { key: 'typical', label: 'About right' },
-                      { key: 'more', label: 'More active' },
-                    ].map(({ key, label }) => (
-                      <button
-                        key={key}
-                        onClick={() => setPulseFilter(key)}
-                        className={`px-3 py-1 text-sm rounded-md transition ${
-                          pulseFilter === key ? 'bg-white text-sage-700 shadow-sm' : 'text-sage-500 hover:text-sage-700'
-                        }`}
-                      >
-                        {label}
-                        {key !== 'all' && Object.values(pulses).filter(p => p.level === key).length > 0 && (
-                          <span className="ml-1 text-xs text-sage-400">
-                            ({Object.values(pulses).filter(p => p.level === key).length})
-                          </span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                )}
                 {!showArchived && (
                   <div className="flex items-center gap-1 bg-cream-50 rounded-lg p-1">
                     <button
@@ -370,9 +320,6 @@ export default function AdminWeddingList({
                             {wedding.wedding_date ? new Date(wedding.wedding_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'No date set'}
                             <span className="mx-1 sm:mx-2 text-sage-300">·</span>
                             <span className="font-mono text-xs">{wedding.event_code}</span>
-                            {pulses[wedding.id] && (
-                              <><span className="mx-1 sm:mx-2 text-sage-300">·</span><span className="text-xs text-sage-400">{pulses[wedding.id].level}</span><PulseMeter level={pulses[wedding.id].level} /></>
-                            )}
                           </p>
                           {wedding.profiles?.length > 0 && (
                             <div className="flex flex-wrap gap-1 mt-1.5 sm:mt-2">

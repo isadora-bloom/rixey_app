@@ -59,7 +59,6 @@ export default function Admin() {
   const [notesSearchQuery, setNotesSearchQuery] = useState('')
   const [collapsedNoteCategories, setCollapsedNoteCategories] = useState({})
   const [sortBy, setSortBy] = useState('lastActivity') // 'lastActivity' or 'weddingDate'
-  const [pulseFilter, setPulseFilter] = useState('all') // 'all' | 'less' | 'typical' | 'more'
   const [uncertainQuestions, setUncertainQuestions] = useState([])
   const [answeringQuestion, setAnsweringQuestion] = useState(null)
   const [adminAnswer, setAdminAnswer] = useState('')
@@ -100,19 +99,8 @@ export default function Admin() {
   const [injecting, setInjecting] = useState(false)
   const [checkingIn, setCheckingIn] = useState(false)
   const [checkedIn, setCheckedIn] = useState(false)
-  const [pulses, setPulses] = useState({})
-  const [weddingPulse, setWeddingPulse] = useState(null)
   const [last24h, setLast24h] = useState({ signups: [], activity: [] })
   const [last24hLoading, setLast24hLoading] = useState(true)
-
-  // Debug pulse key matching
-  useEffect(() => {
-    if (Object.keys(pulses).length > 0 && weddings.length > 0) {
-      console.log('[Pulse] pulse keys (first 3):', Object.keys(pulses).slice(0, 3))
-      console.log('[Pulse] wedding IDs (first 3):', weddings.slice(0, 3).map(w => w.id))
-      console.log('[Pulse] first match?', pulses[weddings[0]?.id])
-    }
-  }, [pulses, weddings])
 
   // Keep unanswered count in sync with loaded uncertain questions
   useEffect(() => {
@@ -488,14 +476,6 @@ export default function Admin() {
       setWeddings([])
     }
 
-    // Load communication pulses for all weddings (background, non-blocking)
-    authHeaders().then(hdrs =>
-      fetch(`${API_URL}/api/communication-pulse`, { headers: hdrs })
-        .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
-        .then(d => { console.log('[Pulse] got response:', d); if (d.pulses) setPulses(d.pulses); else console.warn('[Pulse] no pulses key in response:', d) })
-        .catch(err => console.error('[Pulse] Failed to load pulses:', err))
-    )
-
     // Load last 24h activity summary
     authHeaders().then(hdrs =>
       fetch(`${API_URL}/api/admin/last-24h`, { headers: hdrs })
@@ -625,20 +605,11 @@ export default function Admin() {
 
   const viewWeddingProfile = async (wedding) => {
     setViewingWedding(wedding)
-    setWeddingPulse(null)
     setLoadingMessages(true)
     setSearchQuery('')
     setNotesSearchQuery('')
     setNotesHighlights('')
     setActiveTab('overview')
-
-    // Fire-and-forget pulse load
-    authHeaders().then(hdrs =>
-      fetch(`${API_URL}/api/communication-pulse/${wedding.id}`, { headers: hdrs })
-        .then(r => r.json())
-        .then(d => { if (d.level) setWeddingPulse(d) })
-        .catch(() => {})
-    )
 
     // PARALLELIZED: Load all wedding data concurrently with Promise.allSettled
     const hdrs = await authHeaders()
@@ -960,10 +931,6 @@ export default function Admin() {
       if (showArchived) return w.archived
       return !w.archived
     })
-    .filter(w => {
-      if (pulseFilter === 'all') return true
-      return pulses[w.id]?.level === pulseFilter
-    })
     .sort((a, b) => {
       if (sortBy === 'lastActivity') {
         // Get last activity for each wedding
@@ -1014,7 +981,6 @@ export default function Admin() {
         setSearchQuery={setSearchQuery}
         escalations={escalations}
         markEscalationHandled={markEscalationHandled}
-        weddingPulse={weddingPulse}
         couplePhotos={couplePhotos}
         setEnlargedPhoto={setEnlargedPhoto}
         setCouplePhotos={setCouplePhotos}
@@ -1294,14 +1260,11 @@ export default function Admin() {
             displayedWeddings={displayedWeddings}
             allMessages={allMessages}
             escalations={escalations}
-            pulses={pulses}
             couplePhotos={couplePhotos}
             showArchived={showArchived}
             setShowArchived={setShowArchived}
             sortBy={sortBy}
             setSortBy={setSortBy}
-            pulseFilter={pulseFilter}
-            setPulseFilter={setPulseFilter}
             stats={stats}
             editingWedding={editingWedding}
             setEditingWedding={setEditingWedding}
