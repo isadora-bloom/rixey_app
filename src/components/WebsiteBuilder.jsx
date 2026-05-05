@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
 import { Button, Input } from './ui'
+import { useToast } from './ui/Toast'
 
 const APP_URL = import.meta.env.VITE_APP_URL || window.location.origin
 
@@ -144,6 +145,7 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
   const [sections, setSections]               = useState(
     Object.fromEntries(SECTION_TOGGLES.map(s => [s.key, true]))
   )
+  const { error: toastError } = useToast()
 
   useEffect(() => { loadSettings() }, [weddingId])
 
@@ -268,9 +270,8 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
       ...sections,
     }
     try {
-      await fetch(`${API_URL}/api/wedding-website/${weddingId}`, {
+      await apiFetch(`${API_URL}/api/wedding-website/${weddingId}`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify(payload),
       })
       if (publishOverride !== undefined) setPublished(publishOverride)
@@ -278,6 +279,7 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
       setTimeout(() => setSaved(false), 2500)
     } catch (err) {
       console.error('Save error:', err)
+      toastError(`Could not save website: ${err.message}`)
     }
     setSaving(false)
   }

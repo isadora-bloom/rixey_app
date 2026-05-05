@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
 import { Button, Input, ConfirmDialog } from './ui'
+import { useToast } from './ui/Toast'
 const PlusIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
 const PencilIcon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
 const Trash2Icon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
@@ -60,6 +61,7 @@ export default function AllergyRegistry({ weddingId, userId }) {
   const [deletingId, setDeletingId] = useState(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [confirmTarget, setConfirmTarget] = useState(null)
+  const { error: toastError } = useToast()
 
   useEffect(() => {
     if (!weddingId) return
@@ -118,39 +120,28 @@ export default function AllergyRegistry({ weddingId, userId }) {
     setSaveError(null)
     try {
       if (editingId) {
-        const res = await fetch(`${API_URL}/api/allergies/${editingId}`, {
+        const updated = await apiFetch(`${API_URL}/api/allergies/${editingId}`, {
           method: 'PUT',
-          headers: await authHeaders(),
           body: JSON.stringify({ ...formData, wedding_id: weddingId }),
         })
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}))
-          throw new Error(body.error || `Save failed (${res.status})`)
-        }
-        const updated = await res.json()
         setAllergies((prev) =>
           prev.map((a) => (a.id === editingId ? { ...a, ...updated } : a))
         )
       } else {
-        const res = await fetch(`${API_URL}/api/allergies`, {
+        const created = await apiFetch(`${API_URL}/api/allergies`, {
           method: 'POST',
-          headers: await authHeaders(),
           body: JSON.stringify({
             wedding_id: weddingId,
             ...formData,
             sort_order: allergies.length,
           }),
         })
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}))
-          throw new Error(body.error || `Save failed (${res.status})`)
-        }
-        const created = await res.json()
         setAllergies((prev) => [...prev, created])
       }
       handleCancel()
     } catch (err) {
       setSaveError(`Couldn't save ${formData.guest_name || 'allergy'}: ${err.message}. Please try again.`)
+      toastError(`Could not save ${formData.guest_name || 'allergy'}: ${err.message}`)
     } finally {
       setSaving(false)
     }
@@ -163,12 +154,14 @@ export default function AllergyRegistry({ weddingId, userId }) {
 
   const handleDeleteConfirm = async () => {
     const id = confirmTarget
+    const snapshot = allergies
     setDeletingId(id)
+    setAllergies((prev) => prev.filter((a) => a.id !== id))
     try {
-      await fetch(`${API_URL}/api/allergies/${id}`, { method: 'DELETE', headers: await authHeaders() })
-      setAllergies((prev) => prev.filter((a) => a.id !== id))
+      await apiFetch(`${API_URL}/api/allergies/${id}`, { method: 'DELETE' })
     } catch (err) {
-      console.error(err)
+      setAllergies(snapshot)
+      toastError(`Could not delete entry: ${err.message}`)
     } finally {
       setDeletingId(null)
       setConfirmTarget(null)

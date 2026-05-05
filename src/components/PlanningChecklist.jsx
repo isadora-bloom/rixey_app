@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
 import SaveIndicator from './ui/SaveIndicator'
+import { useToast } from './ui/Toast'
 
 
 const CATEGORIES = ['Venue', 'Vendors', 'Attire & Beauty', 'Decor', 'Timeline', 'Guests', 'Other']
@@ -15,6 +16,7 @@ export default function PlanningChecklist({ weddingId, userId, compact = false, 
   const [filterCategory, setFilterCategory] = useState('all')
   const [showCompleted, setShowCompleted] = useState(false)
   const [saveState, setSaveState] = useState('idle')
+  const { error: toastError } = useToast()
 
   useEffect(() => {
     if (weddingId) {
@@ -31,12 +33,14 @@ export default function PlanningChecklist({ weddingId, userId, compact = false, 
 
       if (data.tasks && data.tasks.length === 0) {
         // Initialize default checklist if empty
-        const initResponse = await fetch(`${API_URL}/api/checklist/initialize/${weddingId}`, {
-          method: 'POST',
-          headers: await authHeaders()
-        })
-        const initData = await initResponse.json()
-        setTasks(initData.tasks || [])
+        try {
+          const initData = await apiFetch(`${API_URL}/api/checklist/initialize/${weddingId}`, {
+            method: 'POST',
+          })
+          setTasks(initData.tasks || [])
+        } catch (err) {
+          toastError(`Could not initialize checklist: ${err.message}`)
+        }
       } else {
         setTasks(data.tasks || [])
       }
@@ -49,23 +53,21 @@ export default function PlanningChecklist({ weddingId, userId, compact = false, 
   const handleToggle = async (taskId, currentCompleted) => {
     setSaveState('saving')
     try {
-      const response = await fetch(`${API_URL}/api/checklist/${taskId}`, {
+      const data = await apiFetch(`${API_URL}/api/checklist/${taskId}`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify({
           isCompleted: !currentCompleted,
           completedBy: userId,
           completedVia: 'manual'
         })
       })
-      const data = await response.json()
       if (data.task) {
         setTasks(tasks.map(t => t.id === taskId ? data.task : t))
       }
       setSaveState('saved')
-    } catch (error) {
-      console.error('Error toggling task:', error)
+    } catch (err) {
       setSaveState('idle')
+      toastError(`Could not update task: ${err.message}`)
     }
   }
 
@@ -75,9 +77,8 @@ export default function PlanningChecklist({ weddingId, userId, compact = false, 
 
     setSaving(true)
     try {
-      const response = await fetch(`${API_URL}/api/checklist`, {
+      const data = await apiFetch(`${API_URL}/api/checklist`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({
           weddingId,
           taskText: newTask.text.trim(),
@@ -85,14 +86,13 @@ export default function PlanningChecklist({ weddingId, userId, compact = false, 
           dueDate: newTask.dueDate || null
         })
       })
-      const data = await response.json()
       if (data.task) {
         setTasks([...tasks, data.task])
         setNewTask({ text: '', category: 'Other', dueDate: '' })
         setShowAddForm(false)
       }
-    } catch (error) {
-      console.error('Error adding task:', error)
+    } catch (err) {
+      toastError(`Could not add task: ${err.message}`)
     }
     setSaving(false)
   }
@@ -100,19 +100,19 @@ export default function PlanningChecklist({ weddingId, userId, compact = false, 
   const handleDeleteTask = async (taskId) => {
     if (!confirm('Delete this task?')) return
 
+    const snapshot = tasks
+    setTasks(tasks.filter(t => t.id !== taskId))
     try {
-      const response = await fetch(`${API_URL}/api/checklist/${taskId}`, {
+      const data = await apiFetch(`${API_URL}/api/checklist/${taskId}`, {
         method: 'DELETE',
-        headers: await authHeaders()
       })
-      const data = await response.json()
-      if (data.success) {
-        setTasks(tasks.filter(t => t.id !== taskId))
-      } else if (data.error) {
-        alert(data.error)
+      if (data && data.error) {
+        setTasks(snapshot)
+        toastError(data.error)
       }
-    } catch (error) {
-      console.error('Error deleting task:', error)
+    } catch (err) {
+      setTasks(snapshot)
+      toastError(`Could not delete task: ${err.message}`)
     }
   }
 

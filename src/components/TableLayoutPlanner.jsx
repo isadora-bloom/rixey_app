@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
+import { useToast } from './ui/Toast'
 
 
 const TABLE_SHAPES = [
@@ -196,6 +197,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
   const [saving, setSaving]     = useState(false)
   const [saved, setSaved]       = useState(false)
   const [saveError, setSaveError] = useState(null)
+  const { error: toastError } = useToast()
 
   useEffect(() => {
     if (weddingId) loadTableSetup()
@@ -250,9 +252,8 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
     setSaving(true)
     setSaveError(null)
     try {
-      const res = await fetch(`${API_URL}/api/tables`, {
+      await apiFetch(`${API_URL}/api/tables`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({
           weddingId,
           userId,
@@ -280,16 +281,13 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
           isDraft: draft,
         })
       })
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
-        throw new Error(body.error || `Error ${res.status}`)
-      }
       setIsDraft(draft)
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
     } catch (err) {
       console.error('Failed to save table setup:', err)
       setSaveError('Save failed — please try again.')
+      toastError(`Could not save table setup: ${err.message}`)
     }
     setSaving(false)
   }

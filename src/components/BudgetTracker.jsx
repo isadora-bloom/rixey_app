@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
+import { useToast } from './ui/Toast'
 
 function useDebounce(value, delay = 500) {
   const [debounced, setDebounced] = useState(value)
@@ -36,6 +37,7 @@ export default function BudgetTracker({ weddingId }) {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [saveError, setSaveError] = useState(null)
+  const { error: toastError } = useToast()
 
   useEffect(() => {
     loadBudget()
@@ -117,20 +119,16 @@ export default function BudgetTracker({ weddingId }) {
     setSaving(true)
     setSaveError(null)
     try {
-      const res = await fetch(`${API_URL}/api/budget`, {
+      await apiFetch(`${API_URL}/api/budget`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({ weddingId, totalBudget, isShared, categories })
       })
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
-        throw new Error(body.error || `Error ${res.status}`)
-      }
       setSaved(true)
       setTimeout(() => setSaved(false), 2500)
     } catch (err) {
       console.error('Failed to save budget:', err)
       setSaveError('Save failed — please try again.')
+      toastError(`Could not save budget: ${err.message}`)
     }
     setSaving(false)
   }

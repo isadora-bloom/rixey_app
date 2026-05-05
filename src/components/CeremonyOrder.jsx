@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
 import SaveIndicator from './ui/SaveIndicator'
 import { Button } from './ui'
+import { useToast } from './ui/Toast'
 
 
 const SECTIONS = [
@@ -75,11 +76,9 @@ function buildUpdates(steps) {
 }
 
 async function persistUpdates(updates) {
-  const hdrs = await authHeaders();
   await Promise.all(updates.map(({ id, sort_order }) =>
-    fetch(`${API_URL}/api/ceremony-order/${id}`, {
+    apiFetch(`${API_URL}/api/ceremony-order/${id}`, {
       method: 'PUT',
-      headers: hdrs,
       body: JSON.stringify({ sort_order }),
     })
   ));
@@ -254,20 +253,24 @@ function AddPersonForm({ onAdd, onCancel }) {
 function SectionBuilder({ section, sectionEntries, onAdd, onDelete, onReorder, onSaveStateChange }) {
   const [draggingId, setDraggingId] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
+  const { error: toastError } = useToast();
 
   const steps = toSteps(sectionEntries);
   const isDragging = draggingId !== null;
 
   const applyNewSteps = async (newSteps) => {
     const updates = buildUpdates(newSteps);
+    const snapshot = sectionEntries.map(e => ({ id: e.id, sort_order: e.sort_order }));
     onReorder(updates);
     setDraggingId(null);
     onSaveStateChange?.('saving');
     try {
       await persistUpdates(updates);
       onSaveStateChange?.('saved');
-    } catch {
+    } catch (err) {
+      onReorder(snapshot);
       onSaveStateChange?.('idle');
+      toastError(`Could not save ceremony order: ${err.message}`);
     }
   };
 
@@ -392,6 +395,7 @@ export default function CeremonyOrder({ weddingId }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [saveState, setSaveState] = useState('idle');
+  const { error: toastError } = useToast();
 
   const load = useCallback(async () => {
     try {
@@ -424,30 +428,29 @@ export default function CeremonyOrder({ weddingId }) {
     };
     setSaveState('saving');
     try {
-      const res = await fetch(`${API_URL}/api/ceremony-order`, {
+      const newEntry = await apiFetch(`${API_URL}/api/ceremony-order`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error('Failed to add');
-      const newEntry = await res.json();
       setEntries(prev => [...prev, newEntry]);
       setSaveState('saved');
     } catch (err) {
-      console.error(err);
       setSaveState('idle');
+      toastError(`Could not add ${payload.participant_name}: ${err.message}`);
     }
   };
 
   const handleDelete = async (id) => {
+    const snapshot = entries;
     setSaveState('saving');
+    setEntries(prev => prev.filter(e => e.id !== id));
     try {
-      await fetch(`${API_URL}/api/ceremony-order/${id}`, { method: 'DELETE', headers: await authHeaders() });
-      setEntries(prev => prev.filter(e => e.id !== id));
+      await apiFetch(`${API_URL}/api/ceremony-order/${id}`, { method: 'DELETE' });
       setSaveState('saved');
     } catch (err) {
-      console.error(err);
+      setEntries(snapshot);
       setSaveState('idle');
+      toastError(`Could not delete entry: ${err.message}`);
     }
   };
 

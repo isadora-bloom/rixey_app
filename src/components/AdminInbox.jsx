@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { apiFetch, authHeaders } from '../utils/api'
+import { useToast } from './ui/Toast'
 
 
 export default function AdminInbox({ weddings = [], onUnreadChange }) {
+  const { error: toastError } = useToast()
   const [conversations, setConversations] = useState([])
   const [selectedWedding, setSelectedWedding] = useState(null)
   const [messages, setMessages] = useState([])
@@ -74,12 +76,15 @@ export default function AdminInbox({ weddings = [], onUnreadChange }) {
       const data = await response.json()
       setMessages(data.messages || [])
 
-      // Mark client messages as read
-      await fetch(`${API_URL}/api/messages/read/${weddingId}`, {
-        method: 'PUT',
-        headers: await authHeaders(),
-        body: JSON.stringify({ senderType: 'client' })
-      })
+      // Mark client messages as read (fire-and-forget; toast on error)
+      try {
+        await apiFetch(`${API_URL}/api/messages/read/${weddingId}`, {
+          method: 'PUT',
+          body: JSON.stringify({ senderType: 'client' })
+        })
+      } catch (err) {
+        toastError(`Could not mark messages as read: ${err.message}`)
+      }
 
       // Refresh unread counts
       loadUnreadCounts()
@@ -95,23 +100,19 @@ export default function AdminInbox({ weddings = [], onUnreadChange }) {
 
     setSending(true)
     try {
-      const response = await fetch(`${API_URL}/api/messages`, {
+      await apiFetch(`${API_URL}/api/messages`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({
           weddingId: selectedWedding.id,
           senderType: 'admin',
           content: newMessage.trim()
         })
       })
-
-      if (response.ok) {
-        setNewMessage('')
-        loadMessages(selectedWedding.id)
-        loadConversations()
-      }
+      setNewMessage('')
+      loadMessages(selectedWedding.id)
+      loadConversations()
     } catch (err) {
-      console.error('Failed to send message:', err)
+      toastError(`Could not send message: ${err.message}`)
     }
     setSending(false)
   }

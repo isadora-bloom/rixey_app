@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
 import { Button, Input } from './ui'
+import { useToast } from './ui/Toast'
 
 
 const ROLES = [
@@ -55,6 +56,7 @@ export default function MakeupSchedule({ weddingId, userId }) {
   const [error, setError] = useState(null);
   const [saveError, setSaveError] = useState(null);
   const [hairMakeupDoneTime, setHairMakeupDoneTime] = useState(null);
+  const { error: toastError } = useToast();
 
   useEffect(() => {
     if (!weddingId) return;
@@ -94,9 +96,8 @@ export default function MakeupSchedule({ weddingId, userId }) {
     if (!formData.participant_name.trim()) return;
     setSubmitting(true);
     try {
-      const res = await fetch(`${API_URL}/api/makeup`, {
+      const newEntry = await apiFetch(`${API_URL}/api/makeup`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({
           wedding_id: weddingId,
           participant_name: formData.participant_name.trim(),
@@ -108,13 +109,11 @@ export default function MakeupSchedule({ weddingId, userId }) {
           user_id: userId,
         }),
       });
-      if (!res.ok) throw new Error('Failed to add entry');
-      const newEntry = await res.json();
       setEntries(prev => sortByTime([...prev, newEntry]));
       setFormData(EMPTY_FORM);
       setShowForm(false);
     } catch (err) {
-      alert(err.message);
+      toastError(`Could not add ${formData.participant_name}: ${err.message}`);
     } finally {
       setSubmitting(false);
     }
@@ -122,12 +121,13 @@ export default function MakeupSchedule({ weddingId, userId }) {
 
   async function handleDelete(id) {
     if (!window.confirm('Remove this person from the schedule?')) return;
+    const snapshot = entries;
+    setEntries(prev => prev.filter(e => e.id !== id));
     try {
-      const res = await fetch(`${API_URL}/api/makeup/${id}`, { method: 'DELETE', headers: await authHeaders() });
-      if (!res.ok) throw new Error('Delete failed');
-      setEntries(prev => prev.filter(e => e.id !== id));
+      await apiFetch(`${API_URL}/api/makeup/${id}`, { method: 'DELETE' });
     } catch (err) {
-      alert(err.message);
+      setEntries(snapshot);
+      toastError(`Could not delete entry: ${err.message}`);
     }
   }
 
@@ -149,9 +149,8 @@ export default function MakeupSchedule({ weddingId, userId }) {
 
     setSaveError(null);
     try {
-      const res = await fetch(`${API_URL}/api/makeup/${id}`, {
+      await apiFetch(`${API_URL}/api/makeup/${id}`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify({
           participant_name: updated.participant_name,
           role: updated.role,
@@ -160,10 +159,6 @@ export default function MakeupSchedule({ weddingId, userId }) {
           notes: updated.notes,
         }),
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `Save failed (${res.status})`);
-      }
       setSavedRows(prev => ({ ...prev, [id]: true }));
       setTimeout(() => {
         setSavedRows(prev => {
@@ -174,8 +169,9 @@ export default function MakeupSchedule({ weddingId, userId }) {
       }, 2000);
     } catch (err) {
       setSaveError(`Couldn't save change to ${updated.participant_name || 'entry'}: ${err.message}. The value shown isn't saved, please try again.`);
+      toastError(`Could not save ${updated.participant_name || 'entry'}: ${err.message}`);
     }
-  }, [editingCell, editValue]);
+  }, [editingCell, editValue, toastError]);
 
   if (loading) {
     return (

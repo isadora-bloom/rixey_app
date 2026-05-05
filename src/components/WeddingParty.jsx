@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
 import { supabase } from '../lib/supabase'
+import { useToast } from './ui/Toast'
 
 
 // ── Role suggestions — no gender or family-structure assumptions ───────────────
@@ -388,6 +389,7 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
   const [editingPartners, setEditingPartners] = useState(false)
   const [p1Draft, setP1Draft] = useState('')
   const [p2Draft, setP2Draft] = useState('')
+  const { error: toastError } = useToast()
 
   useEffect(() => {
     loadAll()
@@ -448,59 +450,63 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
 
   const handleSavePartners = async () => {
     try {
-      await fetch(`${API_URL}/api/weddings/${weddingId}/partners`, {
+      await apiFetch(`${API_URL}/api/weddings/${weddingId}/partners`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify({ partner1_name: p1Draft.trim(), partner2_name: p2Draft.trim() })
       })
       setPartner1(p1Draft.trim())
       setPartner2(p2Draft.trim())
       setEditingPartners(false)
     } catch (err) {
-      console.error('Failed to save partner names:', err)
+      toastError(`Could not save partner names: ${err.message}`)
     }
   }
 
   const handleAdd = async (form) => {
-    const res = await fetch(`${API_URL}/api/wedding-party/${weddingId}`, {
-      method: 'POST',
-      headers: await authHeaders(),
-      body: JSON.stringify({ ...form, sort_order: members.length })
-    })
-    if (res.ok) {
-      const newMember = await res.json()
+    try {
+      const newMember = await apiFetch(`${API_URL}/api/wedding-party/${weddingId}`, {
+        method: 'POST',
+        body: JSON.stringify({ ...form, sort_order: members.length })
+      })
       setMembers(prev => [...prev, newMember])
       // Remove from available guests
       if (newMember.guest_id) {
         setGuests(prev => prev.filter(g => g.id !== newMember.guest_id))
       }
       setShowAdd(false)
+    } catch (err) {
+      toastError(`Could not add ${form.member_name}: ${err.message}`)
     }
   }
 
   const handleUpdate = async (id, form) => {
-    const res = await fetch(`${API_URL}/api/wedding-party/${id}`, {
-      method: 'PUT',
-      headers: await authHeaders(),
-      body: JSON.stringify(form)
-    })
-    if (res.ok) {
-      const updated = await res.json()
+    try {
+      const updated = await apiFetch(`${API_URL}/api/wedding-party/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(form)
+      })
       setMembers(prev => prev.map(m => m.id === id ? updated : m))
       setEditingId(null)
+    } catch (err) {
+      toastError(`Could not update ${form.member_name}: ${err.message}`)
     }
   }
 
   const handleDelete = async (id) => {
     const member = members.find(m => m.id === id)
-    await fetch(`${API_URL}/api/wedding-party/${id}`, { method: 'DELETE', headers: await authHeaders() })
+    const snapshot = members
     setMembers(prev => prev.filter(m => m.id !== id))
-    // Return guest to available list
-    if (member?.guest_id) {
-      const res = await fetch(`${API_URL}/api/guests/${weddingId}`, { headers: await authHeaders() })
-      const data = await res.json()
-      const guest = (data.guests || data).find(g => g.id === member.guest_id)
-      if (guest) setGuests(prev => [...prev, guest])
+    try {
+      await apiFetch(`${API_URL}/api/wedding-party/${id}`, { method: 'DELETE' })
+      // Return guest to available list
+      if (member?.guest_id) {
+        const data = await apiFetch(`${API_URL}/api/guests/${weddingId}`)
+        const guest = (data.guests || data).find(g => g.id === member.guest_id)
+        if (guest) setGuests(prev => [...prev, guest])
+      }
+    } catch (err) {
+      setMembers(snapshot)
+      toastError(`Could not remove ${member?.member_name || 'member'}: ${err.message}`)
     }
   }
 
@@ -509,9 +515,8 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
     try {
       for (const m of toAdd) {
         const mapping = getCeremonyMapping(m.role)
-        await fetch(`${API_URL}/api/ceremony-order`, {
+        await apiFetch(`${API_URL}/api/ceremony-order`, {
           method: 'POST',
-          headers: await authHeaders(),
           body: JSON.stringify({
             wedding_id: weddingId,
             section: mapping.section,
@@ -524,12 +529,12 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
         })
       }
       // Reload ceremony entries
-      const res = await fetch(`${API_URL}/api/ceremony-order/${weddingId}`, { headers: await authHeaders() })
-      setExistingCeremony(await res.json())
+      const data = await apiFetch(`${API_URL}/api/ceremony-order/${weddingId}`)
+      setExistingCeremony(data)
       setSyncDone(true)
       setTimeout(() => setSyncDone(false), 3000)
     } catch (err) {
-      console.error('Sync error:', err)
+      toastError(`Could not sync to ceremony order: ${err.message}`)
     }
     setSyncing(false)
     setShowSync(false)

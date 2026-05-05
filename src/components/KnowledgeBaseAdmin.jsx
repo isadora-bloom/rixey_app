@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
 import { Button, Input, ConfirmDialog } from './ui'
+import { useToast } from './ui/Toast'
 
 
 // Splits text and wraps matched parts in a highlight span
@@ -50,6 +51,7 @@ export default function KnowledgeBaseAdmin() {
     content: ''
   })
   const [saving, setSaving] = useState(false)
+  const { error: toastError } = useToast()
 
   useEffect(() => {
     loadEntries()
@@ -77,18 +79,15 @@ export default function KnowledgeBaseAdmin() {
         ? `${API_URL}/api/knowledge-base/${editingId}`
         : `${API_URL}/api/knowledge-base`
 
-      const response = await fetch(url, {
+      await apiFetch(url, {
         method: editingId ? 'PUT' : 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify(formData)
       })
-
-      if (response.ok) {
-        await loadEntries()
-        resetForm()
-      }
+      await loadEntries()
+      resetForm()
     } catch (err) {
       console.error('Save error:', err)
+      toastError(`Could not save knowledge base entry: ${err.message}`)
     }
     setSaving(false)
   }
@@ -105,29 +104,33 @@ export default function KnowledgeBaseAdmin() {
   }
 
   const handleDelete = async (id) => {
+    const snapshot = entries
+    setEntries(entries.filter(e => e.id !== id))
     try {
-      await fetch(`${API_URL}/api/knowledge-base/${id}`, {
+      await apiFetch(`${API_URL}/api/knowledge-base/${id}`, {
         method: 'DELETE',
-        headers: await authHeaders()
       })
-      setEntries(entries.filter(e => e.id !== id))
     } catch (err) {
       console.error('Delete error:', err)
+      setEntries(snapshot)
+      toastError(`Could not delete entry: ${err.message}`)
     }
   }
 
   const toggleActive = async (entry) => {
+    const snapshot = entries
+    setEntries(entries.map(e =>
+      e.id === entry.id ? { ...e, active: !e.active } : e
+    ))
     try {
-      await fetch(`${API_URL}/api/knowledge-base/${entry.id}`, {
+      await apiFetch(`${API_URL}/api/knowledge-base/${entry.id}`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify({ active: !entry.active })
       })
-      setEntries(entries.map(e =>
-        e.id === entry.id ? { ...e, active: !e.active } : e
-      ))
     } catch (err) {
       console.error('Toggle error:', err)
+      setEntries(snapshot)
+      toastError(`Could not toggle entry: ${err.message}`)
     }
   }
 

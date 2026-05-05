@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
 import { Button, Input, ConfirmDialog } from './ui'
+import { useToast } from './ui/Toast'
 
 
 const CATEGORIES = ['Partyware & Serving', 'Guest Experience', 'Décor & Lighting']
@@ -38,6 +39,7 @@ function pickTypeColor(type) {
 }
 
 export default function StorefrontAdmin() {
+  const { error: toastError } = useToast()
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
@@ -88,13 +90,11 @@ export default function StorefrontAdmin() {
         ? `${API_URL}/api/storefront/${editingId}`
         : `${API_URL}/api/storefront`
       const method = editingId ? 'PUT' : 'POST'
-      const res = await fetch(url, {
+      const data = await apiFetch(url, {
         method,
-        headers: await authHeaders(),
         body: JSON.stringify(form),
       })
-      const data = await res.json()
-      if (data.success) {
+      if (data?.success) {
         setSaveMsg('Saved!')
         setShowForm(false)
         setEditingId(null)
@@ -102,34 +102,41 @@ export default function StorefrontAdmin() {
         loadItems()
       } else {
         setSaveMsg('Error saving item.')
+        toastError('Could not save item.')
       }
     } catch (err) {
       setSaveMsg('Error saving item.')
+      toastError(`Could not save item: ${err.message}`)
     }
     setSaving(false)
     setTimeout(() => setSaveMsg(''), 3000)
   }
 
   const toggleActive = async (item) => {
+    const snapshot = items
+    setItems(prev => prev.map(i => i.id === item.id ? { ...i, is_active: !i.is_active } : i))
     try {
-      await fetch(`${API_URL}/api/storefront/${item.id}`, {
+      await apiFetch(`${API_URL}/api/storefront/${item.id}`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify({ ...item, is_active: !item.is_active }),
       })
-      setItems(prev => prev.map(i => i.id === item.id ? { ...i, is_active: !i.is_active } : i))
     } catch (err) {
       console.error('Toggle active error:', err)
+      setItems(snapshot)
+      toastError(`Could not update visibility: ${err.message}`)
     }
   }
 
   const deleteItem = async (id) => {
+    const snapshot = items
+    setItems(prev => prev.filter(i => i.id !== id))
+    setConfirmDelete(null)
     try {
-      await fetch(`${API_URL}/api/storefront/${id}`, { method: 'DELETE', headers: await authHeaders() })
-      setItems(prev => prev.filter(i => i.id !== id))
-      setConfirmDelete(null)
+      await apiFetch(`${API_URL}/api/storefront/${id}`, { method: 'DELETE' })
     } catch (err) {
       console.error('Delete error:', err)
+      setItems(snapshot)
+      toastError(`Could not delete item: ${err.message}`)
     }
   }
 

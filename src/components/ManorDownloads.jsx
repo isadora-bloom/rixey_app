@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { apiFetch, authHeaders } from '../utils/api'
+import { useToast } from './ui/Toast'
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
 
@@ -92,6 +93,7 @@ function AssetCard({ asset, isAdmin, onUpdate, onDelete }) {
 // ── Upload form (admin only) ───────────────────────────────────────────────
 
 function UploadForm({ onUploaded }) {
+  const { error: toastError } = useToast()
   const [open, setOpen]           = useState(false)
   const [title, setTitle]         = useState('')
   const [description, setDesc]    = useState('')
@@ -110,13 +112,13 @@ function UploadForm({ onUploaded }) {
     fd.append('title', title)
     fd.append('description', description)
     try {
-      const hdrs = await authHeaders()
-      const res  = await fetch(`${API_URL}/api/manor-assets`, { method: 'POST', headers: { 'Authorization': hdrs['Authorization'] }, body: fd })
-      const data = await res.json()
-      if (!res.ok) { setUploadError(data.error || 'Upload failed'); setUploading(false); return }
+      const data = await apiFetch(`${API_URL}/api/manor-assets`, { method: 'POST', body: fd })
       onUploaded(data)
       setTitle(''); setDesc(''); setFile(null); setOpen(false)
-    } catch (err) { setUploadError(err.message || 'Upload failed'); console.error(err) }
+    } catch (err) {
+      setUploadError(err.message || 'Upload failed')
+      toastError(`Could not upload asset: ${err.message}`)
+    }
     setUploading(false)
   }
 
@@ -170,6 +172,7 @@ function UploadForm({ onUploaded }) {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function ManorDownloads({ isAdmin = false }) {
+  const { error: toastError } = useToast()
   const [assets, setAssets]   = useState([])
   const [loading, setLoading] = useState(true)
 
@@ -185,17 +188,29 @@ export default function ManorDownloads({ isAdmin = false }) {
   }
 
   const handleUpdate = async (id, fields) => {
-    await fetch(`${API_URL}/api/manor-assets/${id}`, {
-      method: 'PUT', headers: await authHeaders(),
-      body: JSON.stringify(fields),
-    })
+    const snapshot = assets
     setAssets(prev => prev.map(a => a.id === id ? { ...a, ...fields } : a))
+    try {
+      await apiFetch(`${API_URL}/api/manor-assets/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(fields),
+      })
+    } catch (err) {
+      setAssets(snapshot)
+      toastError(`Could not update asset: ${err.message}`)
+    }
   }
 
   const handleDelete = async (id) => {
     if (!confirm('Remove this asset?')) return
-    await fetch(`${API_URL}/api/manor-assets/${id}`, { method: 'DELETE', headers: await authHeaders() })
+    const snapshot = assets
     setAssets(prev => prev.filter(a => a.id !== id))
+    try {
+      await apiFetch(`${API_URL}/api/manor-assets/${id}`, { method: 'DELETE' })
+    } catch (err) {
+      setAssets(snapshot)
+      toastError(`Could not delete asset: ${err.message}`)
+    }
   }
 
   if (loading) return <div className="text-sage-400 text-center py-8">Loading…</div>

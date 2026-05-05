@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
 import { Button, Input } from './ui'
+import { useToast } from './ui/Toast'
 
 
 // ── time helpers ──────────────────────────────────────────────────
@@ -216,6 +217,7 @@ export default function ShuttleSchedule({ weddingId, userId }) {
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editingFields, setEditingFields] = useState({});
+  const { error: toastError } = useToast();
   const [formData, setFormData] = useState({
     run_label: '',
     pickup_location: '',
@@ -249,12 +251,10 @@ export default function ShuttleSchedule({ weddingId, userId }) {
   }
 
   async function addRun(data) {
-    const res = await fetch(`${API_URL}/api/shuttle`, {
+    return await apiFetch(`${API_URL}/api/shuttle`, {
       method: 'POST',
-      headers: await authHeaders(),
       body: JSON.stringify({ wedding_id: weddingId, ...data }),
     });
-    return await res.json();
   }
 
   async function handleAddRun(e) {
@@ -274,7 +274,7 @@ export default function ShuttleSchedule({ weddingId, userId }) {
       });
       setShowForm(false);
     } catch (err) {
-      console.error('Failed to add shuttle run:', err);
+      toastError(`Could not add shuttle run: ${err.message}`);
     } finally {
       setSaving(false);
     }
@@ -282,15 +282,19 @@ export default function ShuttleSchedule({ weddingId, userId }) {
 
   async function handleGenerateRuns(runDataArray) {
     const newRuns = [];
+    let failures = 0;
     for (const data of runDataArray) {
       try {
         const run = await addRun(data);
         newRuns.push(run);
       } catch (err) {
-        console.error('Failed to add run:', err);
+        failures++;
       }
     }
     setRuns((prev) => [...prev, ...newRuns]);
+    if (failures > 0) {
+      toastError(`Could not generate ${failures} of ${runDataArray.length} shuttle runs`);
+    }
   }
 
   function handleEditField(runId, field, value) {
@@ -319,15 +323,13 @@ export default function ShuttleSchedule({ weddingId, userId }) {
     }
     try {
       const updated = { ...run, [field]: newValue };
-      const res = await fetch(`${API_URL}/api/shuttle/${run.id}`, {
+      const saved = await apiFetch(`${API_URL}/api/shuttle/${run.id}`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify({ ...updated, userId }),
       });
-      const saved = await res.json();
       setRuns((prev) => prev.map((r) => (r.id === run.id ? saved : r)));
     } catch (err) {
-      console.error('Failed to update shuttle run:', err);
+      toastError(`Could not save shuttle run: ${err.message}`);
     } finally {
       setEditingFields((prev) => {
         const copy = { ...prev };
@@ -339,15 +341,16 @@ export default function ShuttleSchedule({ weddingId, userId }) {
 
   async function handleDelete(runId) {
     if (!window.confirm('Delete this shuttle run?')) return;
+    const snapshot = runs;
+    setRuns((prev) => prev.filter((r) => r.id !== runId));
     try {
-      await fetch(`${API_URL}/api/shuttle/${runId}`, {
+      await apiFetch(`${API_URL}/api/shuttle/${runId}`, {
         method: 'DELETE',
-        headers: await authHeaders(),
         body: JSON.stringify({ userId }),
       });
-      setRuns((prev) => prev.filter((r) => r.id !== runId));
     } catch (err) {
-      console.error('Failed to delete shuttle run:', err);
+      setRuns(snapshot);
+      toastError(`Could not delete shuttle run: ${err.message}`);
     }
   }
 

@@ -1,10 +1,12 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
+import { useToast } from '../components/ui/Toast'
 
 
 export default function VendorPortal() {
+  const { error: toastError } = useToast()
   const { token } = useParams()
   const [vendor, setVendor] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -44,18 +46,16 @@ export default function VendorPortal() {
     setSaving(true)
     setSaveError('')
     try {
-      const res = await fetch(`${API_URL}/api/vendor-portal/${token}`, {
+      const data = await apiFetch(`${API_URL}/api/vendor-portal/${token}`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify(form),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Save failed')
       setVendor(data.vendor)
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
     } catch (err) {
       setSaveError(err.message)
+      toastError(`Could not save profile: ${err.message}`)
     }
     setSaving(false)
   }
@@ -68,13 +68,10 @@ export default function VendorPortal() {
     const fd = new FormData()
     fd.append('photo', file)
     try {
-      const hdrs = await authHeaders()
-      const res = await fetch(`${API_URL}/api/vendor-portal/${token}/photos`, { method: 'POST', headers: { 'Authorization': hdrs['Authorization'] }, body: fd })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Upload failed')
+      const data = await apiFetch(`${API_URL}/api/vendor-portal/${token}/photos`, { method: 'POST', body: fd })
       setPhotos(data.photos)
     } catch (err) {
-      alert(`Photo upload failed: ${err.message}`)
+      toastError(`Photo upload failed: ${err.message}`)
     }
     setUploadingPhoto(false)
     e.target.value = ''
@@ -82,17 +79,17 @@ export default function VendorPortal() {
 
   const removePhoto = async (url) => {
     if (!confirm('Remove this photo?')) return
+    const snapshot = photos
+    setPhotos(prev => prev.filter(p => p !== url))
     try {
-      const res = await fetch(`${API_URL}/api/vendor-portal/${token}/photos`, {
+      const data = await apiFetch(`${API_URL}/api/vendor-portal/${token}/photos`, {
         method: 'DELETE',
-        headers: await authHeaders(),
         body: JSON.stringify({ url }),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
       setPhotos(data.photos)
     } catch (err) {
-      alert(`Failed to remove photo: ${err.message}`)
+      setPhotos(snapshot)
+      toastError(`Failed to remove photo: ${err.message}`)
     }
   }
 

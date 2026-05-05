@@ -12,7 +12,8 @@ import BorrowCatalog from '../components/BorrowCatalog'
 import StorefrontAdmin from '../components/StorefrontAdmin'
 import ManorDownloads from '../components/ManorDownloads'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { apiFetch, authHeaders } from '../utils/api'
+import { useToast } from '../components/ui/Toast'
 
 // Extracted sub-components
 import AdminHeader from './admin/AdminHeader'
@@ -22,6 +23,7 @@ import { detectEscalation } from './admin/adminUtils'
 
 export default function Admin() {
   const navigate = useNavigate()
+  const { error: toastError } = useToast()
   const [notifications, setNotifications] = useState([])
   const [weddings, setWeddings] = useState([])
   const [allMessages, setAllMessages] = useState({}) // Messages by wedding ID
@@ -161,27 +163,24 @@ export default function Admin() {
     setGmailSyncing(true)
     setGmailStatus('')
     try {
-      const response = await fetch(`${API_URL}/api/gmail/sync`, {
-        method: 'POST',
-        headers: await authHeaders()
-      })
-      const data = await response.json()
+      const data = await apiFetch(`${API_URL}/api/gmail/sync`, { method: 'POST' })
       setGmailStatus(data.message || data.error)
       // Reload data to get any new planning notes
       loadData()
     } catch (err) {
       setGmailStatus('Failed to sync emails')
+      toastError(`Could not sync Gmail: ${err.message}`)
     }
     setGmailSyncing(false)
   }
 
   const disconnectGmail = async () => {
     try {
-      await fetch(`${API_URL}/api/gmail/disconnect`, { method: 'POST', headers: await authHeaders() })
+      await apiFetch(`${API_URL}/api/gmail/disconnect`, { method: 'POST' })
       setGmailConnected(false)
       setGmailStatus('Gmail disconnected')
     } catch (err) {
-      console.error('Disconnect error:', err)
+      toastError(`Could not disconnect Gmail: ${err.message}`)
     }
   }
 
@@ -202,20 +201,10 @@ export default function Admin() {
     setQuoStatus(forceReprocess ? 'Force resyncing all messages...' : 'Syncing new messages...')
     try {
       console.log('Calling Quo sync with forceReprocess:', forceReprocess)
-      const response = await fetch(`${API_URL}/api/quo/sync`, {
+      const data = await apiFetch(`${API_URL}/api/quo/sync`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({ forceReprocess })
       })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        setQuoStatus(`Server error ${response.status}: ${errorText}`)
-        setQuoSyncing(false)
-        return
-      }
-
-      const data = await response.json()
       console.log('Quo sync response:', data)
 
       let statusMsg = data.message || data.error || 'Sync completed'
@@ -242,6 +231,7 @@ export default function Admin() {
     } catch (err) {
       console.error('Quo sync error:', err)
       setQuoStatus('Failed to sync: ' + err.message + '\nCheck console for details')
+      toastError(`Could not sync Quo: ${err.message}`)
     }
     setQuoSyncing(false)
   }
@@ -276,15 +266,12 @@ export default function Admin() {
     setZoomSyncing(true)
     setZoomStatus('')
     try {
-      const response = await fetch(`${API_URL}/api/zoom/sync`, {
-        method: 'POST',
-        headers: await authHeaders()
-      })
-      const data = await response.json()
+      const data = await apiFetch(`${API_URL}/api/zoom/sync`, { method: 'POST' })
       setZoomStatus(data.message || data.error)
       loadData()
     } catch (err) {
       setZoomStatus('Failed to sync Zoom meetings')
+      toastError(`Could not sync Zoom: ${err.message}`)
     }
     setZoomSyncing(false)
   }
@@ -293,12 +280,12 @@ export default function Admin() {
     setZoomSyncing(true)
     setZoomStatus('')
     try {
-      const response = await fetch(`${API_URL}/api/zoom/reextract`, { method: 'POST', headers: await authHeaders() })
-      const data = await response.json()
+      const data = await apiFetch(`${API_URL}/api/zoom/reextract`, { method: 'POST' })
       setZoomStatus(data.message || data.error)
       loadData()
     } catch (err) {
       setZoomStatus('Failed to re-extract notes')
+      toastError(`Could not re-extract Zoom notes: ${err.message}`)
     }
     setZoomSyncing(false)
   }
@@ -308,22 +295,22 @@ export default function Admin() {
     setZoomSyncing(true)
     setZoomStatus('')
     try {
-      const response = await fetch(`${API_URL}/api/zoom/clear`, { method: 'POST', headers: await authHeaders() })
-      const data = await response.json()
+      const data = await apiFetch(`${API_URL}/api/zoom/clear`, { method: 'POST' })
       setZoomStatus(data.message || data.error)
     } catch (err) {
       setZoomStatus('Failed to clear Zoom data')
+      toastError(`Could not clear Zoom data: ${err.message}`)
     }
     setZoomSyncing(false)
   }
 
   const disconnectZoom = async () => {
     try {
-      await fetch(`${API_URL}/api/zoom/disconnect`, { method: 'POST', headers: await authHeaders() })
+      await apiFetch(`${API_URL}/api/zoom/disconnect`, { method: 'POST' })
       setZoomConnected(false)
       setZoomStatus('Zoom disconnected')
     } catch (err) {
-      console.error('Disconnect error:', err)
+      toastError(`Could not disconnect Zoom: ${err.message}`)
     }
   }
 
@@ -333,15 +320,14 @@ export default function Admin() {
     setNotesHighlights('')
 
     try {
-      const response = await fetch(`${API_URL}/api/notes-highlights`, {
+      const data = await apiFetch(`${API_URL}/api/notes-highlights`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({ weddingId: viewingWedding.id })
       })
-      const data = await response.json()
       setNotesHighlights(data.highlights || data.error)
     } catch (err) {
       setNotesHighlights('Failed to generate highlights')
+      toastError(`Could not generate highlights: ${err.message}`)
     }
     setLoadingHighlights(false)
   }
@@ -362,9 +348,8 @@ export default function Admin() {
     if (!injectText.trim() || injecting) return
     setInjecting(true)
     try {
-      const res = await fetch(`${API_URL}/api/sage-messages/inject`, {
+      const data = await apiFetch(`${API_URL}/api/sage-messages/inject`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({
           user_id: userId,
           content: injectText.trim(),
@@ -372,7 +357,6 @@ export default function Admin() {
           kbCategory: injectKbCat || 'General'
         })
       })
-      const data = await res.json()
       if (data.message) {
         setWeddingMessages(prev => [...prev, data.message])
         setInjectText('')
@@ -380,7 +364,7 @@ export default function Admin() {
         setInjectKbCat('')
       }
     } catch (err) {
-      console.error('Inject note failed:', err)
+      toastError(`Could not inject note: ${err.message}`)
     }
     setInjecting(false)
   }
@@ -410,9 +394,8 @@ export default function Admin() {
 
     setSubmittingAnswer(true)
     try {
-      const response = await fetch(`${API_URL}/api/uncertain-questions/${questionId}/answer`, {
+      const data = await apiFetch(`${API_URL}/api/uncertain-questions/${questionId}/answer`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({
           answer: adminAnswer,
           addToKnowledgeBase: addToKb,
@@ -420,8 +403,6 @@ export default function Admin() {
           kbSubcategory: addToKb ? kbSubcategory : null
         })
       })
-
-      const data = await response.json()
       if (data.success) {
         // Remove from list or update
         setUncertainQuestions(prev => prev.filter(q => q.id !== questionId))
@@ -432,20 +413,21 @@ export default function Admin() {
         setKbSubcategory('')
       }
     } catch (err) {
-      console.error('Failed to submit answer:', err)
+      toastError(`Could not submit answer: ${err.message}`)
     }
     setSubmittingAnswer(false)
   }
 
   const deleteUncertainQuestion = async (questionId) => {
+    const snapshot = uncertainQuestions
+    setUncertainQuestions(prev => prev.filter(q => q.id !== questionId))
     try {
-      await fetch(`${API_URL}/api/uncertain-questions/${questionId}`, {
-        method: 'DELETE',
-        headers: await authHeaders()
+      await apiFetch(`${API_URL}/api/uncertain-questions/${questionId}`, {
+        method: 'DELETE'
       })
-      setUncertainQuestions(prev => prev.filter(q => q.id !== questionId))
     } catch (err) {
-      console.error('Failed to delete question:', err)
+      setUncertainQuestions(snapshot)
+      toastError(`Could not delete question: ${err.message}`)
     }
   }
 
@@ -516,16 +498,17 @@ export default function Admin() {
   }
 
   const markAsRead = async (id) => {
+    const snapshot = notifications
+    setNotifications(notifications.map(n =>
+      n.id === id ? { ...n, read: true } : n
+    ))
     try {
-      await fetch(`${API_URL}/api/admin/notifications/${id}/read`, {
-        method: 'PUT',
-        headers: await authHeaders()
+      await apiFetch(`${API_URL}/api/admin/notifications/${id}/read`, {
+        method: 'PUT'
       })
-      setNotifications(notifications.map(n =>
-        n.id === id ? { ...n, read: true } : n
-      ))
     } catch (err) {
-      console.error('Failed to mark notification as read:', err)
+      setNotifications(snapshot)
+      toastError(`Could not mark notification as read: ${err.message}`)
     }
   }
 
@@ -538,68 +521,61 @@ export default function Admin() {
   const saveLinks = async () => {
     setSaving(true)
     try {
-      const response = await fetch(`${API_URL}/api/weddings/${editingWedding}/links`, {
+      await apiFetch(`${API_URL}/api/weddings/${editingWedding}/links`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify({
           honeybook_link: honeybook || null,
           google_sheets_link: googleSheets || null
         })
       })
-
-      if (response.ok) {
-        setWeddings(weddings.map(w =>
-          w.id === editingWedding
-            ? { ...w, honeybook_link: honeybook || null, google_sheets_link: googleSheets || null }
-            : w
-        ))
-        setEditingWedding(null)
-      }
+      setWeddings(weddings.map(w =>
+        w.id === editingWedding
+          ? { ...w, honeybook_link: honeybook || null, google_sheets_link: googleSheets || null }
+          : w
+      ))
+      setEditingWedding(null)
     } catch (err) {
-      console.error('Failed to save links:', err)
+      toastError(`Could not save links: ${err.message}`)
     }
     setSaving(false)
   }
 
   const toggleArchive = async (weddingId, currentArchived) => {
+    const snapshot = weddings
+    setWeddings(weddings.map(w =>
+      w.id === weddingId ? { ...w, archived: !currentArchived } : w
+    ))
     try {
-      const response = await fetch(`${API_URL}/api/weddings/${weddingId}/archive`, {
+      await apiFetch(`${API_URL}/api/weddings/${weddingId}/archive`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify({ archived: !currentArchived })
       })
-
-      if (response.ok) {
-        setWeddings(weddings.map(w =>
-          w.id === weddingId ? { ...w, archived: !currentArchived } : w
-        ))
-      }
     } catch (err) {
-      console.error('Failed to toggle archive:', err)
+      setWeddings(snapshot)
+      toastError(`Could not ${currentArchived ? 'unarchive' : 'archive'} wedding: ${err.message}`)
     }
   }
 
   const markEscalationHandled = async (weddingId) => {
     const now = new Date().toISOString()
+    const weddingsSnapshot = weddings
+    const escalationsSnapshot = escalations
+    setWeddings(weddings.map(w =>
+      w.id === weddingId ? { ...w, escalation_handled_at: now } : w
+    ))
+    setEscalations(prev => ({
+      ...prev,
+      [weddingId]: { hasEscalation: false, count: 0, messages: [] }
+    }))
     try {
-      const response = await fetch(`${API_URL}/api/weddings/${weddingId}/escalation`, {
+      await apiFetch(`${API_URL}/api/weddings/${weddingId}/escalation`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify({ escalation_handled_at: now })
       })
-
-      if (response.ok) {
-        setWeddings(weddings.map(w =>
-          w.id === weddingId ? { ...w, escalation_handled_at: now } : w
-        ))
-        // Clear the escalation status
-        setEscalations(prev => ({
-          ...prev,
-          [weddingId]: { hasEscalation: false, count: 0, messages: [] }
-        }))
-      }
     } catch (err) {
-      console.error('Failed to mark escalation handled:', err)
+      setWeddings(weddingsSnapshot)
+      setEscalations(escalationsSnapshot)
+      toastError(`Could not mark escalation handled: ${err.message}`)
     }
   }
 
@@ -733,20 +709,18 @@ export default function Admin() {
   }
 
   const updateNoteStatus = async (noteId, newStatus) => {
+    const snapshot = planningNotes
+    setPlanningNotes(planningNotes.map(n =>
+      n.id === noteId ? { ...n, status: newStatus } : n
+    ))
     try {
-      const response = await fetch(`${API_URL}/api/planning-notes/${noteId}`, {
+      await apiFetch(`${API_URL}/api/planning-notes/${noteId}`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify({ status: newStatus })
       })
-
-      if (response.ok) {
-        setPlanningNotes(planningNotes.map(n =>
-          n.id === noteId ? { ...n, status: newStatus } : n
-        ))
-      }
     } catch (err) {
-      console.error('Failed to update note status:', err)
+      setPlanningNotes(snapshot)
+      toastError(`Could not update note status: ${err.message}`)
     }
   }
 
@@ -754,28 +728,28 @@ export default function Admin() {
     if (!newNoteText.trim() || !viewingWedding) return
     setSavingNote(true)
     try {
-      const res = await fetch(`${API_URL}/api/internal-notes`, {
+      const data = await apiFetch(`${API_URL}/api/internal-notes`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({ weddingId: viewingWedding.id, content: newNoteText.trim() })
       })
-      const data = await res.json()
       if (data.note) {
         setInternalNotes(prev => [data.note, ...prev])
         setNewNoteText('')
       }
     } catch (err) {
-      console.error('Failed to add internal note:', err)
+      toastError(`Could not save internal note: ${err.message}`)
     }
     setSavingNote(false)
   }
 
   const deleteInternalNote = async (noteId) => {
+    const snapshot = internalNotes
+    setInternalNotes(prev => prev.filter(n => n.id !== noteId))
     try {
-      await fetch(`${API_URL}/api/internal-notes/${noteId}`, { method: 'DELETE', headers: await authHeaders() })
-      setInternalNotes(prev => prev.filter(n => n.id !== noteId))
+      await apiFetch(`${API_URL}/api/internal-notes/${noteId}`, { method: 'DELETE' })
     } catch (err) {
-      console.error('Failed to delete internal note:', err)
+      setInternalNotes(snapshot)
+      toastError(`Could not delete internal note: ${err.message}`)
     }
   }
 
@@ -791,32 +765,25 @@ export default function Admin() {
     formData.append('weddingId', viewingWedding.id)
 
     try {
-      const contractToken = (await authHeaders())['Authorization']
-      const response = await fetch(`${API_URL}/api/extract-contract`, {
+      const data = await apiFetch(`${API_URL}/api/extract-contract`, {
         method: 'POST',
-        headers: contractToken ? { 'Authorization': contractToken } : {},
         body: formData
       })
 
-      const data = await response.json()
-
-      if (data.success) {
-        setUploadResult({
-          success: true,
-          message: `Extracted ${data.notesExtracted} notes from contract`
-        })
-        // Reload planning notes via server endpoint
-        const notesRes = await fetch(`${API_URL}/api/planning-notes/${viewingWedding.id}`, {
-          headers: await authHeaders()
-        })
-        const notesData = await notesRes.json()
-        setPlanningNotes(notesData.notes || [])
-      } else {
-        setUploadResult({ success: false, message: data.error })
-      }
+      setUploadResult({
+        success: true,
+        message: `Extracted ${data.notesExtracted} notes from contract`
+      })
+      // Reload planning notes via server endpoint
+      const notesRes = await fetch(`${API_URL}/api/planning-notes/${viewingWedding.id}`, {
+        headers: await authHeaders()
+      })
+      const notesData = await notesRes.json()
+      setPlanningNotes(notesData.notes || [])
     } catch (err) {
       console.error('Upload error:', err)
-      setUploadResult({ success: false, message: 'Failed to upload contract' })
+      setUploadResult({ success: false, message: err.message || 'Failed to upload contract' })
+      toastError(`Could not upload contract: ${err.message}`)
     }
 
     setUploadingContract(false)
@@ -831,20 +798,18 @@ export default function Admin() {
     setContractAnswer('')
 
     try {
-      const response = await fetch(`${API_URL}/api/ask-contracts`, {
+      const data = await apiFetch(`${API_URL}/api/ask-contracts`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({
           weddingId: viewingWedding.id,
           question: contractQuestion
         })
       })
-
-      const data = await response.json()
       setContractAnswer(data.answer || data.error)
     } catch (err) {
       console.error('Question error:', err)
       setContractAnswer('Failed to get answer. Make sure the server is running.')
+      toastError(`Could not get answer: ${err.message}`)
     }
 
     setAskingQuestion(false)
@@ -854,11 +819,11 @@ export default function Admin() {
     if (!viewingWedding || checkingIn) return
     setCheckingIn(true)
     try {
-      await fetch(`${API_URL}/api/checkin/${viewingWedding.id}`, { method: 'POST', headers: await authHeaders() })
+      await apiFetch(`${API_URL}/api/checkin/${viewingWedding.id}`, { method: 'POST' })
       setCheckedIn(true)
       setTimeout(() => setCheckedIn(false), 3000)
     } catch (err) {
-      console.error('Check-in failed:', err)
+      toastError(`Could not send check-in: ${err.message}`)
     }
     setCheckingIn(false)
   }
@@ -1188,9 +1153,7 @@ export default function Admin() {
                       fd.append('category', newItemCategory)
                       fd.append('description', newItemDescription.trim())
                       if (newItemImage) fd.append('image', newItemImage)
-                      const borrowToken = (await authHeaders())['Authorization']
-                      const res = await fetch(`${API_URL}/api/admin/borrow-catalog`, { method: 'POST', headers: borrowToken ? { 'Authorization': borrowToken } : {}, body: fd })
-                      const data = await res.json()
+                      const data = await apiFetch(`${API_URL}/api/admin/borrow-catalog`, { method: 'POST', body: fd })
                       if (data.item) {
                         setAddItemResult({ success: true, message: `"${data.item.item_name}" added to catalog.` })
                         setNewItemName(''); setNewItemCategory(''); setNewItemDescription(''); setNewItemImage(null)
@@ -1199,7 +1162,8 @@ export default function Admin() {
                         setAddItemResult({ success: false, message: data.error || 'Failed to add item' })
                       }
                     } catch (err) {
-                      setAddItemResult({ success: false, message: 'Network error' })
+                      setAddItemResult({ success: false, message: err.message || 'Failed to add item' })
+                      toastError(`Could not add catalog item: ${err.message}`)
                     }
                     setSavingNewItem(false)
                   }}

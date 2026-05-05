@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
 import { Button, Card } from './ui'
+import { useToast } from './ui/Toast'
 
 const STAFF_RATE = 350 // 2026 rate
 
@@ -9,6 +10,7 @@ export default function StaffingCalculator({ guestCount: initialGuestCount, wedd
   const [step, setStep] = useState(0)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const { error: toastError } = useToast()
   const [answers, setAnswers] = useState({
     guestCount: initialGuestCount || 100,
     hasFridayEvent: false,
@@ -190,9 +192,8 @@ export default function StaffingCalculator({ guestCount: initialGuestCount, wedd
       const total = fridayData.total + saturdayData.total
       const cost = total * STAFF_RATE
 
-      await fetch(`${API_URL}/api/staffing`, {
+      await apiFetch(`${API_URL}/api/staffing`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({
           weddingId,
           userId,
@@ -211,6 +212,7 @@ export default function StaffingCalculator({ guestCount: initialGuestCount, wedd
       setTimeout(() => setSaved(false), 3000)
     } catch (err) {
       console.error('Failed to save staffing:', err)
+      toastError(`Could not save staffing estimate: ${err.message}`)
     }
     setSaving(false)
   }

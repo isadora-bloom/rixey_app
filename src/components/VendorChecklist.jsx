@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
+import { useToast } from './ui/Toast'
 
 
 export default function VendorChecklist({ weddingId, isAdmin = false }) {
+  const { error: toastError } = useToast()
   const [vendors, setVendors] = useState([])
   const [vendorTypes, setVendorTypes] = useState([])
   const [loading, setLoading] = useState(true)
@@ -50,18 +52,16 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
 
     setSaving(true)
     try {
-      const response = await fetch(`${API_URL}/api/vendors`, {
+      const data = await apiFetch(`${API_URL}/api/vendors`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({
           id: editingId,
           weddingId,
           ...formData
         })
       })
-      const data = await response.json()
 
-      if (data.vendor) {
+      if (data?.vendor) {
         if (editingId) {
           setVendors(vendors.map(v => v.id === editingId ? data.vendor : v))
         } else {
@@ -71,6 +71,7 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
       }
     } catch (error) {
       console.error('Error saving vendor:', error)
+      toastError(`Could not save vendor: ${error.message}`)
     }
     setSaving(false)
   }
@@ -94,11 +95,14 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
   const handleDelete = async (id) => {
     if (!confirm('Delete this vendor?')) return
 
+    const snapshot = vendors
+    setVendors(vendors.filter(v => v.id !== id))
     try {
-      await fetch(`${API_URL}/api/vendors/${id}`, { method: 'DELETE', headers: await authHeaders() })
-      setVendors(vendors.filter(v => v.id !== id))
+      await apiFetch(`${API_URL}/api/vendors/${id}`, { method: 'DELETE' })
     } catch (error) {
       console.error('Error deleting vendor:', error)
+      setVendors(snapshot)
+      toastError(`Could not delete vendor: ${error.message}`)
     }
   }
 
@@ -108,18 +112,16 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
     formData.append('contract', file)
 
     try {
-      const token = (await authHeaders())['Authorization']
-      const response = await fetch(`${API_URL}/api/vendors/${vendorId}/contract`, {
+      const data = await apiFetch(`${API_URL}/api/vendors/${vendorId}/contract`, {
         method: 'POST',
-        headers: token ? { 'Authorization': token } : {},
         body: formData
       })
-      const data = await response.json()
-      if (data.vendor) {
+      if (data?.vendor) {
         setVendors(vendors.map(v => v.id === vendorId ? data.vendor : v))
       }
     } catch (error) {
       console.error('Error uploading contract:', error)
+      toastError(`Could not upload contract: ${error.message}`)
     }
     setUploadingContract(null)
   }
@@ -128,16 +130,15 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
     if (!confirm('Remove this contract?')) return
 
     try {
-      const response = await fetch(`${API_URL}/api/vendors/${vendorId}/contract`, {
-        method: 'DELETE',
-        headers: await authHeaders()
+      const data = await apiFetch(`${API_URL}/api/vendors/${vendorId}/contract`, {
+        method: 'DELETE'
       })
-      const data = await response.json()
-      if (data.vendor) {
+      if (data?.vendor) {
         setVendors(vendors.map(v => v.id === vendorId ? data.vendor : v))
       }
     } catch (error) {
       console.error('Error removing contract:', error)
+      toastError(`Could not remove contract: ${error.message}`)
     }
   }
 

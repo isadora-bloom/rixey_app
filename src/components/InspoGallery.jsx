@@ -1,10 +1,12 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
+import { useToast } from './ui/Toast'
 
 const CATEGORIES = ['All', 'Flowers', 'Decor', 'Table Settings', 'Cake & Dessert', 'Ceremony', 'Reception', 'Attire', 'Other']
 
 export default function InspoGallery({ weddingId, userId, isAdmin = false }) {
+  const { error: toastError } = useToast()
   const [images, setImages] = useState([])
   const [maxImages, setMaxImages] = useState(20)
   const [loading, setLoading] = useState(true)
@@ -48,21 +50,17 @@ export default function InspoGallery({ weddingId, userId, isAdmin = false }) {
     if (userId) formData.append('uploadedBy', userId)
 
     try {
-      const hdrs = await authHeaders()
-      const response = await fetch(`${API_URL}/api/inspo`, {
+      const data = await apiFetch(`${API_URL}/api/inspo`, {
         method: 'POST',
-        headers: { 'Authorization': hdrs['Authorization'] },
         body: formData
       })
-      const data = await response.json()
 
-      if (data.error) {
-        alert(data.error)
-      } else if (data.image) {
+      if (data?.image) {
         setImages([...images, data.image])
       }
     } catch (error) {
       console.error('Error uploading image:', error)
+      toastError(`Could not upload image: ${error.message}`)
     }
     setUploading(false)
     if (fileInputRef.current) {
@@ -72,17 +70,16 @@ export default function InspoGallery({ weddingId, userId, isAdmin = false }) {
 
   const handleUpdateCaption = async (id) => {
     try {
-      const response = await fetch(`${API_URL}/api/inspo/${id}`, {
+      const data = await apiFetch(`${API_URL}/api/inspo/${id}`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify({ caption: captionText })
       })
-      const data = await response.json()
-      if (data.image) {
+      if (data?.image) {
         setImages(images.map(img => img.id === id ? data.image : img))
       }
     } catch (error) {
       console.error('Error updating caption:', error)
+      toastError(`Could not save caption: ${error.message}`)
     }
     setEditingCaption(null)
     setCaptionText('')
@@ -91,14 +88,19 @@ export default function InspoGallery({ weddingId, userId, isAdmin = false }) {
   const handleDelete = async (id) => {
     if (!confirm('Delete this image?')) return
 
+    const snapshot = images
+    const prevSelected = selectedImage
+    setImages(images.filter(img => img.id !== id))
+    if (selectedImage?.id === id) {
+      setSelectedImage(null)
+    }
     try {
-      await fetch(`${API_URL}/api/inspo/${id}`, { method: 'DELETE', headers: await authHeaders() })
-      setImages(images.filter(img => img.id !== id))
-      if (selectedImage?.id === id) {
-        setSelectedImage(null)
-      }
+      await apiFetch(`${API_URL}/api/inspo/${id}`, { method: 'DELETE' })
     } catch (error) {
       console.error('Error deleting image:', error)
+      setImages(snapshot)
+      setSelectedImage(prevSelected)
+      toastError(`Could not delete image: ${error.message}`)
     }
   }
 

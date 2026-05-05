@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
+import { useToast } from './ui/Toast'
 
 
 export default function RecommendedVendorsAdmin() {
+  const { error: toastError } = useToast()
   const [vendors, setVendors] = useState([])
   const [categories, setCategories] = useState([])
   const [loading, setLoading] = useState(true)
@@ -62,20 +64,18 @@ export default function RecommendedVendorsAdmin() {
         ? `${API_URL}/api/recommended-vendors/${editingVendor.id}`
         : `${API_URL}/api/recommended-vendors`
 
-      const response = await fetch(url, {
+      await apiFetch(url, {
         method: editingVendor ? 'PUT' : 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify(formData)
       })
 
-      if (response.ok) {
-        await loadVendors()
-        setShowForm(false)
-        setEditingVendor(null)
-        setFormData(emptyVendor)
-      }
+      await loadVendors()
+      setShowForm(false)
+      setEditingVendor(null)
+      setFormData(emptyVendor)
     } catch (error) {
       console.error('Failed to save vendor:', error)
+      toastError(`Could not save vendor: ${error.message}`)
     }
     setSaving(false)
   }
@@ -105,14 +105,14 @@ export default function RecommendedVendorsAdmin() {
 
   const togglePublish = async (vendor) => {
     try {
-      const res = await fetch(`${API_URL}/api/recommended-vendors/${vendor.id}/publish`, {
+      await apiFetch(`${API_URL}/api/recommended-vendors/${vendor.id}/publish`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify({ is_published: !vendor.is_published }),
       })
-      if (res.ok) await loadVendors()
+      await loadVendors()
     } catch (err) {
       console.error('Failed to toggle publish:', err)
+      toastError(`Could not toggle publish: ${err.message}`)
     }
   }
 
@@ -127,13 +127,13 @@ export default function RecommendedVendorsAdmin() {
     if (!confirm('Are you sure you want to delete this vendor?')) return
 
     try {
-      await fetch(`${API_URL}/api/recommended-vendors/${id}`, {
-        method: 'DELETE',
-        headers: await authHeaders()
+      await apiFetch(`${API_URL}/api/recommended-vendors/${id}`, {
+        method: 'DELETE'
       })
       await loadVendors()
     } catch (error) {
       console.error('Failed to delete vendor:', error)
+      toastError(`Could not delete vendor: ${error.message}`)
     }
   }
 

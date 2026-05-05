@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
+import { useToast } from './ui/Toast'
 
 const CATEGORIES = [
   { key: 'video_message', label: 'Video messages', hint: 'Short phone clips captured during the day' },
@@ -85,6 +86,7 @@ function MediaTile({ item, isAdmin, onDelete, onCaptionChange }) {
 }
 
 export default function DayOfMemories({ weddingId, isAdmin = false }) {
+  const { error: toastError } = useToast()
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
@@ -127,20 +129,14 @@ export default function DayOfMemories({ weddingId, isAdmin = false }) {
       fd.append('file', file)
       fd.append('category', category)
       try {
-        const headers = await authHeaders()
-        delete headers['Content-Type']
-        const res = await fetch(`${API_URL}/api/day-of-media/${weddingId}/upload`, {
+        const result = await apiFetch(`${API_URL}/api/day-of-media/${weddingId}/upload`, {
           method: 'POST',
-          headers,
           body: fd,
         })
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}))
-          throw new Error(body.error || `Upload failed (${res.status})`)
-        }
-        uploaded.push(await res.json())
+        if (result) uploaded.push(result)
       } catch (err) {
         setError(`Couldn't upload ${file.name}: ${err.message}`)
+        toastError(`Could not upload ${file.name}: ${err.message}`)
         break
       }
       done++
@@ -154,30 +150,31 @@ export default function DayOfMemories({ weddingId, isAdmin = false }) {
 
   async function handleDelete(id) {
     if (!window.confirm('Delete this item? This cannot be undone.')) return
+    const snapshot = items
+    setItems(prev => prev.filter(i => i.id !== id))
     try {
-      const res = await fetch(`${API_URL}/api/day-of-media/${id}`, {
+      await apiFetch(`${API_URL}/api/day-of-media/${id}`, {
         method: 'DELETE',
-        headers: await authHeaders(),
       })
-      if (!res.ok) throw new Error('Delete failed')
-      setItems(prev => prev.filter(i => i.id !== id))
     } catch (err) {
+      setItems(snapshot)
       setError(`Couldn't delete: ${err.message}`)
+      toastError(`Could not delete: ${err.message}`)
     }
   }
 
   async function handleCaptionChange(id, caption) {
     try {
-      const res = await fetch(`${API_URL}/api/day-of-media/${id}`, {
+      const updated = await apiFetch(`${API_URL}/api/day-of-media/${id}`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify({ caption }),
       })
-      if (!res.ok) throw new Error('Caption save failed')
-      const updated = await res.json()
-      setItems(prev => prev.map(i => i.id === id ? { ...i, ...updated } : i))
+      if (updated) {
+        setItems(prev => prev.map(i => i.id === id ? { ...i, ...updated } : i))
+      }
     } catch (err) {
       setError(`Couldn't save caption: ${err.message}`)
+      toastError(`Could not save caption: ${err.message}`)
     }
   }
 

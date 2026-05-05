@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
+import { useToast } from './ui/Toast'
 
 
 /**
@@ -31,6 +32,7 @@ export default function SectionFinaliser({
   saved = false,
 }) {
   const [toggling, setToggling] = useState(false)
+  const { error: toastError } = useToast()
 
   if (!isPreWedding) return null
 
@@ -44,12 +46,13 @@ export default function SectionFinaliser({
     if (toggling) return
     setToggling(true)
     try {
-      await fetch(`${API_URL}/api/finalisations/${weddingId}`, {
+      await apiFetch(`${API_URL}/api/finalisations/${weddingId}`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({ section: sectionKey, party: role, value: !myDone }),
       })
       onFinalised?.(sectionKey, role, !myDone)
+    } catch (err) {
+      toastError(`Could not update sign-off: ${err.message}`)
     } finally {
       setToggling(false)
     }

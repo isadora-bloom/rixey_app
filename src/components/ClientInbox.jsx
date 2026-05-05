@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { apiFetch, authHeaders } from '../utils/api'
+import { useToast } from './ui/Toast'
 
 
 export default function ClientInbox({ weddingId, userId, onUnreadChange }) {
+  const { error: toastError } = useToast()
   const [messages, setMessages] = useState([])
   const [newMessage, setNewMessage] = useState('')
   const [loading, setLoading] = useState(true)
@@ -65,15 +67,14 @@ export default function ClientInbox({ weddingId, userId, onUnreadChange }) {
   const markAsRead = async () => {
     if (unreadCount === 0) return
     try {
-      await fetch(`${API_URL}/api/messages/read/${weddingId}`, {
+      await apiFetch(`${API_URL}/api/messages/read/${weddingId}`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify({ senderType: 'admin' })
       })
       setUnreadCount(0)
       onUnreadChange?.(0)
     } catch (err) {
-      console.error('Failed to mark as read:', err)
+      toastError(`Could not mark messages as read: ${err.message}`)
     }
   }
 
@@ -83,9 +84,8 @@ export default function ClientInbox({ weddingId, userId, onUnreadChange }) {
 
     setSending(true)
     try {
-      const response = await fetch(`${API_URL}/api/messages`, {
+      await apiFetch(`${API_URL}/api/messages`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({
           weddingId,
           senderId: userId,
@@ -93,13 +93,10 @@ export default function ClientInbox({ weddingId, userId, onUnreadChange }) {
           content: newMessage.trim()
         })
       })
-
-      if (response.ok) {
-        setNewMessage('')
-        loadMessages()
-      }
+      setNewMessage('')
+      loadMessages()
     } catch (err) {
-      console.error('Failed to send message:', err)
+      toastError(`Could not send message: ${err.message}`)
     }
     setSending(false)
   }

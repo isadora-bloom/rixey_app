@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
+import { useToast } from './ui/Toast'
 
 
 // ── Tag definitions ────────────────────────────────────────────────────────────
@@ -247,6 +248,7 @@ function TagEditor({ photo, guestNames, onUpdate, onDelete, onClose }) {
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export default function PhotoBucket({ weddingId, readOnly = false }) {
+  const { error: toastError } = useToast()
   const [photos, setPhotos]               = useState([])
   const [loading, setLoading]             = useState(true)
   const [uploading, setUploading]         = useState(false)
@@ -295,18 +297,16 @@ export default function PhotoBucket({ weddingId, readOnly = false }) {
         const formData = new FormData()
         formData.append('photo', file)
         formData.append('tags', JSON.stringify([]))
-        const hdrs = await authHeaders()
-        const res = await fetch(`${API_URL}/api/wedding-photos/${weddingId}/upload`, {
+        const photo = await apiFetch(`${API_URL}/api/wedding-photos/${weddingId}/upload`, {
           method: 'POST',
-          headers: { 'Authorization': hdrs['Authorization'] },
           body: formData
         })
-        if (res.ok) {
-          const photo = await res.json()
+        if (photo) {
           setPhotos(prev => [...prev, photo])
         }
       } catch (err) {
         console.error('Upload error:', err)
+        toastError(`Could not upload ${file.name}: ${err.message}`)
       }
     }
     setUploading(false)
@@ -314,28 +314,32 @@ export default function PhotoBucket({ weddingId, readOnly = false }) {
 
   const handleUpdate = async (photoId, updates) => {
     try {
-      const res = await fetch(`${API_URL}/api/wedding-photos/${photoId}`, {
+      const updated = await apiFetch(`${API_URL}/api/wedding-photos/${photoId}`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify(updates)
       })
-      if (res.ok) {
-        const updated = await res.json()
+      if (updated) {
         setPhotos(prev => prev.map(p => p.id === photoId ? updated : p))
         if (selectedPhoto?.id === photoId) setSelectedPhoto(updated)
       }
     } catch (err) {
       console.error('Update error:', err)
+      toastError(`Could not save photo: ${err.message}`)
     }
   }
 
   const handleDelete = async (photoId) => {
+    const snapshot = photos
+    const prevSelected = selectedPhoto
+    setPhotos(prev => prev.filter(p => p.id !== photoId))
+    if (selectedPhoto?.id === photoId) setSelectedPhoto(null)
     try {
-      await fetch(`${API_URL}/api/wedding-photos/${photoId}`, { method: 'DELETE', headers: await authHeaders() })
-      setPhotos(prev => prev.filter(p => p.id !== photoId))
-      if (selectedPhoto?.id === photoId) setSelectedPhoto(null)
+      await apiFetch(`${API_URL}/api/wedding-photos/${photoId}`, { method: 'DELETE' })
     } catch (err) {
       console.error('Delete error:', err)
+      setPhotos(snapshot)
+      setSelectedPhoto(prevSelected)
+      toastError(`Could not delete photo: ${err.message}`)
     }
   }
 

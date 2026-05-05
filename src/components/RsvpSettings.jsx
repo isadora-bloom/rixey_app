@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
+import { useToast } from './ui/Toast'
 
 const RSVP_FIELDS = [
   { key: 'ask_dietary', label: 'Dietary restrictions / allergies', default: true },
@@ -20,6 +21,7 @@ export default function RsvpSettings({ weddingId }) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const { error: toastError } = useToast()
 
   useEffect(() => {
     if (!weddingId) return
@@ -43,9 +45,8 @@ export default function RsvpSettings({ weddingId }) {
   const handleSave = async () => {
     setSaving(true)
     try {
-      await fetch(`${API_URL}/api/wedding-website/${weddingId}`, {
+      await apiFetch(`${API_URL}/api/wedding-website/${weddingId}`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify({
           rsvp_config: {
             fields: config,
@@ -55,7 +56,9 @@ export default function RsvpSettings({ weddingId }) {
       })
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
-    } catch {}
+    } catch (err) {
+      toastError(`Could not save RSVP settings: ${err.message}`)
+    }
     setSaving(false)
   }
 

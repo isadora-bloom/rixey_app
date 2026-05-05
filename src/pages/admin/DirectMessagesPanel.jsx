@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../../config/api'
-import { authHeaders } from '../../utils/api'
+import { apiFetch, authHeaders } from '../../utils/api'
+import { useToast } from '../../components/ui/Toast'
 
 export default function DirectMessagesPanel({ weddingId, weddingName }) {
+  const { error: toastError } = useToast()
   const [messages, setMessages] = useState([])
   const [newMessage, setNewMessage] = useState('')
   const [loading, setLoading] = useState(true)
@@ -25,12 +27,15 @@ export default function DirectMessagesPanel({ weddingId, weddingName }) {
       const data = await response.json()
       setMessages(data.messages || [])
 
-      // Mark client messages as read
-      await fetch(`${API_URL}/api/messages/read/${weddingId}`, {
-        method: 'PUT',
-        headers: await authHeaders(),
-        body: JSON.stringify({ senderType: 'client' })
-      })
+      // Mark client messages as read (fire-and-forget; toast on error)
+      try {
+        await apiFetch(`${API_URL}/api/messages/read/${weddingId}`, {
+          method: 'PUT',
+          body: JSON.stringify({ senderType: 'client' })
+        })
+      } catch (err) {
+        toastError(`Could not mark messages as read: ${err.message}`)
+      }
     } catch (err) {
       console.error('Failed to load messages:', err)
     }
@@ -43,9 +48,8 @@ export default function DirectMessagesPanel({ weddingId, weddingName }) {
 
     setSending(true)
     try {
-      await fetch(`${API_URL}/api/messages`, {
+      await apiFetch(`${API_URL}/api/messages`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({
           weddingId,
           senderType: 'admin',
@@ -55,7 +59,7 @@ export default function DirectMessagesPanel({ weddingId, weddingName }) {
       setNewMessage('')
       loadMessages()
     } catch (err) {
-      console.error('Failed to send message:', err)
+      toastError(`Could not send message: ${err.message}`)
     }
     setSending(false)
   }

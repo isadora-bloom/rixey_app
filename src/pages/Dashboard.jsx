@@ -38,7 +38,8 @@ import WebsiteBuilder from '../components/WebsiteBuilder'
 import BarPlanner from '../components/BarPlanner'
 import SectionFinaliser from '../components/SectionFinaliser'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { apiFetch, authHeaders } from '../utils/api'
+import { useToast } from '../components/ui/Toast'
 import DashboardChat from './dashboard/DashboardChat'
 import FloatingSage from '../components/FloatingSage'
 import DashboardNav, { FINALISABLE } from './dashboard/DashboardNav'
@@ -122,6 +123,7 @@ function WeddingCountdown({ weddingDate }) {
 export default function Dashboard() {
   const { user, signOut } = useAuth()
   const navigate = useNavigate()
+  const { error: toastError } = useToast()
   const [messages, setMessages] = useState([])
   const [newMessage, setNewMessage] = useState('')
   const [loadingMessages, setLoadingMessages] = useState(true)
@@ -172,17 +174,16 @@ export default function Dashboard() {
     formData.append('weddingId', profile.wedding_id)
     formData.append('uploadedBy', user?.id || '')
     try {
-      const token = (await authHeaders())['Authorization']
-      const res = await fetch(`${API_URL}/api/couple-photo`, { method: 'POST', headers: token ? { 'Authorization': token } : {}, body: formData })
-      const data = await res.json()
+      const data = await apiFetch(`${API_URL}/api/couple-photo`, { method: 'POST', body: formData })
       if (data.photo) {
         setNeedsPhoto(false)
         setCouplePhotoKey(k => k + 1) // force sidebar CouplePhoto to reload
       } else {
         setPhotoError(data.error || 'Upload failed — please try again.')
       }
-    } catch {
-      setPhotoError('Could not connect to the server — please try again.')
+    } catch (err) {
+      setPhotoError(err.message || 'Could not connect to the server — please try again.')
+      toastError(`Could not upload photo: ${err.message}`)
     }
     setPhotoUploading(false)
     if (photoInputRef.current) photoInputRef.current.value = ''
@@ -419,9 +420,8 @@ export default function Dashboard() {
   const doSageRequest = async (userMessage, baseMessages) => {
     setSending(true)
     try {
-      const response = await fetch(`${API_URL}/api/chat`, {
+      const data = await apiFetch(`${API_URL}/api/chat`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({
           message: userMessage,
           userId: user.id,
@@ -429,14 +429,11 @@ export default function Dashboard() {
           conversationHistory: baseMessages.slice(-10)
         })
       })
-      const data = await response.json()
       if (data.message) {
-        const saveRes = await fetch(`${API_URL}/api/sage-messages`, {
+        const saveData = await apiFetch(`${API_URL}/api/sage-messages`, {
           method: 'POST',
-          headers: await authHeaders(),
           body: JSON.stringify({ user_id: user.id, content: data.message, sender: 'sage' })
         })
-        const saveData = await saveRes.json()
         if (saveData.message) {
           setMessages([...baseMessages, saveData.message])
           setRetryState(null)
@@ -470,9 +467,8 @@ export default function Dashboard() {
     setSending(true)
 
     try {
-      const response = await fetch(`${API_URL}/api/welcome`, {
+      const data = await apiFetch(`${API_URL}/api/welcome`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({
           userId: user.id,
           userEmail: user.email,
@@ -481,20 +477,16 @@ export default function Dashboard() {
         })
       })
 
-      const data = await response.json()
-
       if (data.message) {
         // Save welcome message via server endpoint
-        const saveRes = await fetch(`${API_URL}/api/sage-messages`, {
+        const saveData = await apiFetch(`${API_URL}/api/sage-messages`, {
           method: 'POST',
-          headers: await authHeaders(),
           body: JSON.stringify({
             user_id: user.id,
             content: data.message,
             sender: 'sage'
           })
         })
-        const saveData = await saveRes.json()
 
         if (saveData.message) {
           setMessages(prev => [...prev, saveData.message])
@@ -502,6 +494,8 @@ export default function Dashboard() {
       }
     } catch (error) {
       console.error('Error getting welcome message:', error)
+      // Welcome message is best-effort; surface but don't block
+      toastError(`Could not load welcome message: ${error.message}`)
     }
 
     setSending(false)
@@ -520,24 +514,23 @@ export default function Dashboard() {
     // Save user message via server endpoint
     let userData
     try {
-      const saveRes = await fetch(`${API_URL}/api/sage-messages`, {
+      const saveData = await apiFetch(`${API_URL}/api/sage-messages`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({
           user_id: user.id,
           content: userMessageContent,
           sender: 'user'
         })
       })
-      const saveData = await saveRes.json()
       if (!saveData.message) {
         console.error('Error sending message:', saveData.error)
+        toastError(`Could not save message: ${saveData.error || 'Unknown error'}`)
         setSending(false)
         return
       }
       userData = saveData.message
     } catch (err) {
-      console.error('Error sending message:', err)
+      toastError(`Could not save message: ${err.message}`)
       setSending(false)
       return
     }
@@ -584,23 +577,23 @@ export default function Dashboard() {
     // Save user message via server endpoint
     let userData
     try {
-      const saveRes = await fetch(`${API_URL}/api/sage-messages`, {
+      const saveData = await apiFetch(`${API_URL}/api/sage-messages`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({
           user_id: user.id,
           content: userMessageContent,
           sender: 'user'
         })
       })
-      const saveData = await saveRes.json()
       if (!saveData.message) {
+        toastError('Could not save your message')
         setSending(false)
         setUploadingFile(false)
         return
       }
       userData = saveData.message
     } catch (err) {
+      toastError(`Could not save your message: ${err.message}`)
       setSending(false)
       setUploadingFile(false)
       return
@@ -616,27 +609,21 @@ export default function Dashboard() {
       formData.append('userId', user.id)
       formData.append('weddingId', profile?.wedding_id || '')
 
-      const fileToken = (await authHeaders())['Authorization']
-      const response = await fetch(`${API_URL}/api/chat-with-file`, {
+      const data = await apiFetch(`${API_URL}/api/chat-with-file`, {
         method: 'POST',
-        headers: fileToken ? { 'Authorization': fileToken } : {},
         body: formData
       })
 
-      const data = await response.json()
-
       if (data.message) {
         // Save Sage's response via server endpoint
-        const saveRes = await fetch(`${API_URL}/api/sage-messages`, {
+        const saveData = await apiFetch(`${API_URL}/api/sage-messages`, {
           method: 'POST',
-          headers: await authHeaders(),
           body: JSON.stringify({
             user_id: user.id,
             content: data.message,
             sender: 'sage'
           })
         })
-        const saveData = await saveRes.json()
 
         if (saveData.message) {
           setMessages([...updatedMessages, saveData.message])
@@ -644,20 +631,23 @@ export default function Dashboard() {
       }
     } catch (error) {
       console.error('Error uploading file:', error)
+      toastError(`Could not process file: ${error.message}`)
       // Save error message via server endpoint
-      const saveRes = await fetch(`${API_URL}/api/sage-messages`, {
-        method: 'POST',
-        headers: await authHeaders(),
-        body: JSON.stringify({
-          user_id: user.id,
-          content: "I had trouble processing that file. Please try again.",
-          sender: 'sage'
+      try {
+        const saveData = await apiFetch(`${API_URL}/api/sage-messages`, {
+          method: 'POST',
+          body: JSON.stringify({
+            user_id: user.id,
+            content: "I had trouble processing that file. Please try again.",
+            sender: 'sage'
+          })
         })
-      })
-      const saveData = await saveRes.json()
 
-      if (saveData.message) {
-        setMessages([...updatedMessages, saveData.message])
+        if (saveData.message) {
+          setMessages([...updatedMessages, saveData.message])
+        }
+      } catch (saveErr) {
+        console.error('Failed to save error message:', saveErr)
       }
     }
 
@@ -686,6 +676,8 @@ export default function Dashboard() {
     if (!error) {
       setProfile({ ...profile, name: editName.trim(), phone: editPhone.trim() || null })
       setShowEditProfile(false)
+    } else {
+      toastError(`Could not save profile: ${error.message}`)
     }
     setSavingProfile(false)
   }

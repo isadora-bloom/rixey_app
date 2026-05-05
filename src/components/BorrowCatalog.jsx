@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
+import { useToast } from './ui/Toast'
 
 
 const CATEGORIES = [
@@ -19,6 +20,7 @@ const CATEGORIES = [
 ]
 
 export default function BorrowCatalog({ onAskSage, weddingId, isAdmin, refreshKey }) {
+  const { error: toastError } = useToast()
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [activeCategory, setActiveCategory] = useState('All')
@@ -74,9 +76,8 @@ export default function BorrowCatalog({ onAskSage, weddingId, isAdmin, refreshKe
     setToggling(prev => new Set(prev).add(item.id))
 
     try {
-      await fetch(`${API_URL}/api/borrow-selections`, {
+      await apiFetch(`${API_URL}/api/borrow-selections`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({ weddingId, itemId: item.id, selected: nowSelected })
       })
     } catch (err) {
@@ -88,6 +89,7 @@ export default function BorrowCatalog({ onAskSage, weddingId, isAdmin, refreshKe
         return next
       })
       console.error('Failed to toggle selection:', err)
+      toastError(`Could not save selection: ${err.message}`)
     }
     setToggling(prev => {
       const next = new Set(prev)

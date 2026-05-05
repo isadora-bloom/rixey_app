@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { Stage, Layer, Image as KonvaImage, Circle, Rect, Text, Group } from 'react-konva'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
+import { useToast } from './ui/Toast'
 
 
 // Cropped image is 2893×1550. Barn measured: 718px = 40ft → 17.95 px/ft
@@ -192,6 +193,7 @@ export default function TableCanvas({ weddingId, isAdmin }) {
   const [loading, setLoading]     = useState(true)
   const [saving, setSaving]       = useState(false)
   const [saved, setSaved]         = useState(false)
+  const { error: toastError } = useToast()
 
   // Table summary from the Tables planner (for admin reference on the map)
   const [tableSummary, setTableSummary] = useState(null)
@@ -261,18 +263,15 @@ export default function TableCanvas({ weddingId, isAdmin }) {
   const save = async () => {
     setSaving(true)
     try {
-      const res = await fetch(`${API_URL}/api/table-layout`, {
+      await apiFetch(`${API_URL}/api/table-layout`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({ weddingId, elements }),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || `Server error ${res.status}`)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (err) {
       console.error('Save failed:', err)
-      alert(`Save failed: ${err.message}`)
+      toastError(`Could not save table layout: ${err.message}`)
     }
     setSaving(false)
   }

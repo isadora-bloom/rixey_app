@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
+import { useToast } from './ui/Toast'
 
 
 // Events organized by section
@@ -168,6 +169,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, isAdmi
   const [concurrentEvents, setConcurrentEvents] = useState({}) // Track which events are concurrent with others
   const [doingFirstLook, setDoingFirstLook] = useState(true) // First look vs traditional (no first look)
   const [formalityTimings, setFormalityTimings] = useState({}) // Individual before/after dinner for each formality
+  const { error: toastError } = useToast()
 
   // Calculate sunset time for the wedding date
   const sunsetTime = calculateSunset(weddingDate)
@@ -871,9 +873,8 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, isAdmi
     setSaving(true)
     setSaveError(null)
     try {
-      const res = await fetch(`${API_URL}/api/timeline`, {
+      await apiFetch(`${API_URL}/api/timeline`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({
           weddingId,
           userId,
@@ -895,15 +896,12 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, isAdmi
           notes
         })
       })
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
-        throw new Error(body.error || `Error ${res.status}`)
-      }
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (err) {
       console.error('Failed to save timeline:', err)
       setSaveError('Save failed — please try again.')
+      toastError(`Could not save timeline: ${err.message}`)
     }
     setSaving(false)
   }

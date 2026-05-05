@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
+import { useToast } from './ui/Toast'
 
 
 const FIELDS = [
@@ -23,6 +24,7 @@ export default function VenueSettings() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving]   = useState(false)
   const [saved, setSaved]     = useState(false)
+  const { error: toastError } = useToast()
 
   useEffect(() => { load() }, [])
 
@@ -40,15 +42,15 @@ export default function VenueSettings() {
   const handleSave = async () => {
     setSaving(true)
     try {
-      await fetch(`${API_URL}/api/venue-settings`, {
+      await apiFetch(`${API_URL}/api/venue-settings`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify(values),
       })
       setSaved(true)
       setTimeout(() => setSaved(false), 2500)
     } catch (err) {
       console.error('Save error:', err)
+      toastError(`Could not save venue settings: ${err.message}`)
     }
     setSaving(false)
   }

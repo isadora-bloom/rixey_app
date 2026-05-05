@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { apiFetch, authHeaders } from '../utils/api'
+import { useToast } from './ui/Toast'
 
 
 function timeAgo(dateStr) {
@@ -25,6 +26,7 @@ const TYPE_DOT_COLOR = {
 }
 
 export default function NotificationBell({ recipientType, weddingId, extraItems = [] }) {
+  const { error: toastError } = useToast()
   const [notifications, setNotifications] = useState([])
   const [unreadCount, setUnreadCount] = useState(0)
   const [open, setOpen] = useState(false)
@@ -62,34 +64,40 @@ export default function NotificationBell({ recipientType, weddingId, extraItems 
   }, [])
 
   const markAllRead = async () => {
+    const snapshot = notifications
+    const snapshotCount = unreadCount
+    setNotifications(prev => prev.map(n => ({ ...n, is_read: true })))
+    setUnreadCount(0)
     try {
-      await fetch(`${API_URL}/api/notifications/read`, {
+      await apiFetch(`${API_URL}/api/notifications/read`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify(
           recipientType === 'admin'
             ? { recipientType: 'admin' }
             : { recipientType: 'client', weddingId }
         ),
       })
-      setNotifications(prev => prev.map(n => ({ ...n, is_read: true })))
-      setUnreadCount(0)
     } catch (err) {
-      console.error('Failed to mark as read:', err)
+      setNotifications(snapshot)
+      setUnreadCount(snapshotCount)
+      toastError(`Could not mark notifications as read: ${err.message}`)
     }
   }
 
   const markOneRead = async (id) => {
+    const snapshot = notifications
+    const snapshotCount = unreadCount
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n))
+    setUnreadCount(prev => Math.max(0, prev - 1))
     try {
-      await fetch(`${API_URL}/api/notifications/read`, {
+      await apiFetch(`${API_URL}/api/notifications/read`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify({ notificationId: id }),
       })
-      setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n))
-      setUnreadCount(prev => Math.max(0, prev - 1))
     } catch (err) {
-      console.error('Failed to mark read:', err)
+      setNotifications(snapshot)
+      setUnreadCount(snapshotCount)
+      toastError(`Could not mark notification as read: ${err.message}`)
     }
   }
 

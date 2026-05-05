@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
+import { useToast } from './ui/Toast'
 
 
 const ONBOARDING_STEPS = [
@@ -106,6 +107,7 @@ export default function OnboardingChecklist({ weddingId, weddingDate, onAction, 
   const [progress, setProgress] = useState(null)
   const [loading, setLoading] = useState(true)
   const [dismissed, setDismissed] = useState(false)
+  const { error: toastError } = useToast()
 
   useEffect(() => {
     if (weddingId) {
@@ -127,15 +129,14 @@ export default function OnboardingChecklist({ weddingId, weddingDate, onAction, 
 
   const handleDismiss = async () => {
     try {
-      await fetch(`${API_URL}/api/onboarding/${weddingId}`, {
+      await apiFetch(`${API_URL}/api/onboarding/${weddingId}`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify({ onboarding_dismissed: true })
       })
       setDismissed(true)
       if (onDismiss) onDismiss()
     } catch (err) {
-      console.error('Failed to dismiss:', err)
+      toastError(`Could not dismiss onboarding: ${err.message}`)
     }
   }
 

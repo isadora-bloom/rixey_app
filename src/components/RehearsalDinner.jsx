@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
 import { Button, Input } from './ui'
+import { useToast } from './ui/Toast'
 
 
 function ToggleGroup({ options, value, onChange }) {
@@ -87,6 +88,7 @@ export default function RehearsalDinner({ weddingId, userId }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const { error: toastError } = useToast();
 
   useEffect(() => {
     async function fetchData() {
@@ -115,15 +117,14 @@ export default function RehearsalDinner({ weddingId, userId }) {
     e.preventDefault();
     setSaving(true);
     try {
-      await fetch(`${API_URL}/api/rehearsal-dinner`, {
+      await apiFetch(`${API_URL}/api/rehearsal-dinner`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({ weddingId, userId, ...form }),
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (err) {
-      console.error('Failed to save rehearsal dinner:', err);
+      toastError(`Could not save rehearsal dinner: ${err.message}`);
     } finally {
       setSaving(false);
     }

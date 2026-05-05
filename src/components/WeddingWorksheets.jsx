@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
 import { Button, Input } from './ui'
+import { useToast } from './ui/Toast'
 
 
 const PRIORITY_CATS = [
@@ -119,6 +120,7 @@ export default function WeddingWorksheets({ weddingId, userId }) {
   })
   const [budgetSaving, setBudgetSaving] = useState(false)
   const [budgetSaved, setBudgetSaved] = useState(false)
+  const { error: toastError } = useToast()
 
   // Load data
   useEffect(() => {
@@ -178,9 +180,8 @@ export default function WeddingWorksheets({ weddingId, userId }) {
         values,
         ...(notify ? { values_statement_submitted: true } : {}),
       }
-      await fetch(`${API_URL}/api/worksheets/${weddingId}`, {
+      await apiFetch(`${API_URL}/api/worksheets/${weddingId}`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify({ section: 'worksheet_priorities', data: sectionData, notify }),
       })
       if (notify) {
@@ -191,6 +192,7 @@ export default function WeddingWorksheets({ weddingId, userId }) {
       }
     } catch (err) {
       console.error('Save priorities error:', err)
+      toastError(`Could not save priorities: ${err.message}`)
     } finally {
       if (notify) setSubmitting(false); else setPrioritiesSaving(false)
     }
@@ -199,14 +201,14 @@ export default function WeddingWorksheets({ weddingId, userId }) {
   const saveGuestRules = async () => {
     setGuestSaving(true)
     try {
-      await fetch(`${API_URL}/api/worksheets/${weddingId}`, {
+      await apiFetch(`${API_URL}/api/worksheets/${weddingId}`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify({ section: 'worksheet_guest_rules', data: guestRules }),
       })
       showSaved(setGuestSaved)
     } catch (err) {
       console.error('Save guest rules error:', err)
+      toastError(`Could not save guest rules: ${err.message}`)
     } finally {
       setGuestSaving(false)
     }
@@ -215,20 +217,19 @@ export default function WeddingWorksheets({ weddingId, userId }) {
   const saveBudgetAlignment = async () => {
     setBudgetSaving(true)
     try {
-      await fetch(`${API_URL}/api/worksheets/${weddingId}`, {
+      await apiFetch(`${API_URL}/api/worksheets/${weddingId}`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify({ section: 'worksheet_budget_alignment', data: { ...budget, total: budgetTotal } }),
       })
       // Also update main budget total
-      await fetch(`${API_URL}/api/budget/${weddingId}`, {
+      await apiFetch(`${API_URL}/api/budget/${weddingId}`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify({ total_budget: budgetTotal }),
       })
       showSaved(setBudgetSaved)
     } catch (err) {
       console.error('Save budget alignment error:', err)
+      toastError(`Could not save budget alignment: ${err.message}`)
     } finally {
       setBudgetSaving(false)
     }

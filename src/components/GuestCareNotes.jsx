@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
+import { useToast } from './ui/Toast'
 
 
 const SECTIONS = [
@@ -102,6 +103,7 @@ export default function GuestCareNotes({ weddingId }) {
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState(null)
   const [dirty, setDirty] = useState(false)
+  const { error: toastError } = useToast()
 
   useEffect(() => {
     if (!weddingId) return
@@ -136,18 +138,17 @@ export default function GuestCareNotes({ weddingId }) {
     if (!weddingId) return
     setSaving(true)
     try {
-      const res = await fetch(`${API_URL}/api/guest-care`, {
+      const result = await apiFetch(`${API_URL}/api/guest-care`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({ weddingId, data: formData }),
       })
-      const result = await res.json()
-      if (result.success) {
+      if (result?.success) {
         setSavedAt(new Date().toISOString())
         setDirty(false)
       }
     } catch (err) {
       console.error('Failed to save guest care:', err)
+      toastError(`Could not save guest care notes: ${err.message}`)
     }
     setSaving(false)
   }

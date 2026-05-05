@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
+import { useToast } from './ui/Toast'
 
 
 export default function CouplePhoto({ weddingId, userId, compact = false }) {
+  const { error: toastError } = useToast()
   const [photo, setPhoto] = useState(null)
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
@@ -34,19 +36,17 @@ export default function CouplePhoto({ weddingId, userId, compact = false }) {
     if (userId) formData.append('uploadedBy', userId)
 
     try {
-      const hdrs = await authHeaders()
-      const response = await fetch(`${API_URL}/api/couple-photo`, {
+      const data = await apiFetch(`${API_URL}/api/couple-photo`, {
         method: 'POST',
-        headers: { 'Authorization': hdrs['Authorization'] },
         body: formData
       })
-      const data = await response.json()
 
-      if (data.photo) {
+      if (data?.photo) {
         setPhoto(data.photo)
       }
     } catch (error) {
       console.error('Error uploading photo:', error)
+      toastError(`Could not upload photo: ${error.message}`)
     }
     setUploading(false)
     if (fileInputRef.current) {
@@ -57,11 +57,14 @@ export default function CouplePhoto({ weddingId, userId, compact = false }) {
   const handleDelete = async () => {
     if (!confirm('Remove your couple photo?')) return
 
+    const snapshot = photo
+    setPhoto(null)
     try {
-      await fetch(`${API_URL}/api/couple-photo/${weddingId}`, { method: 'DELETE', headers: await authHeaders() })
-      setPhoto(null)
+      await apiFetch(`${API_URL}/api/couple-photo/${weddingId}`, { method: 'DELETE' })
     } catch (error) {
       console.error('Error deleting photo:', error)
+      setPhoto(snapshot)
+      toastError(`Could not remove photo: ${error.message}`)
     }
   }
 

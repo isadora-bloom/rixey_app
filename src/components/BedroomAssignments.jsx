@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
 import { Input } from './ui'
 import SaveIndicator from './ui/SaveIndicator'
+import { useToast } from './ui/Toast'
 
 
 export default function BedroomAssignments({ weddingId }) {
@@ -12,6 +13,7 @@ export default function BedroomAssignments({ weddingId }) {
   const [fetchError, setFetchError] = useState(null);
   const [saveError, setSaveError] = useState(null);
   const [saveState, setSaveState] = useState('idle');
+  const { error: toastError } = useToast();
 
   useEffect(() => {
     if (!weddingId) return;
@@ -43,19 +45,14 @@ export default function BedroomAssignments({ weddingId }) {
     setSaveState('saving');
     setSaveError(null);
     try {
-      const res = await fetch(`${API_URL}/api/bedrooms/${room.id}`, {
+      await apiFetch(`${API_URL}/api/bedrooms/${room.id}`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify({
           guest_friday: room.guest_friday || '',
           guest_saturday: room.guest_saturday || '',
           notes: room.notes || '',
         }),
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `Save failed (${res.status})`);
-      }
       setSaveState('saved');
       setSavedRows(prev => ({ ...prev, [room.id]: true }));
       setTimeout(() => {
@@ -68,8 +65,9 @@ export default function BedroomAssignments({ weddingId }) {
     } catch (err) {
       setSaveState('idle');
       setSaveError(`Couldn't save ${room.room_name}: ${err.message}. Your changes aren't saved, please try again.`);
+      toastError(`Could not save ${room.room_name}: ${err.message}`);
     }
-  }, []);
+  }, [toastError]);
 
   if (loading) {
     return (
