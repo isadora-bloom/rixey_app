@@ -1,7 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
 import { authHeaders, apiFetch } from '../utils/api'
 import { useToast } from './ui/Toast'
+import { useAutosave } from '../hooks/useAutosave'
+import SaveIndicator from './ui/SaveIndicator'
 
 
 // Events organized by section
@@ -159,9 +161,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, isAdmi
   const [formalitiesTiming, setFormalitiesTiming] = useState('after') // 'before' or 'after' dinner
   const [notes, setNotes] = useState('')
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
-  const [saveError, setSaveError] = useState(null)
+  const hasLoadedRef = useRef(false)
   const [showAddCustom, setShowAddCustom] = useState(false)
   const [newCustomEvent, setNewCustomEvent] = useState({ name: '', time: '', duration: 15, notes: '', section: 'reception' })
   const [editingCustomEvent, setEditingCustomEvent] = useState(null)
@@ -869,42 +869,50 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, isAdmi
     setLoading(false)
   }
 
-  const saveTimeline = async () => {
-    setSaving(true)
-    setSaveError(null)
-    try {
+  const { schedule: scheduleSave, state: saveState } = useAutosave(
+    async (payload) => {
       await apiFetch(`${API_URL}/api/timeline`, {
         method: 'POST',
-        body: JSON.stringify({
-          weddingId,
-          userId,
-          timelineData: {
-            events,
-            shuttleArrivals,
-            shuttleDepartures,
-            customEvents,
-            offSiteCeremony,
-            dinnerType,
-            formalitiesTiming,
-            autoCalculate,
-            concurrentEvents,
-            doingFirstLook,
-            formalityTimings
-          },
-          ceremonyStart: ceremonyTime,
-          receptionEnd,
-          notes
-        })
+        body: JSON.stringify(payload),
       })
-      setSaved(true)
-      setTimeout(() => setSaved(false), 2000)
-    } catch (err) {
-      console.error('Failed to save timeline:', err)
-      setSaveError('Save failed — please try again.')
-      toastError(`Could not save timeline: ${err.message}`)
+    },
+    { delay: 1500, errorMessage: 'Could not save timeline', toastError }
+  )
+
+  // Autosave on any planning-state change. Skips the first effect after load
+  // so we don't fire a no-op save with the just-loaded data.
+  useEffect(() => {
+    if (loading) return
+    if (!hasLoadedRef.current) {
+      hasLoadedRef.current = true
+      return
     }
-    setSaving(false)
-  }
+    scheduleSave({
+      weddingId,
+      userId,
+      timelineData: {
+        events,
+        shuttleArrivals,
+        shuttleDepartures,
+        customEvents,
+        offSiteCeremony,
+        dinnerType,
+        formalitiesTiming,
+        autoCalculate,
+        concurrentEvents,
+        doingFirstLook,
+        formalityTimings,
+      },
+      ceremonyStart: ceremonyTime,
+      receptionEnd,
+      notes,
+    })
+  }, [
+    loading, weddingId, userId, events, shuttleArrivals, shuttleDepartures,
+    customEvents, offSiteCeremony, dinnerType, formalitiesTiming, autoCalculate,
+    concurrentEvents, doingFirstLook, formalityTimings, ceremonyTime, receptionEnd, notes,
+    scheduleSave,
+  ])
 
   const updateEvent = (id, field, value) => {
     setEvents(prev => {
@@ -1195,15 +1203,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, isAdmi
           <h2 className="font-serif text-xl text-sage-700">Wedding Day Timeline</h2>
           <p className="text-sage-500 text-sm">Times auto-calculate based on your ceremony time</p>
         </div>
-        <button
-          onClick={saveTimeline}
-          disabled={saving}
-          className={`px-5 py-2 rounded-lg font-medium transition ${
-            saved ? 'bg-green-500 text-white' : saveError ? 'bg-red-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'
-          } disabled:opacity-50`}
-        >
-          {saved ? '✓ Saved!' : saving ? 'Saving...' : saveError ? 'Retry save' : 'Save Timeline'}
-        </button>
+        <SaveIndicator state={saveState} />
       </div>
 
       {/* First Look Toggle - Important decision at the top */}
@@ -1771,21 +1771,6 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, isAdmi
         </div>
       </div>
 
-      {/* Bottom Save Button */}
-      <div className="sticky bottom-0 bg-gradient-to-t from-white via-white to-transparent pt-4 pb-2 -mx-4 px-4 sm:-mx-6 sm:px-6">
-        {saveError && (
-          <p className="text-center text-sm text-red-600 mb-2">{saveError}</p>
-        )}
-        <button
-          onClick={saveTimeline}
-          disabled={saving}
-          className={`w-full px-5 py-3 rounded-lg font-medium transition text-lg ${
-            saved ? 'bg-green-500 text-white' : saveError ? 'bg-red-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'
-          } disabled:opacity-50 shadow-lg`}
-        >
-          {saved ? '✓ Timeline Saved!' : saving ? 'Saving...' : saveError ? 'Save failed — tap to retry' : 'Save Timeline'}
-        </button>
-      </div>
     </div>
   )
 }
