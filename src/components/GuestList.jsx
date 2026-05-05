@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
+import { useToast } from './ui/Toast'
 
 
 const RSVP_OPTIONS = [
@@ -137,13 +138,10 @@ function GuestModal({ guest, weddingId, tagOptions, mealOptions, platedMeal, tab
     try {
       const url = guest?.id ? `${API_URL}/api/guests/${guest.id}` : `${API_URL}/api/guests`
       const method = guest?.id ? 'PUT' : 'POST'
-      const res = await fetch(url, {
+      const data = await apiFetch(url, {
         method,
-        headers: await authHeaders(),
         body: JSON.stringify(payload),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Failed to save')
       onSave(data.guest)
     } catch (err) {
       setError(err.message)
@@ -387,6 +385,7 @@ function GuestModal({ guest, weddingId, tagOptions, mealOptions, platedMeal, tab
 // ─── Settings Modal ────────────────────────────────────────────────────────────
 
 function SettingsModal({ weddingId, tagOptions, mealOptions, platedMeal, onUpdate, onClose }) {
+  const { error: toastError } = useToast()
   const [plated, setPlated] = useState(platedMeal)
   const [tags, setTags] = useState(tagOptions)
   const [meals, setMeals] = useState(mealOptions)
@@ -400,55 +399,76 @@ function SettingsModal({ weddingId, tagOptions, mealOptions, platedMeal, onUpdat
 
   const togglePlated = async () => {
     const val = !plated
+    const snapshot = plated
     setPlated(val)
-    await fetch(`${API_URL}/api/guest-settings/${weddingId}`, {
-      method: 'PUT',
-      headers: await authHeaders(),
-      body: JSON.stringify({ platedMeal: val }),
-    })
-    emit({ platedMeal: val })
+    try {
+      await apiFetch(`${API_URL}/api/guest-settings/${weddingId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ platedMeal: val }),
+      })
+      emit({ platedMeal: val })
+    } catch (err) {
+      setPlated(snapshot)
+      toastError(`Could not update plated meal setting: ${err.message}`)
+    }
   }
 
   const addTag = async () => {
     if (!newTag.trim()) return
-    const res = await fetch(`${API_URL}/api/guest-tags`, {
-      method: 'POST',
-      headers: await authHeaders(),
-      body: JSON.stringify({ weddingId, label: newTag.trim(), color: newTagColor }),
-    })
-    const data = await res.json()
-    const updated = [...tags, data.tag]
-    setTags(updated)
-    setNewTag('')
-    emit({ tagOptions: updated })
+    try {
+      const data = await apiFetch(`${API_URL}/api/guest-tags`, {
+        method: 'POST',
+        body: JSON.stringify({ weddingId, label: newTag.trim(), color: newTagColor }),
+      })
+      const updated = [...tags, data.tag]
+      setTags(updated)
+      setNewTag('')
+      emit({ tagOptions: updated })
+    } catch (err) {
+      toastError(`Could not add tag: ${err.message}`)
+    }
   }
 
   const deleteTag = async (id) => {
-    await fetch(`${API_URL}/api/guest-tags/${id}`, { method: 'DELETE', headers: await authHeaders() })
+    const snapshot = tags
     const updated = tags.filter(t => t.id !== id)
     setTags(updated)
-    emit({ tagOptions: updated })
+    try {
+      await apiFetch(`${API_URL}/api/guest-tags/${id}`, { method: 'DELETE' })
+      emit({ tagOptions: updated })
+    } catch (err) {
+      setTags(snapshot)
+      toastError(`Could not delete tag: ${err.message}`)
+    }
   }
 
   const addMeal = async () => {
     if (!newMeal.trim()) return
-    const res = await fetch(`${API_URL}/api/meal-options`, {
-      method: 'POST',
-      headers: await authHeaders(),
-      body: JSON.stringify({ weddingId, label: newMeal.trim() }),
-    })
-    const data = await res.json()
-    const updated = [...meals, data.option]
-    setMeals(updated)
-    setNewMeal('')
-    emit({ mealOptions: updated })
+    try {
+      const data = await apiFetch(`${API_URL}/api/meal-options`, {
+        method: 'POST',
+        body: JSON.stringify({ weddingId, label: newMeal.trim() }),
+      })
+      const updated = [...meals, data.option]
+      setMeals(updated)
+      setNewMeal('')
+      emit({ mealOptions: updated })
+    } catch (err) {
+      toastError(`Could not add meal option: ${err.message}`)
+    }
   }
 
   const deleteMeal = async (id) => {
-    await fetch(`${API_URL}/api/meal-options/${id}`, { method: 'DELETE', headers: await authHeaders() })
+    const snapshot = meals
     const updated = meals.filter(m => m.id !== id)
     setMeals(updated)
-    emit({ mealOptions: updated })
+    try {
+      await apiFetch(`${API_URL}/api/meal-options/${id}`, { method: 'DELETE' })
+      emit({ mealOptions: updated })
+    } catch (err) {
+      setMeals(snapshot)
+      toastError(`Could not delete meal option: ${err.message}`)
+    }
   }
 
   return (
@@ -575,6 +595,7 @@ function SettingsModal({ weddingId, tagOptions, mealOptions, platedMeal, onUpdat
 // ─── Main Component ────────────────────────────────────────────────────────────
 
 export default function GuestList({ weddingId, userId }) {
+  const { error: toastError } = useToast()
   const [guests, setGuests] = useState([])
   const [tagOptions, setTagOptions] = useState([])
   const [mealOptions, setMealOptions] = useState([])
@@ -647,9 +668,15 @@ export default function GuestList({ weddingId, userId }) {
   }
 
   const handleDelete = async (id) => {
-    await fetch(`${API_URL}/api/guests/${id}`, { method: 'DELETE', headers: await authHeaders() })
+    const snapshot = guests
     setGuests(prev => prev.filter(g => g.id !== id))
     setDeleteConfirm(null)
+    try {
+      await apiFetch(`${API_URL}/api/guests/${id}`, { method: 'DELETE' })
+    } catch (err) {
+      setGuests(snapshot)
+      toastError(`Could not delete guest: ${err.message}`)
+    }
   }
 
   const handleCsvUpload = async (e) => {
@@ -710,17 +737,15 @@ export default function GuestList({ weddingId, userId }) {
       return g
     })
     try {
-      const res = await fetch(`${API_URL}/api/guests/bulk`, {
+      const data = await apiFetch(`${API_URL}/api/guests/bulk`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({ weddingId, guests: normalised }),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
       setGuests(prev => [...prev, ...data.guests])
       setCsvResult({ success: true, count: data.imported })
     } catch (err) {
       setCsvResult({ success: false, error: err.message })
+      toastError(`Could not import guests: ${err.message}`)
     }
     setCsvImporting(false)
     e.target.value = ''
@@ -774,9 +799,8 @@ export default function GuestList({ weddingId, userId }) {
     const updated = { ...guest, table_assignment: tableLabel || null }
     setGuests(prev => prev.map(g => g.id === guest.id ? updated : g))
     try {
-      await fetch(`${API_URL}/api/guests/${guest.id}`, {
+      await apiFetch(`${API_URL}/api/guests/${guest.id}`, {
         method: 'PUT',
-        headers: await authHeaders(),
         body: JSON.stringify({
           first_name: guest.first_name, last_name: guest.last_name,
           rsvp: guest.rsvp, dietary_restrictions: guest.dietary_restrictions,
@@ -788,8 +812,8 @@ export default function GuestList({ weddingId, userId }) {
         }),
       })
     } catch (err) {
-      console.error('Failed to assign table:', err)
       setGuests(prev => prev.map(g => g.id === guest.id ? guest : g)) // revert
+      toastError(`Could not assign table: ${err.message}`)
     }
   }
 

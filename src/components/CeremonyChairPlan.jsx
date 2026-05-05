@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
+import { useToast } from './ui/Toast'
 
 const DEFAULT_SIDES = 6
 const EMPTY_FRONT_ROWS = {
@@ -13,6 +14,7 @@ function countNames(text) {
 }
 
 export default function CeremonyChairPlan({ weddingId, userId, isAdmin = false }) {
+  const { error: toastError } = useToast()
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -56,9 +58,8 @@ export default function CeremonyChairPlan({ weddingId, userId, isAdmin = false }
     setSaved(false)
     setSaving(true)
     try {
-      await fetch(`${API_URL}/api/ceremony-plan/${weddingId}`, {
+      await apiFetch(`${API_URL}/api/ceremony-plan/${weddingId}`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({ plan: {
           rows: newRows ?? rows,
           aisleLabel: newAisleLabel ?? aisleLabel,
@@ -68,7 +69,7 @@ export default function CeremonyChairPlan({ weddingId, userId, isAdmin = false }
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (err) {
-      console.error('Save failed:', err)
+      toastError(`Could not save ceremony plan: ${err.message}`)
     }
     setSaving(false)
   }

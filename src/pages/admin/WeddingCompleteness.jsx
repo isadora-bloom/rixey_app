@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../../config/api'
-import { authHeaders } from '../../utils/api'
+import { authHeaders, apiFetch } from '../../utils/api'
+import { useToast } from '../../components/ui/Toast'
 
 // Each check: { label, check: (data) => boolean, tab?, inlineField? }
 // tab = clicking "Go" switches to that admin tab
@@ -100,6 +101,7 @@ const SECTIONS = [
 ]
 
 export default function WeddingCompleteness({ weddingId, wedding, onSwitchTab }) {
+  const { error: toastError } = useToast()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [inlineEdits, setInlineEdits] = useState({})
@@ -193,19 +195,20 @@ export default function WeddingCompleteness({ weddingId, wedding, onSwitchTab })
 
   const saveInlineField = async (field, value) => {
     setSavingField(field)
+    const snapshot = data
+    setData(prev => ({
+      ...prev,
+      details: { ...prev.details, [field]: value },
+    }))
     try {
-      await fetch(`${API_URL}/api/wedding-details`, {
+      await apiFetch(`${API_URL}/api/wedding-details`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify({ weddingId, [field]: value }),
       })
-      setData(prev => ({
-        ...prev,
-        details: { ...prev.details, [field]: value },
-      }))
       setInlineEdits(prev => { const n = { ...prev }; delete n[field]; return n })
     } catch (err) {
-      console.error('Inline save error:', err)
+      setData(snapshot)
+      toastError(`Could not save ${field}: ${err.message}`)
     }
     setSavingField(null)
   }

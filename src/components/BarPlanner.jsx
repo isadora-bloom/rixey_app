@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
+import { useToast } from './ui/Toast'
 
 
 // ── Ingredient scaling → meaningful units ─────────────────────────────────────
@@ -350,6 +351,7 @@ function ShoppingRow({ item, onToggle, onDelete, onUpdate }) {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function BarPlanner({ weddingId, guestCount: guestCountProp, weddingDate, coupleNames, isAdmin = false }) {
+  const { error: toastError } = useToast()
   // Admin lands on the shopping list so they immediately see what the
   // couple has actually bought, not an empty calculator.
   const [tab, setTab]     = useState(isAdmin ? 'list' : 'calculator')
@@ -436,89 +438,114 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
       clearTimeout(notesTimer.current)
       notesTimer.current = setTimeout(async () => {
         try {
-          const res = await fetch(`${API_URL}/api/bar-notes/${weddingId}`, {
-            method: 'PUT', headers: await authHeaders(),
+          await apiFetch(`${API_URL}/api/bar-notes/${weddingId}`, {
+            method: 'PUT',
             body: JSON.stringify(next),
           })
-          if (!res.ok) console.error('[BarPlanner] Notes save failed:', res.status)
         } catch (err) {
-          console.error('[BarPlanner] Notes save error:', err)
+          toastError(`Could not save bar notes: ${err.message}`)
         }
       }, 800)
       return next
     })
-  }, [weddingId])
+  }, [weddingId, toastError])
 
   // ── Shopping list ──
 
   const addItem = async () => {
     if (!newItem.item_name.trim()) return
     try {
-      const res = await fetch(`${API_URL}/api/bar-shopping/${weddingId}`, {
-        method: 'POST', headers: await authHeaders(),
+      const saved = await apiFetch(`${API_URL}/api/bar-shopping/${weddingId}`, {
+        method: 'POST',
         body: JSON.stringify({ ...newItem, sort_order: items.length }),
       })
-      if (!res.ok) throw new Error(`Error ${res.status}`)
-      const saved = await res.json()
       setItems(prev => [...prev, saved])
       setNewItem({ item_name: '', quantity: '', unit: '', category: 'other', notes: '' })
       setAddingItem(false)
     } catch (err) {
-      console.error('[BarPlanner] Add item failed:', err)
-      alert('Failed to save item — please try again.')
+      toastError(`Could not add item: ${err.message}`)
     }
   }
 
   const toggleItem = async (id, checked) => {
+    const snapshot = items
     setItems(prev => prev.map(i => i.id === id ? { ...i, checked } : i))
-    await fetch(`${API_URL}/api/bar-shopping/${id}`, {
-      method: 'PUT', headers: await authHeaders(),
-      body: JSON.stringify({ checked }),
-    })
+    try {
+      await apiFetch(`${API_URL}/api/bar-shopping/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ checked }),
+      })
+    } catch (err) {
+      setItems(snapshot)
+      toastError(`Could not update item: ${err.message}`)
+    }
   }
 
   const updateItem = async (id, fields) => {
+    const snapshot = items
     setItems(prev => prev.map(i => i.id === id ? { ...i, ...fields } : i))
-    await fetch(`${API_URL}/api/bar-shopping/${id}`, {
-      method: 'PUT', headers: await authHeaders(),
-      body: JSON.stringify(fields),
-    })
+    try {
+      await apiFetch(`${API_URL}/api/bar-shopping/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(fields),
+      })
+    } catch (err) {
+      setItems(snapshot)
+      toastError(`Could not update item: ${err.message}`)
+    }
   }
 
   const deleteItem = async (id) => {
+    const snapshot = items
     setItems(prev => prev.filter(i => i.id !== id))
-    await fetch(`${API_URL}/api/bar-shopping/${id}`, { method: 'DELETE', headers: await authHeaders() })
+    try {
+      await apiFetch(`${API_URL}/api/bar-shopping/${id}`, { method: 'DELETE' })
+    } catch (err) {
+      setItems(snapshot)
+      toastError(`Could not delete item: ${err.message}`)
+    }
   }
 
   const clearList = async () => {
     if (!window.confirm("Clear everything on the shopping list? This can't be undone.")) return
     const snapshot = [...items]
     setItems([])
-    for (const item of snapshot) {
-      await fetch(`${API_URL}/api/bar-shopping/${item.id}`, { method: 'DELETE', headers: await authHeaders() })
+    try {
+      for (const item of snapshot) {
+        await apiFetch(`${API_URL}/api/bar-shopping/${item.id}`, { method: 'DELETE' })
+      }
+    } catch (err) {
+      setItems(snapshot)
+      toastError(`Could not clear list: ${err.message}`)
     }
   }
 
   const importFromCalculator = async () => {
+    const snapshot = items
     // Replace only calculator-generated items; keep anything manually added
     const toRemove = items.filter(i => i.from_calculator)
-    for (const item of toRemove) {
-      await fetch(`${API_URL}/api/bar-shopping/${item.id}`, { method: 'DELETE', headers: await authHeaders() })
+    try {
+      for (const item of toRemove) {
+        await apiFetch(`${API_URL}/api/bar-shopping/${item.id}`, { method: 'DELETE' })
+      }
+      const added = []
+      for (const item of calcPreview) {
+        // Wine: show bottles in the calculator, save as cases on the shopping list
+        const listItem = (item.category === 'wine' && item.unit === 'bottles')
+          ? { ...item, quantity: Math.ceil(item.quantity / 12), unit: 'cases of 12' }
+          : item
+        const saved = await apiFetch(`${API_URL}/api/bar-shopping/${weddingId}`, {
+          method: 'POST',
+          body: JSON.stringify({ ...listItem, from_calculator: true, sort_order: items.length + added.length }),
+        })
+        added.push(saved)
+      }
+      setItems(prev => [...prev.filter(i => !i.from_calculator), ...added])
+      setTab('list')
+    } catch (err) {
+      setItems(snapshot)
+      toastError(`Could not import from calculator: ${err.message}`)
     }
-    const added = []
-    for (const item of calcPreview) {
-      // Wine: show bottles in the calculator, save as cases on the shopping list
-      const listItem = (item.category === 'wine' && item.unit === 'bottles')
-        ? { ...item, quantity: Math.ceil(item.quantity / 12), unit: 'cases of 12' }
-        : item
-      const res = await fetch(`${API_URL}/api/bar-shopping/${weddingId}`, {
-        method: 'POST', headers: await authHeaders(),
-        body: JSON.stringify({ ...listItem, from_calculator: true, sort_order: items.length + added.length }),
-      })
-      added.push(await res.json())
-    }
-    setItems(prev => [...prev.filter(i => !i.from_calculator), ...added])
-    setTab('list')
   }
 
   // ── Recipes ──
@@ -530,25 +557,22 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
     setExtracting(true)
     setEditableIngredients(null)
     try {
-      let res
+      let data
       if (recipeMode === 'url') {
-        res = await fetch(`${API_URL}/api/bar-recipes/extract-url`, {
-          method: 'POST', headers: await authHeaders(),
+        data = await apiFetch(`${API_URL}/api/bar-recipes/extract-url`, {
+          method: 'POST',
           body: JSON.stringify({ url: recipeUrl, name: recipeName }),
         })
       } else {
         const form = new FormData()
         form.append('file', recipeFile)
         form.append('name', recipeName)
-        const uploadHdrs = await authHeaders()
-        res = await fetch(`${API_URL}/api/bar-recipes/extract-upload`, { method: 'POST', headers: { 'Authorization': uploadHdrs['Authorization'] }, body: form })
+        data = await apiFetch(`${API_URL}/api/bar-recipes/extract-upload`, { method: 'POST', body: form })
       }
-      const data = await res.json()
-      if (data.ingredients) setEditableIngredients(data.ingredients)
-      else alert(data.error || 'Could not extract ingredients.')
+      if (data && data.ingredients) setEditableIngredients(data.ingredients)
+      else alert((data && data.error) || 'Could not extract ingredients.')
     } catch (err) {
-      console.error(err)
-      alert('Extraction failed.')
+      toastError(`Could not extract recipe: ${err.message}`)
     }
     setExtracting(false)
   }
@@ -567,44 +591,59 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
 
   const saveRecipe = async () => {
     const ingredients = (editableIngredients || []).filter(i => i.name.trim())
-    const res = await fetch(`${API_URL}/api/bar-recipes/${weddingId}`, {
-      method: 'POST', headers: await authHeaders(),
-      body: JSON.stringify({
-        name: recipeName, source_type: recipeMode,
-        source_url: recipeMode === 'url' ? recipeUrl : null,
-        ingredients, servings_basis: 1,
-      }),
-    })
-    const saved = await res.json()
-    setRecipes(prev => [...prev, saved])
-    setAddingRecipe(false)
-    setRecipeName(''); setRecipeUrl(''); setRecipeFile(null); setEditableIngredients(null)
+    try {
+      const saved = await apiFetch(`${API_URL}/api/bar-recipes/${weddingId}`, {
+        method: 'POST',
+        body: JSON.stringify({
+          name: recipeName, source_type: recipeMode,
+          source_url: recipeMode === 'url' ? recipeUrl : null,
+          ingredients, servings_basis: 1,
+        }),
+      })
+      setRecipes(prev => [...prev, saved])
+      setAddingRecipe(false)
+      setRecipeName(''); setRecipeUrl(''); setRecipeFile(null); setEditableIngredients(null)
+    } catch (err) {
+      toastError(`Could not save recipe: ${err.message}`)
+    }
   }
 
   const deleteRecipe = async (id) => {
+    const snapshot = recipes
     setRecipes(prev => prev.filter(r => r.id !== id))
-    await fetch(`${API_URL}/api/bar-recipes/${id}`, { method: 'DELETE', headers: await authHeaders() })
+    try {
+      await apiFetch(`${API_URL}/api/bar-recipes/${id}`, { method: 'DELETE' })
+    } catch (err) {
+      setRecipes(snapshot)
+      toastError(`Could not delete recipe: ${err.message}`)
+    }
   }
 
   const addRecipeToList = async (recipe) => {
-    const added = []
-    for (const ing of recipe.ingredients) {
-      const scaled = ing.per_serving
-        ? scaleIngredient(ing.quantity, ing.unit, ing.category, guests)
-        : { qty: ing.quantity, unit: ing.unit, note: null }
-      const res = await fetch(`${API_URL}/api/bar-shopping/${weddingId}`, {
-        method: 'POST', headers: await authHeaders(),
-        body: JSON.stringify({
-          item_name: ing.name, quantity: scaled.qty, unit: scaled.unit,
-          category: ing.category || 'other',
-          notes: `For ${recipe.name}${scaled.note ? ` (${scaled.note})` : ` (scaled to ${guests} guests)`}`,
-          sort_order: items.length + added.length,
-        }),
-      })
-      added.push(await res.json())
+    const snapshot = items
+    try {
+      const added = []
+      for (const ing of recipe.ingredients) {
+        const scaled = ing.per_serving
+          ? scaleIngredient(ing.quantity, ing.unit, ing.category, guests)
+          : { qty: ing.quantity, unit: ing.unit, note: null }
+        const saved = await apiFetch(`${API_URL}/api/bar-shopping/${weddingId}`, {
+          method: 'POST',
+          body: JSON.stringify({
+            item_name: ing.name, quantity: scaled.qty, unit: scaled.unit,
+            category: ing.category || 'other',
+            notes: `For ${recipe.name}${scaled.note ? ` (${scaled.note})` : ` (scaled to ${guests} guests)`}`,
+            sort_order: items.length + added.length,
+          }),
+        })
+        added.push(saved)
+      }
+      setItems(prev => [...prev, ...added])
+      setTab('list')
+    } catch (err) {
+      setItems(snapshot)
+      toastError(`Could not add recipe to list: ${err.message}`)
     }
-    setItems(prev => [...prev, ...added])
-    setTab('list')
   }
 
   // ── Render ────────────────────────────────────────────────────────────────

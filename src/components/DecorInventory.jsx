@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
 import { Button, Input, ConfirmDialog } from './ui'
+import { useToast } from './ui/Toast'
 
 
 const SPACE_OPTIONS = [
@@ -29,6 +30,7 @@ const EMPTY_ITEM_FORM = {
 };
 
 function ItemRow({ item, onDelete, onUpdate }) {
+  const { error: toastError } = useToast();
   const [values, setValues] = useState({
     item_name: item.item_name || '',
     source: item.source || '',
@@ -43,20 +45,17 @@ function ItemRow({ item, onDelete, onUpdate }) {
       clearTimeout(saveTimeout.current);
       saveTimeout.current = setTimeout(async () => {
         try {
-          const res = await fetch(`${API_URL}/api/decor/${item.id}`, {
+          const saved = await apiFetch(`${API_URL}/api/decor/${item.id}`, {
             method: 'PUT',
-            headers: await authHeaders(),
             body: JSON.stringify(updated),
           });
-          if (!res.ok) throw new Error('Failed to update item');
-          const saved = await res.json();
           onUpdate(saved);
         } catch (err) {
-          console.error(err);
+          toastError(`Could not save decor item: ${err.message}`);
         }
       }, 400);
     },
-    [item.id, onUpdate]
+    [item.id, onUpdate, toastError]
   );
 
   const handleChange = (field, val) => {
@@ -301,6 +300,7 @@ function SpaceSection({ spaceName, items, onAddItem, onDeleteItem, onUpdateItem,
 }
 
 export default function DecorInventory({ weddingId, userId }) {
+  const { error: toastError } = useToast();
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -347,14 +347,22 @@ export default function DecorInventory({ weddingId, userId }) {
   const handleDeleteSpaceConfirm = async () => {
     const spaceName = confirmTarget;
     const spaceItems = items.filter((i) => i.space_name === spaceName);
-    await Promise.all(
-      spaceItems.map(async (item) =>
-        fetch(`${API_URL}/api/decor/${item.id}`, { method: 'DELETE', headers: await authHeaders() }).catch(console.error)
-      )
-    );
+    const itemsSnapshot = items;
+    const spacesSnapshot = activeSpaces;
     setItems((prev) => prev.filter((i) => i.space_name !== spaceName));
     setActiveSpaces((prev) => prev.filter((s) => s !== spaceName));
     setConfirmTarget(null);
+    try {
+      await Promise.all(
+        spaceItems.map((item) =>
+          apiFetch(`${API_URL}/api/decor/${item.id}`, { method: 'DELETE' })
+        )
+      );
+    } catch (err) {
+      setItems(itemsSnapshot);
+      setActiveSpaces(spacesSnapshot);
+      toastError(`Could not delete space: ${err.message}`);
+    }
   };
 
   const getNextSortOrder = (spaceName) => {
@@ -376,26 +384,24 @@ export default function DecorInventory({ weddingId, userId }) {
         notes: form.notes,
         sort_order: getNextSortOrder(spaceName),
       };
-      const res = await fetch(`${API_URL}/api/decor`, {
+      const newItem = await apiFetch(`${API_URL}/api/decor`, {
         method: 'POST',
-        headers: await authHeaders(),
         body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error('Failed to add item');
-      const newItem = await res.json();
       setItems((prev) => [...prev, newItem]);
     } catch (err) {
-      console.error(err);
+      toastError(`Could not add decor item: ${err.message}`);
     }
   };
 
   const handleDeleteItem = async (id) => {
+    const snapshot = items;
+    setItems((prev) => prev.filter((i) => i.id !== id));
     try {
-      const res = await fetch(`${API_URL}/api/decor/${id}`, { method: 'DELETE', headers: await authHeaders() });
-      if (!res.ok) throw new Error('Failed to delete item');
-      setItems((prev) => prev.filter((i) => i.id !== id));
+      await apiFetch(`${API_URL}/api/decor/${id}`, { method: 'DELETE' });
     } catch (err) {
-      console.error(err);
+      setItems(snapshot);
+      toastError(`Could not delete decor item: ${err.message}`);
     }
   };
 
