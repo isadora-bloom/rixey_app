@@ -1,8 +1,10 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
 import { authHeaders, apiFetch } from '../utils/api'
 import { Button, Input } from './ui'
 import { useToast } from './ui/Toast'
+import { useAutosave } from '../hooks/useAutosave'
+import SaveIndicator from './ui/SaveIndicator'
 
 
 const PRIORITY_CATS = [
@@ -35,7 +37,7 @@ const SKIP_OPTIONS = [
 ]
 
 
-function SectionCard({ title, isOpen, onToggle, hasData, children }) {
+function SectionCard({ title, isOpen, onToggle, hasData, headerExtra, children }) {
   return (
     <div className="bg-white rounded-2xl border border-cream-200 shadow-sm overflow-hidden">
       <button
@@ -51,15 +53,18 @@ function SectionCard({ title, isOpen, onToggle, hasData, children }) {
           )}
           <span className="font-semibold text-sage-800 text-base">{title}</span>
         </div>
-        <svg
-          className={`w-5 h-5 text-sage-400 transition-transform flex-shrink-0 ${isOpen ? 'rotate-180' : ''}`}
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth={2}
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-        </svg>
+        <div className="flex items-center gap-3">
+          {headerExtra}
+          <svg
+            className={`w-5 h-5 text-sage-400 transition-transform flex-shrink-0 ${isOpen ? 'rotate-180' : ''}`}
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
+        </div>
       </button>
       {isOpen && (
         <div className="px-5 pb-6 pt-1 border-t border-cream-100">
@@ -67,19 +72,6 @@ function SectionCard({ title, isOpen, onToggle, hasData, children }) {
         </div>
       )}
     </div>
-  )
-}
-
-function SaveButton({ onClick, label = 'Save draft', saving, saved, variant = 'secondary', className = '' }) {
-  return (
-    <Button
-      onClick={onClick}
-      disabled={saving}
-      variant={variant}
-      className={className}
-    >
-      {saving ? 'Saving…' : saved ? '✓ Saved' : label}
-    </Button>
   )
 }
 
@@ -99,18 +91,16 @@ export default function WeddingWorksheets({ weddingId, userId }) {
     skip: '', skip_because: '',
     remember: '',
   })
-  const [prioritiesSaving, setPrioritiesSaving] = useState(false)
-  const [prioritiesSaved, setPrioritiesSaved] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
+  const prioritiesLoadedRef = useRef(false)
 
   // Section 2 — Guest rules
   const [guestRules, setGuestRules] = useState({
     count_min: '', count_max: '', count_contracted: '',
     rule_family: '', rule_friends: '', rule_work: '', rule_plusones: '', rule_children: '',
   })
-  const [guestSaving, setGuestSaving] = useState(false)
-  const [guestSaved, setGuestSaved] = useState(false)
+  const guestLoadedRef = useRef(false)
 
   // Section 3 — Budget
   const [budget, setBudget] = useState({
@@ -118,8 +108,7 @@ export default function WeddingWorksheets({ weddingId, userId }) {
     p2_savings: '', p2_future: '',
     family: '',
   })
-  const [budgetSaving, setBudgetSaving] = useState(false)
-  const [budgetSaved, setBudgetSaved] = useState(false)
+  const budgetLoadedRef = useRef(false)
   const { error: toastError } = useToast()
 
   // Load data
@@ -148,11 +137,6 @@ export default function WeddingWorksheets({ weddingId, userId }) {
       .finally(() => setLoading(false))
   }, [weddingId])
 
-  const showSaved = useCallback((setSaved) => {
-    setSaved(true)
-    setTimeout(() => setSaved(false), 3000)
-  }, [])
-
   // Alignment check
   const agreements = PRIORITY_CATS.filter(cat => {
     const r1 = parseInt(p1Ranks[cat])
@@ -170,68 +154,98 @@ export default function WeddingWorksheets({ weddingId, userId }) {
     .map(v => parseFloat(v) || 0)
     .reduce((a, b) => a + b, 0)
 
-  const savePriorities = async (notify = false) => {
-    if (notify) setSubmitting(true); else setPrioritiesSaving(true)
+  const { schedule: schedulePrioritiesSave, state: prioritiesSaveState } = useAutosave(
+    async (payload) => {
+      await apiFetch(`${API_URL}/api/worksheets/${weddingId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ section: 'worksheet_priorities', data: payload, notify: false }),
+      })
+    },
+    { delay: 1500, errorMessage: 'Could not save priorities', toastError }
+  )
+
+  const { schedule: scheduleGuestSave, state: guestSaveState } = useAutosave(
+    async (payload) => {
+      await apiFetch(`${API_URL}/api/worksheets/${weddingId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ section: 'worksheet_guest_rules', data: payload }),
+      })
+    },
+    { delay: 1500, errorMessage: 'Could not save guest rules', toastError }
+  )
+
+  const { schedule: scheduleBudgetSave, state: budgetSaveState } = useAutosave(
+    async (payload) => {
+      await apiFetch(`${API_URL}/api/worksheets/${weddingId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ section: 'worksheet_budget_alignment', data: payload }),
+      })
+      await apiFetch(`${API_URL}/api/budget/${weddingId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ total_budget: payload.total }),
+      })
+    },
+    { delay: 1500, errorMessage: 'Could not save budget alignment', toastError }
+  )
+
+  // Autosave priorities
+  useEffect(() => {
+    if (loading) return
+    if (!weddingId) return
+    if (!prioritiesLoadedRef.current) {
+      prioritiesLoadedRef.current = true
+      return
+    }
+    schedulePrioritiesSave({
+      p1: p1Ranks,
+      p2: p2Ranks,
+      skipped,
+      values,
+    })
+  }, [loading, weddingId, p1Ranks, p2Ranks, skipped, values, schedulePrioritiesSave])
+
+  // Autosave guest rules
+  useEffect(() => {
+    if (loading) return
+    if (!weddingId) return
+    if (!guestLoadedRef.current) {
+      guestLoadedRef.current = true
+      return
+    }
+    scheduleGuestSave(guestRules)
+  }, [loading, weddingId, guestRules, scheduleGuestSave])
+
+  // Autosave budget alignment
+  useEffect(() => {
+    if (loading) return
+    if (!weddingId) return
+    if (!budgetLoadedRef.current) {
+      budgetLoadedRef.current = true
+      return
+    }
+    scheduleBudgetSave({ ...budget, total: budgetTotal })
+  }, [loading, weddingId, budget, budgetTotal, scheduleBudgetSave])
+
+  const submitPriorities = async () => {
+    setSubmitting(true)
     try {
       const sectionData = {
         p1: p1Ranks,
         p2: p2Ranks,
         skipped,
         values,
-        ...(notify ? { values_statement_submitted: true } : {}),
+        values_statement_submitted: true,
       }
       await apiFetch(`${API_URL}/api/worksheets/${weddingId}`, {
         method: 'PUT',
-        body: JSON.stringify({ section: 'worksheet_priorities', data: sectionData, notify }),
+        body: JSON.stringify({ section: 'worksheet_priorities', data: sectionData, notify: true }),
       })
-      if (notify) {
-        setSubmitted(true)
-        showSaved(setSubmitted)
-      } else {
-        showSaved(setPrioritiesSaved)
-      }
+      setSubmitted(true)
     } catch (err) {
-      console.error('Save priorities error:', err)
-      toastError(`Could not save priorities: ${err.message}`)
+      console.error('Submit priorities error:', err)
+      toastError(`Could not send to Rixey team: ${err.message}`)
     } finally {
-      if (notify) setSubmitting(false); else setPrioritiesSaving(false)
-    }
-  }
-
-  const saveGuestRules = async () => {
-    setGuestSaving(true)
-    try {
-      await apiFetch(`${API_URL}/api/worksheets/${weddingId}`, {
-        method: 'PUT',
-        body: JSON.stringify({ section: 'worksheet_guest_rules', data: guestRules }),
-      })
-      showSaved(setGuestSaved)
-    } catch (err) {
-      console.error('Save guest rules error:', err)
-      toastError(`Could not save guest rules: ${err.message}`)
-    } finally {
-      setGuestSaving(false)
-    }
-  }
-
-  const saveBudgetAlignment = async () => {
-    setBudgetSaving(true)
-    try {
-      await apiFetch(`${API_URL}/api/worksheets/${weddingId}`, {
-        method: 'PUT',
-        body: JSON.stringify({ section: 'worksheet_budget_alignment', data: { ...budget, total: budgetTotal } }),
-      })
-      // Also update main budget total
-      await apiFetch(`${API_URL}/api/budget/${weddingId}`, {
-        method: 'PUT',
-        body: JSON.stringify({ total_budget: budgetTotal }),
-      })
-      showSaved(setBudgetSaved)
-    } catch (err) {
-      console.error('Save budget alignment error:', err)
-      toastError(`Could not save budget alignment: ${err.message}`)
-    } finally {
-      setBudgetSaving(false)
+      setSubmitting(false)
     }
   }
 
@@ -258,6 +272,7 @@ export default function WeddingWorksheets({ weddingId, userId }) {
         isOpen={openSection === 'priorities'}
         onToggle={() => setOpenSection(openSection === 'priorities' ? null : 'priorities')}
         hasData={hasPrioritiesData}
+        headerExtra={<SaveIndicator state={prioritiesSaveState} />}
       >
         <div className="mt-4 space-y-6">
           <p className="text-sm text-sage-600">Rank each category 1–10 (1 = most important). Do this independently first, then compare.</p>
@@ -447,20 +462,14 @@ export default function WeddingWorksheets({ weddingId, userId }) {
             </div>
           </div>
 
-          {/* Buttons */}
+          {/* Send to Rixey */}
           <div className="flex flex-wrap items-center gap-3 pt-2">
             <Button
-              onClick={() => savePriorities(true)}
+              onClick={submitPriorities}
               disabled={submitting || submitted}
             >
-              {submitting ? 'Sending…' : submitted ? '✓ Sent to Rixey team' : 'Save & Send to Rixey Team'}
+              {submitting ? 'Sending…' : submitted ? '✓ Sent to Rixey team' : 'Send to Rixey Team'}
             </Button>
-            <SaveButton
-              onClick={() => savePriorities(false)}
-              saving={prioritiesSaving}
-              saved={prioritiesSaved}
-              className="border border-cream-200 text-sage-600 hover:bg-cream-50"
-            />
           </div>
         </div>
       </SectionCard>
@@ -471,6 +480,7 @@ export default function WeddingWorksheets({ weddingId, userId }) {
         isOpen={openSection === 'guests'}
         onToggle={() => setOpenSection(openSection === 'guests' ? null : 'guests')}
         hasData={hasGuestData}
+        headerExtra={<SaveIndicator state={guestSaveState} />}
       >
         <div className="mt-4 space-y-5">
           <p className="text-sm text-sage-600">Set your rules before anyone asks to be invited. It's much easier to say no when you have a clear policy.</p>
@@ -532,16 +542,6 @@ export default function WeddingWorksheets({ weddingId, userId }) {
               ))}
             </div>
           </div>
-
-          <div className="flex items-center gap-3 pt-1">
-            <SaveButton
-              onClick={saveGuestRules}
-              label="Save guest rules"
-              saving={guestSaving}
-              saved={guestSaved}
-              className="px-5 py-2 bg-sage-600 hover:bg-sage-700 text-white"
-            />
-          </div>
         </div>
       </SectionCard>
 
@@ -551,6 +551,7 @@ export default function WeddingWorksheets({ weddingId, userId }) {
         isOpen={openSection === 'budget'}
         onToggle={() => setOpenSection(openSection === 'budget' ? null : 'budget')}
         hasData={hasBudgetData}
+        headerExtra={<SaveIndicator state={budgetSaveState} />}
       >
         <div className="mt-4 space-y-5">
           <p className="text-sm text-sage-600">Do this privately first, then share with each other. Being honest now saves arguments later.</p>
@@ -640,16 +641,6 @@ export default function WeddingWorksheets({ weddingId, userId }) {
           <div className="bg-amber-50 rounded-xl p-3 flex gap-2">
             <span className="text-amber-600 flex-shrink-0">⚠️</span>
             <p className="text-sm text-amber-800">Don't count money you "hope" someone might give you, or credit cards. Only confirmed amounts.</p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3 pt-1">
-            <SaveButton
-              onClick={saveBudgetAlignment}
-              label="Save & set as my budget"
-              saving={budgetSaving}
-              saved={budgetSaved}
-              className="px-5 py-2 bg-sage-600 hover:bg-sage-700 text-white"
-            />
           </div>
         </div>
       </SectionCard>

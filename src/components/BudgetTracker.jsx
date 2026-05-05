@@ -1,7 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
 import { authHeaders, apiFetch } from '../utils/api'
 import { useToast } from './ui/Toast'
+import { useAutosave } from '../hooks/useAutosave'
+import SaveIndicator from './ui/SaveIndicator'
 
 function useDebounce(value, delay = 500) {
   const [debounced, setDebounced] = useState(value)
@@ -34,10 +36,27 @@ export default function BudgetTracker({ weddingId }) {
   const [isShared, setIsShared] = useState(false)
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES)
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
-  const [saveError, setSaveError] = useState(null)
+  const hasLoadedRef = useRef(false)
   const { error: toastError } = useToast()
+
+  const { schedule: scheduleSave, state: saveState } = useAutosave(
+    async (payload) => {
+      await apiFetch(`${API_URL}/api/budget`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      })
+    },
+    { delay: 1500, errorMessage: 'Could not save budget', toastError }
+  )
+
+  useEffect(() => {
+    if (loading) return
+    if (!hasLoadedRef.current) {
+      hasLoadedRef.current = true
+      return
+    }
+    scheduleSave({ weddingId, totalBudget, isShared, categories })
+  }, [loading, weddingId, totalBudget, isShared, categories, scheduleSave])
 
   useEffect(() => {
     loadBudget()
@@ -115,24 +134,6 @@ export default function BudgetTracker({ weddingId }) {
   const overallPercent = overallBudget > 0 ? Math.min(100, Math.round((totalCommitted / overallBudget) * 100)) : 0
   const isOverall = totalCommitted > overallBudget && overallBudget > 0
 
-  const handleSave = async () => {
-    setSaving(true)
-    setSaveError(null)
-    try {
-      await apiFetch(`${API_URL}/api/budget`, {
-        method: 'POST',
-        body: JSON.stringify({ weddingId, totalBudget, isShared, categories })
-      })
-      setSaved(true)
-      setTimeout(() => setSaved(false), 2500)
-    } catch (err) {
-      console.error('Failed to save budget:', err)
-      setSaveError('Save failed — please try again.')
-      toastError(`Could not save budget: ${err.message}`)
-    }
-    setSaving(false)
-  }
-
   if (loading) {
     return (
       <div className="space-y-3 animate-pulse">
@@ -145,6 +146,15 @@ export default function BudgetTracker({ weddingId }) {
 
   return (
     <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-4">
+        <div>
+          <h2 className="font-serif text-xl text-sage-700">Budget</h2>
+          <p className="text-sage-500 text-sm">Track your wedding spend by category</p>
+        </div>
+        <SaveIndicator state={saveState} />
+      </div>
+
       {/* Total budget input */}
       <div>
         <label className="block text-sm font-medium text-sage-700 mb-1">Total Wedding Budget</label>
@@ -386,19 +396,6 @@ export default function BudgetTracker({ weddingId }) {
         </label>
       </div>
 
-      {/* Save button */}
-      {saveError && (
-        <p className="text-sm text-red-600 text-center">{saveError}</p>
-      )}
-      <button
-        onClick={handleSave}
-        disabled={saving}
-        className={`w-full py-3 rounded-xl font-medium transition text-white ${
-          saved ? 'bg-green-600' : saveError ? 'bg-red-500' : 'bg-sage-600 hover:bg-sage-700'
-        } disabled:opacity-50`}
-      >
-        {saved ? '✓ Saved!' : saving ? 'Saving...' : saveError ? 'Save failed — tap to retry' : 'Save Budget'}
-      </button>
     </div>
   )
 }

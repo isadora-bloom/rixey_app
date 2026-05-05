@@ -1,10 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
 import { authHeaders, apiFetch } from '../utils/api'
 import SaveIndicator from './ui/SaveIndicator'
 import { useToast } from './ui/Toast'
-const SaveIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-const CheckIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+import { useAutosave } from '../hooks/useAutosave'
 
 
 const defaultDetails = {
@@ -139,15 +138,13 @@ function FieldRow({ label, children }) {
 export default function WeddingDetails({ weddingId, userId }) {
   const [details, setDetails] = useState(defaultDetails)
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
-  const [saveError, setSaveError] = useState(null)
-  const [saveState, setSaveState] = useState('idle')
+  const hasLoadedRef = useRef(false)
   const { error: toastError } = useToast()
 
   useEffect(() => {
     if (!weddingId) return
     setLoading(true)
+    hasLoadedRef.current = false
     const load = async () => {
       try {
         const res = await fetch(`${API_URL}/api/wedding-details/${weddingId}`, {
@@ -172,27 +169,24 @@ export default function WeddingDetails({ weddingId, userId }) {
   const setInput = (field) => (e) =>
     setDetails((prev) => ({ ...prev, [field]: e.target.value }))
 
-  const handleSave = async () => {
-    setSaving(true)
-    setSaveError(null)
-    setSaveState('saving')
-    try {
+  const { schedule: scheduleSave, state: saveState } = useAutosave(
+    async (payload) => {
       await apiFetch(`${API_URL}/api/wedding-details`, {
         method: 'POST',
-        body: JSON.stringify({ weddingId, userId, ...details }),
+        body: JSON.stringify(payload),
       })
-      setSaved(true)
-      setSaveState('saved')
-      setTimeout(() => setSaved(false), 2500)
-    } catch (err) {
-      console.error(err)
-      setSaveError('Save failed — please try again.')
-      setSaveState('idle')
-      toastError(`Could not save wedding details: ${err.message}`)
-    } finally {
-      setSaving(false)
+    },
+    { delay: 1200, errorMessage: 'Could not save wedding details', toastError }
+  )
+
+  useEffect(() => {
+    if (loading) return
+    if (!hasLoadedRef.current) {
+      hasLoadedRef.current = true
+      return
     }
-  }
+    scheduleSave({ weddingId, userId, ...details })
+  }, [loading, weddingId, userId, details, scheduleSave])
 
   if (loading) {
     return (
@@ -203,7 +197,16 @@ export default function WeddingDetails({ weddingId, userId }) {
   }
 
   return (
-    <div className="pb-24 space-y-6">
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-4">
+        <div>
+          <h2 className="font-serif text-xl text-sage-700">Wedding Details</h2>
+          <p className="text-sage-500 text-sm">Everything the team needs to know about your day</p>
+        </div>
+        <SaveIndicator state={saveState} />
+      </div>
+
       {/* The Basics */}
       <SectionCard title="The Basics">
         <FieldRow label="Wedding colors">
@@ -473,21 +476,6 @@ export default function WeddingDetails({ weddingId, userId }) {
         )}
       </SectionCard>
 
-      {/* Sticky save bar */}
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-cream-200 px-6 py-3 flex items-center justify-end gap-3 z-20 lg:pl-64">
-        <SaveIndicator state={saveState} />
-        {saveError && (
-          <span className="text-sm text-red-600">{saveError}</span>
-        )}
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm disabled:opacity-50 transition-colors text-white ${saveError ? 'bg-red-500 hover:bg-red-600' : 'bg-sage-600 hover:bg-sage-700'}`}
-        >
-          <SaveIcon />
-          {saving ? 'Saving…' : saveError ? 'Retry' : 'Save Details'}
-        </button>
-      </div>
     </div>
   )
 }

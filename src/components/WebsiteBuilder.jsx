@@ -1,8 +1,10 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
 import { authHeaders, apiFetch } from '../utils/api'
-import { Button, Input } from './ui'
+import { Input } from './ui'
 import { useToast } from './ui/Toast'
+import { useAutosave } from '../hooks/useAutosave'
+import SaveIndicator from './ui/SaveIndicator'
 
 const APP_URL = import.meta.env.VITE_APP_URL || window.location.origin
 
@@ -96,9 +98,8 @@ function CollapsibleSection({ title, hint, children, defaultOpen = false }) {
 export default function WebsiteBuilder({ weddingId, coupleNames }) {
   const [settings, setSettings] = useState(null)
   const [loading, setLoading]   = useState(true)
-  const [saving, setSaving]     = useState(false)
-  const [saved, setSaved]       = useState(false)
   const [copied, setCopied]     = useState(false)
+  const hasLoadedRef = useRef(false)
 
   // RSVP analytics
   const [rsvpCounts, setRsvpCounts] = useState({ total: 0, yes: 0, no: 0, pending: 0 })
@@ -246,11 +247,25 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
     setLoading(false)
   }
 
-  const handleSave = async (publishOverride) => {
-    setSaving(true)
-    const isPublished = publishOverride !== undefined ? publishOverride : published
-    const payload = {
-      theme, slug: slug.trim(), published: isPublished,
+  const { schedule: scheduleSave, flush: flushSave, state: saveState } = useAutosave(
+    async (payload) => {
+      await apiFetch(`${API_URL}/api/wedding-website/${weddingId}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      })
+    },
+    { delay: 1500, errorMessage: 'Could not save website', toastError }
+  )
+
+  useEffect(() => {
+    if (loading) return
+    if (slugStatus === 'taken') return
+    if (!hasLoadedRef.current) {
+      hasLoadedRef.current = true
+      return
+    }
+    scheduleSave({
+      theme, slug: slug.trim(), published,
       accent_color: accentColor || null,
       font_pair: fontPair || null,
       hero_pretext: heroPretext || null,
@@ -268,21 +283,14 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
       access_password: passwordEnabled ? accessPassword : null,
       section_order: sectionOrder,
       ...sections,
-    }
-    try {
-      await apiFetch(`${API_URL}/api/wedding-website/${weddingId}`, {
-        method: 'PUT',
-        body: JSON.stringify(payload),
-      })
-      if (publishOverride !== undefined) setPublished(publishOverride)
-      setSaved(true)
-      setTimeout(() => setSaved(false), 2500)
-    } catch (err) {
-      console.error('Save error:', err)
-      toastError(`Could not save website: ${err.message}`)
-    }
-    setSaving(false)
-  }
+    })
+  }, [
+    loading, slugStatus, theme, slug, published, accentColor, fontPair, heroPretext,
+    welcomeMsg, ourStory, theProposal, ceremonyTime, receptionTime, dressCode, dressCodeNote,
+    unplugged, kidsPolicy, plusOnePolicy, signatureCocktail, registryLinks, faqItems,
+    thingsToDo, rsvpDeadline, rsvpNote, footerMessage, accessPassword, passwordEnabled,
+    sectionOrder, sections, scheduleSave,
+  ])
 
   const moveSectionOrder = (index, direction) => {
     const newOrder = [...sectionOrder]
@@ -293,8 +301,8 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
   }
 
   const handlePreviewTab = async () => {
-    // Auto-save before showing preview
-    await handleSave()
+    // Flush any pending autosave before showing preview
+    await flushSave()
     setActiveTab('preview')
   }
 
@@ -317,17 +325,7 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
           <h3 className="font-serif text-lg text-sage-700">Your Wedding Website</h3>
           <p className="text-sage-500 text-sm">Built from your planning — no starting from scratch</p>
         </div>
-        <div className="flex items-center gap-2">
-          {saved && (
-            <span className="text-xs text-green-600 font-medium">Saved ✓</span>
-          )}
-          <Button
-            onClick={() => handleSave()}
-            disabled={saving || slugStatus === 'taken'}
-          >
-            {saving ? 'Saving…' : 'Save'}
-          </Button>
-        </div>
+        <SaveIndicator state={saveState} />
       </div>
 
       {/* Edit / Preview toggle */}
@@ -348,7 +346,7 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
             activeTab === 'preview' ? 'bg-white text-sage-700 shadow-sm' : 'text-sage-500 hover:text-sage-700'
           }`}
         >
-          {saving ? 'Saving…' : 'Preview'}
+          Preview
         </button>
       </div>
 
@@ -583,7 +581,7 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
                 )}
                 <button
                   type="button"
-                  onClick={() => handleSave(!published)}
+                  onClick={() => { setPublished(!published); setTimeout(() => flushSave(), 0) }}
                   disabled={slugStatus === 'taken'}
                   className={`px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 ${
                     published
@@ -1004,18 +1002,9 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
         </div>
       </div>
 
-      {/* Save button */}
-      <div className="flex items-center justify-between pt-2">
-        <p className="text-xs text-sage-400">
-          Getting there, venue info, and accommodations are always included and pre-filled by Rixey
-        </p>
-        <Button
-          onClick={() => handleSave()}
-          disabled={saving || slugStatus === 'taken'}
-        >
-          {saving ? 'Saving…' : saved ? 'Saved ✓' : 'Save changes'}
-        </Button>
-      </div>
+      <p className="text-xs text-sage-400 pt-2">
+        Getting there, venue info, and accommodations are always included and pre-filled by Rixey
+      </p>
 
       </>)}
     </div>

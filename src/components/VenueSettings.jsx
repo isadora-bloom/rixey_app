@@ -1,7 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
 import { authHeaders, apiFetch } from '../utils/api'
 import { useToast } from './ui/Toast'
+import { useAutosave } from '../hooks/useAutosave'
+import SaveIndicator from './ui/SaveIndicator'
 
 
 const FIELDS = [
@@ -22,8 +24,7 @@ const FIELDS = [
 export default function VenueSettings() {
   const [values, setValues]   = useState({})
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving]   = useState(false)
-  const [saved, setSaved]     = useState(false)
+  const hasLoadedRef = useRef(false)
   const { error: toastError } = useToast()
 
   useEffect(() => { load() }, [])
@@ -39,21 +40,24 @@ export default function VenueSettings() {
     setLoading(false)
   }
 
-  const handleSave = async () => {
-    setSaving(true)
-    try {
+  const { schedule: scheduleSave, state: saveState } = useAutosave(
+    async (payload) => {
       await apiFetch(`${API_URL}/api/venue-settings`, {
         method: 'PUT',
-        body: JSON.stringify(values),
+        body: JSON.stringify(payload),
       })
-      setSaved(true)
-      setTimeout(() => setSaved(false), 2500)
-    } catch (err) {
-      console.error('Save error:', err)
-      toastError(`Could not save venue settings: ${err.message}`)
+    },
+    { delay: 1200, errorMessage: 'Could not save venue settings', toastError }
+  )
+
+  useEffect(() => {
+    if (loading) return
+    if (!hasLoadedRef.current) {
+      hasLoadedRef.current = true
+      return
     }
-    setSaving(false)
-  }
+    scheduleSave(values)
+  }, [loading, values, scheduleSave])
 
   const set = (key, val) => setValues(prev => ({ ...prev, [key]: val }))
 
@@ -62,12 +66,15 @@ export default function VenueSettings() {
   return (
     <div className="max-w-2xl space-y-6">
 
-      <div>
-        <h2 className="font-serif text-xl text-sage-700">Venue Settings</h2>
-        <p className="text-sage-500 text-sm mt-1">
-          This information appears on every couple's public wedding website.
-          Change it here and it updates everywhere — no code changes needed.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="font-serif text-xl text-sage-700">Venue Settings</h2>
+          <p className="text-sage-500 text-sm mt-1">
+            This information appears on every couple's public wedding website.
+            Change it here and it updates everywhere — no code changes needed.
+          </p>
+        </div>
+        <SaveIndicator state={saveState} />
       </div>
 
       <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">
@@ -98,17 +105,6 @@ export default function VenueSettings() {
             )}
           </div>
         ))}
-      </div>
-
-      <div className="flex items-center justify-end gap-3 pt-2">
-        {saved && <span className="text-sm text-green-600 font-medium">Saved ✓</span>}
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="px-6 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
-        >
-          {saving ? 'Saving…' : 'Save venue settings'}
-        </button>
       </div>
     </div>
   )

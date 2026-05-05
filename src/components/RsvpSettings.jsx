@@ -1,7 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
 import { authHeaders, apiFetch } from '../utils/api'
 import { useToast } from './ui/Toast'
+import { useAutosave } from '../hooks/useAutosave'
+import SaveIndicator from './ui/SaveIndicator'
 
 const RSVP_FIELDS = [
   { key: 'ask_dietary', label: 'Dietary restrictions / allergies', default: true },
@@ -19,8 +21,7 @@ export default function RsvpSettings({ weddingId }) {
   const [config, setConfig] = useState({})
   const [customQuestions, setCustomQuestions] = useState([])
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
+  const hasLoadedRef = useRef(false)
   const { error: toastError } = useToast()
 
   useEffect(() => {
@@ -42,25 +43,30 @@ export default function RsvpSettings({ weddingId }) {
     setConfig(prev => ({ ...prev, [key]: !prev[key] }))
   }
 
-  const handleSave = async () => {
-    setSaving(true)
-    try {
+  const { schedule: scheduleSave, state: saveState } = useAutosave(
+    async (payload) => {
       await apiFetch(`${API_URL}/api/wedding-website/${weddingId}`, {
         method: 'PUT',
-        body: JSON.stringify({
-          rsvp_config: {
-            fields: config,
-            custom_questions: customQuestions.filter(q => q.label.trim()),
-          },
-        }),
+        body: JSON.stringify(payload),
       })
-      setSaved(true)
-      setTimeout(() => setSaved(false), 2000)
-    } catch (err) {
-      toastError(`Could not save RSVP settings: ${err.message}`)
+    },
+    { delay: 1500, errorMessage: 'Could not save RSVP settings', toastError }
+  )
+
+  useEffect(() => {
+    if (loading) return
+    if (!weddingId) return
+    if (!hasLoadedRef.current) {
+      hasLoadedRef.current = true
+      return
     }
-    setSaving(false)
-  }
+    scheduleSave({
+      rsvp_config: {
+        fields: config,
+        custom_questions: customQuestions.filter(q => q.label.trim()),
+      },
+    })
+  }, [loading, weddingId, config, customQuestions, scheduleSave])
 
   const addCustomQuestion = () => {
     setCustomQuestions(prev => [...prev, { label: '', type: 'text', options: '' }])
@@ -83,13 +89,7 @@ export default function RsvpSettings({ weddingId }) {
           <h2 className="font-serif text-xl text-sage-700">RSVP Settings</h2>
           <p className="text-sage-600 text-sm">Choose what guests are asked when they RSVP on your website</p>
         </div>
-        <div className="flex items-center gap-2">
-          {saved && <span className="text-green-600 text-xs">Saved</span>}
-          <button onClick={handleSave} disabled={saving}
-            className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm font-medium hover:bg-sage-700 disabled:opacity-50 transition">
-            {saving ? 'Saving...' : 'Save'}
-          </button>
-        </div>
+        <SaveIndicator state={saveState} />
       </div>
 
       <p className="text-sage-600 text-xs bg-sage-50 rounded-lg px-4 py-3 border border-sage-200">
