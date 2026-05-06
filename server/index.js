@@ -4801,7 +4801,8 @@ app.post('/api/recommended-vendors', async (req, res) => {
     const {
       category, name, notes, contact, website, pricing_info,
       has_multiple_events, is_local, is_budget_friendly,
-      serves_indian, serves_chinese
+      serves_indian, serves_chinese,
+      bio, instagram, facebook, special_offer, availability_note
     } = req.body;
 
     if (!category || !name) {
@@ -4821,7 +4822,12 @@ app.post('/api/recommended-vendors', async (req, res) => {
         is_local: is_local || false,
         is_budget_friendly: is_budget_friendly || false,
         serves_indian: serves_indian || false,
-        serves_chinese: serves_chinese || false
+        serves_chinese: serves_chinese || false,
+        bio: bio || null,
+        instagram: instagram || null,
+        facebook: facebook || null,
+        special_offer: special_offer || null,
+        availability_note: availability_note || null
       })
       .select()
       .single();
