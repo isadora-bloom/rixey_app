@@ -7026,15 +7026,42 @@ app.get('/api/guests/:weddingId', async (req, res) => {
   }
 });
 
+// Default guest tag options seeded on first load so the filter dropdown is
+// immediately usable. Couple can rename, recolor, delete, or add to these.
+const DEFAULT_GUEST_TAGS = [
+  { label: 'Bridesmaid',       color: '#EC4899' },
+  { label: 'Groomsman',        color: '#3B82F6' },
+  { label: 'Family of Bride',  color: '#F59E0B' },
+  { label: 'Family of Groom',  color: '#10B981' },
+  { label: 'Rehearsal Dinner', color: '#8B5CF6' },
+  { label: 'Shuttle',          color: '#06B6D4' },
+  { label: 'Out of Town',      color: '#F97316' },
+  { label: 'Plus One',         color: '#9CA3AF' },
+];
+
 // GET guest settings (tags, meal options, plated flag)
 app.get('/api/guest-settings/:weddingId', async (req, res) => {
   try {
     const { weddingId } = req.params;
-    const [tagsRes, mealsRes, weddingRes] = await Promise.all([
+    let [tagsRes, mealsRes, weddingRes] = await Promise.all([
       supabaseAdmin.from('guest_tag_options').select('*').eq('wedding_id', weddingId).order('display_order'),
       supabaseAdmin.from('guest_meal_options').select('*').eq('wedding_id', weddingId).order('display_order'),
       supabaseAdmin.from('weddings').select('plated_meal').eq('id', weddingId).single(),
     ]);
+    // Lazy-seed default tags on first load so the filter is discoverable.
+    if (!tagsRes.error && (tagsRes.data?.length ?? 0) === 0) {
+      const seedRows = DEFAULT_GUEST_TAGS.map((t, i) => ({
+        wedding_id: weddingId,
+        label: t.label,
+        color: t.color,
+        display_order: i,
+      }));
+      const seeded = await supabaseAdmin
+        .from('guest_tag_options')
+        .insert(seedRows)
+        .select();
+      if (!seeded.error) tagsRes = seeded;
+    }
     res.json({
       tagOptions: tagsRes.data || [],
       mealOptions: mealsRes.data || [],
