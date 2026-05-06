@@ -3704,7 +3704,7 @@ app.post('/api/vendors', async (req, res) => {
     }
   } catch (error) {
     console.error('Save vendor error:', error);
-    res.status(500).json({ error: 'Failed to save vendor' });
+    res.status(500).json({ error: error.message || 'Failed to save vendor' });
   }
 });
 
