@@ -6726,7 +6726,10 @@ app.get('/api/wedding-details/:weddingId', async (req, res) => {
 });
 app.post('/api/wedding-details', async (req, res) => {
   try {
-    const { weddingId, ...fields } = req.body;
+    // Strip session metadata the autosave hook bundles in. Anything left in
+    // `fields` must map to a real column or the upsert dies on the first
+    // unknown name and nothing saves.
+    const { weddingId, userId, id, created_at, updated_at, ...fields } = req.body;
     const { data, error } = await supabaseAdmin.from('wedding_details')
       .upsert({ wedding_id: weddingId, ...fields, updated_at: new Date().toISOString() }, { onConflict: 'wedding_id' })
       .select().single();
