@@ -685,8 +685,6 @@ export default function Dashboard() {
   const resourceLinks = [
     { name: 'Vendor Directory', href: '/vendors' },
     { name: 'Accommodations', href: '/accommodations' },
-    { name: 'Venue Gallery', href: 'https://www.rixeymanor.com/weddingsbyseason' },
-    { name: 'Planning Resources', href: 'https://www.rixeymanor.com/planning' },
   ]
 
   return (
@@ -1058,8 +1056,6 @@ export default function Dashboard() {
                   {[
                     { name: 'Vendor Directory', href: '/vendors' },
                     { name: 'Accommodations', href: '/accommodations' },
-                    { name: 'Venue Gallery', href: 'https://www.rixeymanor.com/weddingsbyseason' },
-                    { name: 'Planning Resources', href: 'https://www.rixeymanor.com/planning' },
                   ].map((link) => (
                     link.href.startsWith('/') ? (
                       <button key={link.name} onClick={() => navigate(link.href)}
