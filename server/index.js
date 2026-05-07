@@ -6134,19 +6134,23 @@ app.get('/api/timeline/:weddingId', async (req, res) => {
 // Save wedding timeline
 app.post('/api/timeline', async (req, res) => {
   try {
-    const { weddingId, timelineData, ceremonyStart, receptionStart, receptionEnd, notes, userId } = req.body;
+    const { weddingId, timelineData, ceremonyStart, receptionEnd, notes, userId } = req.body;
+
+    // Build the upsert defensively. `reception_start` lives on the table but
+    // the current client only tracks ceremony + reception end; including it
+    // unconditionally was wiping any preexisting value to NULL on every save.
+    const row = {
+      wedding_id: weddingId,
+      timeline_data: timelineData || {},
+      ceremony_start: ceremonyStart,
+      reception_end: receptionEnd,
+      notes,
+      updated_at: new Date().toISOString(),
+    };
 
     const { data, error } = await supabaseAdmin
       .from('wedding_timeline')
-      .upsert({
-        wedding_id: weddingId,
-        timeline_data: timelineData || {},
-        ceremony_start: ceremonyStart,
-        reception_start: receptionStart,
-        reception_end: receptionEnd,
-        notes,
-        updated_at: new Date().toISOString()
-      }, { onConflict: 'wedding_id' })
+      .upsert(row, { onConflict: 'wedding_id' })
       .select()
       .single();
 
@@ -6159,7 +6163,7 @@ app.post('/api/timeline', async (req, res) => {
     res.json({ timeline: data });
   } catch (error) {
     console.error('Save timeline error:', error);
-    res.status(500).json({ error: 'Failed to save timeline' });
+    res.status(500).json({ error: error.message || 'Failed to save timeline' });
   }
 });
 
@@ -6464,7 +6468,7 @@ app.post('/api/budget', async (req, res) => {
     res.json({ budget: data });
   } catch (error) {
     console.error('Save budget error:', error);
-    res.status(500).json({ error: 'Failed to save budget' });
+    res.status(500).json({ error: error.message || 'Failed to save budget' });
   }
 });
 
@@ -7798,6 +7802,8 @@ app.put('/api/wedding-website/:weddingId', async (req, res) => {
       // New columns (require migration 004)
       'accent_color', 'font_pair', 'hero_pretext', 'the_proposal', 'things_to_do',
       'footer_message', 'section_order', 'access_password', 'show_things_to_do',
+      // RsvpSettings page persists field toggles + custom questions here (migration 007)
+      'rsvp_config',
     ];
     const filtered = {};
     for (const key of ALLOWED) {
