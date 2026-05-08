@@ -8,7 +8,7 @@ export default function AdminLogin() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const [staySignedIn, setStaySignedIn] = useState(false)
+  const [staySignedIn, setStaySignedIn] = useState(true)
   const { signIn } = useAuth()
   const navigate = useNavigate()
 
