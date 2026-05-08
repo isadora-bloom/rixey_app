@@ -417,7 +417,11 @@ export default function PrintView() {
         }
         .bedroom-name { font-size: 13px; font-weight: 600; color: #2d3748; margin-bottom: 2px; }
         .bedroom-desc { font-size: 11px; color: #9a8b7a; margin-bottom: 6px; }
-        .bedroom-occupants { font-size: 13px; color: #4a5568; }
+        .bedroom-nights { display: flex; flex-direction: column; gap: 3px; margin-top: 2px; }
+        .bedroom-night { display: flex; gap: 8px; font-size: 13px; align-items: baseline; }
+        .bedroom-night-label { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: #9a8b7a; min-width: 56px; }
+        .bedroom-night-value { color: #2d3748; flex: 1; }
+        .bedroom-empty-inline { color: #c8bfb5; font-style: italic; }
         .bedroom-notes { font-size: 11px; color: #7a6b5a; margin-top: 4px; font-style: italic; }
         .bedroom-empty { color: #c8bfb5; font-style: italic; font-size: 12px; }
 
@@ -717,7 +721,7 @@ export default function PrintView() {
                       {group.items.map((item, ii) => (
                         <span key={item.id}>
                           {ii > 0 && <span style={{ color: '#9a8b7a', margin: '0 6px' }}>&</span>}
-                          {item.person_name || <em style={{ color: '#c0b5a8' }}>TBD</em>}
+                          {item.participant_name || <em style={{ color: '#c0b5a8' }}>TBD</em>}
                           {item.role && <span className="ceremony-role" style={{ marginLeft: 6 }}>({item.role})</span>}
                         </span>
                       ))}
@@ -734,18 +738,31 @@ export default function PrintView() {
           <div className="print-section section-start">
             <SectionHeader title="Bedroom Assignments" icon="🛏" />
             <div className="bedroom-list">
-              {bedrooms.map(room => (
-                <div key={room.id} className="bedroom-card">
-                  <div className="bedroom-name">{room.room_name}</div>
-                  <div className="bedroom-desc">{room.room_description}</div>
-                  {room.occupants ? (
-                    <div className="bedroom-occupants">{room.occupants}</div>
-                  ) : (
-                    <div className="bedroom-empty">Unassigned</div>
-                  )}
-                  {room.notes && <div className="bedroom-notes">{room.notes}</div>}
-                </div>
-              ))}
+              {bedrooms.map(room => {
+                const fri = (room.guest_friday || '').trim()
+                const sat = (room.guest_saturday || '').trim()
+                return (
+                  <div key={room.id} className="bedroom-card">
+                    <div className="bedroom-name">{room.room_name}</div>
+                    {room.room_description && <div className="bedroom-desc">{room.room_description}</div>}
+                    {(fri || sat) ? (
+                      <div className="bedroom-nights">
+                        <div className="bedroom-night">
+                          <span className="bedroom-night-label">Friday</span>
+                          <span className="bedroom-night-value">{fri || <em className="bedroom-empty-inline">—</em>}</span>
+                        </div>
+                        <div className="bedroom-night">
+                          <span className="bedroom-night-label">Saturday</span>
+                          <span className="bedroom-night-value">{sat || <em className="bedroom-empty-inline">—</em>}</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="bedroom-empty">Unassigned</div>
+                    )}
+                    {room.notes && <div className="bedroom-notes">{room.notes}</div>}
+                  </div>
+                )
+              })}
             </div>
           </div>
         )}
@@ -808,18 +825,20 @@ export default function PrintView() {
             <table className="makeup-table">
               <thead>
                 <tr>
-                  <th>Time</th>
                   <th>Name</th>
-                  <th>Service</th>
+                  <th>Role</th>
+                  <th>Hair</th>
+                  <th>Makeup</th>
                   <th>Notes</th>
                 </tr>
               </thead>
               <tbody>
                 {makeup.map(slot => (
                   <tr key={slot.id}>
-                    <td>{slot.time || '—'}</td>
-                    <td>{slot.person_name || '—'}</td>
-                    <td>{slot.service_type || '—'}</td>
+                    <td>{slot.participant_name || '—'}</td>
+                    <td>{slot.role || ''}</td>
+                    <td>{formatTime12h(slot.hair_start_time) || '—'}</td>
+                    <td>{formatTime12h(slot.makeup_start_time) || '—'}</td>
                     <td>{slot.notes || ''}</td>
                   </tr>
                 ))}
