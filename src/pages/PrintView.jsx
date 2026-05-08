@@ -809,7 +809,7 @@ export default function PrintView() {
             <SectionHeader title="Shuttle Schedule" icon="🚌" />
             {shuttle.map(run => (
               <div key={run.id} className="shuttle-run">
-                <div className="shuttle-label">{run.label || `Run ${run.sort_order + 1}`}</div>
+                <div className="shuttle-label">{run.run_label || `Run ${run.sort_order + 1}`}</div>
                 <div className="shuttle-detail">📍 Pickup: {run.pickup_location} · {run.pickup_time}</div>
                 <div className="shuttle-detail">📍 Dropoff: {run.dropoff_location} · {run.dropoff_time}</div>
                 {run.notes && <div className="shuttle-detail" style={{ color: '#7a6b5a', marginTop: 4 }}>📝 {run.notes}</div>}
@@ -920,8 +920,10 @@ export default function PrintView() {
               <thead>
                 <tr>
                   <th>Guest Name</th>
-                  <th>Restriction</th>
+                  <th>Allergy</th>
                   <th>Severity</th>
+                  <th>Caterer</th>
+                  <th>Overnight</th>
                   <th>Notes</th>
                 </tr>
               </thead>
@@ -929,12 +931,14 @@ export default function PrintView() {
                 {allergies.map(a => (
                   <tr key={a.id}>
                     <td>{a.guest_name || '—'}</td>
-                    <td>{a.restriction_type || '—'}</td>
+                    <td>{a.allergy || '—'}</td>
                     <td>
                       {a.severity && (
                         <span className={`allergy-severity ${a.severity.toLowerCase()}`}>{a.severity}</span>
                       )}
                     </td>
+                    <td>{a.caterer_alerted ? '✓ Alerted' : ''}</td>
+                    <td>{a.staying_overnight ? '✓' : ''}</td>
                     <td>{a.notes || ''}</td>
                   </tr>
                 ))}
