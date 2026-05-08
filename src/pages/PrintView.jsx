@@ -531,12 +531,18 @@ export default function PrintView() {
         @media print {
           .screen-controls { display: none !important; }
           .print-container { margin: 0; box-shadow: none; max-width: none; }
-          .print-section { padding: 20px 32px; page-break-inside: avoid; }
+          .print-section { padding: 20px 32px; }
           .print-footer { padding: 10px 32px; background: white !important; border-top: 1px solid #999; }
           .print-footer span { color: #555 !important; }
-          /* Sections flow naturally; page-break-inside: avoid (on .print-section above)
-             keeps each section together, so a section that won't fit on the current page
-             moves to the next one. No forced break-per-section — small sections share pages. */
+          /* Content flows naturally across pages. We don't keep whole sections
+             unbreakable — a long section like the timeline must be allowed to
+             split, otherwise the browser pushes it to a new page entirely
+             (leaving a near-empty first page) and then has to split it anyway. */
+
+          /* Keep section headers glued to their first row to avoid orphan headings. */
+          .section-header { break-after: avoid; page-break-after: avoid; }
+          /* Small atomic items shouldn't split across pages. */
+          .data-row, .timeline-grid > div { break-inside: avoid; page-break-inside: avoid; }
 
           /* Ink-friendly header — drop the solid green block */
           .print-header {
