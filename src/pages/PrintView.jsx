@@ -534,11 +534,9 @@ export default function PrintView() {
           .print-section { padding: 20px 32px; page-break-inside: avoid; }
           .print-footer { padding: 10px 32px; background: white !important; border-top: 1px solid #999; }
           .print-footer span { color: #555 !important; }
-          .section-start { page-break-before: always; }
-          .section-start:first-child { page-break-before: avoid; }
-          /* Header sits before any section-start, so :first-child never matches the first section.
-             Suppress the break for whichever section is rendered immediately after the header. */
-          .print-header + .section-start { page-break-before: avoid; }
+          /* Sections flow naturally; page-break-inside: avoid (on .print-section above)
+             keeps each section together, so a section that won't fit on the current page
+             moves to the next one. No forced break-per-section — small sections share pages. */
 
           /* Ink-friendly header — drop the solid green block */
           .print-header {
