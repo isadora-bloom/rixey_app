@@ -44,7 +44,9 @@ export default function AdminLogin() {
       // Admin verified - go to admin dashboard
       navigate('/admin')
     } catch (err) {
-      setError('An error occurred. Please try again.')
+      console.error('Admin login error:', err)
+      const detail = err?.message || err?.error_description || String(err) || 'Unknown error'
+      setError(`Login failed: ${detail}`)
       setLoading(false)
     }
   }

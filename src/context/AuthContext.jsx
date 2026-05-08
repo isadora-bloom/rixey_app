@@ -30,8 +30,16 @@ export function AuthProvider({ children }) {
     //   and mark the current tab in sessionStorage with 'rixey_tab_active'.
     // - sessionStorage is cleared when the browser/tab closes, so on a fresh open
     //   we detect the mismatch and sign out automatically.
-    const sessionOnly = localStorage.getItem('rixey_session_only') === 'true'
-    const tabActive = sessionStorage.getItem('rixey_tab_active') === 'true'
+    // Wrap storage reads — Android/iOS browsers in private mode or with site data
+    // disabled throw on access, which would otherwise crash the auth bootstrap.
+    let sessionOnly = false
+    let tabActive = false
+    try {
+      sessionOnly = localStorage.getItem('rixey_session_only') === 'true'
+      tabActive = sessionStorage.getItem('rixey_tab_active') === 'true'
+    } catch (e) {
+      console.warn('Storage unavailable, defaulting to stay-signed-in:', e)
+    }
 
     if (sessionOnly && !tabActive) {
       supabase.auth.signOut().finally(() => setLoading(false))
@@ -65,12 +73,16 @@ export function AuthProvider({ children }) {
   const signIn = async (email, password, staySignedIn = true) => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     if (!error) {
-      if (staySignedIn) {
-        localStorage.removeItem('rixey_session_only')
-      } else {
-        localStorage.setItem('rixey_session_only', 'true')
+      try {
+        if (staySignedIn) {
+          localStorage.removeItem('rixey_session_only')
+        } else {
+          localStorage.setItem('rixey_session_only', 'true')
+        }
+        sessionStorage.setItem('rixey_tab_active', 'true')
+      } catch (e) {
+        console.warn('Storage write failed (private mode / quota), continuing:', e)
       }
-      sessionStorage.setItem('rixey_tab_active', 'true')
       // Set user synchronously so ProtectedRoute sees it before navigate runs.
       // Without this, onAuthStateChange races the navigate() and bounces users
       // back to /.
