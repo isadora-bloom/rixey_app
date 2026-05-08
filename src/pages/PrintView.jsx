@@ -534,14 +534,20 @@ export default function PrintView() {
           .print-section { padding: 20px 32px; }
           .print-footer { padding: 10px 32px; background: white !important; border-top: 1px solid #999; }
           .print-footer span { color: #555 !important; }
-          /* Content flows naturally across pages. We don't keep whole sections
-             unbreakable — a long section like the timeline must be allowed to
-             split, otherwise the browser pushes it to a new page entirely
-             (leaving a near-empty first page) and then has to split it anyway. */
+          /* Each section starts on its own page... */
+          .section-start { page-break-before: always; }
+          /* ...except the very first one, which sits with the header on page 1.
+             :first-child fails because .print-header is a sibling that comes first,
+             so target the section that's adjacent to the header instead. */
+          .section-start:first-child,
+          .print-header + .section-start { page-break-before: avoid; }
+          /* Notably we do NOT set page-break-inside: avoid on .print-section —
+             that made long sections (timeline, decor) push themselves to a fresh
+             page and split anyway, leaving the previous page nearly empty. */
 
-          /* Keep section headers glued to their first row to avoid orphan headings. */
+          /* Keep section headings glued to their first row of content. */
           .section-header { break-after: avoid; page-break-after: avoid; }
-          /* Small atomic items shouldn't split across pages. */
+          /* Atomic rows shouldn't split mid-line across pages. */
           .data-row, .timeline-grid > div { break-inside: avoid; page-break-inside: avoid; }
 
           /* Ink-friendly header — drop the solid green block */
