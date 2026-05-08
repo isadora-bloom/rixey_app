@@ -83,23 +83,23 @@ export default function PrintView() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [sections, setSections] = useState({
-    timeline: true,
-    tables: true,
-    seating: true,
-    staffing: true,
-    ceremony: true,
-    ceremonyChairs: true,
-    bedrooms: true,
-    rehearsal: true,
-    shuttle: true,
-    makeup: true,
-    decor: true,
-    vendors: true,
-    allergies: true,
-    guestCare: true,
-    parents: true,
-    details: true,
-    highlights: true,
+    timeline: false,
+    tables: false,
+    seating: false,
+    staffing: false,
+    ceremony: false,
+    ceremonyChairs: false,
+    bedrooms: false,
+    rehearsal: false,
+    shuttle: false,
+    makeup: false,
+    decor: false,
+    vendors: false,
+    allergies: false,
+    guestCare: false,
+    parents: false,
+    details: false,
+    highlights: false,
   })
 
   // Data
@@ -437,14 +437,19 @@ export default function PrintView() {
           margin-bottom: 8px; padding-bottom: 4px;
           border-bottom: 1px solid #e0d8cc;
         }
-        .decor-item {
-          display: flex; gap: 12px; align-items: baseline;
-          padding: 6px 0; border-bottom: 1px solid #f5f0e8; font-size: 13px;
+        .decor-table { width: 100%; border-collapse: collapse; }
+        .decor-table th {
+          text-align: left; font-size: 10px; letter-spacing: 0.08em;
+          text-transform: uppercase; color: #9a8b7a;
+          padding: 8px 10px; background: #faf8f5; border-bottom: 1px solid #ede8e0;
         }
-        .decor-item:last-child { border-bottom: none; }
-        .decor-item-name { color: #2d3748; flex: 1; }
-        .decor-item-qty { color: #9a8b7a; font-size: 12px; min-width: 60px; text-align: right; }
-        .decor-item-color { color: #7a6b5a; font-size: 12px; }
+        .decor-table td {
+          font-size: 13px; color: #2d3748; vertical-align: top;
+          padding: 8px 10px; border-bottom: 1px solid #f5f0e8;
+        }
+        .decor-table tr:last-child td { border-bottom: none; }
+        .decor-table .stays { color: #3d5a47; font-style: italic; }
+        .decor-table .muted { color: #c0b5a8; }
 
         /* Vendors */
         .vendor-table { width: 100%; border-collapse: collapse; }
@@ -511,15 +516,31 @@ export default function PrintView() {
 
         /* ===== PRINT MEDIA ===== */
         @media print {
-          * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
           .screen-controls { display: none !important; }
           .print-container { margin: 0; box-shadow: none; max-width: none; }
-          .print-section { padding: 24px 40px; }
-          .print-header { padding: 32px 40px 24px; }
-          .print-footer { padding: 16px 40px; }
-          .print-section { page-break-inside: avoid; }
+          .print-section { padding: 20px 32px; page-break-inside: avoid; }
+          .print-footer { padding: 10px 32px; background: white !important; border-top: 1px solid #999; }
+          .print-footer span { color: #555 !important; }
           .section-start { page-break-before: always; }
           .section-start:first-child { page-break-before: avoid; }
+
+          /* Ink-friendly header — drop the solid green block */
+          .print-header {
+            background: white !important;
+            color: #2d3748 !important;
+            padding: 16px 32px 12px !important;
+            border-bottom: 2px solid #2d3748;
+          }
+          .print-header .venue { color: #555 !important; opacity: 1 !important; }
+          .print-header h1 { font-size: 24px !important; }
+          .print-header .meta { color: #555 !important; opacity: 1 !important; font-size: 12px !important; }
+
+          /* Strip green fills from section accents */
+          .section-header { color: #2d3748 !important; border-bottom-color: #2d3748 !important; }
+          .tl-event::before { background: #2d3748 !important; box-shadow: 0 0 0 1px #2d3748 !important; }
+          .decor-space-name { color: #2d3748 !important; }
+          .shuttle-label { color: #2d3748 !important; }
+          .vendor-booked { background: white !important; color: #2d3748 !important; border: 1px solid #2d3748; }
         }
       `}</style>
 
@@ -788,15 +809,30 @@ export default function PrintView() {
             {Object.entries(decorBySpace).map(([space, items]) => (
               <div key={space} className="decor-space">
                 <div className="decor-space-name">{space}</div>
-                {items.map(item => (
-                  <div key={item.id} className="decor-item">
-                    <span className="decor-item-name">{item.item_name}</span>
-                    {item.color && <span className="decor-item-color">{item.color}</span>}
-                    {(item.quantity || item.quantity === 0) && (
-                      <span className="decor-item-qty">Qty: {item.quantity}</span>
-                    )}
-                  </div>
-                ))}
+                <table className="decor-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: '32%' }}>Item</th>
+                      <th style={{ width: '24%' }}>Coming From</th>
+                      <th style={{ width: '24%' }}>Going Home With</th>
+                      <th style={{ width: '20%' }}>Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map(item => (
+                      <tr key={item.id}>
+                        <td>{item.item_name || <span className="muted">—</span>}</td>
+                        <td>{item.source || <span className="muted">—</span>}</td>
+                        <td>
+                          {item.leaving_it
+                            ? <span className="stays">Staying at venue</span>
+                            : (item.goes_home_with || <span className="muted">—</span>)}
+                        </td>
+                        <td>{item.notes || ''}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             ))}
           </div>
