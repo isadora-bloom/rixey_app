@@ -56,6 +56,19 @@ function formatDate(dateStr) {
   return new Date(dateStr).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
 }
 
+// Accepts "HH:MM", "HH:MM:SS", or "h:MM AM/PM" and returns "h:MM AM/PM"
+function formatTime12h(t) {
+  if (!t) return ''
+  if (/AM|PM/i.test(t)) return t
+  const m = String(t).match(/^(\d{1,2}):(\d{2})/)
+  if (!m) return t
+  const h = parseInt(m[1])
+  const min = m[2]
+  const ampm = h >= 12 ? 'PM' : 'AM'
+  const h12 = h % 12 || 12
+  return `${h12}:${min} ${ampm}`
+}
+
 function SectionHeader({ title, icon }) {
   return (
     <div className="section-header">
@@ -221,13 +234,13 @@ export default function PrintView() {
     const rows = []
     Object.entries(events).forEach(([id, ev]) => {
       if (!ev.included) return
-      if (!ev.calculatedTime) return
+      if (!ev.time) return
       const name = ALL_TIMELINE_EVENTS[id] || ev.name || id
-      rows.push({ time: ev.calculatedTime, name, duration: ev.duration, id })
+      rows.push({ time: formatTime12h(ev.time), name, duration: ev.duration, id })
     })
     customEvents.forEach(ev => {
       if (!ev.time) return
-      rows.push({ time: ev.time, name: ev.name, duration: ev.duration, id: ev.id, custom: true })
+      rows.push({ time: formatTime12h(ev.time), name: ev.name, duration: ev.duration, id: ev.id, custom: true })
     })
     rows.sort((a, b) => {
       const toMin = t => {
@@ -523,6 +536,9 @@ export default function PrintView() {
           .print-footer span { color: #555 !important; }
           .section-start { page-break-before: always; }
           .section-start:first-child { page-break-before: avoid; }
+          /* Header sits before any section-start, so :first-child never matches the first section.
+             Suppress the break for whichever section is rendered immediately after the header. */
+          .print-header + .section-start { page-break-before: avoid; }
 
           /* Ink-friendly header — drop the solid green block */
           .print-header {
@@ -604,8 +620,8 @@ export default function PrintView() {
             <SectionHeader title="Wedding Day Timeline" icon="📋" />
             {timeline?.ceremony_start && (
               <div style={{ marginBottom: 16, fontSize: 12, color: '#7a6b5a' }}>
-                Ceremony: <strong>{timeline.ceremony_start}</strong>
-                {timeline?.reception_end && <> · End: <strong>{timeline.reception_end}</strong></>}
+                Ceremony: <strong>{formatTime12h(timeline.ceremony_start)}</strong>
+                {timeline?.reception_end && <> · End: <strong>{formatTime12h(timeline.reception_end)}</strong></>}
               </div>
             )}
             <div className="timeline-grid">
