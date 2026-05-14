@@ -2550,12 +2550,16 @@ app.post('/api/admin/sheet-sync/:weddingId/apply', async (req, res) => {
       appliedBy: req.userId || null
     });
     const failures = (result.results || []).filter((r) => !r.ok && !r.skipped);
+    const succeeded = (result.results || []).filter((r) => r.ok && !r.skipped).map((r) => r.entryId);
+    const importDecisions = (decisions || []).filter((d) => d.choice === 'import-sheet').map((d) => d.entryId);
     LAST_APPLY = {
       at: new Date().toISOString(),
       weddingId,
       attempted: decisions.length,
       applied: result.appliedCount,
-      failures: failures.map((f) => ({ entryId: f.entryId, error: f.error }))
+      failures: failures.map((f) => ({ entryId: f.entryId, error: f.error })),
+      succeededIds: succeeded,
+      importsRequested: importDecisions
     };
     console.log(`[sheet-sync apply] applied=${result.appliedCount} failures=${failures.length}`);
     res.json(result);
