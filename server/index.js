@@ -2529,10 +2529,17 @@ app.post('/api/admin/sheet-sync/:weddingId/diff', async (req, res) => {
   }
 });
 
+// In-memory record of the last apply attempt. Public-readable via
+// GET /api/sheet-sync-apply-debug — payload has no token values, only counts +
+// per-result error messages.
+let LAST_APPLY = { at: null, weddingId: null, attempted: 0, applied: 0, failures: [] };
+
 app.post('/api/admin/sheet-sync/:weddingId/apply', async (req, res) => {
   const { weddingId } = req.params;
   const decisions = req.body?.decisions;
+  console.log(`[sheet-sync apply] weddingId=${weddingId} decisions=${Array.isArray(decisions) ? decisions.length : 'NOT_ARRAY'}`);
   if (!Array.isArray(decisions)) {
+    LAST_APPLY = { at: new Date().toISOString(), weddingId, attempted: 0, applied: 0, failures: [{ entryId: null, error: 'decisions must be an array' }] };
     return res.status(400).json({ error: 'decisions must be an array' });
   }
   try {
@@ -2542,11 +2549,31 @@ app.post('/api/admin/sheet-sync/:weddingId/apply', async (req, res) => {
       decisions,
       appliedBy: req.userId || null
     });
+    const failures = (result.results || []).filter((r) => !r.ok && !r.skipped);
+    LAST_APPLY = {
+      at: new Date().toISOString(),
+      weddingId,
+      attempted: decisions.length,
+      applied: result.appliedCount,
+      failures: failures.map((f) => ({ entryId: f.entryId, error: f.error }))
+    };
+    console.log(`[sheet-sync apply] applied=${result.appliedCount} failures=${failures.length}`);
     res.json(result);
   } catch (err) {
+    LAST_APPLY = {
+      at: new Date().toISOString(),
+      weddingId,
+      attempted: decisions?.length || 0,
+      applied: 0,
+      failures: [{ entryId: null, error: err.message || String(err) }]
+    };
     console.error('[sheet-sync apply]', err);
     res.status(500).json({ error: err.message || 'Internal error' });
   }
+});
+
+app.get('/api/sheet-sync-apply-debug', (req, res) => {
+  res.json(LAST_APPLY);
 });
 
 // Check Gmail connection status

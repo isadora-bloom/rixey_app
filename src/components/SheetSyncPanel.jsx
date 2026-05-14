@@ -56,19 +56,19 @@ export default function SheetSyncPanel({ wedding }) {
     }
   }
 
+  const [confirming, setConfirming] = useState(false)
+
   async function applyChanges() {
     if (!diff) return
-    const toApply = (diff.entries || []).filter((e) => {
-      const c = decisions[e.id]
-      return c === 'import-sheet'
-    })
+    const toApply = (diff.entries || []).filter((e) => decisions[e.id] === 'import-sheet')
     if (toApply.length === 0) {
       setError('Nothing selected to import. Toggle at least one row.')
       return
     }
-    if (!window.confirm(`Apply ${toApply.length} change${toApply.length === 1 ? '' : 's'} to the portal?`)) return
     setPhase('applying')
+    setConfirming(false)
     setError(null)
+    setApplyResult(null)
     try {
       const data = await apiFetch(`${API_URL}/api/admin/sheet-sync/${weddingId}/apply`, {
         method: 'POST',
@@ -82,10 +82,9 @@ export default function SheetSyncPanel({ wedding }) {
       })
       setApplyResult(data)
       setPhase('done')
-      // Auto re-run diff so applied rows now show as "agree"
-      runDiff()
+      // Don't auto-rerun diff — leave state visible so the user can read it
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : String(err))
+      setError(err instanceof ApiError ? `Apply failed: ${err.message}` : String(err))
       setPhase('loaded')
     }
   }
@@ -206,17 +205,36 @@ export default function SheetSyncPanel({ wedding }) {
       ))}
 
       {diff && (
-        <div className="sticky bottom-0 bg-white border-t border-cream-200 -mx-3 sm:-mx-4 lg:-mx-6 px-3 sm:px-4 lg:px-6 py-3 flex items-center justify-between">
+        <div className="sticky bottom-0 bg-white border-t border-cream-200 -mx-3 sm:-mx-4 lg:-mx-6 px-3 sm:px-4 lg:px-6 py-3 flex items-center justify-between gap-3 flex-wrap">
           <span className="text-sm text-sage-600">
             {decisionCount} change{decisionCount === 1 ? '' : 's'} ready to apply
           </span>
-          <button
-            onClick={applyChanges}
-            disabled={decisionCount === 0 || phase === 'applying'}
-            className="px-5 py-2 rounded-lg bg-sage-700 text-white text-sm font-medium hover:bg-sage-800 disabled:opacity-50"
-          >
-            {phase === 'applying' ? 'Applying…' : `Apply ${decisionCount} change${decisionCount === 1 ? '' : 's'}`}
-          </button>
+          {!confirming ? (
+            <button
+              onClick={() => setConfirming(true)}
+              disabled={decisionCount === 0 || phase === 'applying'}
+              className="px-5 py-2 rounded-lg bg-sage-700 text-white text-sm font-medium hover:bg-sage-800 disabled:opacity-50"
+            >
+              {phase === 'applying' ? 'Applying…' : `Apply ${decisionCount} change${decisionCount === 1 ? '' : 's'}`}
+            </button>
+          ) : (
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-sage-700">Sure? This writes to Supabase.</span>
+              <button
+                onClick={() => setConfirming(false)}
+                className="px-3 py-2 rounded-lg border border-cream-300 text-sm text-sage-600 hover:bg-cream-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={applyChanges}
+                disabled={phase === 'applying'}
+                className="px-5 py-2 rounded-lg bg-sage-700 text-white text-sm font-medium hover:bg-sage-800 disabled:opacity-50"
+              >
+                {phase === 'applying' ? 'Applying…' : `Confirm — apply ${decisionCount}`}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
