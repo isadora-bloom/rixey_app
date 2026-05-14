@@ -96,6 +96,26 @@ app.get('/', (req, res) => {
   res.status(200).json({ status: 'ok', service: 'rixey-portal-api' });
 });
 
+// PUBLIC debug endpoint — surfaces which Google OAuth client + redirect URI the
+// backend is currently configured with. None of this is sensitive (client_id prefix
+// + redirect URI both leak in Google's own error pages). Used to diagnose
+// redirect_uri_mismatch errors without needing an admin auth header.
+app.get('/api/google-debug', (req, res) => {
+  const cid = process.env.GOOGLE_CLIENT_ID || '';
+  const fe = process.env.FRONTEND_URL || '(unset)';
+  res.json({
+    client_id_prefix: cid ? cid.slice(0, 16) + '…' : '(unset)',
+    client_id_project_number: cid.split('-')[0] || '(unset)',
+    redirect_uri: fe === '(unset)'
+      ? 'http://localhost:5173/admin/gmail-callback'
+      : `${fe}/admin/gmail-callback`,
+    frontend_url: fe,
+    has_client_secret: !!process.env.GOOGLE_CLIENT_SECRET,
+    git_commit: process.env.RAILWAY_GIT_COMMIT_SHA || '(unknown)',
+    note: 'project_number must match the GCP project where you added the redirect URI. redirect_uri must appear verbatim in that OAuth client.'
+  });
+});
+
 // ============ AUTH MIDDLEWARE ============
 // Public routes that skip auth (matched by path prefix)
 const PUBLIC_ROUTES = [
@@ -2472,25 +2492,6 @@ app.post('/api/admin/sheet-sync/:weddingId/diff', async (req, res) => {
     console.error('[sheet-sync diff]', err);
     res.status(500).json({ error: err.message || 'Internal error' });
   }
-});
-
-// Surfaces which Google client_id + redirect URI the backend is currently using.
-// Useful when diagnosing redirect_uri_mismatch errors — compare the client_id_prefix
-// against the OAuth client you edited in GCP. They must match.
-app.get('/api/admin/sheet-sync/debug', async (req, res) => {
-  const cid = process.env.GOOGLE_CLIENT_ID || '';
-  const fe = process.env.FRONTEND_URL || '(unset)';
-  res.json({
-    client_id_prefix: cid ? cid.slice(0, 16) + '…' : '(unset)',
-    client_id_project_number: cid.split('-')[0] || '(unset)',
-    redirect_uri: fe === '(unset)'
-      ? 'http://localhost:5173/admin/gmail-callback'
-      : `${fe}/admin/gmail-callback`,
-    frontend_url: fe,
-    has_client_secret: !!process.env.GOOGLE_CLIENT_SECRET,
-    git_commit: process.env.RAILWAY_GIT_COMMIT_SHA || '(unknown)',
-    note: 'The project_number must match the GCP project where you added the redirect URI. The redirect_uri shown must appear verbatim in that OAuth client.'
-  });
 });
 
 app.post('/api/admin/sheet-sync/:weddingId/apply', async (req, res) => {
