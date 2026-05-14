@@ -21,6 +21,7 @@ import DecorInventory from '../../components/DecorInventory'
 import MakeupSchedule from '../../components/MakeupSchedule'
 import ShuttleSchedule from '../../components/ShuttleSchedule'
 import RehearsalDinner from '../../components/RehearsalDinner'
+import SheetSyncPanel from '../../components/SheetSyncPanel'
 import StaffingCalculator from '../../components/StaffingCalculator'
 import BudgetTracker from '../../components/BudgetTracker'
 import GuestList from '../../components/GuestList'
@@ -364,6 +365,7 @@ export default function AdminWeddingProfile({
                   { tab: 'day-of-memories', label: 'Day-of Memories', icon: '/icons/inspiration.svg' },
                   { tab: 'activity', label: 'Recent Activity', icon: '/icons/recent-activity.svg', badge: activities.length },
                   { section: 'Admin' },
+                  { tab: 'sheet-sync', label: 'Sync from Sheet', icon: '/icons/upload-contract.svg' },
                   { tab: 'contract-upload', label: 'Upload Contract', icon: '/icons/upload-contract.svg' },
                   { tab: 'ask', label: 'Ask About Wedding', icon: '/icons/ask-about-wedding.svg' },
                   { tab: 'api-usage', label: 'API Usage', icon: '/icons/api-usage.svg' },
@@ -448,6 +450,7 @@ export default function AdminWeddingProfile({
                   <option value="activity">
                     Recent Activity {activities.length > 0 ? `(${activities.length})` : ''}
                   </option>
+                  <option value="sheet-sync">Sync from Sheet</option>
                   <option value="contract-upload">Upload Contract</option>
                   <option value="ask">Ask About Wedding</option>
                   <option value="api-usage">API Usage</option>
@@ -1490,6 +1493,11 @@ export default function AdminWeddingProfile({
                   partner1={viewingWedding.partner1_name}
                   partner2={viewingWedding.partner2_name}
                 />
+              )}
+
+              {/* Sheet Sync Tab */}
+              {activeTab === 'sheet-sync' && (
+                <SheetSyncPanel wedding={viewingWedding} />
               )}
 
               {/* Contract Upload Tab */}

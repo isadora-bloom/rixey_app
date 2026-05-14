@@ -9,6 +9,8 @@ import { Resend } from 'resend';
 import rateLimit from 'express-rate-limit';
 import { requireAuth, requireAdmin } from './middleware/auth.js';
 import { validateBody } from './middleware/validate.js';
+import { fetchAllTabs, SheetFetchError } from './lib/sheet-fetcher.js';
+import { buildDiff, applyChoices } from './lib/sheet-diff/index.js';
 // PDF parsing removed - using Claude vision for all documents
 
 dotenv.config();
@@ -2320,10 +2322,16 @@ Answer concisely and helpfully:`
 // ============ GMAIL INTEGRATION ============
 
 // Start Gmail OAuth flow
+// Scopes: gmail.readonly (planning-note sync) + spreadsheets.readonly (Sheet Sync feature
+// on admin wedding profile). Existing tokens issued before Sheets scope was added will
+// get insufficientScope errors on Sheets API — sheet-sync helper detects and re-prompts.
 app.get('/api/gmail/auth', (req, res) => {
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: 'offline',
-    scope: ['https://www.googleapis.com/auth/gmail.readonly'],
+    scope: [
+      'https://www.googleapis.com/auth/gmail.readonly',
+      'https://www.googleapis.com/auth/spreadsheets.readonly'
+    ],
     prompt: 'consent'
   });
   res.json({ authUrl });
@@ -2370,6 +2378,101 @@ app.post('/api/gmail/callback', async (req, res) => {
   } catch (error) {
     console.error('Gmail auth error:', error);
     res.status(500).json({ error: 'Failed to connect Gmail: ' + error.message });
+  }
+});
+
+// ============ SHEET SYNC (Sync from Google Sheet) ============
+// Reuses the Gmail OAuth credentials (spreadsheets.readonly scope was added 2026-05-14).
+// Diff endpoint pulls the Sheet + every relevant portal table for a wedding, runs every
+// registered module, and returns a flat list of DiffEntry to the admin UI. Apply takes the
+// user's chosen actions back and executes the writes.
+
+app.post('/api/admin/sheet-sync/:weddingId/diff', async (req, res) => {
+  const { weddingId } = req.params;
+  if (!weddingId) return res.status(400).json({ error: 'Missing weddingId' });
+  try {
+    // 1. Look up the wedding's google_sheets_link
+    const { data: wedding, error: wErr } = await supabaseAdmin
+      .from('weddings')
+      .select('id, couple_names, google_sheets_link')
+      .eq('id', weddingId)
+      .single();
+    if (wErr || !wedding) return res.status(404).json({ error: 'Wedding not found' });
+    if (!wedding.google_sheets_link) {
+      return res.status(400).json({
+        error: 'NO_SHEET_LINK',
+        message: 'This wedding has no Google Sheets link. Set one via the Links editor on the wedding card.'
+      });
+    }
+
+    // 2. Authenticate to Google (gmail_tokens row holds the OAuth creds)
+    const tokens = await loadAndRefreshGmailTokens();
+    if (!tokens) {
+      return res.status(401).json({
+        error: 'NOT_CONNECTED',
+        message: 'Google account is not connected. Connect Gmail/Google in admin settings, then try again.'
+      });
+    }
+
+    // 3. Fetch every tab from the Sheet
+    let sheet;
+    try {
+      sheet = await fetchAllTabs(oauth2Client, wedding.google_sheets_link);
+    } catch (err) {
+      if (err instanceof SheetFetchError) {
+        return res.status(err.code === 'INSUFFICIENT_SCOPE' ? 403 : 400).json({
+          error: err.code,
+          message: err.message
+        });
+      }
+      throw err;
+    }
+
+    // 4. Run every module
+    const { entries, moduleErrors } = await buildDiff({
+      supabase: supabaseAdmin,
+      weddingId,
+      sheet
+    });
+
+    res.json({
+      wedding: { id: wedding.id, couple_names: wedding.couple_names },
+      sheetTitle: sheet.title,
+      fetchedAt: sheet.fetchedAt,
+      tabs: Object.keys(sheet.tabs || {}),
+      entries,
+      moduleErrors,
+      counts: {
+        total: entries.length,
+        missing: entries.filter((e) => e.status === 'missing').length,
+        conflict: entries.filter((e) => e.status === 'conflict').length,
+        agree: entries.filter((e) => e.status === 'agree').length,
+        sheetOnly: entries.filter((e) => e.status === 'sheet-only').length,
+        bothMissing: entries.filter((e) => e.status === 'both-missing').length
+      }
+    });
+  } catch (err) {
+    console.error('[sheet-sync diff]', err);
+    res.status(500).json({ error: err.message || 'Internal error' });
+  }
+});
+
+app.post('/api/admin/sheet-sync/:weddingId/apply', async (req, res) => {
+  const { weddingId } = req.params;
+  const decisions = req.body?.decisions;
+  if (!Array.isArray(decisions)) {
+    return res.status(400).json({ error: 'decisions must be an array' });
+  }
+  try {
+    const result = await applyChoices({
+      supabase: supabaseAdmin,
+      weddingId,
+      decisions
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('[sheet-sync apply]', err);
+    res.status(500).json({ error: err.message || 'Internal error' });
   }
 });
 
