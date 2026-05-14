@@ -81,8 +81,26 @@ export default function SheetSyncPanel({ wedding }) {
         })
       })
       setApplyResult(data)
+      // Clear successful imports from the decision map so the button count drops to
+      // the remaining failures (or 0 if everything landed).
+      const succeeded = new Set((data.results || []).filter((r) => r.ok && !r.skipped).map((r) => r.entryId))
+      setDecisions((d) => {
+        const next = { ...d }
+        for (const id of succeeded) next[id] = 'skip'
+        return next
+      })
       setPhase('done')
-      // Don't auto-rerun diff — leave state visible so the user can read it
+      // Re-run the diff so the UI reflects what's now in the portal. The applyResult
+      // banner is kept in separate state so it stays visible after the refresh.
+      try {
+        const fresh = await apiFetch(`${API_URL}/api/admin/sheet-sync/${weddingId}/diff`, { method: 'POST' })
+        setDiff(fresh)
+        const seed = {}
+        for (const e of fresh.entries || []) seed[e.id] = e.defaultAction || 'skip'
+        setDecisions(seed)
+      } catch {
+        // non-fatal — banner still tells the user what happened
+      }
     } catch (err) {
       setError(err instanceof ApiError ? `Apply failed: ${err.message}` : String(err))
       setPhase('loaded')
@@ -206,9 +224,21 @@ export default function SheetSyncPanel({ wedding }) {
 
       {diff && (
         <div className="sticky bottom-0 bg-white border-t border-cream-200 -mx-3 sm:-mx-4 lg:-mx-6 px-3 sm:px-4 lg:px-6 py-3 flex items-center justify-between gap-3 flex-wrap">
-          <span className="text-sm text-sage-600">
-            {decisionCount} change{decisionCount === 1 ? '' : 's'} ready to apply
-          </span>
+          <div className="flex flex-col gap-1">
+            <span className="text-sm text-sage-600">
+              {decisionCount} change{decisionCount === 1 ? '' : 's'} ready to apply
+            </span>
+            {applyResult && (
+              <span className="text-xs text-emerald-700">
+                Last run: applied {applyResult.appliedCount}
+                {(applyResult.results || []).filter((r) => !r.ok).length > 0 && (
+                  <span className="text-red-700">
+                    {' '}· {(applyResult.results || []).filter((r) => !r.ok).length} failed
+                  </span>
+                )}
+              </span>
+            )}
+          </div>
           {!confirming ? (
             <button
               onClick={() => setConfirming(true)}

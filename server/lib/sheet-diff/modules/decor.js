@@ -33,9 +33,9 @@ export default {
       if (!filled) continue;
       filledRowCount += 1;
 
-      // Try to match an existing decor_inventory row by (space + item)
+      // Try to match an existing decor_inventory row by (space_name + item_name)
       const portalMatch = portalRows.find((p) => {
-        const sp = (p.space || '').toLowerCase();
+        const sp = (p.space_name || '').toLowerCase();
         const it = (p.item_name || '').toLowerCase();
         return sp === tableName.toLowerCase()
           && (item ? it.includes(item.toLowerCase()) : true);
@@ -65,11 +65,12 @@ export default {
           table: 'decor_inventory',
           row: {
             wedding_id: weddingId,
-            space: tableName,
+            space_name: tableName,
             item_name: item || tableName,
-            source: source || null,
+            source: source || 'bringing it',
             goes_home_with: goesHome || null,
-            notes: leaving ? `Leaving: ${leaving}` : null
+            leaving_it: !!(leaving && /yes|true|leaving|^y$/i.test(String(leaving).trim())),
+            notes: leaving && !/yes|true|leaving|^y$/i.test(String(leaving).trim()) ? `Leaving: ${leaving}` : null
           }
         }
       }));

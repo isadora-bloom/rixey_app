@@ -101,10 +101,10 @@ export default {
                   wedding_id: weddingId,
                   vendor_type: cType,
                   vendor_name: name,
-                  contact_phone: phone || null,
+                  vendor_contact: phone || null,
                   arrival_time: arrival || null,
                   departure_time: departure || null,
-                  instagram_handle: instagram || null,
+                  instagram: instagram || null,
                   notes: notes || null,
                   is_booked: true
                 }
@@ -119,10 +119,10 @@ export default {
         // Existing portal row — diff fields
         const fields = [
           ['name', 'name', name || null, portalRow?.vendor_name || null],
-          ['phone', 'phone', phone || null, portalRow?.contact_phone || null],
+          ['phone', 'phone', phone || null, portalRow?.vendor_contact || null],
           ['arrival', 'arrival time', arrival || null, portalRow?.arrival_time || null],
           ['departure', 'departure time', departure || null, portalRow?.departure_time || null],
-          ['instagram', 'Instagram', instagram || null, portalRow?.instagram_handle || null],
+          ['instagram', 'Instagram', instagram || null, portalRow?.instagram || null],
           ['notes', 'notes', notes || null, portalRow?.notes || null]
         ];
 
@@ -135,10 +135,10 @@ export default {
               : `${cType} — ${fLabel}`;
           const patchCol =
             fk === 'name' ? 'vendor_name' :
-            fk === 'phone' ? 'contact_phone' :
+            fk === 'phone' ? 'vendor_contact' :
             fk === 'arrival' ? 'arrival_time' :
             fk === 'departure' ? 'departure_time' :
-            fk === 'instagram' ? 'instagram_handle' :
+            fk === 'instagram' ? 'instagram' :
             'notes';
           entries.push(
             makeEntry({
