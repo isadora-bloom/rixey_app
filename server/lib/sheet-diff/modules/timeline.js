@@ -11,30 +11,52 @@ const SECTION = 'Wedding Day Timeline';
  * Ambiguous one-to-many mappings (e.g. sheet "Cake Cutting/Speeches" hits BOTH portal
  * "toasts" AND "cake-cutting") emit two diff entries so Grace can review each separately.
  */
+// Each entry can match multiple portal IDs. We now run every regex against the
+// sheet label and union the hits — so a compound row like
+// "Introductions/First Dance/Parent Dances/Welcome Speech" maps to all 4 portal
+// events at the same start time. Regexes are intentionally permissive (no
+// anchors, optional plurals) because human-typed sheets drift in wording.
 const SHEET_TO_PORTAL = [
-  [/lunch arrival/i, ['buffer-break']],
-  [/hair.*makeup finished/i, ['hair-makeup-done']],
-  [/detail photos/i, ['details-photos']],
-  [/robes.*getting ready/i, ['robe-photos']],
-  [/bridesmaids?.*groomsmen.*dressed/i, ['bridesmaids-dressed']],
-  [/bride gets dressed/i, ['bride-dress']],
-  [/first look with dad/i, ['first-look-dad']],
+  // Prep
+  [/lunch arrival|lunch.*break/i, ['buffer-break']],
+  [/hair.*makeup (finished|complete|done)/i, ['hair-makeup-done']],
+  [/details? photos?/i, ['details-photos']],
+  [/robes?.*getting ready|robe photos?/i, ['robe-photos']],
+  [/bridesmaids?.*groomsmen.*dressed|wedding party.*dressed|bridesmaids?.*dressed/i, ['bridesmaids-dressed']],
+  [/bride gets dressed|bride.*dress.*on|bride dressing/i, ['bride-dress']],
+  [/(pj|pyjama|getting ready).*pictures?|bride getting ready/i, ['bride-getting-ready-photos']],
+  [/groomsmen pics|groomsmen photos|groom getting ready/i, ['groom-getting-ready']],
+  [/bridesmaids?.*bride photos?|bride.*bridesmaids?/i, ['wedding-party-photos']],
+  // First-look
+  [/first look (with )?dad/i, ['first-look-dad']],
   [/first look (with )?groom/i, ['first-look-groom']],
-  [/bride.*bridesmaids/i, ['wedding-party-photos']],
-  [/bride away/i, ['hide-bride']],
-  [/private vows.*first touch/i, ['private-vows']],
-  [/^ceremony$/i, ['ceremony']],
-  [/group photos/i, ['group-photo']],
-  [/family photos/i, ['family-formals', 'extended-family']],
-  [/wedding party photos/i, ['wedding-party-photos']],
-  [/^sweethearts$/i, ['couple-portraits']],
-  [/ballroom.*patio open/i, ['doors-open']],
-  [/introductions.*welcome speech.*first dance/i, ['grand-entrance', 'welcome-toast', 'first-dance', 'parent-dances']],
-  [/dinner served/i, ['dinner']],
-  [/cake cutting.*speeches/i, ['cake-cutting', 'toasts']],
-  [/open dance floor/i, ['open-dancing']],
+  [/private vows|first touch/i, ['private-vows']],
+  // Pre-ceremony
+  [/bride away|hide bride|put bride away/i, ['hide-bride']],
+  [/last shuttle/i, ['last-shuttle']],
+  // Ceremony
+  [/^ceremony$|^ceremony begins/i, ['ceremony']],
+  // Post-ceremony
+  [/group photos?|big group photo|^group photo/i, ['group-photo']],
+  [/family (photos?|formals)/i, ['family-formals', 'extended-family']],
+  [/wedding party photos?/i, ['wedding-party-photos']],
+  [/sweethearts? photos?|^sweethearts?$|couple portraits?|sweetheart photos?/i, ['couple-portraits']],
+  // Cocktail
+  [/cocktail hour/i, ['cocktail-hour']],
+  [/couple join.*cocktail|couple.*join.*reception|return to (cocktail|reception)/i, ['couple-break']],
+  // Reception
+  [/ballroom.*patio open|doors open|ballroom opens/i, ['doors-open']],
+  [/introductions|grand entrance/i, ['grand-entrance']],
+  [/welcome speech|welcome toast|welcome.*blessing|blessing/i, ['welcome-toast']],
+  [/first dance/i, ['first-dance']],
+  [/parent dances?|father.daughter dance|mother.son dance/i, ['parent-dances']],
+  [/dinner (served|service)|dinner begins/i, ['dinner']],
+  [/toasts?(\s|$)|speeches/i, ['toasts']],
+  [/cake cutting/i, ['cake-cutting']],
+  [/open dance floor|open dancing|dance floor opens/i, ['open-dancing']],
+  // End of night
   [/last dance/i, ['last-dance']],
-  [/last shuttle/i, ['last-shuttle']]
+  [/grand exit|sparkler|send.?off/i, ['grand-exit']]
 ];
 
 function parseTime(s) {
@@ -60,10 +82,15 @@ function parseTime(s) {
 }
 
 function findEventLabel(label) {
+  const all = [];
   for (const [re, portalIds] of SHEET_TO_PORTAL) {
-    if (re.test(label)) return portalIds;
+    if (re.test(label)) {
+      for (const pid of portalIds) {
+        if (!all.includes(pid)) all.push(pid);
+      }
+    }
   }
-  return null;
+  return all.length ? all : null;
 }
 
 export default {
