@@ -129,8 +129,24 @@ export default {
       for (const pid of portalIds) {
         const portalEvent = events[pid];
         const portalTime = portalEvent?.time || null;
-        const status = portalTime == null ? 'missing'
-                     : looselyEqual(time, portalTime) ? 'agree' : 'conflict';
+        const isIncluded = portalEvent?.included === true;
+        const isManual = portalEvent?.manualTime === true;
+        // We only count portal as "having this time" when the operator has actually
+        // locked it (manualTime). Auto-calculated times will be overwritten on the
+        // portal's next render, so they aren't real overrides — treat them as missing
+        // unless they happen to match the sheet.
+        let status;
+        if (!portalTime || !isIncluded) {
+          status = 'missing';
+        } else if (looselyEqual(time, portalTime)) {
+          status = isManual ? 'agree' : 'conflict';
+        } else {
+          status = 'conflict';
+        }
+
+        const noteParts = [];
+        if (portalIds.length > 1) noteParts.push(`Sheet row maps to ${portalIds.length} portal events`);
+        if (portalTime && !isManual) noteParts.push('Portal time is auto-calculated, not locked');
 
         entries.push(makeEntry({
           id: `timeline:${pid}`,
@@ -139,14 +155,14 @@ export default {
           sheetValue: time,
           portalValue: portalTime,
           status,
-          notes: portalIds.length > 1 ? `Sheet row maps to ${portalIds.length} portal events` : null,
+          notes: noteParts.join(' · ') || null,
           applyOp: {
             type: 'json-patch',
             table: 'wedding_timeline',
             match,
             column: 'timeline_data',
-            path: ['events', pid, 'time'],
-            value: time
+            path: ['events', pid],
+            patch: { included: true, time, manualTime: true }
           }
         }));
       }

@@ -143,25 +143,39 @@ async function executeOp(supabase, op, weddingId) {
     }
 
     case 'json-patch': {
-      // Patch a single key path inside a JSONB column. We fetch the current row, deep-set
-      // the new value, then write the whole column back. If no row exists, insert one.
+      // Patch inside a JSONB column. Two modes:
+      //   - { value }     → set the single value at op.path
+      //   - { patch: {…} } → fetch current value at op.path (must be object), shallow
+      //                      merge the patch object into it, write back
+      // We fetch the current row, mutate, then write the whole column back. If no row
+      // exists in an upsertable table, insert one with just this patch applied.
       const match = op.match || { wedding_id: weddingId };
       let q = supabase.from(op.table).select(op.column);
       for (const [k, v] of Object.entries(match)) q = q.eq(k, v);
       const { data, error } = await q.limit(1).maybeSingle();
       if (error) throw new Error(error.message);
+
+      const applyTo = (root) => {
+        if ('patch' in op) {
+          const existing = deepGet(root, op.path || []) || {};
+          const merged = { ...existing, ...op.patch };
+          return deepSet(root, op.path || [], merged);
+        }
+        return deepSet(root, op.path || [], op.value);
+      };
+
       if (!data) {
         if (!UPSERTABLE_SINGLE_ROW_TABLES.has(op.table)) {
           throw new Error(`json-patch: no row found in ${op.table} for ${JSON.stringify(match)}`);
         }
-        const fresh = deepSet({}, op.path || [], op.value);
+        const fresh = applyTo({});
         const insertRow = { ...match, [op.column]: fresh };
         const { error: insertErr } = await supabase.from(op.table).insert(insertRow);
         if (insertErr) throw new Error(`json-patch insert fallback failed: ${insertErr.message}`);
         return { upserted: true };
       }
       const current = data[op.column] || {};
-      const next = deepSet(structuredClone(current), op.path || [], op.value);
+      const next = applyTo(structuredClone(current));
       let u = supabase.from(op.table).update({ [op.column]: next });
       for (const [k, v] of Object.entries(match)) u = u.eq(k, v);
       const { error: uErr } = await u;
@@ -186,4 +200,14 @@ function deepSet(target, path, value) {
   }
   cur[path[path.length - 1]] = value;
   return target;
+}
+
+function deepGet(target, path) {
+  if (!path || path.length === 0) return target;
+  let cur = target;
+  for (const key of path) {
+    if (cur == null || typeof cur !== 'object') return undefined;
+    cur = cur[key];
+  }
+  return cur;
 }
