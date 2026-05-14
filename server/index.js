@@ -2474,6 +2474,25 @@ app.post('/api/admin/sheet-sync/:weddingId/diff', async (req, res) => {
   }
 });
 
+// Surfaces which Google client_id + redirect URI the backend is currently using.
+// Useful when diagnosing redirect_uri_mismatch errors — compare the client_id_prefix
+// against the OAuth client you edited in GCP. They must match.
+app.get('/api/admin/sheet-sync/debug', async (req, res) => {
+  const cid = process.env.GOOGLE_CLIENT_ID || '';
+  const fe = process.env.FRONTEND_URL || '(unset)';
+  res.json({
+    client_id_prefix: cid ? cid.slice(0, 16) + '…' : '(unset)',
+    client_id_project_number: cid.split('-')[0] || '(unset)',
+    redirect_uri: fe === '(unset)'
+      ? 'http://localhost:5173/admin/gmail-callback'
+      : `${fe}/admin/gmail-callback`,
+    frontend_url: fe,
+    has_client_secret: !!process.env.GOOGLE_CLIENT_SECRET,
+    git_commit: process.env.RAILWAY_GIT_COMMIT_SHA || '(unknown)',
+    note: 'The project_number must match the GCP project where you added the redirect URI. The redirect_uri shown must appear verbatim in that OAuth client.'
+  });
+});
+
 app.post('/api/admin/sheet-sync/:weddingId/apply', async (req, res) => {
   const { weddingId } = req.params;
   const decisions = req.body?.decisions;
