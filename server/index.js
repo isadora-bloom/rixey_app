@@ -2435,6 +2435,22 @@ app.post('/api/admin/sheet-sync/:weddingId/diff', async (req, res) => {
       sheet
     });
 
+    // 5. Fetch most-recent apply stats (best-effort; the audit table may not exist yet)
+    let lastApply = null;
+    try {
+      const { data: lastRow } = await supabaseAdmin
+        .from('sheet_sync_log')
+        .select('applied_at, applied_by, executed')
+        .eq('wedding_id', weddingId)
+        .order('applied_at', { ascending: false })
+        .limit(1);
+      if (lastRow && lastRow[0]) {
+        lastApply = { applied_at: lastRow[0].applied_at, applied_by: lastRow[0].applied_by };
+      }
+    } catch {
+      // ignore — audit table optional
+    }
+
     res.json({
       wedding: { id: wedding.id, couple_names: wedding.couple_names },
       sheetTitle: sheet.title,
@@ -2442,6 +2458,7 @@ app.post('/api/admin/sheet-sync/:weddingId/diff', async (req, res) => {
       tabs: Object.keys(sheet.tabs || {}),
       entries,
       moduleErrors,
+      lastApply,
       counts: {
         total: entries.length,
         missing: entries.filter((e) => e.status === 'missing').length,
@@ -2467,7 +2484,8 @@ app.post('/api/admin/sheet-sync/:weddingId/apply', async (req, res) => {
     const result = await applyChoices({
       supabase: supabaseAdmin,
       weddingId,
-      decisions
+      decisions,
+      appliedBy: req.userId || null
     });
     res.json(result);
   } catch (err) {

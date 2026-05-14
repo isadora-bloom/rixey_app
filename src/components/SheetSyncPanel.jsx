@@ -171,6 +171,11 @@ export default function SheetSyncPanel({ wedding }) {
           <span className="text-sage-400">
             Sheet: <em>{diff.sheetTitle || '(untitled)'}</em>
           </span>
+          {diff.lastApply && (
+            <span className="text-sage-400">
+              Last applied: <em>{new Date(diff.lastApply.applied_at).toLocaleString()}</em>
+            </span>
+          )}
         </div>
       )}
 

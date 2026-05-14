@@ -14,10 +14,11 @@
  *     to sheet, but we don't have write scope. So 'use-portal' = noop and is logged as "resolved
  *     in favor of portal" (decision audit only)
  */
-export async function applyChoices({ supabase, weddingId, decisions }) {
+export async function applyChoices({ supabase, weddingId, decisions, appliedBy }) {
   const results = [];
   let appliedCount = 0;
   const auditRows = [];
+  const appliedAt = new Date().toISOString();
 
   for (const d of decisions || []) {
     const { entryId, choice, op } = d;
@@ -35,7 +36,8 @@ export async function applyChoices({ supabase, weddingId, decisions }) {
         op_type: op.type,
         table_name: op.table || null,
         executed: false,
-        applied_at: new Date().toISOString()
+        applied_by: appliedBy || null,
+        applied_at: appliedAt
       });
       continue;
     }
@@ -56,7 +58,8 @@ export async function applyChoices({ supabase, weddingId, decisions }) {
         op_type: op.type,
         table_name: op.table || null,
         executed: true,
-        applied_at: new Date().toISOString()
+        applied_by: appliedBy || null,
+        applied_at: appliedAt
       });
     } catch (err) {
       const msg = err?.message || String(err);
@@ -69,7 +72,8 @@ export async function applyChoices({ supabase, weddingId, decisions }) {
         table_name: op.table || null,
         executed: false,
         error: msg,
-        applied_at: new Date().toISOString()
+        applied_by: appliedBy || null,
+        applied_at: appliedAt
       });
     }
   }
