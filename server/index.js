@@ -2357,17 +2357,39 @@ app.get('/api/gmail/auth', (req, res) => {
   res.json({ authUrl });
 });
 
+// In-memory diagnostic for the last callback attempt. Cleared on redeploy.
+// Read via GET /api/gmail/callback-debug (public — no secrets in payload).
+let LAST_GMAIL_CALLBACK = { at: null, stage: null, ok: null, error: null };
+
 // Gmail OAuth callback
 app.post('/api/gmail/callback', async (req, res) => {
+  const debug = { at: new Date().toISOString(), stage: null, ok: false, error: null };
   try {
     const { code } = req.body;
+    debug.stage = 'received-code';
     console.log('Received OAuth code, exchanging for tokens...');
 
-    const { tokens } = await oauth2Client.getToken(code);
+    let tokens;
+    try {
+      const r = await oauth2Client.getToken(code);
+      tokens = r.tokens;
+      debug.stage = 'exchanged-tokens';
+    } catch (exchangeErr) {
+      const msg = exchangeErr?.response?.data
+        ? JSON.stringify(exchangeErr.response.data)
+        : (exchangeErr.message || String(exchangeErr));
+      debug.stage = 'token-exchange-failed';
+      debug.error = msg;
+      LAST_GMAIL_CALLBACK = debug;
+      console.error('Google token exchange failed:', msg);
+      return res.status(500).json({ error: 'Token exchange failed: ' + msg });
+    }
+
     console.log('Got tokens:', {
       hasAccessToken: !!tokens.access_token,
       hasRefreshToken: !!tokens.refresh_token,
-      expiry: tokens.expiry_date
+      expiry: tokens.expiry_date,
+      scope: tokens.scope
     });
 
     oauth2Client.setCredentials(tokens);
@@ -2389,16 +2411,29 @@ app.post('/api/gmail/callback', async (req, res) => {
       });
 
     if (insertError) {
+      debug.stage = 'supabase-insert-failed';
+      debug.error = insertError.message;
+      LAST_GMAIL_CALLBACK = debug;
       console.error('Failed to save tokens:', insertError);
       return res.status(500).json({ error: 'Failed to save tokens: ' + insertError.message });
     }
 
+    debug.stage = 'saved';
+    debug.ok = true;
+    LAST_GMAIL_CALLBACK = debug;
     console.log('Gmail connected successfully - tokens saved');
     res.json({ success: true });
   } catch (error) {
+    debug.error = error.message || String(error);
+    LAST_GMAIL_CALLBACK = debug;
     console.error('Gmail auth error:', error);
     res.status(500).json({ error: 'Failed to connect Gmail: ' + error.message });
   }
+});
+
+// PUBLIC — last Gmail callback attempt result (no token values, just stage + error)
+app.get('/api/gmail/callback-debug', (req, res) => {
+  res.json(LAST_GMAIL_CALLBACK);
 });
 
 // ============ SHEET SYNC (Sync from Google Sheet) ============

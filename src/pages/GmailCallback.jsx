@@ -26,18 +26,21 @@ export default function GmailCallback() {
         headers: hdrs,
         body: JSON.stringify({ code })
       }))
-        .then(res => res.json())
-        .then(data => {
-          if (data.success) {
-            setStatus('Gmail connected successfully! Redirecting...')
-          } else {
-            setStatus('Failed to connect. Redirecting...')
-          }
-          setTimeout(() => navigate('/admin'), 2000)
+        .then(async res => {
+          const data = await res.json().catch(() => ({}))
+          return { ok: res.ok, status: res.status, data }
         })
-        .catch(() => {
-          setStatus('Connection error. Redirecting...')
-          setTimeout(() => navigate('/admin'), 2000)
+        .then(({ ok, status: httpStatus, data }) => {
+          if (ok && data?.success) {
+            setStatus('Gmail connected successfully! Redirecting...')
+            setTimeout(() => navigate('/admin'), 2000)
+          } else {
+            const detail = data?.error || `HTTP ${httpStatus}`
+            setStatus(`Failed to connect: ${detail}`)
+          }
+        })
+        .catch((err) => {
+          setStatus(`Connection error: ${err?.message || String(err)}`)
         })
     } else {
       setStatus('No authorization code. Redirecting...')
