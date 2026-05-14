@@ -50,7 +50,9 @@ export async function applyChoices({ supabase, weddingId, decisions, appliedBy }
     try {
       const r = await executeOp(supabase, op, weddingId);
       results.push({ entryId, ok: true, ...r });
-      appliedCount += 1;
+      // Don't count noops as "applied" — they have no portal effect, so reporting them
+      // as wins makes the user think writes happened when they didn't.
+      if (!r.skipped) appliedCount += 1;
       auditRows.push({
         wedding_id: weddingId,
         entry_id: entryId,
@@ -89,18 +91,38 @@ export async function applyChoices({ supabase, weddingId, decisions, appliedBy }
   return { results, appliedCount };
 }
 
+// Tables that are guaranteed to have at most one row per wedding. A PATCH against one
+// of these may legitimately need to INSERT instead — the row may not exist yet for
+// weddings where the couple never filled out the form. UPDATE on a missing row is a
+// silent no-op in PostgREST, so we have to detect 0-row updates and fall back to insert.
+const UPSERTABLE_SINGLE_ROW_TABLES = new Set([
+  'wedding_details',
+  'wedding_staffing',
+  'wedding_timeline',
+  'wedding_tables',
+  'rehearsal_dinner'
+]);
+
 async function executeOp(supabase, op, weddingId) {
   switch (op.type) {
     case 'noop':
       return { skipped: true };
 
     case 'patch': {
-      let q = supabase.from(op.table).update(op.patch || {});
-      for (const [k, v] of Object.entries(op.match || { wedding_id: weddingId })) {
+      const matchObj = op.match || { wedding_id: weddingId };
+      let q = supabase.from(op.table).update(op.patch || {}).select();
+      for (const [k, v] of Object.entries(matchObj)) {
         q = q.eq(k, v);
       }
-      const { error } = await q;
+      const { data, error } = await q;
       if (error) throw new Error(error.message);
+      if ((!data || data.length === 0) && UPSERTABLE_SINGLE_ROW_TABLES.has(op.table)) {
+        // No row matched. Insert a fresh row with the match key + the patch fields.
+        const insertRow = { ...matchObj, ...(op.patch || {}) };
+        const { error: insertErr } = await supabase.from(op.table).insert(insertRow);
+        if (insertErr) throw new Error(`patch→insert fallback failed: ${insertErr.message}`);
+        return { upserted: true };
+      }
       return {};
     }
 
@@ -122,13 +144,23 @@ async function executeOp(supabase, op, weddingId) {
 
     case 'json-patch': {
       // Patch a single key path inside a JSONB column. We fetch the current row, deep-set
-      // the new value, then write the whole column back.
+      // the new value, then write the whole column back. If no row exists, insert one.
       const match = op.match || { wedding_id: weddingId };
       let q = supabase.from(op.table).select(op.column);
       for (const [k, v] of Object.entries(match)) q = q.eq(k, v);
       const { data, error } = await q.limit(1).maybeSingle();
       if (error) throw new Error(error.message);
-      const current = (data && data[op.column]) || {};
+      if (!data) {
+        if (!UPSERTABLE_SINGLE_ROW_TABLES.has(op.table)) {
+          throw new Error(`json-patch: no row found in ${op.table} for ${JSON.stringify(match)}`);
+        }
+        const fresh = deepSet({}, op.path || [], op.value);
+        const insertRow = { ...match, [op.column]: fresh };
+        const { error: insertErr } = await supabase.from(op.table).insert(insertRow);
+        if (insertErr) throw new Error(`json-patch insert fallback failed: ${insertErr.message}`);
+        return { upserted: true };
+      }
+      const current = data[op.column] || {};
       const next = deepSet(structuredClone(current), op.path || [], op.value);
       let u = supabase.from(op.table).update({ [op.column]: next });
       for (const [k, v] of Object.entries(match)) u = u.eq(k, v);

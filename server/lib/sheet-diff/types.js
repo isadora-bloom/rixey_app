@@ -26,10 +26,13 @@
 export const STATUSES = ['missing', 'conflict', 'agree', 'sheet-only', 'both-missing'];
 
 export function makeEntry({ id, section, field, sheetValue, portalValue, status, applyOp, notes }) {
+  const op = applyOp || { type: 'noop' };
+  const isActionable = op.type !== 'noop';
   let defaultAction = null;
-  if (status === 'missing') defaultAction = 'import-sheet';
+  if (status === 'missing' && isActionable) defaultAction = 'import-sheet';
   else if (status === 'conflict') defaultAction = 'skip';
   else if (status === 'agree' || status === 'sheet-only' || status === 'both-missing') defaultAction = 'skip';
+  else defaultAction = 'skip';
   return {
     id,
     section,
@@ -38,8 +41,9 @@ export function makeEntry({ id, section, field, sheetValue, portalValue, status,
     portalValue: normalize(portalValue),
     status,
     defaultAction,
+    actionable: isActionable,
     notes: notes || null,
-    applyOp: applyOp || { type: 'noop' }
+    applyOp: op
   };
 }
 

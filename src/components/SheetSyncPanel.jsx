@@ -283,10 +283,13 @@ export default function SheetSyncPanel({ wedding }) {
 }
 
 function DiffRow({ entry, choice, onChange }) {
-  const isMissing = entry.status === 'missing'
-  const isConflict = entry.status === 'conflict'
+  // Items without an actionable applyOp are informational — surface them with a
+  // pointer to the canonical UI rather than letting Grace tick a no-op checkbox.
+  const informational = entry.actionable === false
+  const isMissing = entry.status === 'missing' && !informational
+  const isConflict = entry.status === 'conflict' && !informational
   const isAgree = entry.status === 'agree'
-  const isReadOnly = entry.status === 'sheet-only' || entry.status === 'both-missing' || entry.status === 'agree'
+  const isReadOnly = informational || entry.status === 'sheet-only' || entry.status === 'both-missing' || entry.status === 'agree'
   return (
     <div className="px-4 py-3 grid grid-cols-1 md:grid-cols-[200px_1fr_1fr_150px] gap-3 items-start">
       <div>
