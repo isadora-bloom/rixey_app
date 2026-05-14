@@ -100,6 +100,14 @@ app.get('/', (req, res) => {
 // backend is currently configured with. None of this is sensitive (client_id prefix
 // + redirect URI both leak in Google's own error pages). Used to diagnose
 // redirect_uri_mismatch errors without needing an admin auth header.
+// In-memory diagnostic for the last Gmail callback attempt. Cleared on redeploy.
+// Read via GET /api/gmail-callback-debug (public — no secrets in payload).
+let LAST_GMAIL_CALLBACK = { at: null, stage: 'no-attempts-yet', ok: null, error: null };
+
+app.get('/api/gmail-callback-debug', (req, res) => {
+  res.json(LAST_GMAIL_CALLBACK);
+});
+
 app.get('/api/google-debug', (req, res) => {
   const cid = process.env.GOOGLE_CLIENT_ID || '';
   const fe = process.env.FRONTEND_URL || '(unset)';
@@ -2357,10 +2365,6 @@ app.get('/api/gmail/auth', (req, res) => {
   res.json({ authUrl });
 });
 
-// In-memory diagnostic for the last callback attempt. Cleared on redeploy.
-// Read via GET /api/gmail/callback-debug (public — no secrets in payload).
-let LAST_GMAIL_CALLBACK = { at: null, stage: null, ok: null, error: null };
-
 // Gmail OAuth callback
 app.post('/api/gmail/callback', async (req, res) => {
   const debug = { at: new Date().toISOString(), stage: null, ok: false, error: null };
@@ -2431,10 +2435,6 @@ app.post('/api/gmail/callback', async (req, res) => {
   }
 });
 
-// PUBLIC — last Gmail callback attempt result (no token values, just stage + error)
-app.get('/api/gmail/callback-debug', (req, res) => {
-  res.json(LAST_GMAIL_CALLBACK);
-});
 
 // ============ SHEET SYNC (Sync from Google Sheet) ============
 // Reuses the Gmail OAuth credentials (spreadsheets.readonly scope was added 2026-05-14).
