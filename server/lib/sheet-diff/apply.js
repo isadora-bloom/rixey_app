@@ -142,6 +142,46 @@ async function executeOp(supabase, op, weddingId) {
       return {};
     }
 
+    case 'json-array-upsert': {
+      // Upsert an item into a JSONB array at op.path. Items are matched by op.key
+      // (e.g. 'id' or 'name'). If found, the item is replaced; otherwise appended.
+      // Used for timeline_data.customEvents and any other array-of-objects field
+      // where we want idempotent re-imports.
+      const match = op.match || { wedding_id: weddingId };
+      let q = supabase.from(op.table).select(op.column);
+      for (const [k, v] of Object.entries(match)) q = q.eq(k, v);
+      const { data, error } = await q.limit(1).maybeSingle();
+      if (error) throw new Error(error.message);
+
+      const upsertArray = (root) => {
+        const path = op.path || [];
+        const arr = (deepGet(root, path) || []).slice();
+        const key = op.key || 'id';
+        const idx = arr.findIndex((it) => it && it[key] != null && op.item && it[key] === op.item[key]);
+        if (idx >= 0) arr[idx] = { ...arr[idx], ...op.item };
+        else arr.push(op.item);
+        return deepSet(root, path, arr);
+      };
+
+      if (!data) {
+        if (!UPSERTABLE_SINGLE_ROW_TABLES.has(op.table)) {
+          throw new Error(`json-array-upsert: no row found in ${op.table} for ${JSON.stringify(match)}`);
+        }
+        const fresh = upsertArray({});
+        const insertRow = { ...match, [op.column]: fresh };
+        const { error: insertErr } = await supabase.from(op.table).insert(insertRow);
+        if (insertErr) throw new Error(`json-array-upsert insert fallback failed: ${insertErr.message}`);
+        return { upserted: true };
+      }
+      const current = data[op.column] || {};
+      const next = upsertArray(structuredClone(current));
+      let u = supabase.from(op.table).update({ [op.column]: next });
+      for (const [k, v] of Object.entries(match)) u = u.eq(k, v);
+      const { error: uErr } = await u;
+      if (uErr) throw new Error(uErr.message);
+      return {};
+    }
+
     case 'json-patch': {
       // Patch inside a JSONB column. Two modes:
       //   - { value }     → set the single value at op.path

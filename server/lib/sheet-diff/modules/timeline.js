@@ -93,6 +93,33 @@ function findEventLabel(label) {
   return all.length ? all : null;
 }
 
+/**
+ * Heuristic for which Timeline section a custom event belongs to. The portal
+ * supports five buckets: prep / ceremony / cocktail / reception / end. We use
+ * ceremony start as the anchor and fall back to absolute time bands when the
+ * ceremony time isn't known.
+ */
+function inferSection(time, ceremonyTime) {
+  const [h, m] = String(time).split(':').map(Number);
+  const mins = h * 60 + m;
+  const cer = ceremonyTime ? (() => {
+    const [ch, cm] = String(ceremonyTime).split(':').map(Number);
+    return ch * 60 + cm;
+  })() : null;
+  if (cer != null) {
+    if (mins < cer) return 'prep';
+    if (mins < cer + 25) return 'ceremony';
+    if (mins < cer + 90) return 'cocktail';
+    if (mins < cer + 5 * 60) return 'reception';
+    return 'end';
+  }
+  if (mins < 16 * 60) return 'prep';
+  if (mins < 17 * 60) return 'ceremony';
+  if (mins < 18 * 60) return 'cocktail';
+  if (mins < 22 * 60) return 'reception';
+  return 'end';
+}
+
 export default {
   section: SECTION,
   build({ sheet, portal, weddingId }) {
@@ -101,6 +128,8 @@ export default {
     const wt = portal.wedding_timeline || {};
     const tdata = (wt && wt.timeline_data) || {};
     const events = tdata.events || {};
+    const customEvents = tdata.customEvents || [];
+    const ceremonyStart = wt.ceremony_start || null;
     const match = { wedding_id: weddingId };
     const entries = [];
 
@@ -114,14 +143,38 @@ export default {
 
       const portalIds = findEventLabel(label);
       if (!portalIds || portalIds.length === 0) {
-        // Sheet has this event, portal doesn't recognise it — informational only
+        // Sheet has an event the portal template doesn't know. Emit a json-array-upsert
+        // op that adds (or updates) it inside timeline_data.customEvents, keyed by a
+        // deterministic slug-id so re-imports don't duplicate.
+        const customId = `custom-${slug(label)}`;
+        const existing = customEvents.find((c) => c && c.id === customId);
+        const section = inferSection(time, ceremonyStart);
+        const status = !existing ? 'missing'
+                     : looselyEqual(existing.time, time) ? 'agree' : 'conflict';
         entries.push(makeEntry({
-          id: `timeline:unmapped:${slug(label)}`,
+          id: `timeline:custom:${slug(label)}`,
           section: SECTION,
-          field: `${label} (sheet only — no portal event)`,
+          field: `${label} (custom event)`,
           sheetValue: time,
-          portalValue: null,
-          status: 'sheet-only'
+          portalValue: existing?.time || null,
+          status,
+          notes: `Will appear in the ${section} block. Add or edit times directly in the Timeline tab afterwards if needed.`,
+          applyOp: {
+            type: 'json-array-upsert',
+            table: 'wedding_timeline',
+            match,
+            column: 'timeline_data',
+            path: ['customEvents'],
+            key: 'id',
+            item: {
+              id: customId,
+              name: label,
+              time,
+              duration: 15,
+              section,
+              notes: ''
+            }
+          }
         }));
         continue;
       }
