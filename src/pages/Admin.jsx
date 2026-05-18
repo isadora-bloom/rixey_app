@@ -40,7 +40,31 @@ export default function Admin() {
   const [showArchived, setShowArchived] = useState(false)
   const [escalations, setEscalations] = useState({})
   const [planningNotes, setPlanningNotes] = useState([])
-  const [activeTab, setActiveTab] = useState('overview')
+  const [activeTab, setActiveTabRaw] = useState('overview')
+  const [tabHistory, setTabHistory] = useState([])
+
+  // Wrapper around the tab setter: records the tab we're leaving so the
+  // header Back button can step back through visited tabs, and scrolls the
+  // new tab to the top instead of inheriting the previous tab's scroll position.
+  const setActiveTab = (tab) => {
+    setActiveTabRaw((prev) => {
+      if (tab !== prev) setTabHistory((h) => [...h, prev])
+      return tab
+    })
+    window.scrollTo(0, 0)
+  }
+
+  // Header Back button: pop to the last visited tab; once the tab history is
+  // exhausted, fall back to closing the profile (returning to the wedding list).
+  const goBack = () => {
+    if (tabHistory.length === 0) {
+      closeProfile()
+      return
+    }
+    setActiveTabRaw(tabHistory[tabHistory.length - 1])
+    setTabHistory((h) => h.slice(0, -1))
+    window.scrollTo(0, 0)
+  }
   const [showUsageStats, setShowUsageStats] = useState(false) // Collapsed by default on mobile
   const [uploadingContract, setUploadingContract] = useState(false)
   const [uploadResult, setUploadResult] = useState(null)
@@ -585,7 +609,8 @@ export default function Admin() {
     setSearchQuery('')
     setNotesSearchQuery('')
     setNotesHighlights('')
-    setActiveTab('overview')
+    setActiveTabRaw('overview')
+    setTabHistory([])
 
     // PARALLELIZED: Load all wedding data concurrently with Promise.allSettled
     const hdrs = await authHeaders()
@@ -830,6 +855,7 @@ export default function Admin() {
 
   const closeProfile = () => {
     setViewingWedding(null)
+    setTabHistory([])
     setWeddingMessages([])
     setSearchQuery('')
     setSelectedChatUser(null)
@@ -937,6 +963,8 @@ export default function Admin() {
       <AdminWeddingProfile
         viewingWedding={viewingWedding}
         closeProfile={closeProfile}
+        goBack={goBack}
+        tabHistory={tabHistory}
         weddingMessages={weddingMessages}
         setWeddingMessages={setWeddingMessages}
         loadingMessages={loadingMessages}

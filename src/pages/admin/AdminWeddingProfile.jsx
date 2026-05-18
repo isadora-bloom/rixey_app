@@ -35,6 +35,8 @@ import { ESCALATION_KEYWORDS, getLastActivity, getCategoryIcon, getCategoryLabel
 export default function AdminWeddingProfile({
   viewingWedding,
   closeProfile,
+  goBack,
+  tabHistory,
   // Messages / chat
   weddingMessages,
   setWeddingMessages,
@@ -242,13 +244,14 @@ export default function AdminWeddingProfile({
               Print
             </button>
             <button
-              onClick={closeProfile}
+              onClick={goBack}
               className="flex items-center gap-1.5 text-sage-500 hover:text-sage-700 text-sm font-medium"
+              title={tabHistory?.length ? 'Back to the last tab you viewed' : 'Back to the wedding list'}
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
               </svg>
-              Back
+              {tabHistory?.length ? 'Back' : 'Back to list'}
             </button>
           </div>
         </div>
