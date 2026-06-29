@@ -5,12 +5,12 @@ import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import multer from 'multer';
 import { google } from 'googleapis';
-import { Resend } from 'resend';
 import rateLimit from 'express-rate-limit';
 import { requireAuth, requireAdmin } from './middleware/auth.js';
 import { validateBody } from './middleware/validate.js';
 import { fetchAllTabs, SheetFetchError } from './lib/sheet-fetcher.js';
 import { buildDiff, applyChoices } from './lib/sheet-diff/index.js';
+import cron from 'node-cron';
 // PDF parsing removed - using Claude vision for all documents
 
 dotenv.config();
@@ -256,43 +256,56 @@ async function logActivity(weddingId, userId, activityType, details = '') {
 
 // ============ EMAIL SETUP ============
 
-const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
-
-async function sendNotificationEmail(to, subject, bodyText, recipientType = 'admin') {
-  if (!resend || !to) {
-    console.log('[Email] Skipping (not configured or no recipient):', subject);
-    return false;
-  }
+// Core Gmail send — builds RFC 2822 message and uses the already-connected Gmail OAuth client
+async function sendViaGmail(to, subject, html) {
+  if (!to) return false;
   try {
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    const linkUrl = recipientType === 'client' ? `${frontendUrl}/` : `${frontendUrl}/admin`;
-    const linkLabel = recipientType === 'client' ? 'Open your portal' : 'View in Admin';
+    const tokens = await loadAndRefreshGmailTokens();
+    if (!tokens) {
+      console.log('[Email] Gmail not connected — skipping:', subject);
+      return false;
+    }
     const fromName = process.env.EMAIL_FROM_NAME || 'Rixey Manor';
-    const fromAddress = process.env.EMAIL_FROM_ADDRESS || 'notifications@rixeymanor.com';
-    const { error } = await resend.emails.send({
-      from: `${fromName} <${fromAddress}>`,
-      to,
-      subject,
-      html: `
-        <div style="font-family: Georgia, serif; max-width: 580px; margin: 0 auto; padding: 30px 20px; color: #3d3d3d; background: #fefbf7;">
-          <div style="padding-bottom: 16px; margin-bottom: 24px; border-bottom: 2px solid #7C9070;">
-            <span style="font-size: 11px; letter-spacing: 3px; text-transform: uppercase; color: #7C9070;">Rixey Manor Planning Portal</span>
-          </div>
-          <p style="font-size: 16px; line-height: 1.7; margin: 0 0 24px;">${bodyText}</p>
-          <a href="${linkUrl}" style="display: inline-block; background: #5C6B4F; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-size: 14px;">${linkLabel} →</a>
-          <div style="margin-top: 32px; padding-top: 16px; border-top: 1px solid #e8e0d5;">
-            <p style="font-size: 12px; color: #999; margin: 0;">Rapidan, VA · rixeymanor.com</p>
-          </div>
-        </div>
-      `,
-    });
-    if (error) throw error;
-    console.log('[Email] Sent:', subject, '→', to);
+    const raw = [
+      `To: ${to}`,
+      `Subject: FROM PORTAL — ${subject}`,
+      'MIME-Version: 1.0',
+      'Content-Type: text/html; charset=utf-8',
+      `X-Mailer: Rixey Portal (${fromName})`,
+      '',
+      html,
+    ].join('\r\n');
+    const encoded = Buffer.from(raw).toString('base64url');
+    await gmail.users.messages.send({ userId: 'me', requestBody: { raw: encoded } });
+    console.log('[Email] Sent via Gmail:', subject, '→', to);
     return true;
   } catch (err) {
-    console.error('[Email] Failed:', err.message);
+    console.error('[Email] Gmail send failed:', err.message);
     return false;
   }
+}
+
+async function sendNotificationEmail(to, subject, bodyText, recipientType = 'admin') {
+  if (!to) return false;
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const linkUrl = recipientType === 'client' ? `${frontendUrl}/` : `${frontendUrl}/admin`;
+  const linkLabel = recipientType === 'client' ? 'Open your portal' : 'View in Admin';
+  const html = `
+    <div style="font-family: Georgia, serif; max-width: 580px; margin: 0 auto; padding: 30px 20px; color: #3d3d3d; background: #fefbf7;">
+      <div style="padding-bottom: 16px; margin-bottom: 24px; border-bottom: 2px solid #7C9070;">
+        <span style="font-size: 11px; letter-spacing: 3px; text-transform: uppercase; color: #7C9070;">Rixey Manor Planning Portal</span>
+      </div>
+      <p style="font-size: 16px; line-height: 1.7; margin: 0 0 24px;">${bodyText}</p>
+      <a href="${linkUrl}" style="display: inline-block; background: #5C6B4F; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-size: 14px;">${linkLabel} →</a>
+      <div style="margin-top: 32px; padding-top: 16px; border-top: 1px solid #e8e0d5;">
+        <p style="font-size: 12px; color: #999; margin: 0;">Rapidan, VA · rixeymanor.com</p>
+      </div>
+    </div>`;
+  return sendViaGmail(to, subject, html);
+}
+
+async function sendEmail(to, subject, html) {
+  return sendViaGmail(to, subject, html);
 }
 
 // ============ NOTIFICATIONS ============
@@ -1486,6 +1499,16 @@ app.post('/api/chat', async (req, res) => {
         });
         console.log(`Low confidence (${confidence}%) question logged for admin review`);
 
+        const { data: weddingForAlert } = await supabaseAdmin
+          .from('weddings').select('couple_names').eq('id', weddingId).single();
+        const coupleForAlert = weddingForAlert?.couple_names || 'A client';
+        await createNotification(
+          weddingId, 'admin', 'sage_uncertain',
+          `Sage wasn't confident — ${coupleForAlert} asked a question`,
+          `"${message.substring(0, 150)}${message.length > 150 ? '…' : ''}" (${confidence}% confidence)`,
+          process.env.ADMIN_EMAIL
+        );
+
         // Add a friendly note to the response letting them know we're checking with the team
         assistantMessage += "\n\n---\n*I want to make sure I'm giving you the right info on this one, so I've flagged it for the human team to double-check. They'll follow up if there's anything to add or clarify!*";
       } catch (err) {
@@ -1518,11 +1541,43 @@ app.post('/api/chat', async (req, res) => {
           weddingId, 'admin', 'sage_uncertain',
           'Sage deferred to the team',
           `A client asked: "${message.substring(0, 120)}${message.length > 120 ? '...' : ''}"`,
-          null
+          process.env.ADMIN_EMAIL
         );
         console.log(`Sage deferral detected — flagged for admin review`);
       } catch (err) {
         console.error('Error saving Sage deferral flag:', err);
+      }
+    }
+
+    // Detect distress or explicit request for human help in the client's message
+    const HELP_REQUEST_PHRASES = [
+      'talk to someone', 'speak with someone', 'speak with grace', 'speak with isadora',
+      'talk to grace', 'talk to isadora', 'need a human', 'need to speak with',
+      'want to speak with', 'can i call', 'can you call me', 'call me',
+      'schedule a call', 'get on a call', 'zoom call', 'book a call', 'real person',
+      'can someone call', 'have someone call', 'reach out to me'
+    ];
+    const userMessageLower = message.toLowerCase();
+    const wantsHuman = HELP_REQUEST_PHRASES.some(p => userMessageLower.includes(p));
+    const isDistressed = hasEscalation(message);
+
+    if ((wantsHuman || isDistressed) && weddingId) {
+      try {
+        const { data: weddingEsc } = await supabaseAdmin
+          .from('weddings').select('couple_names').eq('id', weddingId).single();
+        const coupleEsc = weddingEsc?.couple_names || 'A client';
+        const escalationTitle = wantsHuman
+          ? `${coupleEsc} is asking to speak with the team`
+          : `${coupleEsc} may need support`;
+        await createNotification(
+          weddingId, 'admin', 'escalation',
+          escalationTitle,
+          `Via Sage: "${message.substring(0, 200)}"`,
+          process.env.ADMIN_EMAIL
+        );
+        console.log(`Chat escalation detected — ${wantsHuman ? 'help request' : 'distress keywords'}`);
+      } catch (err) {
+        console.error('Error creating chat escalation notification:', err);
       }
     }
 
@@ -8276,6 +8331,117 @@ app.post('/api/finalisations/:weddingId', async (req, res) => {
     res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+// ============ DAILY DIGEST ============
+
+async function sendDailyDigest() {
+  const adminEmail = process.env.ADMIN_EMAIL || 'info@rixeymanor.com';
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+  const [
+    { data: activities },
+    { data: chatMsgs },
+    { data: uncertainQ },
+    { data: directMsgs },
+  ] = await Promise.all([
+    supabaseAdmin.from('activity_log').select('wedding_id, activity_type, details, created_at').gte('created_at', since).order('created_at', { ascending: true }),
+    supabaseAdmin.from('messages').select('wedding_id, created_at').eq('sender', 'user').gte('created_at', since),
+    supabaseAdmin.from('uncertain_questions').select('wedding_id, question, confidence_level, created_at').gte('created_at', since),
+    supabaseAdmin.from('direct_messages').select('wedding_id, content, created_at').eq('sender_type', 'client').gte('created_at', since),
+  ]);
+
+  const weddingIds = [...new Set([
+    ...(activities || []).map(a => a.wedding_id),
+    ...(chatMsgs || []).map(m => m.wedding_id),
+    ...(uncertainQ || []).map(q => q.wedding_id),
+    ...(directMsgs || []).map(m => m.wedding_id),
+  ].filter(Boolean))];
+
+  if (weddingIds.length === 0) {
+    console.log('[Digest] No portal activity in last 24h — skipping');
+    return;
+  }
+
+  const { data: weddings } = await supabaseAdmin.from('weddings').select('id, couple_names').in('id', weddingIds);
+  const weddingMap = {};
+  (weddings || []).forEach(w => { weddingMap[w.id] = w.couple_names || 'Unknown Couple'; });
+
+  const sections = weddingIds.map(wid => {
+    const coupleName = weddingMap[wid] || 'Unknown Couple';
+    const rows = [];
+
+    (activities || []).filter(a => a.wedding_id === wid).forEach(a => {
+      const label = ACTIVITY_LABELS[a.activity_type] || a.activity_type.replace(/_/g, ' ');
+      const time = new Date(a.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' });
+      rows.push({ icon: '·', color: '#5c6b4f', text: label, time, detail: a.details || '' });
+    });
+
+    const chatCount = (chatMsgs || []).filter(m => m.wedding_id === wid).length;
+    if (chatCount > 0) {
+      rows.push({ icon: '💬', color: '#5c6b4f', text: `Asked Sage ${chatCount} question${chatCount !== 1 ? 's' : ''}` });
+    }
+
+    const uncertain = (uncertainQ || []).filter(q => q.wedding_id === wid);
+    if (uncertain.length > 0) {
+      uncertain.forEach(q => {
+        rows.push({
+          icon: '⚠',
+          color: '#b45309',
+          text: `Sage flagged for review (${q.confidence_level}% confidence)`,
+          detail: `"${q.question.substring(0, 120)}${q.question.length > 120 ? '…' : ''}"`,
+        });
+      });
+    }
+
+    const dms = (directMsgs || []).filter(m => m.wedding_id === wid);
+    dms.forEach(dm => {
+      rows.push({ icon: '✉', color: '#1d4ed8', text: 'Sent you a direct message', detail: dm.content.substring(0, 120) });
+    });
+
+    return { coupleName, rows };
+  }).filter(s => s.rows.length > 0);
+
+  const coupleHtml = sections.map(({ coupleName, rows }) => {
+    const rowsHtml = rows.map(r => `
+      <tr>
+        <td style="width:20px;padding:8px 8px 8px 0;vertical-align:top;font-size:14px;color:${r.color};">${r.icon}</td>
+        <td style="padding:8px 0;border-bottom:1px solid #f0ebe3;vertical-align:top;">
+          <span style="font-size:14px;color:#3d3d3d;">${r.text}</span>
+          ${r.time ? `<span style="font-size:12px;color:#aaa;margin-left:8px;">${r.time}</span>` : ''}
+          ${r.detail ? `<div style="font-size:12px;color:#777;margin-top:3px;font-style:italic;">${r.detail}</div>` : ''}
+        </td>
+      </tr>`).join('');
+
+    return `
+      <div style="margin-bottom:20px;background:#fff;border-radius:8px;padding:16px;border:1px solid #e8e0d5;">
+        <div style="font-size:15px;font-weight:bold;color:#3d3d3d;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #e8e0d5;">${coupleName}</div>
+        <table style="width:100%;border-collapse:collapse;">${rowsHtml}</table>
+      </div>`;
+  }).join('');
+
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'America/New_York' });
+
+  const html = `
+    <div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;padding:30px 20px;color:#3d3d3d;background:#fefbf7;">
+      <div style="padding-bottom:16px;margin-bottom:8px;border-bottom:2px solid #7C9070;">
+        <span style="font-size:11px;letter-spacing:3px;text-transform:uppercase;color:#7C9070;">Rixey Manor Planning Portal</span>
+      </div>
+      <h2 style="font-size:20px;color:#3d3d3d;margin:0 0 4px;font-weight:normal;">Daily Planning Roundup</h2>
+      <p style="font-size:13px;color:#999;margin:0 0 24px;">${dateStr}</p>
+      ${coupleHtml}
+      <a href="${frontendUrl}/admin" style="display:inline-block;background:#5C6B4F;color:white;padding:10px 20px;border-radius:6px;text-decoration:none;font-size:14px;">View all in admin →</a>
+      <div style="margin-top:32px;padding-top:16px;border-top:1px solid #e8e0d5;">
+        <p style="font-size:12px;color:#999;margin:0;">Rapidan, VA · rixeymanor.com</p>
+      </div>
+    </div>`;
+
+  await sendEmail(adminEmail, `Planning Roundup — ${dateStr}`, html);
+  console.log(`[Digest] Sent to ${adminEmail}`);
+}
+
+// 8 AM ET daily
+cron.schedule('0 8 * * *', () => { sendDailyDigest().catch(err => console.error('[Digest] Error:', err.message)); }, { timezone: 'America/New_York' });
 
 // Global error handler — ensures all unhandled Express errors return JSON, not HTML
 app.use((err, req, res, next) => {
