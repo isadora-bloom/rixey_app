@@ -11,6 +11,7 @@ import { validateBody } from './middleware/validate.js';
 import { fetchAllTabs, SheetFetchError } from './lib/sheet-fetcher.js';
 import { buildDiff, applyChoices } from './lib/sheet-diff/index.js';
 import cron from 'node-cron';
+import * as XLSX from 'xlsx';
 // PDF parsing removed - using Claude vision for all documents
 
 dotenv.config();
@@ -43,6 +44,27 @@ const dayOfMediaUpload = multer({
       cb(null, true);
     } else {
       cb(new Error(`File type not allowed: ${file.mimetype}`));
+    }
+  }
+});
+
+// Spreadsheet uploads — xlsx, xls, csv for seating chart import
+const spreadsheetUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB
+  fileFilter: (req, file, cb) => {
+    const allowed = [
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
+      'application/vnd.ms-excel',                                           // .xls
+      'text/csv',
+      'application/csv',
+      'text/plain', // some browsers send csv as text/plain
+    ];
+    const ext = (file.originalname || '').split('.').pop().toLowerCase();
+    if (allowed.includes(file.mimetype) || ['xlsx', 'xls', 'csv'].includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`Only Excel (.xlsx, .xls) and CSV files are supported. Got: ${file.mimetype}`));
     }
   }
 });
@@ -174,6 +196,10 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
+// Single source of truth for model IDs — update here when Anthropic releases new versions
+const MODEL_SONNET = 'claude-sonnet-4-6';
+const MODEL_HAIKU  = 'claude-haiku-4-5-20251001';
+
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
   process.env.VITE_SUPABASE_ANON_KEY
@@ -189,13 +215,13 @@ const supabaseAdmin = createClient(
 
 // Token costs (approximate, as of 2024)
 const TOKEN_COSTS = {
-  'claude-sonnet-4-20250514': { input: 0.003, output: 0.015 }, // per 1K tokens
+  'claude-sonnet-4-6': { input: 0.003, output: 0.015 }, // per 1K tokens
   'claude-sonnet': { input: 0.003, output: 0.015 },
   'default': { input: 0.003, output: 0.015 }
 };
 
 // Log API usage
-async function logUsage(weddingId, userId, endpoint, response, model = 'claude-sonnet-4-20250514') {
+async function logUsage(weddingId, userId, endpoint, response, model = 'claude-sonnet-4-6') {
   try {
     const inputTokens = response?.usage?.input_tokens || 0;
     const outputTokens = response?.usage?.output_tokens || 0;
@@ -1464,7 +1490,7 @@ app.post('/api/chat', async (req, res) => {
 
     let response;
     try {
-      response = await anthropic.messages.create({ model: 'claude-sonnet-4-20250514', ...sageCallParams });
+      response = await anthropic.messages.create({ model: 'claude-sonnet-4-6', ...sageCallParams });
     } catch (sonnetErr) {
       const isOverloaded = sonnetErr.status === 529 || sonnetErr.status === 503 || sonnetErr.status === 429;
       if (!isOverloaded) throw sonnetErr;
@@ -1679,7 +1705,7 @@ Mention that:
 Keep it warm but not over-the-top. 3-4 sentences max. End with an open question.`;
 
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-4-6',
       max_tokens: 300,
       temperature: 0.7,
       system: SAGE_SYSTEM_PROMPT,
@@ -1720,7 +1746,7 @@ app.post('/api/extract-contract', upload.single('contract'), async (req, res) =>
     let extractedFullText = '';
     try {
       const textExtractionResponse = await anthropic.messages.create({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-6',
         max_tokens: 8000,
         messages: [{
           role: 'user',
@@ -1792,7 +1818,7 @@ Return ONLY a valid JSON array, no other text. Example:
     if (isPdf) {
       // Use Claude's document feature for PDFs
       response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-6',
         max_tokens: 2000,
         messages: [{
           role: 'user',
@@ -1815,7 +1841,7 @@ Return ONLY a valid JSON array, no other text. Example:
     } else {
       // Use Claude's vision for images
       response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-6',
         max_tokens: 2000,
         messages: [{
           role: 'user',
@@ -1899,7 +1925,7 @@ app.post('/api/sage-preview', async (req, res) => {
     const knowledge = await getRelevantKnowledge(message);
 
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-4-6',
       max_tokens: 600,
       system: `${SAGE_SYSTEM_PROMPT}\n\nADDITIONAL RIXEY MANOR KNOWLEDGE BASE:\n\n${knowledge}\n\n---\n\nNOTE: You're chatting with a prospective couple on the Rixey Manor preview page. They haven't created their account yet, so the in-app tabs and the "stay inside the portal" rule above DO NOT apply here — there is no portal for them yet. For prospects, you CAN link to rixeymanor.com pages (availability, packages, pricing calculator, finance101, book a tour, venue galleries) when it's helpful, since the public marketing site is the only thing they have access to. Keep replies concise and welcoming. If they ask about their specific wedding details, gently note they'll have a personalised portal once they sign up.`,
       messages: [
@@ -1937,7 +1963,7 @@ app.post('/api/chat-with-file', upload.single('file'), async (req, res) => {
     let response;
     if (isPdf) {
       response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-6',
         max_tokens: 1500,
         system: SAGE_SYSTEM_PROMPT,
         messages: [{
@@ -1953,7 +1979,7 @@ app.post('/api/chat-with-file', upload.single('file'), async (req, res) => {
       });
     } else {
       response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-6',
         max_tokens: 1500,
         system: SAGE_SYSTEM_PROMPT,
         messages: [{
@@ -1983,7 +2009,7 @@ app.post('/api/chat-with-file', upload.single('file'), async (req, res) => {
         // Determine if this is an inspo image or a contract/document
         let fileType = 'unknown';
         const classifyResponse = await anthropic.messages.create({
-          model: 'claude-sonnet-4-20250514',
+          model: 'claude-sonnet-4-6',
           max_tokens: 100,
           messages: [{
             role: 'user',
@@ -2022,7 +2048,7 @@ app.post('/api/chat-with-file', upload.single('file'), async (req, res) => {
               if (signedUrlData) {
                 // Get a caption for the image
                 const captionResponse = await anthropic.messages.create({
-                  model: 'claude-sonnet-4-20250514',
+                  model: 'claude-sonnet-4-6',
                   max_tokens: 50,
                   messages: [{
                     role: 'user',
@@ -2049,7 +2075,7 @@ app.post('/api/chat-with-file', upload.single('file'), async (req, res) => {
         if (fileType === 'contract' || isDocument) {
           // Extract full text for storage
           const textResponse = await anthropic.messages.create({
-            model: 'claude-sonnet-4-20250514',
+            model: 'claude-sonnet-4-6',
             max_tokens: 8000,
             messages: [{
               role: 'user',
@@ -2073,7 +2099,7 @@ app.post('/api/chat-with-file', upload.single('file'), async (req, res) => {
 
           // Try to identify vendor type and add to vendor checklist if new
           const vendorTypeResponse = await anthropic.messages.create({
-            model: 'claude-sonnet-4-20250514',
+            model: 'claude-sonnet-4-6',
             max_tokens: 100,
             messages: [{
               role: 'user',
@@ -2132,7 +2158,7 @@ Focus on: vendor names, contact info, costs, dates, deadlines, special requireme
 Return ONLY a valid JSON array like: [{"category": "vendor", "content": "Caterer: ABC Catering"}]`;
 
           const notesResponse = await anthropic.messages.create({
-            model: 'claude-sonnet-4-20250514',
+            model: 'claude-sonnet-4-6',
             max_tokens: 2000,
             messages: [{
               role: 'user',
@@ -2373,7 +2399,7 @@ app.post('/api/ask-contracts', async (req, res) => {
 
     // Ask Claude
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-4-6',
       max_tokens: 1000,
       messages: [{
         role: 'user',
@@ -3249,12 +3275,7 @@ app.post('/api/notes-highlights', async (req, res) => {
 
     const contractsList = (contracts || []).map(c => c.filename).join(', ');
 
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1000,
-      messages: [{
-        role: 'user',
-        content: `You are helping a wedding venue manager get a quick overview of a client's wedding planning status.
+    const prompt = `You are helping a wedding venue manager get a quick overview of a client's wedding planning status.
 
 Based on these planning notes, provide a concise summary with:
 1. **Key Decisions Made** - What vendors are booked, major choices finalized
@@ -3269,15 +3290,22 @@ ${notesText}
 
 ${contractsList ? `CONTRACTS ON FILE: ${contractsList}` : ''}
 
-Provide the summary:`
-      }]
-    });
+Provide the summary:`;
+
+    // Try Sonnet first; fall back to Haiku if the primary model is unavailable
+    let response;
+    try {
+      response = await anthropic.messages.create({ model: MODEL_SONNET, max_tokens: 1000, messages: [{ role: 'user', content: prompt }] });
+    } catch (primaryErr) {
+      console.warn('Highlights: primary model failed, falling back to Haiku:', primaryErr?.message ?? primaryErr);
+      response = await anthropic.messages.create({ model: MODEL_HAIKU, max_tokens: 1000, messages: [{ role: 'user', content: prompt }] });
+    }
 
     res.json({ highlights: response.content[0].text });
 
   } catch (error) {
-    console.error('Highlights error:', error);
-    res.status(500).json({ error: 'Failed to generate highlights' });
+    console.error('Highlights error:', error?.message ?? error);
+    res.status(500).json({ error: 'Failed to generate highlights', detail: error?.message ?? String(error) });
   }
 });
 
@@ -4034,7 +4062,7 @@ app.post('/api/vendors/:id/contract', upload.single('contract'), async (req, res
 
         // Extract full text and save to contracts table
         const textResponse = await anthropic.messages.create({
-          model: 'claude-sonnet-4-20250514',
+          model: 'claude-sonnet-4-6',
           max_tokens: 8000,
           messages: [{
             role: 'user',
@@ -4064,7 +4092,7 @@ Focus on: vendor name, contact info (phone/email), costs, payment schedules, dat
 Return ONLY a valid JSON array like: [{"category": "vendor", "content": "Photographer: Jane Smith"}]`;
 
         const notesResponse = await anthropic.messages.create({
-          model: 'claude-sonnet-4-20250514',
+          model: 'claude-sonnet-4-6',
           max_tokens: 2000,
           messages: [{
             role: 'user',
@@ -4217,7 +4245,7 @@ app.post('/api/inspo', upload.single('image'), async (req, res) => {
     if (!caption) {
       try {
         const captionResponse = await anthropic.messages.create({
-          model: 'claude-sonnet-4-20250514',
+          model: 'claude-sonnet-4-6',
           max_tokens: 50,
           messages: [{
             role: 'user',
@@ -4253,7 +4281,7 @@ app.post('/api/inspo', upload.single('image'), async (req, res) => {
     (async () => {
       try {
         const notesResponse = await anthropic.messages.create({
-          model: 'claude-sonnet-4-20250514',
+          model: 'claude-sonnet-4-6',
           max_tokens: 500,
           messages: [{
             role: 'user',
@@ -8442,6 +8470,229 @@ async function sendDailyDigest() {
 
 // 8 AM ET daily
 cron.schedule('0 8 * * *', () => { sendDailyDigest().catch(err => console.error('[Digest] Error:', err.message)); }, { timezone: 'America/New_York' });
+
+// ============ SEATING CHART IMPORT ============
+
+// Detect which column index maps to each logical field by asking Haiku
+async function detectSeatingColumns(headers, sampleRows) {
+  const headerStr = headers.map((h, i) => `${i}: "${h ?? ''}"`).join(', ');
+  const sampleStr = sampleRows
+    .map((row, ri) => `Row ${ri + 1}: [${row.map(v => JSON.stringify(v ?? null)).join(', ')}]`)
+    .join('\n');
+
+  const prompt = `You are mapping spreadsheet columns for a wedding seating chart import.
+
+Headers (index: name): ${headerStr}
+
+Sample data rows:
+${sampleStr}
+
+Return a JSON object mapping each logical field to its 0-based column index (null if not present):
+- table: column containing the table name/number
+- seat: seat number within the table (optional)
+- name: guest's full name
+- relationship: who they are (relationship to couple, role, family side, etc.)
+- notes: per-guest notes or special instructions
+- allergies: dietary restrictions or food allergies
+- rsvp: RSVP or attendance status
+
+Only return the JSON object, no explanation.`;
+
+  try {
+    const response = await anthropic.messages.create({
+      model: MODEL_HAIKU,
+      max_tokens: 256,
+      messages: [{ role: 'user', content: prompt }],
+    });
+    const text = response.content[0]?.text || '{}';
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    return JSON.parse(jsonMatch[0]);
+  } catch (err) {
+    console.error('[SeatingImport] Column detection failed:', err.message);
+    return null;
+  }
+}
+
+function safeCell(cells, idx) {
+  if (idx === null || idx === undefined) return null;
+  const v = cells[idx];
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  return s || null;
+}
+
+function parseRsvpValue(raw) {
+  if (!raw) return 'pending';
+  const lower = raw.toLowerCase();
+  if (/going|attend|yes|confirm/.test(lower)) return 'yes';
+  if (/declin|not coming|no\b|cant|can't/.test(lower)) return 'no';
+  if (/maybe|unsure|likely/.test(lower)) return 'maybe';
+  return 'pending';
+}
+
+function splitGuestName(full) {
+  const cleaned = full.replace(/#\S+/g, '').trim();
+  const parts = cleaned.split(/\s+/);
+  if (parts.length === 1) return { first_name: parts[0], last_name: null };
+  return { first_name: parts.slice(0, -1).join(' '), last_name: parts[parts.length - 1] };
+}
+
+// Parse xlsx/csv buffer → { tables: [...], totalGuests, warnings }
+async function parseSeatingBuffer(buffer, filename) {
+  const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
+
+  // Pick the most data-rich non-meta sheet
+  const SKIP_SHEET = /notes?|legend|key|instruction|readme|about|meta/i;
+  const candidates = workbook.SheetNames.filter(n => !SKIP_SHEET.test(n));
+  const sheetNames = candidates.length > 0 ? candidates : workbook.SheetNames;
+
+  let mainSheet = workbook.Sheets[sheetNames[0]];
+  let maxRows = 0;
+  for (const name of sheetNames) {
+    const ws = workbook.Sheets[name];
+    const ref = ws['!ref'];
+    if (!ref) continue;
+    const range = XLSX.utils.decode_range(ref);
+    if (range.e.r > maxRows) { maxRows = range.e.r; mainSheet = ws; }
+  }
+
+  const rawRows = XLSX.utils.sheet_to_json(mainSheet, { header: 1, defval: null, blankrows: false });
+  if (rawRows.length < 2) throw new Error('Spreadsheet appears empty — needs at least a header row and one data row.');
+
+  const headerRow = rawRows[0].map(h => (h === null || h === undefined) ? '' : String(h));
+  const dataRows = rawRows.slice(1);
+
+  const colMap = await detectSeatingColumns(headerRow, dataRows.slice(0, 3));
+  if (!colMap || colMap.table === null || colMap.name === null) {
+    throw new Error('Could not detect table name or guest name columns. Make sure your spreadsheet has clear column headers.');
+  }
+
+  const tablesMap = new Map();
+  const warnings = [];
+  let totalGuests = 0;
+
+  for (const row of dataRows) {
+    const rawName = safeCell(row, colMap.name);
+    if (!rawName) continue;
+
+    const rawTable = safeCell(row, colMap.table) || 'Unassigned';
+
+    if (!tablesMap.has(rawTable)) {
+      tablesMap.set(rawTable, { table_name: rawTable, guests: [] });
+    }
+    const table = tablesMap.get(rawTable);
+
+    const { first_name, last_name } = splitGuestName(rawName);
+    const relationship = safeCell(row, colMap.relationship);
+    const notes = safeCell(row, colMap.notes);
+    const dietary = safeCell(row, colMap.allergies);
+    const rawRsvp = safeCell(row, colMap.rsvp);
+
+    // Combine relationship + notes into the notes field
+    const combinedNotes = [relationship, notes].filter(Boolean).join(' · ') || null;
+
+    table.guests.push({
+      full_name: rawName,
+      first_name,
+      last_name,
+      notes: combinedNotes,
+      dietary_restrictions: dietary,
+      rsvp: parseRsvpValue(rawRsvp),
+      table_assignment: rawTable,
+    });
+    totalGuests++;
+  }
+
+  return { tables: Array.from(tablesMap.values()), totalGuests, warnings };
+}
+
+// Upsert parsed seating into wedding_guests (update if name matches, insert if new)
+async function commitSeatingToGuests(weddingId, tables, replaceExisting) {
+  if (replaceExisting) {
+    // Clear table_assignment for all existing guests in this wedding
+    await supabaseAdmin
+      .from('wedding_guests')
+      .update({ table_assignment: null })
+      .eq('wedding_id', weddingId);
+  }
+
+  const { data: existingGuests } = await supabaseAdmin
+    .from('wedding_guests')
+    .select('id, first_name, last_name')
+    .eq('wedding_id', weddingId);
+
+  const nameIndex = new Map();
+  for (const g of existingGuests || []) {
+    const key = `${(g.first_name || '').toLowerCase().trim()}|${(g.last_name || '').toLowerCase().trim()}`;
+    nameIndex.set(key, g.id);
+  }
+
+  let created = 0, updated = 0;
+
+  for (const table of tables) {
+    for (const guest of table.guests) {
+      const key = `${guest.first_name.toLowerCase().trim()}|${(guest.last_name || '').toLowerCase().trim()}`;
+      const existingId = nameIndex.get(key);
+
+      const payload = {
+        first_name: guest.first_name,
+        last_name: guest.last_name,
+        notes: guest.notes,
+        dietary_restrictions: guest.dietary_restrictions,
+        rsvp: guest.rsvp,
+        table_assignment: guest.table_assignment,
+        updated_at: new Date().toISOString(),
+      };
+
+      if (existingId) {
+        await supabaseAdmin.from('wedding_guests').update(payload).eq('id', existingId);
+        updated++;
+      } else {
+        const { data: newGuest } = await supabaseAdmin
+          .from('wedding_guests')
+          .insert({ wedding_id: weddingId, ...payload })
+          .select('id')
+          .single();
+        if (newGuest) nameIndex.set(key, newGuest.id);
+        created++;
+      }
+    }
+  }
+
+  return { created, updated };
+}
+
+// POST /api/seating/import — parse (action=parse) or commit (action=commit)
+app.post('/api/seating/import', spreadsheetUpload.single('file'), async (req, res) => {
+  try {
+    const action = req.body.action || 'parse';
+    const weddingId = req.body.weddingId;
+
+    if (!weddingId) return res.status(400).json({ error: 'weddingId required' });
+
+    if (action === 'parse') {
+      if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+      const chart = await parseSeatingBuffer(req.file.buffer, req.file.originalname);
+      return res.json({ ok: true, chart });
+    }
+
+    if (action === 'commit') {
+      let chart;
+      try { chart = typeof req.body.chart === 'string' ? JSON.parse(req.body.chart) : req.body.chart; }
+      catch { return res.status(400).json({ error: 'Invalid chart JSON' }); }
+
+      const replaceExisting = req.body.replaceExisting === 'true' || req.body.replaceExisting === true;
+      const result = await commitSeatingToGuests(weddingId, chart.tables, replaceExisting);
+      return res.json({ ok: true, ...result });
+    }
+
+    return res.status(400).json({ error: `Unknown action: ${action}` });
+  } catch (err) {
+    console.error('[SeatingImport] Error:', err.message);
+    res.status(500).json({ error: err.message || 'Failed to import seating chart' });
+  }
+});
 
 // Global error handler — ensures all unhandled Express errors return JSON, not HTML
 app.use((err, req, res, next) => {

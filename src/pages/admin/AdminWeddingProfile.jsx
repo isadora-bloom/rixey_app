@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import VendorChecklist from '../../components/VendorChecklist'
 import InspoGallery from '../../components/InspoGallery'
 import PlanningChecklist from '../../components/PlanningChecklist'
@@ -25,6 +26,7 @@ import SheetSyncPanel from '../../components/SheetSyncPanel'
 import StaffingCalculator from '../../components/StaffingCalculator'
 import BudgetTracker from '../../components/BudgetTracker'
 import GuestList from '../../components/GuestList'
+import SeatingImportDialog from '../../components/SeatingImportDialog'
 import TableCanvas from '../../components/TableCanvas'
 import UsageStats from '../../components/UsageStats'
 import DirectMessagesPanel from './DirectMessagesPanel'
@@ -125,6 +127,7 @@ export default function AdminWeddingProfile({
   setMainView,
   // Guest care (not used as prop, component is self-contained)
 }) {
+  const [guestListKey, setGuestListKey] = useState(0)
   const msgStats = getMessageStats()
   const profileMap = {}
   viewingWedding.profiles?.forEach(p => { profileMap[p.id] = p })
@@ -1380,7 +1383,18 @@ export default function AdminWeddingProfile({
               )}
 
               {activeTab === 'guests' && (
-                <GuestList weddingId={viewingWedding.id} userId={null} />
+                <div>
+                  <div className="flex justify-end mb-3">
+                    <SeatingImportDialog
+                      weddingId={viewingWedding.id}
+                      onComplete={() => {
+                        // Trigger GuestList refresh by remounting (key trick)
+                        setGuestListKey(k => k + 1);
+                      }}
+                    />
+                  </div>
+                  <GuestList key={guestListKey} weddingId={viewingWedding.id} userId={null} />
+                </div>
               )}
 
               {/* Borrow Brochure Tab */}
