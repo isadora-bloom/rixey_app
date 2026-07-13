@@ -568,6 +568,18 @@ export default function Admin() {
     setSaving(false)
   }
 
+  // Rename a wedding's workspace from the profile header. Reuses the links
+  // endpoint, which only touches project_name when it's sent.
+  const updateProjectName = async (weddingId, name) => {
+    const trimmed = (name || '').trim() || null
+    await apiFetch(`${API_URL}/api/weddings/${weddingId}/links`, {
+      method: 'PUT',
+      body: JSON.stringify({ project_name: trimmed })
+    })
+    setWeddings(prev => prev.map(w => w.id === weddingId ? { ...w, project_name: trimmed } : w))
+    setViewingWedding(prev => (prev && prev.id === weddingId ? { ...prev, project_name: trimmed } : prev))
+  }
+
   const toggleArchive = async (weddingId, currentArchived) => {
     const snapshot = weddings
     setWeddings(weddings.map(w =>
@@ -1000,6 +1012,7 @@ export default function Admin() {
     return (
       <AdminWeddingProfile
         viewingWedding={viewingWedding}
+        updateProjectName={updateProjectName}
         closeProfile={closeProfile}
         goBack={goBack}
         tabHistory={tabHistory}

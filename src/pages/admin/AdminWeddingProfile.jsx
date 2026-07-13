@@ -36,6 +36,7 @@ import { ESCALATION_KEYWORDS, getLastActivity, getCategoryIcon, getCategoryLabel
 
 export default function AdminWeddingProfile({
   viewingWedding,
+  updateProjectName,
   closeProfile,
   goBack,
   tabHistory,
@@ -128,6 +129,25 @@ export default function AdminWeddingProfile({
   // Guest care (not used as prop, component is self-contained)
 }) {
   const [guestListKey, setGuestListKey] = useState(0)
+  const [editingName, setEditingName] = useState(false)
+  const [nameDraft, setNameDraft] = useState('')
+  const [savingName, setSavingName] = useState(false)
+
+  const startEditName = () => {
+    setNameDraft(viewingWedding.project_name || viewingWedding.couple_names || '')
+    setEditingName(true)
+  }
+  const saveName = async () => {
+    setSavingName(true)
+    try {
+      await updateProjectName(viewingWedding.id, nameDraft)
+      setEditingName(false)
+    } catch {
+      // updateProjectName surfaces its own toast on failure
+    }
+    setSavingName(false)
+  }
+
   const msgStats = getMessageStats()
   const profileMap = {}
   viewingWedding.profiles?.forEach(p => { profileMap[p.id] = p })
@@ -186,9 +206,45 @@ export default function AdminWeddingProfile({
             )}
             <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="font-serif text-lg sm:text-2xl text-sage-700 leading-tight">
-                {viewingWedding.project_name || viewingWedding.couple_names || 'Wedding'} Profile
-              </h1>
+              {editingName ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    autoFocus
+                    value={nameDraft}
+                    onChange={(e) => setNameDraft(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') saveName(); if (e.key === 'Escape') setEditingName(false) }}
+                    placeholder="e.g. Joe & Joan"
+                    className="font-serif text-lg sm:text-2xl text-sage-700 leading-tight border-b-2 border-sage-300 bg-transparent focus:outline-none focus:border-sage-500 min-w-0 w-48 sm:w-64"
+                  />
+                  <button
+                    onClick={saveName}
+                    disabled={savingName}
+                    className="px-3 py-1 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
+                  >
+                    {savingName ? 'Saving…' : 'Save'}
+                  </button>
+                  <button
+                    onClick={() => setEditingName(false)}
+                    className="text-sage-500 hover:text-sage-700 text-sm"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <h1 className="font-serif text-lg sm:text-2xl text-sage-700 leading-tight flex items-center gap-2 group">
+                  {viewingWedding.project_name || viewingWedding.couple_names || 'Wedding'} Profile
+                  <button
+                    onClick={startEditName}
+                    className="text-sage-400 hover:text-sage-600 opacity-60 group-hover:opacity-100 transition"
+                    title="Rename this workspace"
+                  >
+                    <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                    </svg>
+                  </button>
+                </h1>
+              )}
               {/* Last Activity in header */}
               {(() => {
                 const lastActivity = getLastActivity(weddingMessages)
