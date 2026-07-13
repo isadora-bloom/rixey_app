@@ -8,6 +8,8 @@ export default function AdminWeddingList({
   couplePhotos,
   showArchived,
   setShowArchived,
+  listSearch,
+  setListSearch,
   sortBy,
   setSortBy,
   stats,
@@ -17,6 +19,8 @@ export default function AdminWeddingList({
   setHoneybook,
   googleSheets,
   setGoogleSheets,
+  projectName,
+  setProjectName,
   saving,
   saveLinks,
   startEditing,
@@ -221,7 +225,9 @@ export default function AdminWeddingList({
           <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-3 sm:p-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
               <h2 className="font-serif text-xl text-sage-700">
-                {showArchived ? 'Archived Weddings' : 'Active Weddings'}
+                {listSearch?.trim()
+                  ? 'Search Results'
+                  : showArchived ? 'Archived Weddings' : 'Active Weddings'}
               </h2>
               <div className="flex items-center gap-3 flex-wrap">
                 {!showArchived && (
@@ -253,10 +259,35 @@ export default function AdminWeddingList({
               </div>
             </div>
 
+            {/* Search — spans all weddings (including past & archived) by couple name or vendor */}
+            <div className="relative mb-4">
+              <svg className="w-4 h-4 text-sage-400 absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <input
+                type="text"
+                value={listSearch || ''}
+                onChange={(e) => setListSearch(e.target.value)}
+                placeholder="Search by couple name or vendor…"
+                className="w-full pl-9 pr-9 py-2 rounded-lg border border-cream-300 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
+              />
+              {listSearch?.trim() && (
+                <button
+                  onClick={() => setListSearch('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-sage-400 hover:text-sage-600"
+                  title="Clear search"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+
             <div className="space-y-3">
               {displayedWeddings.length === 0 ? (
                 <p className="text-sage-400 text-sm py-8 text-center">
-                  {showArchived ? 'No archived weddings' : 'No active weddings'}
+                  {listSearch?.trim()
+                    ? 'No weddings match your search'
+                    : showArchived ? 'No archived weddings' : 'No active weddings'}
                 </p>
               ) : (
                 displayedWeddings.map(wedding => {
@@ -285,7 +316,7 @@ export default function AdminWeddingList({
                             />
                           ) : (
                             <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-cream-100 flex items-center justify-center border-2 border-cream-200 flex-shrink-0">
-                              <span className="text-sage-400 text-lg sm:text-xl">{wedding.couple_names?.charAt(0) || '?'}</span>
+                              <span className="text-sage-400 text-lg sm:text-xl">{(wedding.project_name || wedding.couple_names)?.charAt(0) || '?'}</span>
                             </div>
                           )}
                           {/* Mobile-only view button */}
@@ -297,7 +328,7 @@ export default function AdminWeddingList({
                         {/* Info */}
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <h3 className="font-medium text-sage-800 text-sm sm:text-base">{wedding.couple_names || 'Unnamed'}</h3>
+                            <h3 className="font-medium text-sage-800 text-sm sm:text-base">{wedding.project_name || wedding.couple_names || 'Unnamed'}</h3>
                             {lastActivity ? (
                               <span className={`text-xs px-2 py-0.5 rounded ${
                                 lastActivity.status === 'recent' ? 'bg-green-100 text-green-700' :
@@ -311,7 +342,13 @@ export default function AdminWeddingList({
                             )}
                             {escalation?.hasEscalation && (
                               <span className="bg-red-100 text-red-600 text-xs px-2 py-0.5 rounded flex items-center gap-1">
-                                Needs attention
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); viewWeddingProfile(wedding, { focusUserId: escalation.messages?.[0]?.user_id }) }}
+                                  className="hover:underline"
+                                  title="Open the conversation that needs attention"
+                                >
+                                  Needs attention
+                                </button>
                                 <button onClick={(e) => { e.stopPropagation(); markEscalationHandled(wedding.id) }} className="ml-1 text-green-600 hover:text-green-800" title="Mark handled">✓</button>
                               </span>
                             )}
@@ -349,6 +386,11 @@ export default function AdminWeddingList({
                       {/* Edit Form */}
                       {editingWedding === wedding.id && (
                         <div className="bg-cream-50 rounded-lg p-4 mt-4 space-y-3">
+                          <div>
+                            <label className="block text-sm font-medium text-sage-600 mb-1">Project Name</label>
+                            <input type="text" value={projectName} onChange={(e) => setProjectName(e.target.value)} placeholder={wedding.couple_names || 'e.g. Joe & Joan'} className="w-full px-3 py-2 rounded-lg border border-cream-300 text-sm" />
+                            <p className="text-xs text-sage-400 mt-1">Shown as the workspace title in admin. Leave blank to use “{wedding.couple_names || 'the couple names'}”.</p>
+                          </div>
                           <div className="grid sm:grid-cols-2 gap-3">
                             <div>
                               <label className="block text-sm font-medium text-sage-600 mb-1">HoneyBook Link</label>

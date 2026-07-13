@@ -163,7 +163,7 @@ export default function AdminWeddingProfile({
             <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
             </svg>
-            <span className="text-sage-600 font-medium truncate">{viewingWedding.couple_names || 'Wedding'}</span>
+            <span className="text-sage-600 font-medium truncate">{viewingWedding.project_name || viewingWedding.couple_names || 'Wedding'}</span>
           </nav>
         </div>
         <div className="max-w-6xl mx-auto px-3 sm:px-4 py-3 sm:py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -180,14 +180,14 @@ export default function AdminWeddingProfile({
             ) : (
               <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-cream-100 flex items-center justify-center border-2 border-cream-200 flex-shrink-0">
                 <span className="text-sage-400 text-lg sm:text-xl">
-                  {viewingWedding.couple_names?.charAt(0) || '?'}
+                  {(viewingWedding.project_name || viewingWedding.couple_names)?.charAt(0) || '?'}
                 </span>
               </div>
             )}
             <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <h1 className="font-serif text-lg sm:text-2xl text-sage-700 leading-tight">
-                {viewingWedding.couple_names || 'Wedding'} Profile
+                {viewingWedding.project_name || viewingWedding.couple_names || 'Wedding'} Profile
               </h1>
               {/* Last Activity in header */}
               {(() => {
@@ -282,11 +282,20 @@ export default function AdminWeddingProfile({
               This client may be stressed or need extra support. Review their recent messages below.
             </p>
             {escalation.messages?.[0] && (
-              <p className="mt-2 text-sm text-red-700 bg-red-100 rounded-lg px-3 py-2 italic line-clamp-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const uid = escalation.messages[0].user_id
+                  if (uid) setSelectedChatUser(uid)
+                  setActiveTab('messages')
+                }}
+                className="mt-2 block w-full text-left text-sm text-red-700 bg-red-100 rounded-lg px-3 py-2 italic line-clamp-2 hover:bg-red-200 transition"
+                title="Open this person's conversation"
+              >
                 "{escalation.messages[0].content.length > 140
                   ? escalation.messages[0].content.slice(0, 140) + '\u2026'
                   : escalation.messages[0].content}"
-              </p>
+              </button>
             )}
           </div>
         )}

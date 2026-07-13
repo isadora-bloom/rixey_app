@@ -35,8 +35,10 @@ export default function Admin() {
   const [selectedChatUser, setSelectedChatUser] = useState(null)
   const [honeybook, setHoneybook] = useState('')
   const [googleSheets, setGoogleSheets] = useState('')
+  const [projectName, setProjectName] = useState('')
   const [saving, setSaving] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [listSearch, setListSearch] = useState('') // searches the admin wedding list by couple/vendor
   const [showArchived, setShowArchived] = useState(false)
   const [escalations, setEscalations] = useState({})
   const [planningNotes, setPlanningNotes] = useState([])
@@ -540,6 +542,7 @@ export default function Admin() {
     setEditingWedding(wedding.id)
     setHoneybook(wedding.honeybook_link || '')
     setGoogleSheets(wedding.google_sheets_link || '')
+    setProjectName(wedding.project_name || '')
   }
 
   const saveLinks = async () => {
@@ -549,12 +552,13 @@ export default function Admin() {
         method: 'PUT',
         body: JSON.stringify({
           honeybook_link: honeybook || null,
-          google_sheets_link: googleSheets || null
+          google_sheets_link: googleSheets || null,
+          project_name: projectName.trim() || null
         })
       })
       setWeddings(weddings.map(w =>
         w.id === editingWedding
-          ? { ...w, honeybook_link: honeybook || null, google_sheets_link: googleSheets || null }
+          ? { ...w, honeybook_link: honeybook || null, google_sheets_link: googleSheets || null, project_name: projectName.trim() || null }
           : w
       ))
       setEditingWedding(null)
@@ -603,13 +607,17 @@ export default function Admin() {
     }
   }
 
-  const viewWeddingProfile = async (wedding) => {
+  const viewWeddingProfile = async (wedding, opts = {}) => {
+    const { focusUserId } = opts
     setViewingWedding(wedding)
     setLoadingMessages(true)
     setSearchQuery('')
     setNotesSearchQuery('')
     setNotesHighlights('')
-    setActiveTabRaw('overview')
+    // When opened from a "needs attention" flag, land directly on that person's
+    // conversation; otherwise start on the overview tab.
+    setSelectedChatUser(focusUserId || null)
+    setActiveTabRaw(focusUserId ? 'messages' : 'overview')
     setTabHistory([])
 
     // PARALLELIZED: Load all wedding data concurrently with Promise.allSettled
@@ -916,11 +924,41 @@ export default function Admin() {
   const unreadCount = notifications.filter(n => !n.read).length
   const stats = getQuickStats()
 
-  // Filter and sort weddings for display
+  // Filter and sort weddings for display.
+  // Default view hides archived weddings and weddings whose date has already
+  // passed, to keep the front admin page focused on upcoming work. A non-empty
+  // search spans every wedding (archived + past included) so anything is still
+  // findable by couple name, project name, event code, member name, or vendor.
+  const startOfToday = new Date()
+  startOfToday.setHours(0, 0, 0, 0)
+  const listQuery = listSearch.trim().toLowerCase()
+
+  const isPastWedding = (w) => {
+    if (!w.wedding_date) return false
+    const d = new Date(w.wedding_date)
+    d.setHours(0, 0, 0, 0)
+    return d < startOfToday
+  }
+
+  const matchesListSearch = (w) => {
+    if (!listQuery) return true
+    const haystack = [
+      w.project_name,
+      w.couple_names,
+      w.event_code,
+      ...(w.profiles || []).map(p => p?.name),
+      ...(w.vendor_checklist || []).map(v => v?.vendor_name),
+      ...(w.vendor_checklist || []).map(v => v?.vendor_type),
+    ].filter(Boolean).join(' ').toLowerCase()
+    return haystack.includes(listQuery)
+  }
+
   const displayedWeddings = weddings
     .filter(w => {
+      if (listQuery) return matchesListSearch(w)
       if (showArchived) return w.archived
-      return !w.archived
+      if (w.archived) return false
+      return !isPastWedding(w)
     })
     .sort((a, b) => {
       if (sortBy === 'lastActivity') {
@@ -1041,6 +1079,123 @@ export default function Admin() {
       />
     )
   }
+
+  // Shared renderer for the "Sage needs help" question list — used both by the
+  // popup modal and the full-page Sage Help tab.
+  const renderUncertainList = () => (
+    uncertainQuestions.length === 0 ? (
+      <p className="text-sage-400 text-center py-8">No uncertain questions right now</p>
+    ) : (
+      <div className="space-y-4">
+        {uncertainQuestions.map(q => {
+          const wedding = weddings.find(w => w.id === q.wedding_id)
+          const isAnswering = answeringQuestion === q.id
+
+          return (
+            <div key={q.id} className={`rounded-xl p-4 border ${isAnswering ? 'border-amber-300 bg-amber-50' : 'border-cream-200 bg-cream-50'}`}>
+              <div className="flex items-start justify-between gap-2 mb-2">
+                <div className="flex-1">
+                  <p className="text-sage-800 font-medium">{q.question}</p>
+                  <p className="text-sage-400 text-sm mt-1">
+                    {wedding?.project_name || wedding?.couple_names || 'Unknown'} · {new Date(q.created_at).toLocaleDateString()}
+                    {q.confidence_level && (
+                      <span className="ml-2 text-amber-600">{q.confidence_level}% confident</span>
+                    )}
+                  </p>
+                </div>
+                <button
+                  onClick={() => deleteUncertainQuestion(q.id)}
+                  className="text-sage-400 hover:text-red-500 p-1"
+                  title="Delete question"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              {q.sage_response && (
+                <div className="bg-white rounded-lg p-3 mb-3 text-sm text-sage-600 border border-cream-200">
+                  <span className="font-medium">Sage said:</span> {q.sage_response.substring(0, 200)}...
+                </div>
+              )}
+
+              {isAnswering ? (
+                <div className="space-y-3 mt-3 pt-3 border-t border-cream-200">
+                  <textarea
+                    value={adminAnswer}
+                    onChange={(e) => setAdminAnswer(e.target.value)}
+                    placeholder="Your answer..."
+                    rows={3}
+                    className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
+                  />
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id={`kb-${q.id}`}
+                      checked={addToKb}
+                      onChange={(e) => setAddToKb(e.target.checked)}
+                      className="rounded border-cream-300"
+                    />
+                    <label htmlFor={`kb-${q.id}`} className="text-sm text-sage-600">
+                      Add to Knowledge Base
+                    </label>
+                  </div>
+
+                  {addToKb && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        type="text"
+                        value={kbCategory}
+                        onChange={(e) => setKbCategory(e.target.value)}
+                        placeholder="Category (e.g., venue)"
+                        className="px-3 py-2 border border-cream-300 rounded-lg text-sm"
+                      />
+                      <input
+                        type="text"
+                        value={kbSubcategory}
+                        onChange={(e) => setKbSubcategory(e.target.value)}
+                        placeholder="Subcategory (optional)"
+                        className="px-3 py-2 border border-cream-300 rounded-lg text-sm"
+                      />
+                    </div>
+                  )}
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => submitAnswer(q.id)}
+                      disabled={submittingAnswer || !adminAnswer.trim()}
+                      className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
+                    >
+                      {submittingAnswer ? 'Saving...' : 'Save Answer'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setAnsweringQuestion(null)
+                        setAdminAnswer('')
+                        setAddToKb(false)
+                      }}
+                      className="px-4 py-2 text-sage-500 text-sm hover:text-sage-700"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setAnsweringQuestion(q.id)}
+                  className="mt-2 text-sm text-sage-600 hover:text-sage-800 font-medium"
+                >
+                  Answer this question →
+                </button>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    )
+  )
 
   // Main Admin View
   return (
@@ -1238,6 +1393,19 @@ export default function Admin() {
           <AdminInbox weddings={weddings} onUnreadChange={setUnreadMessages} />
         )}
 
+        {/* Sage Help View -- every question Sage needs answering, in one place */}
+        {mainView === 'sage-help' && (
+          <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
+            <div className="mb-5">
+              <h2 className="font-serif text-xl text-sage-700">Sage Needs Help</h2>
+              <p className="text-sage-400 text-sm mt-1">
+                Questions Sage was uncertain about or deferred to the team. Answer them here and optionally add the answer to Sage's Knowledge Base so it can respond next time.
+              </p>
+            </div>
+            {renderUncertainList()}
+          </div>
+        )}
+
         {/* Recommended Vendors View */}
         {mainView === 'vendors' && (
           <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
@@ -1255,6 +1423,8 @@ export default function Admin() {
             couplePhotos={couplePhotos}
             showArchived={showArchived}
             setShowArchived={setShowArchived}
+            listSearch={listSearch}
+            setListSearch={setListSearch}
             sortBy={sortBy}
             setSortBy={setSortBy}
             stats={stats}
@@ -1264,6 +1434,8 @@ export default function Admin() {
             setHoneybook={setHoneybook}
             googleSheets={googleSheets}
             setGoogleSheets={setGoogleSheets}
+            projectName={projectName}
+            setProjectName={setProjectName}
             saving={saving}
             saveLinks={saveLinks}
             startEditing={startEditing}
@@ -1320,118 +1492,7 @@ export default function Admin() {
               </div>
 
               <div className="flex-1 overflow-y-auto p-4">
-                {uncertainQuestions.length === 0 ? (
-                  <p className="text-sage-400 text-center py-8">No uncertain questions right now</p>
-                ) : (
-                  <div className="space-y-4">
-                    {uncertainQuestions.map(q => {
-                      const wedding = weddings.find(w => w.id === q.wedding_id)
-                      const isAnswering = answeringQuestion === q.id
-
-                      return (
-                        <div key={q.id} className={`rounded-xl p-4 border ${isAnswering ? 'border-amber-300 bg-amber-50' : 'border-cream-200 bg-cream-50'}`}>
-                          <div className="flex items-start justify-between gap-2 mb-2">
-                            <div className="flex-1">
-                              <p className="text-sage-800 font-medium">{q.question}</p>
-                              <p className="text-sage-400 text-sm mt-1">
-                                {wedding?.couple_names || 'Unknown'} · {new Date(q.created_at).toLocaleDateString()}
-                                {q.confidence_level && (
-                                  <span className="ml-2 text-amber-600">{q.confidence_level}% confident</span>
-                                )}
-                              </p>
-                            </div>
-                            <button
-                              onClick={() => deleteUncertainQuestion(q.id)}
-                              className="text-sage-400 hover:text-red-500 p-1"
-                              title="Delete question"
-                            >
-                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                              </svg>
-                            </button>
-                          </div>
-
-                          {q.sage_response && (
-                            <div className="bg-white rounded-lg p-3 mb-3 text-sm text-sage-600 border border-cream-200">
-                              <span className="font-medium">Sage said:</span> {q.sage_response.substring(0, 200)}...
-                            </div>
-                          )}
-
-                          {isAnswering ? (
-                            <div className="space-y-3 mt-3 pt-3 border-t border-cream-200">
-                              <textarea
-                                value={adminAnswer}
-                                onChange={(e) => setAdminAnswer(e.target.value)}
-                                placeholder="Your answer..."
-                                rows={3}
-                                className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
-                              />
-
-                              <div className="flex items-center gap-2">
-                                <input
-                                  type="checkbox"
-                                  id={`modal-kb-${q.id}`}
-                                  checked={addToKb}
-                                  onChange={(e) => setAddToKb(e.target.checked)}
-                                  className="rounded border-cream-300"
-                                />
-                                <label htmlFor={`modal-kb-${q.id}`} className="text-sm text-sage-600">
-                                  Add to Knowledge Base
-                                </label>
-                              </div>
-
-                              {addToKb && (
-                                <div className="grid grid-cols-2 gap-2">
-                                  <input
-                                    type="text"
-                                    value={kbCategory}
-                                    onChange={(e) => setKbCategory(e.target.value)}
-                                    placeholder="Category (e.g., venue)"
-                                    className="px-3 py-2 border border-cream-300 rounded-lg text-sm"
-                                  />
-                                  <input
-                                    type="text"
-                                    value={kbSubcategory}
-                                    onChange={(e) => setKbSubcategory(e.target.value)}
-                                    placeholder="Subcategory (optional)"
-                                    className="px-3 py-2 border border-cream-300 rounded-lg text-sm"
-                                  />
-                                </div>
-                              )}
-
-                              <div className="flex gap-2">
-                                <button
-                                  onClick={() => submitAnswer(q.id)}
-                                  disabled={submittingAnswer || !adminAnswer.trim()}
-                                  className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
-                                >
-                                  {submittingAnswer ? 'Saving...' : 'Save Answer'}
-                                </button>
-                                <button
-                                  onClick={() => {
-                                    setAnsweringQuestion(null)
-                                    setAdminAnswer('')
-                                    setAddToKb(false)
-                                  }}
-                                  className="px-4 py-2 text-sage-500 text-sm hover:text-sage-700"
-                                >
-                                  Cancel
-                                </button>
-                              </div>
-                            </div>
-                          ) : (
-                            <button
-                              onClick={() => setAnsweringQuestion(q.id)}
-                              className="mt-2 text-sm text-sage-600 hover:text-sage-800 font-medium"
-                            >
-                              Answer this question →
-                            </button>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
+                {renderUncertainList()}
               </div>
             </div>
           </div>

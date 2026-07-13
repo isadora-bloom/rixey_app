@@ -5777,7 +5777,8 @@ app.get('/api/admin/weddings', async (req, res) => {
   try {
     const { data: weddings, error } = await supabaseAdmin
       .from('weddings')
-      .select('*, profiles(*)')
+      // vendor_checklist embedded so the admin list can be searched by vendor
+      .select('*, profiles(*), vendor_checklist(vendor_name, vendor_type)')
       .order('wedding_date', { ascending: true });
 
     if (error) throw error;
@@ -5944,11 +5945,16 @@ app.get('/api/couple-photos/all', async (req, res) => {
 app.put('/api/weddings/:weddingId/links', async (req, res) => {
   try {
     const { weddingId } = req.params;
-    const { honeybook_link, google_sheets_link } = req.body;
+    const { honeybook_link, google_sheets_link, project_name } = req.body;
+
+    const updates = { honeybook_link, google_sheets_link };
+    // Only touch project_name when the client sends it, so link-only saves
+    // don't wipe a name that's already set.
+    if (project_name !== undefined) updates.project_name = project_name;
 
     const { data, error } = await supabaseAdmin
       .from('weddings')
-      .update({ honeybook_link, google_sheets_link })
+      .update(updates)
       .eq('id', weddingId)
       .select()
       .single();

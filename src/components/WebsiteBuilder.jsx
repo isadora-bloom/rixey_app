@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { QRCodeCanvas } from 'qrcode.react'
 import { API_URL } from '../config/api'
 import { authHeaders, apiFetch } from '../utils/api'
 import { Input } from './ui'
@@ -99,7 +100,9 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
   const [settings, setSettings] = useState(null)
   const [loading, setLoading]   = useState(true)
   const [copied, setCopied]     = useState(false)
+  const [showQr, setShowQr]     = useState(false)
   const hasLoadedRef = useRef(false)
+  const qrRef = useRef(null)
 
   // RSVP analytics
   const [rsvpCounts, setRsvpCounts] = useState({ total: 0, yes: 0, no: 0, pending: 0 })
@@ -312,6 +315,16 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
     navigator.clipboard.writeText(siteUrl)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
+  }
+
+  // Download the QR code as a PNG the couple can drop onto printed invites.
+  const downloadQr = () => {
+    const canvas = qrRef.current?.querySelector('canvas')
+    if (!canvas) return
+    const link = document.createElement('a')
+    link.download = `${slug || 'wedding'}-website-qr.png`
+    link.href = canvas.toDataURL('image/png')
+    link.click()
   }
 
   if (loading) return <p className="text-sage-400 text-center py-8">Loading website settings…</p>
@@ -579,6 +592,15 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
                     {copied ? 'Copied!' : 'Copy link'}
                   </button>
                 )}
+                {published && (
+                  <button
+                    type="button"
+                    onClick={() => setShowQr(v => !v)}
+                    className="px-3 py-1.5 bg-white border border-green-300 text-green-700 rounded-lg text-xs hover:bg-green-50"
+                  >
+                    {showQr ? 'Hide QR code' : 'QR code'}
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => { setPublished(!published); setTimeout(() => flushSave(), 0) }}
@@ -593,6 +615,23 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
                 </button>
               </div>
             </div>
+            {published && showQr && (
+              <div className="mt-3 pt-3 border-t border-green-200 flex flex-col items-center text-center">
+                <div ref={qrRef} className="bg-white p-3 rounded-xl border border-green-200">
+                  <QRCodeCanvas value={siteUrl} size={200} level="M" includeMargin />
+                </div>
+                <p className="text-xs text-sage-500 mt-2 max-w-xs">
+                  Point a phone camera here to open your website. Download it to add to your invitations or signage.
+                </p>
+                <button
+                  type="button"
+                  onClick={downloadQr}
+                  className="mt-2 px-3 py-1.5 bg-green-600 text-white rounded-lg text-xs hover:bg-green-700"
+                >
+                  Download QR code (PNG)
+                </button>
+              </div>
+            )}
             {published && (
               <div className="mt-3 pt-3 border-t border-green-200">
                 <button

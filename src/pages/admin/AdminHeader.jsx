@@ -61,6 +61,7 @@ export default function AdminHeader({
             >
               <option value="weddings">Weddings {stats.active > 0 ? `(${stats.active})` : ''}</option>
               <option value="messages">Messages {unreadMessages > 0 ? `(${unreadMessages} unread)` : ''}</option>
+              <option value="sage-help">Sage Help {unansweredCount > 0 ? `(${unansweredCount})` : ''}</option>
               <option value="vendors">Vendors</option>
               <option value="meetings">Meetings</option>
               <option value="borrow-catalog">Borrow Catalog</option>
@@ -76,6 +77,7 @@ export default function AdminHeader({
           {[
             { id: 'weddings', label: 'Weddings', count: stats.active },
             { id: 'messages', label: 'Messages', count: unreadMessages, alert: unreadMessages > 0 },
+            { id: 'sage-help', label: 'Sage Help', count: unansweredCount, alert: unansweredCount > 0 },
             { id: 'vendors', label: 'Vendors' },
             { id: 'meetings', label: 'Meetings' },
             { id: 'borrow-catalog', label: 'Borrow Catalog' },
