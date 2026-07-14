@@ -228,6 +228,11 @@ export default function StaffingCalculator({ guestCount: initialGuestCount, wedd
       title: 'Staffing Guide',
       content: (
         <div className="space-y-4">
+          <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
+            <p className="text-blue-800 text-sm">
+              <strong>Note:</strong> Newer contracts include staffing as part of the package. If yours does, this section doesn't apply to you — check with your coordinator if you're unsure.
+            </p>
+          </div>
           <p className="text-sage-600">
             This guide will help you understand approximately how many Rixey staff members you may need for your wedding weekend.
           </p>
