@@ -470,6 +470,17 @@ export default function Admin() {
       setNotifications([])
     }
 
+    // Auto-archive weddings whose date has passed before loading, so the active
+    // list stays current. Best-effort: if it fails we still load what's there.
+    try {
+      await fetch(`${API_URL}/api/admin/weddings/archive-past`, {
+        method: 'POST',
+        headers: await authHeaders()
+      })
+    } catch (err) {
+      console.error('Auto-archive past weddings failed:', err)
+    }
+
     // Load weddings with profiles via server endpoint (bypasses RLS)
     let weddingsData = []
     try {
@@ -585,6 +596,7 @@ export default function Admin() {
     setWeddings(weddings.map(w =>
       w.id === weddingId ? { ...w, archived: !currentArchived } : w
     ))
+    setViewingWedding(prev => (prev && prev.id === weddingId ? { ...prev, archived: !currentArchived } : prev))
     try {
       await apiFetch(`${API_URL}/api/weddings/${weddingId}/archive`, {
         method: 'PUT',
@@ -592,6 +604,7 @@ export default function Admin() {
       })
     } catch (err) {
       setWeddings(snapshot)
+      setViewingWedding(prev => (prev && prev.id === weddingId ? { ...prev, archived: currentArchived } : prev))
       toastError(`Could not ${currentArchived ? 'unarchive' : 'archive'} wedding: ${err.message}`)
     }
   }
@@ -936,21 +949,11 @@ export default function Admin() {
   const unreadCount = notifications.filter(n => !n.read).length
   const stats = getQuickStats()
 
-  // Filter and sort weddings for display.
-  // Default view hides archived weddings and weddings whose date has already
-  // passed, to keep the front admin page focused on upcoming work. A non-empty
-  // search spans every wedding (archived + past included) so anything is still
-  // findable by couple name, project name, event code, member name, or vendor.
-  const startOfToday = new Date()
-  startOfToday.setHours(0, 0, 0, 0)
+  // Filter and sort weddings for display. Past-date weddings are auto-archived
+  // on load, so the active view simply hides archived weddings. A non-empty
+  // search spans every wedding (archived included) so anything is still findable
+  // by couple name, project name, event code, member name, or vendor.
   const listQuery = listSearch.trim().toLowerCase()
-
-  const isPastWedding = (w) => {
-    if (!w.wedding_date) return false
-    const d = new Date(w.wedding_date)
-    d.setHours(0, 0, 0, 0)
-    return d < startOfToday
-  }
 
   const matchesListSearch = (w) => {
     if (!listQuery) return true
@@ -969,8 +972,7 @@ export default function Admin() {
     .filter(w => {
       if (listQuery) return matchesListSearch(w)
       if (showArchived) return w.archived
-      if (w.archived) return false
-      return !isPastWedding(w)
+      return !w.archived
     })
     .sort((a, b) => {
       if (sortBy === 'lastActivity') {
@@ -1013,6 +1015,7 @@ export default function Admin() {
       <AdminWeddingProfile
         viewingWedding={viewingWedding}
         updateProjectName={updateProjectName}
+        toggleArchive={toggleArchive}
         closeProfile={closeProfile}
         goBack={goBack}
         tabHistory={tabHistory}

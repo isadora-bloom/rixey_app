@@ -37,6 +37,7 @@ import { ESCALATION_KEYWORDS, getLastActivity, getCategoryIcon, getCategoryLabel
 export default function AdminWeddingProfile({
   viewingWedding,
   updateProjectName,
+  toggleArchive,
   closeProfile,
   goBack,
   tabHistory,
@@ -301,6 +302,16 @@ export default function AdminWeddingProfile({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
               </svg>
               Print
+            </button>
+            <button
+              onClick={() => toggleArchive(viewingWedding.id, viewingWedding.archived)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cream-100 hover:bg-cream-200 text-sage-600 text-sm font-medium transition"
+              title={viewingWedding.archived ? 'Move this wedding back to the active list' : 'Archive this wedding (stays searchable)'}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+              </svg>
+              {viewingWedding.archived ? 'Unarchive' : 'Archive'}
             </button>
             <button
               onClick={goBack}

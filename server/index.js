@@ -5990,6 +5990,31 @@ app.put('/api/weddings/:weddingId/archive', async (req, res) => {
   }
 });
 
+// Auto-archive weddings whose date has already passed, so the active admin
+// list only shows current/upcoming work. Archived weddings stay searchable and
+// can be unarchived. Weddings with no date are left alone.
+app.post('/api/admin/weddings/archive-past', async (req, res) => {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayStr = today.toISOString().slice(0, 10); // YYYY-MM-DD
+
+    const { data, error } = await supabaseAdmin
+      .from('weddings')
+      .update({ archived: true })
+      .lt('wedding_date', todayStr)
+      .or('archived.is.null,archived.eq.false')
+      .select('id');
+
+    if (error) throw error;
+
+    res.json({ count: (data || []).length, weddingIds: (data || []).map(w => w.id) });
+  } catch (error) {
+    console.error('Archive past weddings error:', error);
+    res.status(500).json({ error: 'Failed to archive past weddings' });
+  }
+});
+
 // Mark escalation as handled (bypasses RLS)
 app.put('/api/weddings/:weddingId/escalation', async (req, res) => {
   try {
