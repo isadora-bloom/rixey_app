@@ -215,13 +215,13 @@ const supabaseAdmin = createClient(
 
 // Token costs (approximate, as of 2024)
 const TOKEN_COSTS = {
-  'claude-sonnet-4-6': { input: 0.003, output: 0.015 }, // per 1K tokens
+  [MODEL_SONNET]: { input: 0.003, output: 0.015 }, // per 1K tokens
   'claude-sonnet': { input: 0.003, output: 0.015 },
   'default': { input: 0.003, output: 0.015 }
 };
 
 // Log API usage
-async function logUsage(weddingId, userId, endpoint, response, model = 'claude-sonnet-4-6') {
+async function logUsage(weddingId, userId, endpoint, response, model = MODEL_SONNET) {
   try {
     const inputTokens = response?.usage?.input_tokens || 0;
     const outputTokens = response?.usage?.output_tokens || 0;
@@ -920,7 +920,7 @@ async function extractPlanningNotesAI(text, weddingId, source, sourceType = 'mes
 
   try {
     const response = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: MODEL_HAIKU,
       max_tokens: isTranscript ? 3000 : 800,
       messages: [{
         role: 'user',
@@ -1490,12 +1490,12 @@ app.post('/api/chat', async (req, res) => {
 
     let response;
     try {
-      response = await anthropic.messages.create({ model: 'claude-sonnet-4-6', ...sageCallParams });
+      response = await anthropic.messages.create({ model: MODEL_SONNET, ...sageCallParams });
     } catch (sonnetErr) {
       const isOverloaded = sonnetErr.status === 529 || sonnetErr.status === 503 || sonnetErr.status === 429;
       if (!isOverloaded) throw sonnetErr;
       console.log(`Sonnet overloaded (${sonnetErr.status}), falling back to Haiku for Sage`);
-      response = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', ...sageCallParams });
+      response = await anthropic.messages.create({ model: MODEL_HAIKU, ...sageCallParams });
     }
 
     let assistantMessage = response.content[0].text;
@@ -1705,7 +1705,7 @@ Mention that:
 Keep it warm but not over-the-top. 3-4 sentences max. End with an open question.`;
 
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
+      model: MODEL_SONNET,
       max_tokens: 300,
       temperature: 0.7,
       system: SAGE_SYSTEM_PROMPT,
@@ -1746,7 +1746,7 @@ app.post('/api/extract-contract', upload.single('contract'), async (req, res) =>
     let extractedFullText = '';
     try {
       const textExtractionResponse = await anthropic.messages.create({
-        model: 'claude-sonnet-4-6',
+        model: MODEL_SONNET,
         max_tokens: 8000,
         messages: [{
           role: 'user',
@@ -1818,7 +1818,7 @@ Return ONLY a valid JSON array, no other text. Example:
     if (isPdf) {
       // Use Claude's document feature for PDFs
       response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-6',
+        model: MODEL_SONNET,
         max_tokens: 2000,
         messages: [{
           role: 'user',
@@ -1841,7 +1841,7 @@ Return ONLY a valid JSON array, no other text. Example:
     } else {
       // Use Claude's vision for images
       response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-6',
+        model: MODEL_SONNET,
         max_tokens: 2000,
         messages: [{
           role: 'user',
@@ -1925,7 +1925,7 @@ app.post('/api/sage-preview', async (req, res) => {
     const knowledge = await getRelevantKnowledge(message);
 
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
+      model: MODEL_SONNET,
       max_tokens: 600,
       system: `${SAGE_SYSTEM_PROMPT}\n\nADDITIONAL RIXEY MANOR KNOWLEDGE BASE:\n\n${knowledge}\n\n---\n\nNOTE: You're chatting with a prospective couple on the Rixey Manor preview page. They haven't created their account yet, so the in-app tabs and the "stay inside the portal" rule above DO NOT apply here — there is no portal for them yet. For prospects, you CAN link to rixeymanor.com pages (availability, packages, pricing calculator, finance101, book a tour, venue galleries) when it's helpful, since the public marketing site is the only thing they have access to. Keep replies concise and welcoming. If they ask about their specific wedding details, gently note they'll have a personalised portal once they sign up.`,
       messages: [
@@ -1963,7 +1963,7 @@ app.post('/api/chat-with-file', upload.single('file'), async (req, res) => {
     let response;
     if (isPdf) {
       response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-6',
+        model: MODEL_SONNET,
         max_tokens: 1500,
         system: SAGE_SYSTEM_PROMPT,
         messages: [{
@@ -1979,7 +1979,7 @@ app.post('/api/chat-with-file', upload.single('file'), async (req, res) => {
       });
     } else {
       response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-6',
+        model: MODEL_SONNET,
         max_tokens: 1500,
         system: SAGE_SYSTEM_PROMPT,
         messages: [{
@@ -2009,7 +2009,7 @@ app.post('/api/chat-with-file', upload.single('file'), async (req, res) => {
         // Determine if this is an inspo image or a contract/document
         let fileType = 'unknown';
         const classifyResponse = await anthropic.messages.create({
-          model: 'claude-sonnet-4-6',
+          model: MODEL_SONNET,
           max_tokens: 100,
           messages: [{
             role: 'user',
@@ -2048,7 +2048,7 @@ app.post('/api/chat-with-file', upload.single('file'), async (req, res) => {
               if (signedUrlData) {
                 // Get a caption for the image
                 const captionResponse = await anthropic.messages.create({
-                  model: 'claude-sonnet-4-6',
+                  model: MODEL_SONNET,
                   max_tokens: 50,
                   messages: [{
                     role: 'user',
@@ -2075,7 +2075,7 @@ app.post('/api/chat-with-file', upload.single('file'), async (req, res) => {
         if (fileType === 'contract' || isDocument) {
           // Extract full text for storage
           const textResponse = await anthropic.messages.create({
-            model: 'claude-sonnet-4-6',
+            model: MODEL_SONNET,
             max_tokens: 8000,
             messages: [{
               role: 'user',
@@ -2099,7 +2099,7 @@ app.post('/api/chat-with-file', upload.single('file'), async (req, res) => {
 
           // Try to identify vendor type and add to vendor checklist if new
           const vendorTypeResponse = await anthropic.messages.create({
-            model: 'claude-sonnet-4-6',
+            model: MODEL_SONNET,
             max_tokens: 100,
             messages: [{
               role: 'user',
@@ -2158,7 +2158,7 @@ Focus on: vendor names, contact info, costs, dates, deadlines, special requireme
 Return ONLY a valid JSON array like: [{"category": "vendor", "content": "Caterer: ABC Catering"}]`;
 
           const notesResponse = await anthropic.messages.create({
-            model: 'claude-sonnet-4-6',
+            model: MODEL_SONNET,
             max_tokens: 2000,
             messages: [{
               role: 'user',
@@ -2399,7 +2399,7 @@ app.post('/api/ask-contracts', async (req, res) => {
 
     // Ask Claude
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
+      model: MODEL_SONNET,
       max_tokens: 1000,
       messages: [{
         role: 'user',
@@ -4062,7 +4062,7 @@ app.post('/api/vendors/:id/contract', upload.single('contract'), async (req, res
 
         // Extract full text and save to contracts table
         const textResponse = await anthropic.messages.create({
-          model: 'claude-sonnet-4-6',
+          model: MODEL_SONNET,
           max_tokens: 8000,
           messages: [{
             role: 'user',
@@ -4092,7 +4092,7 @@ Focus on: vendor name, contact info (phone/email), costs, payment schedules, dat
 Return ONLY a valid JSON array like: [{"category": "vendor", "content": "Photographer: Jane Smith"}]`;
 
         const notesResponse = await anthropic.messages.create({
-          model: 'claude-sonnet-4-6',
+          model: MODEL_SONNET,
           max_tokens: 2000,
           messages: [{
             role: 'user',
@@ -4245,7 +4245,7 @@ app.post('/api/inspo', upload.single('image'), async (req, res) => {
     if (!caption) {
       try {
         const captionResponse = await anthropic.messages.create({
-          model: 'claude-sonnet-4-6',
+          model: MODEL_SONNET,
           max_tokens: 50,
           messages: [{
             role: 'user',
@@ -4281,7 +4281,7 @@ app.post('/api/inspo', upload.single('image'), async (req, res) => {
     (async () => {
       try {
         const notesResponse = await anthropic.messages.create({
-          model: 'claude-sonnet-4-6',
+          model: MODEL_SONNET,
           max_tokens: 500,
           messages: [{
             role: 'user',
@@ -7696,7 +7696,7 @@ app.post('/api/bar-recipes/extract-url', async (req, res) => {
       .slice(0, 20000); // take much more — recipe content is rarely at the very start
 
     const message = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: MODEL_HAIKU,
       max_tokens: 800,
       messages: [{
         role: 'user',
@@ -7726,7 +7726,7 @@ app.post('/api/bar-recipes/extract-upload', upload.single('file'), async (req, r
     const mediaType = isPdf ? 'application/pdf' : file.mimetype;
 
     const message = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: MODEL_HAIKU,
       max_tokens: 800,
       messages: [{
         role: 'user',
