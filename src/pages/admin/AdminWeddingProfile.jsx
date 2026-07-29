@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { formatDateOnly } from '../../utils/dates'
 import VendorChecklist from '../../components/VendorChecklist'
 import InspoGallery from '../../components/InspoGallery'
 import PlanningChecklist from '../../components/PlanningChecklist'
@@ -273,9 +274,7 @@ export default function AdminWeddingProfile({
             </div>
             <p className="text-sage-400 text-sm">
               {viewingWedding.wedding_date
-                ? new Date(viewingWedding.wedding_date).toLocaleDateString('en-US', {
-                    month: 'long', day: 'numeric', year: 'numeric'
-                  })
+                ? formatDateOnly(viewingWedding.wedding_date, { month: 'long', day: 'numeric', year: 'numeric' })
                 : 'No date set'
               } · Code: {viewingWedding.event_code}
             </p>

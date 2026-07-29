@@ -22,6 +22,11 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
     workedHereBefore: null,
     instagram: '',
   })
+  // The type dropdown is fixed to the venue's own list, so a couple with a
+  // vendor that isn't on it had no way through the form at all. Ashley
+  // Hermsmeyer, April 2026: "it is not letting me add another vendor. What do i
+  // do?" This lets them name their own.
+  const [customVendorType, setCustomVendorType] = useState('')
   const [saving, setSaving] = useState(false)
   const [uploadingContract, setUploadingContract] = useState(null)
   const fileInputRef = useRef(null)
@@ -50,6 +55,11 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
     e.preventDefault()
     if (!formData.vendorType) return
 
+    const vendorType = formData.vendorType === '__custom__'
+      ? customVendorType.trim()
+      : formData.vendorType
+    if (!vendorType) return
+
     setSaving(true)
     try {
       const data = await apiFetch(`${API_URL}/api/vendors`, {
@@ -57,7 +67,8 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
         body: JSON.stringify({
           id: editingId,
           weddingId,
-          ...formData
+          ...formData,
+          vendorType
         })
       })
 
@@ -77,8 +88,12 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
   }
 
   const handleEdit = (vendor) => {
+    // A vendor added under a custom type isn't in the dropdown, so put the
+    // select into custom mode rather than showing a blank type.
+    const isKnownType = vendorTypes.includes(vendor.vendor_type)
+    setCustomVendorType(isKnownType ? '' : (vendor.vendor_type || ''))
     setFormData({
-      vendorType: vendor.vendor_type,
+      vendorType: isKnownType ? vendor.vendor_type : '__custom__',
       vendorName: vendor.vendor_name || '',
       vendorContact: vendor.vendor_contact || '',
       notes: vendor.notes || '',
@@ -154,6 +169,7 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
       workedHereBefore: null,
       instagram: '',
     })
+    setCustomVendorType('')
     setEditingId(null)
     setShowAddForm(false)
   }
@@ -198,7 +214,19 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
                 {vendorTypes.map(type => (
                   <option key={type} value={type}>{type}</option>
                 ))}
+                <option value="__custom__">Something else…</option>
               </select>
+              {formData.vendorType === '__custom__' && (
+                <input
+                  type="text"
+                  value={customVendorType}
+                  onChange={(e) => setCustomVendorType(e.target.value)}
+                  placeholder="e.g. Bakery, Tent rental, Calligrapher"
+                  className="w-full mt-2 px-3 py-2 rounded-lg border border-cream-300 text-sm"
+                  required
+                  autoFocus
+                />
+              )}
             </div>
             <div>
               <label className="block text-xs font-medium text-sage-600 mb-1">Vendor Name</label>

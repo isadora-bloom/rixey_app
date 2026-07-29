@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
 import { apiFetch, authHeaders } from '../utils/api'
 import { useToast } from './ui/Toast'
+import { formatDateOnly } from '../utils/dates'
 
 
 export default function AdminInbox({ weddings = [], onUnreadChange }) {
@@ -187,7 +188,7 @@ export default function AdminInbox({ weddings = [], onUnreadChange }) {
                     <p className="font-medium text-sage-700">{wedding.couple_names}</p>
                     <p className="text-sage-400 text-xs">
                       {wedding.wedding_date
-                        ? new Date(wedding.wedding_date).toLocaleDateString()
+                        ? formatDateOnly(wedding.wedding_date)
                         : 'No date set'}
                     </p>
                   </button>
@@ -263,9 +264,7 @@ export default function AdminInbox({ weddings = [], onUnreadChange }) {
             <p className="font-medium text-sage-700">{selectedWedding.couple_names}</p>
             <p className="text-sage-400 text-xs">
               {selectedWedding.wedding_date
-                ? new Date(selectedWedding.wedding_date).toLocaleDateString('en-US', {
-                    month: 'long', day: 'numeric', year: 'numeric'
-                  })
+                ? formatDateOnly(selectedWedding.wedding_date, { month: 'long', day: 'numeric', year: 'numeric' })
                 : 'Wedding date not set'}
             </p>
           </div>

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
 import { authHeaders, apiFetch } from '../utils/api'
 import { useToast } from './ui/Toast'
+import { shrinkImageForUpload } from '../utils/image'
 
 
 // ── Tag definitions ────────────────────────────────────────────────────────────
@@ -295,7 +296,8 @@ export default function PhotoBucket({ weddingId, readOnly = false }) {
     for (const file of Array.from(files)) {
       try {
         const formData = new FormData()
-        formData.append('photo', file)
+        // wedding-photos bucket caps at 10MB.
+        formData.append('photo', await shrinkImageForUpload(file, { maxBytes: 9.5 * 1024 * 1024 }))
         formData.append('tags', JSON.stringify([]))
         const photo = await apiFetch(`${API_URL}/api/wedding-photos/${weddingId}/upload`, {
           method: 'POST',

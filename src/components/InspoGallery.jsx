@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
 import { authHeaders, apiFetch } from '../utils/api'
 import { useToast } from './ui/Toast'
+import { shrinkImageForUpload } from '../utils/image'
 
 const CATEGORIES = ['All', 'Flowers', 'Decor', 'Table Settings', 'Cake & Dessert', 'Ceremony', 'Reception', 'Attire', 'Other']
 
@@ -43,8 +44,10 @@ export default function InspoGallery({ weddingId, userId, isAdmin = false }) {
     }
 
     setUploading(true)
+    // inspo-gallery bucket caps at 5MB — shrink before sending.
+    const upload = await shrinkImageForUpload(file)
     const formData = new FormData()
-    formData.append('image', file)
+    formData.append('image', upload)
     formData.append('weddingId', weddingId)
     formData.append('category', uploadCategory)
     if (userId) formData.append('uploadedBy', userId)

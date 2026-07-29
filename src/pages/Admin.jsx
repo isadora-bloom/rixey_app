@@ -14,6 +14,7 @@ import ManorDownloads from '../components/ManorDownloads'
 import { API_URL } from '../config/api'
 import { apiFetch, authHeaders } from '../utils/api'
 import { useToast } from '../components/ui/Toast'
+import { parseDateOnly } from '../utils/dates'
 
 // Extracted sub-components
 import AdminHeader from './admin/AdminHeader'
@@ -23,7 +24,7 @@ import { detectEscalation } from './admin/adminUtils'
 
 export default function Admin() {
   const navigate = useNavigate()
-  const { error: toastError } = useToast()
+  const { error: toastError, success: toastSuccess } = useToast()
   const [notifications, setNotifications] = useState([])
   const [weddings, setWeddings] = useState([])
   const [allMessages, setAllMessages] = useState({}) // Messages by wedding ID
@@ -94,6 +95,12 @@ export default function Admin() {
   const [kbCategory, setKbCategory] = useState('')
   const [kbSubcategory, setKbSubcategory] = useState('')
   const [submittingAnswer, setSubmittingAnswer] = useState(false)
+  // Alerting the couple after we've corrected Sage. Sage tells them the team
+  // will follow up, so something has to actually follow up.
+  const [alertingQuestion, setAlertingQuestion] = useState(null)
+  const [clientMessage, setClientMessage] = useState('')
+  const [draftingMessage, setDraftingMessage] = useState(false)
+  const [sendingAlert, setSendingAlert] = useState(false)
   const [couplePhotos, setCouplePhotos] = useState({}) // weddingId -> photo URL
   const [enlargedPhoto, setEnlargedPhoto] = useState(null) // URL for enlarged photo modal
   const [mainView, setMainView] = useState('weddings') // 'weddings', 'knowledge-base', 'usage', 'meetings', 'messages', 'vendors'
@@ -430,9 +437,15 @@ export default function Admin() {
         })
       })
       if (data.success) {
-        // Remove from list or update
-        setUncertainQuestions(prev => prev.filter(q => q.id !== questionId))
+        // Don't drop the question off the list yet. Sage told this couple the
+        // team would come back to them, so the answer isn't finished until
+        // they've been told. Move straight to the send step, pre-filled.
+        setUncertainQuestions(prev => prev.map(q =>
+          q.id === questionId ? { ...q, ...(data.question || {}), admin_answer: adminAnswer } : q
+        ))
         setAnsweringQuestion(null)
+        setAlertingQuestion(questionId)
+        setClientMessage(adminAnswer)
         setAdminAnswer('')
         setAddToKb(false)
         setKbCategory('')
@@ -442,6 +455,51 @@ export default function Admin() {
       toastError(`Could not submit answer: ${err.message}`)
     }
     setSubmittingAnswer(false)
+  }
+
+  const draftClientMessage = async (questionId, answer) => {
+    setDraftingMessage(true)
+    try {
+      const data = await apiFetch(`${API_URL}/api/uncertain-questions/${questionId}/draft-client-message`, {
+        method: 'POST',
+        body: JSON.stringify({ answer })
+      })
+      if (data.draft) setClientMessage(data.draft)
+    } catch (err) {
+      toastError(`Could not draft the message: ${err.message}`)
+    }
+    setDraftingMessage(false)
+  }
+
+  const sendClientAlert = async (questionId) => {
+    if (!clientMessage.trim()) return
+    setSendingAlert(true)
+    try {
+      const data = await apiFetch(`${API_URL}/api/uncertain-questions/${questionId}/alert-client`, {
+        method: 'POST',
+        body: JSON.stringify({ message: clientMessage })
+      })
+      if (data.success) {
+        setUncertainQuestions(prev => prev.filter(q => q.id !== questionId))
+        setAlertingQuestion(null)
+        setClientMessage('')
+        toastSuccess(data.couple
+          ? `Sent to ${data.couple} — it's in their Inbox`
+          : "Sent — it's in their Inbox")
+        if (data.recorded === false) {
+          toastError('Sent, but it could not be recorded against the question. Migration 009 may not be applied yet.')
+        }
+      }
+    } catch (err) {
+      toastError(`Could not send to the client: ${err.message}`)
+    }
+    setSendingAlert(false)
+  }
+
+  const skipClientAlert = (questionId) => {
+    setUncertainQuestions(prev => prev.filter(q => q.id !== questionId))
+    setAlertingQuestion(null)
+    setClientMessage('')
   }
 
   const deleteUncertainQuestion = async (questionId) => {
@@ -932,7 +990,7 @@ export default function Admin() {
     thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30)
     const upcoming = activeWeddings.filter(w => {
       if (!w.wedding_date) return false
-      const weddingDate = new Date(w.wedding_date)
+      const weddingDate = parseDateOnly(w.wedding_date)
       return weddingDate > new Date() && weddingDate < thirtyDaysFromNow
     })
 
@@ -942,6 +1000,10 @@ export default function Admin() {
       archived: archivedWeddings.length,
       activeThisWeek: activeThisWeek.length,
       needsAttention: needsAttention.length,
+      // The couples behind the number. A bare count tells you something is
+      // wrong without telling you who, which means opening every profile to
+      // find out.
+      needsAttentionList: needsAttention,
       upcoming: upcoming.length
     }
   }
@@ -996,7 +1058,7 @@ export default function Admin() {
         if (!a.wedding_date && !b.wedding_date) return 0
         if (!a.wedding_date) return 1
         if (!b.wedding_date) return -1
-        return new Date(a.wedding_date) - new Date(b.wedding_date)
+        return parseDateOnly(a.wedding_date) - parseDateOnly(b.wedding_date)
       }
       return 0
     })
@@ -1106,9 +1168,10 @@ export default function Admin() {
         {uncertainQuestions.map(q => {
           const wedding = weddings.find(w => w.id === q.wedding_id)
           const isAnswering = answeringQuestion === q.id
+          const isAlerting = alertingQuestion === q.id
 
           return (
-            <div key={q.id} className={`rounded-xl p-4 border ${isAnswering ? 'border-amber-300 bg-amber-50' : 'border-cream-200 bg-cream-50'}`}>
+            <div key={q.id} className={`rounded-xl p-4 border ${isAnswering || isAlerting ? 'border-amber-300 bg-amber-50' : 'border-cream-200 bg-cream-50'}`}>
               <div className="flex items-start justify-between gap-2 mb-2">
                 <div className="flex-1">
                   <p className="text-sage-800 font-medium">{q.question}</p>
@@ -1184,7 +1247,7 @@ export default function Admin() {
                       disabled={submittingAnswer || !adminAnswer.trim()}
                       className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
                     >
-                      {submittingAnswer ? 'Saving...' : 'Save Answer'}
+                      {submittingAnswer ? 'Saving...' : 'Save answer, then alert client'}
                     </button>
                     <button
                       onClick={() => {
@@ -1198,13 +1261,76 @@ export default function Admin() {
                     </button>
                   </div>
                 </div>
+              ) : isAlerting ? (
+                <div className="space-y-3 mt-3 pt-3 border-t border-cream-200">
+                  <div>
+                    <p className="text-sm font-medium text-sage-700">
+                      Send the answer to {wedding?.couple_names || 'the couple'}
+                    </p>
+                    <p className="text-xs text-sage-400 mt-0.5">
+                      Sage told them the team would follow up. This goes to their Inbox as a message from Rixey Manor.
+                    </p>
+                  </div>
+
+                  <textarea
+                    value={clientMessage}
+                    onChange={(e) => setClientMessage(e.target.value)}
+                    placeholder="What the couple will read..."
+                    rows={5}
+                    className="w-full px-3 py-2 border border-cream-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
+                  />
+
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={() => sendClientAlert(q.id)}
+                      disabled={sendingAlert || draftingMessage || !clientMessage.trim()}
+                      className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50"
+                    >
+                      {sendingAlert ? 'Sending...' : 'Send to their Inbox'}
+                    </button>
+                    <button
+                      onClick={() => draftClientMessage(q.id, clientMessage || q.admin_answer)}
+                      disabled={draftingMessage || sendingAlert}
+                      className="px-4 py-2 border border-cream-300 text-sage-600 rounded-lg text-sm hover:bg-cream-100 disabled:opacity-50"
+                      title="Rewrite the answer as a message to the couple"
+                    >
+                      {draftingMessage ? 'Drafting...' : 'Reword for the couple'}
+                    </button>
+                    <button
+                      onClick={() => skipClientAlert(q.id)}
+                      disabled={sendingAlert}
+                      className="px-4 py-2 text-sage-500 text-sm hover:text-sage-700"
+                      title="Answer is filed, but don't message the couple"
+                    >
+                      Don't send
+                    </button>
+                  </div>
+                </div>
               ) : (
-                <button
-                  onClick={() => setAnsweringQuestion(q.id)}
-                  className="mt-2 text-sm text-sage-600 hover:text-sage-800 font-medium"
-                >
-                  Answer this question →
-                </button>
+                <div className="mt-2 flex flex-wrap items-center gap-4">
+                  <button
+                    onClick={() => setAnsweringQuestion(q.id)}
+                    className="text-sm text-sage-600 hover:text-sage-800 font-medium"
+                  >
+                    {q.admin_answer ? 'Edit answer →' : 'Answer this question →'}
+                  </button>
+                  {q.admin_answer && !q.client_notified_at && (
+                    <button
+                      onClick={() => {
+                        setAlertingQuestion(q.id)
+                        setClientMessage(q.admin_answer)
+                      }}
+                      className="text-sm text-amber-700 hover:text-amber-900 font-medium"
+                    >
+                      Alert client →
+                    </button>
+                  )}
+                  {q.client_notified_at && (
+                    <span className="text-xs text-sage-400">
+                      Answer sent {new Date(q.client_notified_at).toLocaleDateString()}
+                    </span>
+                  )}
+                </div>
               )}
             </div>
           )
@@ -1246,19 +1372,53 @@ export default function Admin() {
             <span className="text-xl font-bold text-amber-600">{stats.upcoming}</span>
             <span className="text-sage-500 text-sm">Next 30 Days</span>
           </div>
-          {stats.needsAttention > 0 && (
-            <div className="flex items-center gap-2 bg-red-50 rounded-lg px-4 py-2 border border-red-200">
-              <span className="text-xl font-bold text-red-600">{stats.needsAttention}</span>
-              <span className="text-red-600 text-sm">Needs Attention</span>
-            </div>
-          )}
           {uncertainQuestions.length > 0 && (
-            <div className="flex items-center gap-2 bg-amber-50 rounded-lg px-4 py-2 border border-amber-200">
+            <button
+              onClick={() => setShowUncertainModal(true)}
+              className="flex items-center gap-2 bg-amber-50 rounded-lg px-4 py-2 border border-amber-200 hover:bg-amber-100 transition-colors"
+              title="Open the questions Sage could not answer confidently"
+            >
               <span className="text-xl font-bold text-amber-600">{uncertainQuestions.length}</span>
               <span className="text-amber-600 text-sm">Sage Needs Help</span>
-            </div>
+            </button>
           )}
         </div>
+
+        {/* Who needs attention, by name. A count on its own means opening every
+            profile to find out which couple it refers to. */}
+        {stats.needsAttention > 0 && (
+          <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 mb-6">
+            <p className="text-red-700 text-sm font-medium mb-2">
+              {stats.needsAttention === 1 ? '1 client needs attention' : `${stats.needsAttention} clients need attention`}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {(stats.needsAttentionList || []).map(w => {
+                const escalation = escalations[w.id]
+                const firstMessage = escalation?.messages?.[0]
+                return (
+                  <button
+                    key={w.id}
+                    onClick={() => viewWeddingProfile(w, { focusUserId: firstMessage?.user_id })}
+                    className="text-left bg-white border border-red-200 rounded-lg px-3 py-2 hover:border-red-400 hover:shadow-sm transition-all"
+                    title={firstMessage?.content
+                      ? `Open the conversation: "${String(firstMessage.content).slice(0, 120)}"`
+                      : 'Open this profile'}
+                  >
+                    <span className="block text-sm font-medium text-red-700">
+                      {w.project_name || w.couple_names || 'Unnamed wedding'}
+                    </span>
+                    <span className="block text-xs text-red-400">
+                      {w.wedding_date
+                        ? new Date(w.wedding_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                        : 'No date set'}
+                      {escalation?.count ? ` · ${escalation.count} flagged message${escalation.count === 1 ? '' : 's'}` : ''}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Rixey Picks Admin */}
         {mainView === 'picks' && (

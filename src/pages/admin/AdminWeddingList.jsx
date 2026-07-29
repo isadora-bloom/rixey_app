@@ -1,4 +1,5 @@
 import { getLastActivity } from './adminUtils'
+import { formatDateOnly } from '../../utils/dates'
 
 export default function AdminWeddingList({
   weddings,
@@ -106,7 +107,7 @@ export default function AdminWeddingList({
                   <div className="flex-1 min-w-0">
                     <span className="text-sm font-medium text-sage-800">{w.couple_names}</span>
                     <span className="text-sm text-sage-500"> signed up</span>
-                    {w.wedding_date && <span className="text-xs text-sage-400 ml-2">· {new Date(w.wedding_date).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}</span>}
+                    {w.wedding_date && <span className="text-xs text-sage-400 ml-2">· {formatDateOnly(w.wedding_date, 'short')}</span>}
                   </div>
                   <span className="text-xs text-sage-300 flex-shrink-0">{new Date(w.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</span>
                 </div>
@@ -354,7 +355,7 @@ export default function AdminWeddingList({
                             )}
                           </div>
                           <p className="text-sage-500 text-xs sm:text-sm">
-                            {wedding.wedding_date ? new Date(wedding.wedding_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'No date set'}
+                            {wedding.wedding_date ? formatDateOnly(wedding.wedding_date) : 'No date set'}
                             <span className="mx-1 sm:mx-2 text-sage-300">·</span>
                             <span className="font-mono text-xs">{wedding.event_code}</span>
                           </p>

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { apiFetch } from '../utils/api'
 import { Button, Input } from './ui'
 import { useToast } from './ui/Toast'
 
@@ -234,12 +234,12 @@ export default function ShuttleSchedule({ weddingId, userId }) {
 
   async function fetchRuns() {
     try {
-      const res = await fetch(`${API_URL}/api/shuttle/${weddingId}`, { headers: await authHeaders() });
-      const data = await res.json();
+      const data = await apiFetch(`${API_URL}/api/shuttle/${weddingId}`);
       setRuns(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('Failed to load shuttle runs:', err);
       setRuns([]);
+      toastError(`Could not load your shuttle schedule: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -250,10 +250,16 @@ export default function ShuttleSchedule({ weddingId, userId }) {
     setFormData((prev) => ({ ...prev, [name]: value }));
   }
 
-  async function addRun(data) {
+  // sortOrder is passed explicitly when generating a batch, because the runs
+  // are created in a loop and each one needs to keep its place in the sequence.
+  async function addRun(data, sortOrder) {
     return await apiFetch(`${API_URL}/api/shuttle`, {
       method: 'POST',
-      body: JSON.stringify({ wedding_id: weddingId, ...data }),
+      body: JSON.stringify({
+        wedding_id: weddingId,
+        sort_order: sortOrder ?? runs.length,
+        ...data,
+      }),
     });
   }
 
@@ -283,17 +289,20 @@ export default function ShuttleSchedule({ weddingId, userId }) {
   async function handleGenerateRuns(runDataArray) {
     const newRuns = [];
     let failures = 0;
-    for (const data of runDataArray) {
+    let lastError = '';
+    const base = runs.length;
+    for (let i = 0; i < runDataArray.length; i++) {
       try {
-        const run = await addRun(data);
+        const run = await addRun(runDataArray[i], base + i);
         newRuns.push(run);
       } catch (err) {
         failures++;
+        lastError = err.message;
       }
     }
     setRuns((prev) => [...prev, ...newRuns]);
     if (failures > 0) {
-      toastError(`Could not generate ${failures} of ${runDataArray.length} shuttle runs`);
+      toastError(`Could not generate ${failures} of ${runDataArray.length} shuttle runs: ${lastError}`);
     }
   }
 

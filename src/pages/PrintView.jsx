@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { API_URL } from '../config/api'
 import { authHeaders } from '../utils/api'
+import { formatDateOnly } from '../utils/dates'
 
 
 // All timeline event definitions (mirrored from TimelineBuilder for rendering)
@@ -52,8 +53,9 @@ const ALL_TIMELINE_EVENTS = {
 }
 
 function formatDate(dateStr) {
-  if (!dateStr) return ''
-  return new Date(dateStr).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+  // wedding_date is a DATE column, so it must be parsed as local midnight or
+  // the printed day-of paperwork shows the day before the wedding.
+  return formatDateOnly(dateStr, 'long')
 }
 
 // Accepts "HH:MM", "HH:MM:SS", or "h:MM AM/PM" and returns "h:MM AM/PM"

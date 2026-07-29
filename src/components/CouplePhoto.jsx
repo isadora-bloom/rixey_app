@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
 import { authHeaders, apiFetch } from '../utils/api'
 import { useToast } from './ui/Toast'
+import { shrinkImageForUpload } from '../utils/image'
 
 
 export default function CouplePhoto({ weddingId, userId, compact = false }) {
@@ -30,8 +31,11 @@ export default function CouplePhoto({ weddingId, userId, compact = false }) {
 
   const handleUpload = async (file) => {
     setUploading(true)
+    // The couple-photos bucket caps at 5MB and a phone photo is routinely more
+    // than that. Shrink it here rather than letting Storage reject it.
+    const upload = await shrinkImageForUpload(file)
     const formData = new FormData()
-    formData.append('photo', file)
+    formData.append('photo', upload)
     formData.append('weddingId', weddingId)
     if (userId) formData.append('uploadedBy', userId)
 

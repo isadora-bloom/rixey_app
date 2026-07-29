@@ -1,20 +1,21 @@
+// Must come first: middleware/auth.js reads process.env at module load, and
+// imports are evaluated before any statement in this file. See env.js.
+import './env.js';
 import express from 'express';
 import cors from 'cors';
 import Anthropic from '@anthropic-ai/sdk';
 import { createClient } from '@supabase/supabase-js';
-import dotenv from 'dotenv';
 import multer from 'multer';
 import { google } from 'googleapis';
 import rateLimit from 'express-rate-limit';
 import { requireAuth, requireAdmin } from './middleware/auth.js';
 import { validateBody } from './middleware/validate.js';
+import { coerceBody } from './middleware/coerce.js';
 import { fetchAllTabs, SheetFetchError } from './lib/sheet-fetcher.js';
 import { buildDiff, applyChoices } from './lib/sheet-diff/index.js';
 import cron from 'node-cron';
 import * as XLSX from 'xlsx';
 // PDF parsing removed - using Claude vision for all documents
-
-dotenv.config();
 
 // Configure multer for file uploads
 const upload = multer({
@@ -80,6 +81,9 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 app.use(express.json());
+// Blank form fields arrive as "" and Postgres rejects that for every non-text
+// column. Turn those into null before any handler sees them. See coerce.js.
+app.use(coerceBody);
 
 // ============ RATE LIMITING ============
 
@@ -282,7 +286,30 @@ async function logActivity(weddingId, userId, activityType, details = '') {
 
 // ============ EMAIL SETUP ============
 
+// Which notifications are worth interrupting someone for.
+//
+// Everything used to email info@ the moment it happened, so the inbox filled
+// with "a couple uploaded a photo" and the things that actually needed a person
+// were buried in it. Now only these two send straight away. The rest waits for
+// the daily memo.
+//
+// escalation  — a couple sounds distressed or has asked for a human
+// new_message — a couple has written to the team and is waiting on a reply
+const URGENT_ADMIN_NOTIFICATIONS = new Set(['escalation', 'new_message', 'help_request']);
+
+/**
+ * Subject line for anything going to the venue's own inbox.
+ *
+ * Every portal email is tagged so it can be spotted, filtered and searched at a
+ * glance. Urgent ones say so, in the subject, where they will be seen on a
+ * phone lock screen.
+ */
+function portalSubject(subject, { urgent = false } = {}) {
+  return urgent ? `[PORTAL URGENT] ${subject}` : `[PORTAL] ${subject}`;
+}
+
 // Core Gmail send — builds RFC 2822 message and uses the already-connected Gmail OAuth client
+// `subject` is used verbatim; callers going to info@ should wrap it in portalSubject().
 async function sendViaGmail(to, subject, html) {
   if (!to) return false;
   try {
@@ -294,7 +321,7 @@ async function sendViaGmail(to, subject, html) {
     const fromName = process.env.EMAIL_FROM_NAME || 'Rixey Manor';
     const raw = [
       `To: ${to}`,
-      `Subject: FROM PORTAL — ${subject}`,
+      `Subject: ${subject}`,
       'MIME-Version: 1.0',
       'Content-Type: text/html; charset=utf-8',
       `X-Mailer: Rixey Portal (${fromName})`,
@@ -375,11 +402,22 @@ async function createNotification(weddingId, recipientType, type, title, body, e
       return;
     }
 
-    if (emailTo && notif) {
-      const sent = await sendNotificationEmail(emailTo, title, body || title, recipientType);
+    // Couples always get their email. For the venue's own inbox, only the
+    // urgent types send immediately — everything else is carried by the 8am
+    // memo, so routine portal activity stops arriving one email at a time.
+    const isUrgent = URGENT_ADMIN_NOTIFICATIONS.has(type);
+    const shouldEmailNow = recipientType === 'client' || isUrgent;
+
+    if (emailTo && notif && shouldEmailNow) {
+      const subject = recipientType === 'client'
+        ? title
+        : portalSubject(title, { urgent: isUrgent });
+      const sent = await sendNotificationEmail(emailTo, subject, body || title, recipientType);
       if (sent) {
         await supabaseAdmin.from('notifications').update({ email_sent: true }).eq('id', notif.id);
       }
+    } else if (emailTo && notif) {
+      console.log(`[Notifications] "${type}" held for the daily memo rather than emailed`);
     }
   } catch (err) {
     console.error('[Notifications] Error:', err.message);
@@ -906,58 +944,97 @@ CATEGORIES TO USE:
 - follow_up: explicit action items or things the venue should proactively address
 `;
 
+// A long planning meeting cleans down to well over 30k characters, and the
+// interesting parts are rarely at the front. Rather than truncate, split into
+// overlapping windows and extract from each. Overlap stops a decision that
+// straddles a boundary from being lost.
+const TRANSCRIPT_WINDOW = 24000;
+const TRANSCRIPT_OVERLAP = 1500;
+
+function chunkForExtraction(text, size = TRANSCRIPT_WINDOW, overlap = TRANSCRIPT_OVERLAP) {
+  if (text.length <= size) return [text];
+  const chunks = [];
+  let start = 0;
+  while (start < text.length) {
+    chunks.push(text.slice(start, start + size));
+    if (start + size >= text.length) break;
+    start += size - overlap;
+  }
+  return chunks;
+}
+
 // Unified AI-powered planning note extractor — used for all sources
 async function extractPlanningNotesAI(text, weddingId, source, sourceType = 'message') {
   const cleanText = sourceType === 'transcript' ? parseVttToText(text) : text;
   if (!cleanText || cleanText.length < 20) return [];
 
   const isTranscript = sourceType === 'transcript' || sourceType === 'email';
-  const maxLen = isTranscript ? 30000 : 2000;
+
+  // Short messages stay on Haiku — they are one or two sentences and there are
+  // a lot of them. Meetings and emails get Sonnet, because that is where the
+  // coordinator-grade reading actually pays for itself.
+  const model = isTranscript ? MODEL_SONNET : MODEL_HAIKU;
+  const chunks = isTranscript ? chunkForExtraction(cleanText) : [cleanText.substring(0, 2000)];
 
   const instruction = isTranscript
     ? `Read this ${sourceType} as a thoughtful wedding coordinator would. Extract every logistics decision AND every emotional signal — stress, grief, family tension, financial worry, what this day means to them. This may be the only written record of the conversation, so be thorough.`
     : `Read this message as a thoughtful wedding coordinator. Capture any logistics decisions AND any emotional signals — worry, stress, something personally significant, or anything that suggests they need extra care.`;
 
-  try {
-    const response = await anthropic.messages.create({
-      model: MODEL_HAIKU,
-      max_tokens: isTranscript ? 3000 : 800,
-      messages: [{
-        role: 'user',
-        content: `${RIXEY_EXTRACTION_CONTEXT}
+  const collected = [];
 
-${instruction}
+  for (let i = 0; i < chunks.length; i++) {
+    const partLabel = chunks.length > 1 ? ` (part ${i + 1} of ${chunks.length})` : '';
+    try {
+      const response = await anthropic.messages.create({
+        model,
+        max_tokens: isTranscript ? 4000 : 800,
+        messages: [{
+          role: 'user',
+          content: `${RIXEY_EXTRACTION_CONTEXT}
+
+${instruction}${chunks.length > 1 ? `\n\nThis is part ${i + 1} of ${chunks.length} of a longer conversation. Extract only what is in this part; the other parts are handled separately. The start and end may cut mid-sentence — ignore fragments you cannot understand.` : ''}
 
 Return a JSON array. Each item: {"category": "<category>", "content": "<concise coordinator note>"}
 Write notes the way a caring, experienced coordinator would jot them — specific and human (e.g. "Bride is stressed about her mom and future MIL being in the same room — both have strong personalities", not just "family tension").
+Capture the specifics that make a note usable later: names, numbers, dates, quantities, who said it, and what was actually agreed versus merely floated.
 Allergies and emotional signals are the highest priority — never skip these.
 If nothing noteworthy was said, return [].
 Return ONLY the JSON array.
 
 ${sourceType === 'transcript' ? 'Transcript' : sourceType === 'email' ? 'Email' : 'Message'}:
-${cleanText.substring(0, maxLen)}`
-      }]
-    });
+${chunks[i]}`
+        }]
+      });
 
-    const text2 = response.content[0].text.trim();
-    const jsonMatch = text2.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) return [];
+      const raw = response.content[0].text.trim();
+      const jsonMatch = raw.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) continue;
 
-    const items = JSON.parse(jsonMatch[0]);
-    return items
-      .filter(item => item.category && item.content && item.content.length > 5)
-      .map(item => ({
-        wedding_id: weddingId,
-        user_id: null,
-        category: item.category,
-        content: item.content.trim(),
-        source_message: source || `Extracted from ${sourceType}`,
-        status: 'pending'
-      }));
-  } catch (err) {
-    console.error(`AI extraction error (${sourceType}):`, err.message);
-    return [];
+      const items = JSON.parse(jsonMatch[0]);
+      collected.push(...items.filter(item => item.category && item.content && item.content.length > 5));
+    } catch (err) {
+      console.error(`AI extraction error (${sourceType}${partLabel}):`, err.message);
+    }
   }
+
+  // Overlapping windows mean the same point can come back twice, worded almost
+  // identically. Drop near-duplicates before they reach the notes list.
+  const seen = new Set();
+  return collected
+    .filter(item => {
+      const key = `${item.category}|${item.content.toLowerCase().replace(/[^a-z0-9 ]/g, '').slice(0, 80)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map(item => ({
+      wedding_id: weddingId,
+      user_id: null,
+      category: item.category,
+      content: item.content.trim(),
+      source_message: source || `Extracted from ${sourceType}`,
+      status: 'pending'
+    }));
 }
 
 // Legacy alias used by chat endpoint (short user messages)
@@ -972,15 +1049,45 @@ async function savePlanningNotes(notes) {
   if (notes.length === 0) return;
 
   try {
+    // Second line of defence against re-imports. Source-level dedup (the
+    // processed_* tables) is the first, but when that broke silently for Zoom
+    // every sync wrote the same notes again and nothing noticed. An identical
+    // note for the same wedding is never new information, so drop it here too.
+    const weddingIds = [...new Set(notes.map(n => n.wedding_id).filter(Boolean))];
+    const existing = new Set();
+
+    if (weddingIds.length) {
+      const { data: prior } = await supabaseAdmin
+        .from('planning_notes')
+        .select('wedding_id, category, content')
+        .in('wedding_id', weddingIds);
+
+      for (const p of (prior || [])) {
+        existing.add(`${p.wedding_id}|${p.category}|${p.content}`);
+      }
+    }
+
+    const fresh = [];
+    for (const note of notes) {
+      const key = `${note.wedding_id}|${note.category}|${note.content}`;
+      if (existing.has(key)) continue;
+      existing.add(key);   // also catches duplicates within this same batch
+      fresh.push(note);
+    }
+
+    const dropped = notes.length - fresh.length;
+    if (dropped > 0) console.log(`Skipped ${dropped} duplicate planning note(s)`);
+    if (fresh.length === 0) return;
+
     // Use supabaseAdmin to bypass RLS
     const { error } = await supabaseAdmin
       .from('planning_notes')
-      .insert(notes);
+      .insert(fresh);
 
     if (error) {
       console.error('Error saving planning notes:', error);
     } else {
-      console.log(`Saved ${notes.length} planning note(s)`);
+      console.log(`Saved ${fresh.length} planning note(s)`);
     }
   } catch (err) {
     console.error('Error saving planning notes:', err);
@@ -2227,17 +2334,48 @@ app.get('/api/contracts/:weddingId', async (req, res) => {
   }
 });
 
-// Ask questions about contracts AND planning notes
-app.post('/api/ask-contracts', async (req, res) => {
-  try {
-    const { weddingId, question } = req.body;
+// Strips the markup out of an ingested email so the model reads the words
+// rather than a stylesheet. Ingested emails arrive as full HTML, styles and all.
+function stripEmailMarkup(text) {
+  if (!text) return '';
+  return String(text)
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/@media[^{]*\{[\s\S]*?\}\s*\}/gi, ' ')
+    .replace(/@font-face\s*\{[\s\S]*?\}/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&#\d+;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
-    if (!weddingId || !question) {
-      return res.status(400).json({ error: 'Wedding ID and question required' });
-    }
+// Notes that describe the venue talking to itself rather than the couple
+// planning a wedding. Rixey's own daily digest to info@ was being ingested and
+// then summarised back at the coordinator, which is pure noise in a briefing.
+const NOISE_NOTE_PATTERNS = [
+  /here'?s your daily summary for rixey manor/i,
+  /^\[sms from rixey\]\s*(thanks for texting|thank you for calling)/i,
+  /pending drafts:\s*\d+/i,
+];
 
-    // Fetch all wedding data in parallel
-    const [
+function isNoiseNote(note) {
+  const content = String(note.content || '');
+  if (content.trim().length < 12) return true;
+  return NOISE_NOTE_PATTERNS.some(p => p.test(content));
+}
+
+/**
+ * Everything known about one wedding, formatted for a model.
+ *
+ * Shared by the admin Q&A endpoint and the highlights briefing so the two can
+ * never drift apart. Highlights used to see planning notes and contract
+ * filenames only, with no date, guest count, allergies or vendor status, which
+ * is most of why its output read as thin.
+ */
+async function buildWeddingContext(weddingId, { noteLimit = 400 } = {}) {
+  const [
       { data: contracts },
       { data: planningNotes },
       { data: weddingDetails },
@@ -2256,9 +2394,12 @@ app.post('/api/ask-contracts', async (req, res) => {
       { data: borrowSelections },
       { data: guestCareRows },
       { data: internalNotes },
+      { data: wedding },
+      { count: guestCount },
+      { count: rsvpYesCount },
     ] = await Promise.all([
       supabaseAdmin.from('contracts').select('filename, extracted_text').eq('wedding_id', weddingId),
-      supabaseAdmin.from('planning_notes').select('category, content, source_message').eq('wedding_id', weddingId),
+      supabaseAdmin.from('planning_notes').select('category, content, source_message, created_at').eq('wedding_id', weddingId).order('created_at', { ascending: false }),
       supabaseAdmin.from('wedding_details').select('*').eq('wedding_id', weddingId).maybeSingle(),
       supabaseAdmin.from('allergy_registry').select('*').eq('wedding_id', weddingId).order('sort_order'),
       supabaseAdmin.from('bedroom_assignments').select('*').eq('wedding_id', weddingId).order('sort_order'),
@@ -2275,16 +2416,59 @@ app.post('/api/ask-contracts', async (req, res) => {
       supabaseAdmin.from('wedding_borrow_selections').select('item_name, category, quantity, notes').eq('wedding_id', weddingId),
       supabaseAdmin.from('wedding_guest_care').select('guest_name, note_type, notes').eq('wedding_id', weddingId),
       supabaseAdmin.from('wedding_internal_notes').select('content, category, created_at').eq('wedding_id', weddingId).order('created_at', { ascending: false }).limit(20),
+      supabaseAdmin.from('weddings').select('*').eq('id', weddingId).maybeSingle(),
+      supabaseAdmin.from('wedding_guests').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId),
+      supabaseAdmin.from('wedding_guests').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).eq('rsvp', 'yes'),
     ]);
 
     // Build comprehensive context
     let fullContext = '';
 
+    // Who and when, first, because everything else is judged against the date.
+    if (wedding) {
+      const days = wedding.wedding_date
+        ? Math.ceil((new Date(wedding.wedding_date + 'T00:00:00') - new Date()) / 86400000)
+        : null;
+      const when = wedding.wedding_date
+        ? `${wedding.wedding_date}${days === null ? '' : days < 0 ? ` (${Math.abs(days)} days ago)` : ` (${days} days away)`}`
+        : 'no date set';
+      fullContext += `WEDDING: ${wedding.couple_names || wedding.project_name || 'Unnamed'} — ${when}\n`;
+      // Planned guest count lives in the staffing calculator answers, not on the
+      // wedding row. It drives bar quantities, tables and staffing, so it is the
+      // single most useful number to have in front of you.
+      const plannedGuests = staffingRow?.answers?.guestCount;
+      if (plannedGuests) fullContext += `Planned guest count: ${plannedGuests}\n`;
+      if (guestCount) fullContext += `Guest list: ${guestCount} entered, ${rsvpYesCount || 0} RSVP'd yes\n`;
+      if (wedding.plated_meal) fullContext += `Service style: plated meal\n`;
+      if (wedding.archived) fullContext += `Status: archived\n`;
+      fullContext += '\n';
+    }
+
     if (contracts?.length) {
       fullContext += `CONTRACTS:\n${contracts.map(c => `--- ${c.filename} ---\n${c.extracted_text}`).join('\n\n')}\n\n`;
     }
     if (planningNotes?.length) {
-      fullContext += `PLANNING NOTES:\n${planningNotes.map(n => `[${n.category.toUpperCase()}] ${n.content}`).join('\n')}\n\n`;
+      // Clean before showing: strip email markup, drop venue boilerplate, drop
+      // repeats, newest first, capped. Raw, this is where the signal drowned.
+      const seenNotes = new Set();
+      const usableNotes = [];
+      for (const n of planningNotes) {
+        if (isNoiseNote(n)) continue;
+        const body = /^\[Email/i.test(n.content) ? stripEmailMarkup(n.content) : String(n.content).trim();
+        if (body.length < 12) continue;
+        const key = `${n.category}|${body.slice(0, 120).toLowerCase()}`;
+        if (seenNotes.has(key)) continue;
+        seenNotes.add(key);
+        usableNotes.push(`[${n.category.toUpperCase()}] ${body}`);
+        if (usableNotes.length >= noteLimit) break;
+      }
+      const droppedNotes = planningNotes.length - usableNotes.length;
+      if (usableNotes.length) {
+        fullContext += `PLANNING NOTES (newest first, ${usableNotes.length} of ${planningNotes.length} after removing boilerplate and repeats):\n${usableNotes.join('\n')}\n\n`;
+      }
+      if (droppedNotes > 0) {
+        console.log(`Wedding ${weddingId}: filtered ${droppedNotes} noise/duplicate note(s) out of context`);
+      }
     }
     if (vendors?.length) {
       fullContext += `VENDORS:\n${vendors.map(v => `- ${v.vendor_type}: ${v.vendor_name || 'TBD'}${v.is_booked ? ' (booked)' : ''}${v.vendor_contact ? ` — ${v.vendor_contact}` : ''}${v.notes ? ` — ${v.notes}` : ''}`).join('\n')}\n\n`;
@@ -2391,7 +2575,25 @@ app.post('/api/ask-contracts', async (req, res) => {
       fullContext += `INTERNAL COORDINATOR NOTES:\n${internalNotes.map(n => `- ${n.category ? `[${n.category}] ` : ''}${n.content}`).join('\n')}\n\n`;
     }
 
-    if (!fullContext.trim()) {
+  return {
+    context: fullContext,
+    wedding,
+    hasAnything: Boolean(fullContext.trim()),
+  };
+}
+
+// Ask questions about contracts AND planning notes
+app.post('/api/ask-contracts', async (req, res) => {
+  try {
+    const { weddingId, question } = req.body;
+
+    if (!weddingId || !question) {
+      return res.status(400).json({ error: 'Wedding ID and question required' });
+    }
+
+    const { context: fullContext, hasAnything } = await buildWeddingContext(weddingId);
+
+    if (!hasAnything) {
       return res.json({ answer: "No planning information has been recorded for this wedding yet." });
     }
 
@@ -2976,6 +3178,38 @@ app.post('/api/quo/sync', async (req, res) => {
 
     console.log(`Searching Quo for messages from ${Object.keys(phoneToWedding).length} registered phone numbers`);
 
+    // Learn which outbound bodies are templates: the same text sent verbatim to
+    // more than one couple is never a personal reply. Built once per sync.
+    const templateBodies = new Set();
+    {
+      const { data: outboundNotes } = await supabaseAdmin
+        .from('planning_notes')
+        .select('wedding_id, content')
+        .eq('category', 'sms_message')
+        .like('content', '[SMS from Rixey]%');
+
+      // Two couples alone is not enough: "Sounds good!" is a real reply that
+      // happens to be identical. A machine sends the same text to several
+      // couples AND sends it often, so require both.
+      const MIN_COUPLES = 2;
+      const MIN_OCCURRENCES = 5;
+
+      const weddingsPerBody = new Map();
+      const countPerBody = new Map();
+      for (const note of (outboundNotes || [])) {
+        const body = note.content.replace(/^\[SMS from Rixey\]\s*/, '').trim();
+        if (!weddingsPerBody.has(body)) weddingsPerBody.set(body, new Set());
+        weddingsPerBody.get(body).add(note.wedding_id);
+        countPerBody.set(body, (countPerBody.get(body) || 0) + 1);
+      }
+      for (const [body, weddings] of weddingsPerBody) {
+        if (weddings.size >= MIN_COUPLES && countPerBody.get(body) >= MIN_OCCURRENCES) {
+          templateBodies.add(body);
+        }
+      }
+      console.log(`Recognised ${templateBodies.size} outbound SMS template(s) to skip`);
+    }
+
     // Get already processed message IDs (use admin to bypass RLS)
     const { data: processed } = await supabaseAdmin
       .from('processed_quo_messages')
@@ -3072,18 +3306,27 @@ app.post('/api/quo/sync', async (req, res) => {
             console.error(`Error saving to processed_quo_messages:`, insertError);
           }
 
-          // Skip outbound auto-reply templates — real personal responses should still be recorded
+          // Skip outbound auto-reply templates — real personal responses should
+          // still be recorded. The pattern list below used to be the whole
+          // filter, and it missed "Thanks for texting! We will text you back
+          // ASAP!", which then landed in the notes 751 times across the client
+          // base and drowned the AI highlights. Patterns alone will always miss
+          // the next template, so templateBodies does the real work: any
+          // outbound body we have already sent to a different couple, verbatim,
+          // is a template by definition. That needs no maintenance.
           const autoReplyPatterns = [
             /^thank you for (reaching out|contacting|calling|your (message|inquiry|interest))/i,
-            /^thanks for (reaching out|calling|your (message|inquiry|interest))/i,
+            /^thanks for (reaching out|calling|texting|your (message|inquiry|interest))/i,
             /^we('ve| have) received your/i,
             /^we('ll| will) (get back|be in touch|respond)/i,
             /^this is an automated/i,
             /^you('ve| have) reached rixey manor/i,
             /^hi,? (we('re| are) currently|our team is)/i,
           ];
-          const isAutoReply = direction === 'outbound' &&
-            autoReplyPatterns.some(p => p.test(messageBody.trim()));
+          const isAutoReply = direction === 'outbound' && (
+            autoReplyPatterns.some(p => p.test(messageBody.trim())) ||
+            templateBodies.has(messageBody.trim())
+          );
 
           // Also save message as a planning note so Sage can search it
           if (messageBody && !isAutoReply) {
@@ -3251,55 +3494,55 @@ app.post('/api/notes-highlights', async (req, res) => {
       return res.status(400).json({ error: 'Wedding ID required' });
     }
 
-    // Get all planning notes
-    const { data: notes } = await supabaseAdmin
-      .from('planning_notes')
-      .select('category, content, source_message, created_at, status')
-      .eq('wedding_id', weddingId)
-      .order('created_at', { ascending: false });
+    // Same context the admin Q&A gets: the wedding row, contracts, allergies,
+    // vendors, timeline, staffing, decor, bedrooms, checklist, and cleaned
+    // planning notes. This used to be planning notes plus a list of contract
+    // filenames, which is why the output read as generic.
+    const { context: fullContext, wedding, hasAnything } = await buildWeddingContext(weddingId);
 
-    // Get contracts
-    const { data: contracts } = await supabaseAdmin
-      .from('contracts')
-      .select('filename')
-      .eq('wedding_id', weddingId);
-
-    if ((!notes || notes.length === 0) && (!contracts || contracts.length === 0)) {
+    if (!hasAnything) {
       return res.json({ highlights: 'No planning notes or contracts found for this wedding yet.' });
     }
 
-    // Format notes for Claude
-    const notesText = (notes || []).map(n =>
-      `[${n.category.toUpperCase()}] ${n.content} (Status: ${n.status})`
-    ).join('\n');
+    const daysAway = wedding?.wedding_date
+      ? Math.ceil((new Date(wedding.wedding_date + 'T00:00:00') - new Date()) / 86400000)
+      : null;
 
-    const contractsList = (contracts || []).map(c => c.filename).join(', ');
+    const prompt = `You are the senior coordinator at Rixey Manor, briefing the venue owner before she looks at this wedding. She has read the file before. She does not need it read back to her, she needs to know what she would otherwise miss.
 
-    const prompt = `You are helping a wedding venue manager get a quick overview of a client's wedding planning status.
+${RIXEY_EXTRACTION_CONTEXT}
 
-Based on these planning notes, provide a concise summary with:
-1. **Key Decisions Made** - What vendors are booked, major choices finalized
-2. **Important Details** - Guest count, allergies, special requests
-3. **Pending Items** - What still needs attention (notes marked "pending")
-4. **Timeline Notes** - Any dates or deadlines mentioned
+Write the briefing in this order. Skip a section entirely rather than padding it.
 
-Keep it brief and scannable. Use bullet points. Highlight anything urgent.
+**Where this stands** — two or three sentences. Where they are relative to ${daysAway === null ? 'their date' : `their date, which is ${daysAway < 0 ? `${Math.abs(daysAway)} days ago` : `${daysAway} days away`}`}, and whether that is comfortable or tight.
 
-PLANNING NOTES:
-${notesText}
+**Needs a decision or a nudge** — the things that will cause a problem if nobody acts. Say who needs to do what, and by when. Be specific about the consequence: "no caterer booked at 60 days out, and the recommended-vendor discount on their contract needs one" beats "book a caterer".
 
-${contractsList ? `CONTRACTS ON FILE: ${contractsList}` : ''}
+**Watch out for** — anything that contradicts itself, is missing where it should exist, or has drifted. Guest count that changed and was not carried through to staffing or tables. A vendor mentioned in conversation but never added to the checklist. Allergies without the caterer alerted. Contracted hours that do not match the timeline. Compare sections against each other; this is where you earn your keep.
 
-Provide the summary:`;
+**The human bit** — stress, grief, family tension, money worry, anything personally significant. Quote them where it lands better in their own words. If someone sounded like they were having a hard time, say so plainly and say what would help.
+
+**Facts worth having to hand** — the numbers and names she will want without opening another tab: guest count, allergies, bar plan, key vendor contacts, arrival times.
+
+Rules:
+- Concrete over general. Names, numbers, dates, quantities.
+- If something important is unknown, say it is unknown. Do not fill the gap with a guess.
+- Never invent a fact that is not in the file below.
+- No preamble, no sign-off. Start with the first heading.
+
+${fullContext}`;
 
     // Try Sonnet first; fall back to Haiku if the primary model is unavailable
     let response;
     try {
-      response = await anthropic.messages.create({ model: MODEL_SONNET, max_tokens: 1000, messages: [{ role: 'user', content: prompt }] });
+      response = await anthropic.messages.create({ model: MODEL_SONNET, max_tokens: 4000, messages: [{ role: 'user', content: prompt }] });
     } catch (primaryErr) {
       console.warn('Highlights: primary model failed, falling back to Haiku:', primaryErr?.message ?? primaryErr);
-      response = await anthropic.messages.create({ model: MODEL_HAIKU, max_tokens: 1000, messages: [{ role: 'user', content: prompt }] });
+      response = await anthropic.messages.create({ model: MODEL_HAIKU, max_tokens: 4000, messages: [{ role: 'user', content: prompt }] });
     }
+
+    await logUsage(weddingId, null, 'notes-highlights', response);
+    console.log(`Highlights for ${weddingId}: ${Math.round(fullContext.length / 1000)}K chars of context in`);
 
     res.json({ highlights: response.content[0].text });
 
@@ -3525,6 +3768,7 @@ app.post('/api/zoom/sync', async (req, res) => {
     let newlyProcessed = 0;
     let notesExtracted = 0;
     let matched = 0;
+    let skipped = 0;
 
     for (const meeting of meetings) {
       const meetingId = meeting.uuid;
@@ -3567,16 +3811,22 @@ app.post('/api/zoom/sync', async (req, res) => {
         }
       }
 
-      // Save processed meeting
+      // Mark the meeting as processed FIRST. This row is the only thing
+      // stopping the next sync re-importing the same meeting, so if the write
+      // fails we skip the meeting rather than duplicating its notes. Getting
+      // this wrong once already cost us 47 planning notes for 19 meetings.
+      // participant_names is text[], so it takes the array, not a joined string.
       const { error: insertErr } = await supabaseAdmin.from('processed_zoom_meetings').insert({
         zoom_meeting_id: meetingId,
         wedding_id: matchedWeddingId,
         meeting_topic: meeting.topic,
-        participant_names: participantNames.join(', '), // TEXT column — must be string
-        transcript_text: transcriptText.substring(0, 50000)
+        participant_names: participantNames,
+        transcript_text: transcriptText
       });
       if (insertErr) {
-        console.error('Failed to save processed meeting (dedup will not work):', insertErr.message);
+        console.error(`Zoom sync: could not mark "${meeting.topic}" as processed, skipping it to avoid duplicates:`, insertErr.message);
+        skipped++;
+        continue;
       }
 
       // Save full transcript as a planning note so Sage can search it
@@ -3585,22 +3835,41 @@ app.post('/api/zoom/sync', async (req, res) => {
         const meetingLabel = meeting.topic || 'Untitled';
         const meetingDate = meeting.start_time ? new Date(meeting.start_time).toLocaleDateString() : 'unknown date';
 
-        const { error: noteError } = await supabaseAdmin.from('planning_notes').insert({
-          wedding_id: matchedWeddingId,
-          user_id: null,
-          category: 'zoom_transcript',
-          content: `[Zoom Meeting: ${meetingLabel} — ${meetingDate}]\n${cleanTranscript.substring(0, 40000)}`,
-          source_message: `Zoom meeting on ${meetingDate}`,
-          status: 'confirmed'
-        });
+        const transcriptSource = `Zoom meeting on ${meetingDate}`;
 
-        if (noteError) {
-          console.error('Error saving Zoom transcript to planning_notes:', noteError);
+        // Don't re-file a transcript we already hold for this meeting.
+        const { data: priorTranscript } = await supabaseAdmin
+          .from('planning_notes')
+          .select('id')
+          .eq('wedding_id', matchedWeddingId)
+          .eq('category', 'zoom_transcript')
+          .eq('source_message', transcriptSource)
+          .limit(1);
+
+        if (priorTranscript?.length) {
+          console.log(`  Transcript for "${meetingLabel}" already on file, not duplicating`);
+        } else {
+          const { error: noteError } = await supabaseAdmin.from('planning_notes').insert({
+            wedding_id: matchedWeddingId,
+            user_id: null,
+            category: 'zoom_transcript',
+            content: `[Zoom Meeting: ${meetingLabel} — ${meetingDate}]\n${cleanTranscript}`,
+            source_message: transcriptSource,
+            status: 'confirmed'
+          });
+
+          if (noteError) {
+            console.error('Error saving Zoom transcript to planning_notes:', noteError);
+          }
         }
 
-        // AI-powered extraction of specific planning details
+        // AI-powered extraction of specific planning details.
+        // The fourth argument matters: without it this defaults to 'message',
+        // which skips the VTT cleanup and reads only the first 2,000 characters
+        // of raw transcript, i.e. the greeting. Every meeting was being mined
+        // from its first thirty seconds.
         const source = `Zoom meeting: ${meetingLabel} (${meetingDate})`;
-        const notes = await extractPlanningNotesAI(transcriptText, matchedWeddingId, source);
+        const notes = await extractPlanningNotesAI(transcriptText, matchedWeddingId, source, 'transcript');
         if (notes.length > 0) {
           await savePlanningNotes(notes);
           notesExtracted += notes.length;
@@ -3612,12 +3881,14 @@ app.post('/api/zoom/sync', async (req, res) => {
       processedIds.add(meetingId);
     }
 
-    console.log(`Zoom sync: processed ${newlyProcessed} meetings, ${matched} matched, ${notesExtracted} notes extracted`);
+    console.log(`Zoom sync: processed ${newlyProcessed} meetings, ${matched} matched, ${notesExtracted} notes extracted, ${skipped} skipped`);
     res.json({
       processed: newlyProcessed,
       matched,
       notesExtracted,
+      skipped,
       message: `Synced ${newlyProcessed} meeting transcripts. ${matched} matched to clients. Extracted ${notesExtracted} planning notes.`
+        + (skipped ? ` ${skipped} skipped because they could not be marked as processed — check the server log.` : '')
     });
 
   } catch (error) {
@@ -3867,6 +4138,151 @@ app.post('/api/uncertain-questions/:id/answer', async (req, res) => {
   } catch (error) {
     console.error('Answer question error:', error);
     res.status(500).json({ error: 'Failed to save answer' });
+  }
+});
+
+// Turn the knowledge-base answer into something you would actually send a
+// person. The KB entry is written for Sage to read; this is written for the
+// couple, and it opens by referring back to what they asked.
+app.post('/api/uncertain-questions/:id/draft-client-message', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { answer } = req.body;
+
+    const { data: question, error } = await supabaseAdmin
+      .from('uncertain_questions')
+      .select('*, weddings(couple_names)')
+      .eq('id', id)
+      .single();
+
+    if (error || !question) return res.status(404).json({ error: 'Question not found' });
+
+    const source = (answer || question.admin_answer || '').trim();
+    if (!source) return res.status(400).json({ error: 'Answer the question first, then draft the reply' });
+
+    const response = await anthropic.messages.create({
+      model: MODEL_SONNET,
+      max_tokens: 800,
+      messages: [{
+        role: 'user',
+        content: `You write messages to couples on behalf of Rixey Manor, a wedding venue in Rapidan, Virginia. Warm, direct, no corporate padding.
+
+This couple asked our AI assistant Sage a question. Sage wasn't confident, so she told them the human team would double-check and follow up. The team has now confirmed the answer. Write the follow-up message.
+
+Requirements:
+- Open by referring to what they asked, so they know which question this answers.
+- Give the confirmed answer plainly. Do not hedge it, this is now checked.
+- Two short paragraphs at most. No greeting line like "Dear X" and no sign-off, the Inbox already shows it is from Rixey Manor.
+- Do not apologise for the delay unless the answer materially changed what they were told.
+- Do not mention knowledge bases, flags, tickets or internal process.
+
+THEY ASKED: ${question.question}
+
+WHAT SAGE SAID AT THE TIME (may be partly wrong): ${question.sage_response || '(nothing recorded)'}
+
+THE CONFIRMED ANSWER: ${source}
+
+Write only the message body:`
+      }]
+    });
+
+    await logUsage(question.wedding_id, null, 'draft-client-message', response);
+    res.json({ draft: response.content[0].text.trim() });
+  } catch (error) {
+    console.error('Draft client message error:', error);
+    res.status(500).json({ error: error.message || 'Failed to draft the message' });
+  }
+});
+
+// Send the corrected answer back to the couple who asked.
+//
+// Sage promises "I've flagged it for the human team to double-check, they'll
+// follow up if there's anything to add" and then, until now, nobody did. This
+// closes that loop. The answer lands in the couple's Inbox as a message from
+// the Rixey team, clearly from a person rather than from Sage, plus a bell
+// notification and the usual new-message email.
+app.post('/api/uncertain-questions/:id/alert-client', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { message } = req.body;
+    // requireAdmin has already resolved who is logged in, so the client doesn't
+    // get to name the sender.
+    const senderId = req.userId || null;
+
+    if (!message || !message.trim()) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+
+    const { data: question, error: fetchError } = await supabaseAdmin
+      .from('uncertain_questions')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !question) {
+      return res.status(404).json({ error: 'Question not found' });
+    }
+    if (!question.wedding_id) {
+      return res.status(400).json({ error: 'This question is not attached to a wedding, so there is nobody to send it to' });
+    }
+
+    const { data: sent, error: sendError } = await supabaseAdmin
+      .from('direct_messages')
+      .insert({
+        wedding_id: question.wedding_id,
+        sender_id: senderId || null,
+        sender_type: 'admin',
+        content: message.trim(),
+      })
+      .select()
+      .single();
+
+    if (sendError) throw sendError;
+
+    // Bell + email, same path as any other message from the team.
+    const { data: wedding } = await supabaseAdmin
+      .from('weddings')
+      .select('couple_names, profiles(email)')
+      .eq('id', question.wedding_id)
+      .single();
+
+    await createNotification(
+      question.wedding_id,
+      'client',
+      'new_message',
+      'Rixey Manor followed up on your question',
+      message.trim().substring(0, 200),
+      wedding?.profiles?.email
+    );
+
+    // Bookkeeping. Deliberately non-fatal: the couple has already been messaged
+    // by this point, so a failure here must not report the send as failed.
+    // Also lets the feature work before migration 009 has been applied.
+    const { error: markError } = await supabaseAdmin
+      .from('uncertain_questions')
+      .update({
+        client_notified_at: new Date().toISOString(),
+        client_message: message.trim(),
+        client_message_id: sent.id,
+        notified_by: 'admin',
+      })
+      .eq('id', id);
+
+    if (markError) {
+      console.error('Alert client: message sent but could not be recorded on the question. Has migration 009 been applied?', markError.message);
+    }
+
+    await logActivity(question.wedding_id, senderId || null, 'sage_answer_sent', message.trim().substring(0, 100));
+
+    res.json({
+      success: true,
+      messageId: sent.id,
+      recorded: !markError,
+      couple: wedding?.couple_names || null,
+    });
+  } catch (error) {
+    console.error('Alert client error:', error);
+    res.status(500).json({ error: error.message || 'Failed to send the answer to the client' });
   }
 });
 
@@ -5321,14 +5737,29 @@ app.get('/api/onboarding/:weddingId', async (req, res) => {
       throw error;
     }
 
+    // Sage chat messages key off user_id, not wedding_id — the messages table
+    // has no wedding_id column at all. This query used to filter on it, error
+    // out, and hand back null, so "Chat with Sage" never ticked off for anyone.
+    // Grace Teeters reported it in March 2026: "I have been chatting with you,
+    // but it has not crossed off the 'chat with sage' to do".
+    const { data: weddingProfiles } = await supabaseAdmin
+      .from('profiles')
+      .select('id')
+      .eq('wedding_id', weddingId);
+    const profileIds = (weddingProfiles || []).map(p => p.id);
+
     // Also check actual progress from related tables (use admin to bypass RLS)
     const [couplePhoto, messages, vendors, inspo, checklist] = await Promise.all([
       supabaseAdmin.from('couple_photos').select('id').eq('wedding_id', weddingId).single(),
-      supabaseAdmin.from('messages').select('id').eq('wedding_id', weddingId).limit(1),
+      profileIds.length
+        ? supabaseAdmin.from('messages').select('id').in('user_id', profileIds).eq('sender', 'user').limit(1)
+        : Promise.resolve({ data: [] }),
       supabaseAdmin.from('vendor_checklist').select('id').eq('wedding_id', weddingId).limit(1),
       supabaseAdmin.from('inspo_gallery').select('id').eq('wedding_id', weddingId).limit(1),
       supabaseAdmin.from('planning_checklist').select('id').eq('wedding_id', weddingId).eq('is_completed', true).limit(1)
     ]);
+
+    if (messages.error) console.error('Onboarding progress: message check failed:', messages.error.message);
 
     // Update progress based on actual data
     const actualProgress = {
@@ -8393,7 +8824,7 @@ app.post('/api/finalisations/:weddingId', async (req, res) => {
 
 // ============ DAILY DIGEST ============
 
-async function sendDailyDigest() {
+async function sendDailyDigest({ dryRun = false } = {}) {
   const adminEmail = process.env.ADMIN_EMAIL || 'info@rixeymanor.com';
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
@@ -8416,9 +8847,16 @@ async function sendDailyDigest() {
     ...(directMsgs || []).map(m => m.wedding_id),
   ].filter(Boolean))];
 
-  if (weddingIds.length === 0) {
-    console.log('[Digest] No portal activity in last 24h — skipping');
-    return;
+  // A quiet day still gets a memo if questions are sitting unanswered — that is
+  // exactly the day they would otherwise be forgotten.
+  const { count: openQuestionCount } = await supabaseAdmin
+    .from('uncertain_questions')
+    .select('id', { count: 'exact', head: true })
+    .is('admin_answer', null);
+
+  if (weddingIds.length === 0 && !openQuestionCount) {
+    console.log('[Digest] No portal activity in last 24h and nothing outstanding — skipping');
+    return { skipped: true, reason: 'Nothing happened and nothing is outstanding' };
   }
 
   const { data: weddings } = await supabaseAdmin.from('weddings').select('id, couple_names').in('id', weddingIds);
@@ -8481,13 +8919,53 @@ async function sendDailyDigest() {
   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
   const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'America/New_York' });
 
+  // What is actually waiting on a person, pulled to the top. Sage's unanswered
+  // questions are the main one: each is a couple who was told the team would
+  // follow up, and until now nothing tracked whether anyone did.
+  const { data: openQuestions } = await supabaseAdmin
+    .from('uncertain_questions')
+    .select('question, created_at, wedding_id, admin_answer')
+    .is('admin_answer', null)
+    .order('created_at', { ascending: true });
+
+  const openIds = [...new Set((openQuestions || []).map(q => q.wedding_id).filter(Boolean))];
+  const { data: openWeddings } = openIds.length
+    ? await supabaseAdmin.from('weddings').select('id, couple_names').in('id', openIds)
+    : { data: [] };
+  const openWeddingMap = {};
+  (openWeddings || []).forEach(w => { openWeddingMap[w.id] = w.couple_names || 'Unknown Couple'; });
+
+  const needsYouHtml = (openQuestions || []).length === 0 ? '' : `
+      <div style="margin-bottom:20px;background:#fff7ed;border-radius:8px;padding:16px;border:1px solid #fed7aa;">
+        <div style="font-size:15px;font-weight:bold;color:#9a3412;margin-bottom:4px;">Waiting on you</div>
+        <div style="font-size:12px;color:#b45309;margin-bottom:10px;">
+          ${openQuestions.length} question${openQuestions.length === 1 ? '' : 's'} Sage could not answer. Each couple was told the team would follow up.
+        </div>
+        <table style="width:100%;border-collapse:collapse;">
+          ${openQuestions.slice(0, 12).map(q => {
+            const age = Math.floor((Date.now() - new Date(q.created_at).getTime()) / 86400000);
+            const ageLabel = age === 0 ? 'today' : age === 1 ? 'yesterday' : `${age} days ago`;
+            return `
+          <tr>
+            <td style="padding:6px 0;border-bottom:1px solid #fde8d0;vertical-align:top;">
+              <span style="font-size:13px;color:#9a3412;font-weight:bold;">${openWeddingMap[q.wedding_id] || 'Unknown Couple'}</span>
+              <span style="font-size:11px;color:#c2884f;margin-left:6px;">asked ${ageLabel}</span>
+              <div style="font-size:12px;color:#7c2d12;margin-top:2px;font-style:italic;">"${String(q.question).substring(0, 140)}${String(q.question).length > 140 ? '…' : ''}"</div>
+            </td>
+          </tr>`;
+          }).join('')}
+        </table>
+        ${openQuestions.length > 12 ? `<div style="font-size:12px;color:#b45309;margin-top:8px;">and ${openQuestions.length - 12} more</div>` : ''}
+      </div>`;
+
   const html = `
     <div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;padding:30px 20px;color:#3d3d3d;background:#fefbf7;">
       <div style="padding-bottom:16px;margin-bottom:8px;border-bottom:2px solid #7C9070;">
         <span style="font-size:11px;letter-spacing:3px;text-transform:uppercase;color:#7C9070;">Rixey Manor Planning Portal</span>
       </div>
-      <h2 style="font-size:20px;color:#3d3d3d;margin:0 0 4px;font-weight:normal;">Daily Planning Roundup</h2>
+      <h2 style="font-size:20px;color:#3d3d3d;margin:0 0 4px;font-weight:normal;">Daily Portal Memo</h2>
       <p style="font-size:13px;color:#999;margin:0 0 24px;">${dateStr}</p>
+      ${needsYouHtml}
       ${coupleHtml}
       <a href="${frontendUrl}/admin" style="display:inline-block;background:#5C6B4F;color:white;padding:10px 20px;border-radius:6px;text-decoration:none;font-size:14px;">View all in admin →</a>
       <div style="margin-top:32px;padding-top:16px;border-top:1px solid #e8e0d5;">
@@ -8495,12 +8973,39 @@ async function sendDailyDigest() {
       </div>
     </div>`;
 
-  await sendEmail(adminEmail, `Planning Roundup — ${dateStr}`, html);
-  console.log(`[Digest] Sent to ${adminEmail}`);
+  const waiting = (openQuestions || []).length;
+  const subject = portalSubject(
+    `Daily memo — ${dateStr}${waiting ? ` · ${waiting} waiting on you` : ''}`
+  );
+
+  if (dryRun) {
+    return { subject, html, to: adminEmail, waiting, couples: sections.length };
+  }
+
+  await sendEmail(adminEmail, subject, html);
+  console.log(`[Digest] Sent to ${adminEmail} (${waiting} open question(s))`);
+  return { subject, to: adminEmail, waiting, couples: sections.length };
 }
 
 // 8 AM ET daily
 cron.schedule('0 8 * * *', () => { sendDailyDigest().catch(err => console.error('[Digest] Error:', err.message)); }, { timezone: 'America/New_York' });
+
+// Look at today's memo without waiting until 8am, and without sending it.
+// Pass { send: true } to actually put it in the inbox.
+app.post('/api/admin/daily-memo', async (req, res) => {
+  try {
+    const { send } = req.body || {};
+    if (send) {
+      await sendDailyDigest();
+      return res.json({ sent: true, to: process.env.ADMIN_EMAIL || 'info@rixeymanor.com' });
+    }
+    const preview = await sendDailyDigest({ dryRun: true });
+    res.json({ sent: false, ...preview });
+  } catch (error) {
+    console.error('[Digest] Preview error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // ============ SEATING CHART IMPORT ============
 

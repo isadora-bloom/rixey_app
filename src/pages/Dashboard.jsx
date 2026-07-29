@@ -44,6 +44,7 @@ import DashboardChat from './dashboard/DashboardChat'
 import FloatingSage from '../components/FloatingSage'
 import DashboardNav, { FINALISABLE } from './dashboard/DashboardNav'
 import DashboardHeader from './dashboard/DashboardHeader'
+import { shrinkImageForUpload } from '../utils/image'
 
 // Countdown component
 function WeddingCountdown({ weddingDate }) {
@@ -170,7 +171,8 @@ export default function Dashboard() {
     setPhotoUploading(true)
     setPhotoError('')
     const formData = new FormData()
-    formData.append('photo', file)
+    // couple-photos bucket caps at 5MB — shrink before sending.
+    formData.append('photo', await shrinkImageForUpload(file))
     formData.append('weddingId', profile.wedding_id)
     formData.append('uploadedBy', user?.id || '')
     try {
