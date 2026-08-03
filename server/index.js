@@ -766,6 +766,49 @@ When you point them somewhere, use the exact tab label, bolded, and tell them wh
 - **Book a Meeting** — Calendly links for planning calls, walkthroughs, vendor meets
 - **Resources** — additional Rixey-curated links
 
+### PUT IT SOMEWHERE — offer to file what they tell you
+
+Couples tell you things in passing that belong in a section of the portal. "We
+decided on 150", "our florist is Good Earth", "my aunt is coeliac", "the shuttle
+should start at one". If it only lives in this chat, it is lost by the time
+anyone needs it, and the couple has to type it twice.
+
+Whenever someone tells you a concrete planning fact that has a home in the
+portal, **offer to put it there**, in one short sentence at the end of your
+reply. Natural and light: "Want me to pop that in your Guest List?" or "I can
+add Good Earth to your vendors if you like." Never make it the whole reply, and
+never ask twice about the same thing in one conversation.
+
+Then, on its very last line, emit a machine-readable tag so the portal can
+render a button. Exact format, one per line, no more than three:
+
+[PORTAL_ACTION: section=<section-key> | label=<short button text> | detail=<what would be saved>]
+
+Valid section keys: guests, allergies, vendor, budget, timeline, decor, bar,
+tables, table-map, ceremony-order, ceremony-chairs, makeup, shuttle, rehearsal,
+bedrooms, wedding-party, wedding-details, inspo, borrow, guestcare, checklist,
+website-builder, worksheets, photos, staffing.
+
+Rules for the tag:
+- Only when there is a specific fact to save. Never for general questions, and
+  never for advice you gave that they have not agreed to.
+- detail should be the fact itself, phrased so it makes sense on its own.
+- The tag is stripped before the couple sees your message, so your written
+  sentence has to stand on its own. Do not refer to "the button below".
+- If nothing is worth filing, emit no tag at all. Most messages will have none.
+
+Examples:
+
+They say "we're thinking 150 guests now, up from 120":
+  ...your reply about what that changes for bar and staffing...
+  [PORTAL_ACTION: section=guests | label=Update guest count to 150 | detail=Guest count revised from 120 to 150]
+
+They say "my aunt Sylvia is coeliac, properly so, not a preference":
+  ...your reply...
+  [PORTAL_ACTION: section=allergies | label=Add Sylvia to the allergy registry | detail=Sylvia (aunt) — coeliac, severe, caterer must be told]
+
+They ask "how many bartenders do I need?" — no tag. Nothing has been decided.
+
 ### WHEN TO POINT WHERE — common asks
 
 - Borrowing items / what decor is available / vases / candelabras / arbors / votives / cake stands / runners / signs → **Borrow Brochure**
@@ -887,6 +930,18 @@ function parseVttToText(vtt) {
     .replace(/\s+/g, ' ')
     .trim();
 }
+
+// The Dashboard sections Sage is allowed to send someone to. Kept in step with
+// the activeSection values in src/pages/Dashboard.jsx — a key that isn't there
+// renders a button that goes nowhere.
+const PORTAL_SECTION_KEYS = new Set([
+  'allergies', 'bar', 'bedrooms', 'booking', 'borrow', 'budget',
+  'ceremony-chairs', 'ceremony-order', 'checklist', 'day-of-memories', 'decor',
+  'downloads', 'guestcare', 'guests', 'inbox', 'inspo', 'makeup', 'photos',
+  'picks', 'preferred-vendors', 'rehearsal', 'resources', 'rsvp-settings',
+  'shuttle', 'staffing', 'table-map', 'tables', 'timeline', 'vendor',
+  'website-builder', 'wedding-details', 'wedding-party', 'worksheets',
+]);
 
 // Rixey Manor business context for AI extraction
 const RIXEY_EXTRACTION_CONTEXT = `
@@ -1616,6 +1671,36 @@ app.post('/api/chat', async (req, res) => {
       assistantMessage = assistantMessage.replace(/\n?\[CONFIDENCE:\s*\d+\]/i, '').trim();
     }
 
+    // Pull out Sage's offers to file something into a portal section. She writes
+    // the offer in plain English in the message itself; these tags are what the
+    // chat turns into a button. Stripped before the couple sees the message.
+    const portalActions = [];
+    {
+      const tagPattern = /\[PORTAL_ACTION:\s*([^\]]+)\]/gi;
+      let match;
+      while ((match = tagPattern.exec(assistantMessage)) !== null) {
+        const fields = {};
+        for (const part of match[1].split('|')) {
+          const idx = part.indexOf('=');
+          if (idx === -1) continue;
+          fields[part.slice(0, idx).trim().toLowerCase()] = part.slice(idx + 1).trim();
+        }
+        // A tag naming a section that doesn't exist would render a dead button.
+        if (fields.section && PORTAL_SECTION_KEYS.has(fields.section) && fields.label) {
+          portalActions.push({
+            section: fields.section,
+            label: fields.label.slice(0, 80),
+            detail: (fields.detail || '').slice(0, 400),
+          });
+        } else if (fields.section) {
+          console.warn(`Sage suggested an unknown portal section: "${fields.section}"`);
+        }
+      }
+      if (match !== null || portalActions.length || /\[PORTAL_ACTION:/i.test(assistantMessage)) {
+        assistantMessage = assistantMessage.replace(/\n*\[PORTAL_ACTION:[^\]]*\]/gi, '').trim();
+      }
+    }
+
     // Log usage
     await logUsage(weddingId, userId, 'chat', response);
 
@@ -1722,7 +1807,7 @@ app.post('/api/chat', async (req, res) => {
       }
     }
 
-    res.json({ message: assistantMessage, confidence });
+    res.json({ message: assistantMessage, confidence, portalActions: portalActions.slice(0, 3) });
   } catch (error) {
     console.error('Chat error:', error);
     // Detect Anthropic overload / rate-limit errors so the client can retry
@@ -3678,8 +3763,11 @@ async function getZoomAccessToken() {
     const newTokens = await refreshResponse.json();
 
     if (newTokens.access_token) {
-      console.log('Zoom token refreshed successfully');
-      await supabaseAdmin.from('zoom_tokens')
+      // Zoom rotates the refresh token on every use and invalidates the old
+      // one immediately. If this write fails we have just spent the only key we
+      // had, and Zoom stays broken until someone reconnects it by hand. So the
+      // failure has to be loud, not a silent return.
+      const { error: saveError } = await supabaseAdmin.from('zoom_tokens')
         .update({
           access_token: newTokens.access_token,
           refresh_token: newTokens.refresh_token || tokens.refresh_token,
@@ -3687,6 +3775,12 @@ async function getZoomAccessToken() {
         })
         .eq('id', tokens.id);
 
+      if (saveError) {
+        console.error('CRITICAL: Zoom token refreshed but could not be saved. The rotated refresh token is lost and Zoom must be reconnected in the admin panel.', saveError.message);
+        throw new Error(`Zoom token refreshed but could not be saved (${saveError.message}). Reconnect Zoom in the admin panel.`);
+      }
+
+      console.log('Zoom token refreshed successfully');
       return newTokens.access_token;
     } else {
       console.error('Zoom token refresh failed:', JSON.stringify(newTokens));
@@ -3739,29 +3833,66 @@ app.post('/api/zoom/sync', async (req, res) => {
       .select('zoom_meeting_id');
     const processedIds = new Set((processed || []).map(p => p.zoom_meeting_id));
 
-    // Fetch recordings from last 30 days
-    const fromDate = new Date();
-    fromDate.setDate(fromDate.getDate() - 30);
-    const toDate = new Date();
+    // Zoom's recordings endpoint only honours a 30-day span per request, and
+    // this used to make exactly one call for the last 30 days. Any meeting that
+    // happened while nobody ran a sync fell off the back and was never ingested
+    // — Taylor Smith, Kristyn Johnson, Sarah Lemon, Melissa Lesner and several
+    // others were lost that way. Walk the whole period in 30-day windows
+    // instead. Already-processed meetings are skipped, so reaching further back
+    // costs a few API calls and nothing else.
+    const { sinceDays, reprocess } = req.body || {};
+    const lookbackDays = Math.max(1, Math.min(Number(sinceDays) || 30, 800));
 
-    const recordingsResponse = await fetch(
-      `https://api.zoom.us/v2/users/me/recordings?from=${fromDate.toISOString().split('T')[0]}&to=${toDate.toISOString().split('T')[0]}`,
-      { headers: { 'Authorization': `Bearer ${accessToken}` } }
-    );
-
-    if (!recordingsResponse.ok) {
-      const errText = await recordingsResponse.text();
-      console.error('Zoom recordings API error:', recordingsResponse.status, errText);
-      const hint = recordingsResponse.status === 401
-        ? ' Your Zoom access token is invalid or expired — please re-connect Zoom.'
-        : recordingsResponse.status === 124
-        ? ' Your Zoom account plan may not support cloud recordings.'
-        : '';
-      return res.status(500).json({ error: `Zoom recordings API returned ${recordingsResponse.status}.${hint}` });
+    const windows = [];
+    {
+      const end = new Date();
+      const start = new Date();
+      start.setDate(start.getDate() - lookbackDays);
+      let cursor = new Date(start);
+      while (cursor < end) {
+        const windowEnd = new Date(cursor);
+        windowEnd.setDate(windowEnd.getDate() + 29);
+        windows.push([
+          cursor.toISOString().split('T')[0],
+          (windowEnd < end ? windowEnd : end).toISOString().split('T')[0],
+        ]);
+        cursor = new Date(windowEnd);
+        cursor.setDate(cursor.getDate() + 1);
+      }
     }
 
-    const recordingsData = await recordingsResponse.json();
-    const meetings = recordingsData.meetings || [];
+    console.log(`Zoom sync: scanning ${lookbackDays} days in ${windows.length} window(s)${reprocess ? ', reprocessing already-seen meetings' : ''}`);
+
+    const meetings = [];
+    const seenUuids = new Set();
+    for (const [from, to] of windows) {
+      const recordingsResponse = await fetch(
+        `https://api.zoom.us/v2/users/me/recordings?from=${from}&to=${to}&page_size=300`,
+        { headers: { 'Authorization': `Bearer ${accessToken}` } }
+      );
+
+      if (!recordingsResponse.ok) {
+        const errText = await recordingsResponse.text();
+        console.error('Zoom recordings API error:', recordingsResponse.status, errText);
+        const hint = recordingsResponse.status === 401
+          ? ' Your Zoom access token is invalid or expired — please re-connect Zoom.'
+          : recordingsResponse.status === 124
+          ? ' Your Zoom account plan may not support cloud recordings.'
+          : '';
+        return res.status(500).json({ error: `Zoom recordings API returned ${recordingsResponse.status} for ${from}..${to}.${hint}` });
+      }
+
+      const windowData = await recordingsResponse.json();
+      for (const m of (windowData.meetings || [])) {
+        if (seenUuids.has(m.uuid)) continue;   // windows touch at the edges
+        seenUuids.add(m.uuid);
+        meetings.push(m);
+      }
+    }
+
+    // Re-running extraction over a meeting we already hold is safe: the
+    // transcript note and savePlanningNotes both refuse duplicates.
+    if (reprocess) processedIds.clear();
 
     console.log(`Found ${meetings.length} Zoom recordings`);
 
@@ -3816,13 +3947,16 @@ app.post('/api/zoom/sync', async (req, res) => {
       // fails we skip the meeting rather than duplicating its notes. Getting
       // this wrong once already cost us 47 planning notes for 19 meetings.
       // participant_names is text[], so it takes the array, not a joined string.
-      const { error: insertErr } = await supabaseAdmin.from('processed_zoom_meetings').insert({
+      // Upsert rather than insert: a deliberate reprocess run revisits meetings
+      // that already have a marker row, and a conflict there is expected rather
+      // than a reason to skip the meeting.
+      const { error: insertErr } = await supabaseAdmin.from('processed_zoom_meetings').upsert({
         zoom_meeting_id: meetingId,
         wedding_id: matchedWeddingId,
         meeting_topic: meeting.topic,
         participant_names: participantNames,
         transcript_text: transcriptText
-      });
+      }, { onConflict: 'zoom_meeting_id' });
       if (insertErr) {
         console.error(`Zoom sync: could not mark "${meeting.topic}" as processed, skipping it to avoid duplicates:`, insertErr.message);
         skipped++;
@@ -3837,23 +3971,33 @@ app.post('/api/zoom/sync', async (req, res) => {
 
         const transcriptSource = `Zoom meeting on ${meetingDate}`;
 
-        // Don't re-file a transcript we already hold for this meeting.
+        const noteBody = `[Zoom Meeting: ${meetingLabel} — ${meetingDate}]\n${cleanTranscript}`;
+
+        // Don't re-file a transcript we already hold for this meeting. If the
+        // copy on file is shorter, though, it was written under the old 40,000
+        // character cap and the full one is worth having, so replace it.
         const { data: priorTranscript } = await supabaseAdmin
           .from('planning_notes')
-          .select('id')
+          .select('id, content')
           .eq('wedding_id', matchedWeddingId)
           .eq('category', 'zoom_transcript')
           .eq('source_message', transcriptSource)
           .limit(1);
 
         if (priorTranscript?.length) {
-          console.log(`  Transcript for "${meetingLabel}" already on file, not duplicating`);
+          const existing = priorTranscript[0];
+          if (noteBody.length > (existing.content || '').length) {
+            await supabaseAdmin.from('planning_notes').update({ content: noteBody }).eq('id', existing.id);
+            console.log(`  Replaced truncated transcript for "${meetingLabel}" (${existing.content.length} → ${noteBody.length} chars)`);
+          } else {
+            console.log(`  Transcript for "${meetingLabel}" already on file, not duplicating`);
+          }
         } else {
           const { error: noteError } = await supabaseAdmin.from('planning_notes').insert({
             wedding_id: matchedWeddingId,
             user_id: null,
             category: 'zoom_transcript',
-            content: `[Zoom Meeting: ${meetingLabel} — ${meetingDate}]\n${cleanTranscript}`,
+            content: noteBody,
             source_message: transcriptSource,
             status: 'confirmed'
           });

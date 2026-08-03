@@ -140,6 +140,9 @@ export default function Dashboard() {
   const [selectedFile, setSelectedFile] = useState(null)
   const [uploadingFile, setUploadingFile] = useState(false)
   const [activeSection, setActiveSection] = useState('chat')
+  // Sage's "want me to put that in your Guest List?" offers, for the most
+  // recent reply only. { messageId, actions: [{ section, label, detail }] }
+  const [portalActions, setPortalActions] = useState(null)
   const [showShareModal, setShowShareModal] = useState(false)
   const [shareLinkCopied, setShareLinkCopied] = useState(false)
   const [budgetSummary, setBudgetSummary] = useState(null)
@@ -418,6 +421,25 @@ export default function Dashboard() {
     return () => clearTimeout(t)
   }, [retryState]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Take the couple to the section Sage offered to file something into, and
+  // carry the detail across so they aren't retyping what they just said. The
+  // section owns what it does with it; if it doesn't read the hint, the couple
+  // has still landed in the right place.
+  const handlePortalAction = (action) => {
+    if (!action?.section) return
+    try {
+      sessionStorage.setItem('sagePortalHint', JSON.stringify({
+        section: action.section,
+        detail: action.detail || '',
+        at: Date.now(),
+      }))
+    } catch {
+      // Private browsing can refuse sessionStorage. Navigation still works.
+    }
+    setPortalActions(null)
+    setActiveSection(action.section)
+  }
+
   // Extracted Sage API call — used by sendMessage and the retry loop
   const doSageRequest = async (userMessage, baseMessages) => {
     setSending(true)
@@ -439,6 +461,15 @@ export default function Dashboard() {
         if (saveData.message) {
           setMessages([...baseMessages, saveData.message])
           setRetryState(null)
+          // Sage offered to file something into a section of the portal. Hang
+          // the offer off this message so it renders under her reply. Not
+          // persisted: it belongs to the moment, and a stale "add this?" button
+          // on an old message would be worse than none.
+          setPortalActions(
+            (data.portalActions || []).length
+              ? { messageId: saveData.message.id, actions: data.portalActions }
+              : null
+          )
         }
       } else {
         throw new Error(data.error || 'No response from Sage')
@@ -816,6 +847,8 @@ export default function Dashboard() {
                   messagesEndRef={messagesEndRef}
                   fileInputRef={fileInputRef}
                   user={user}
+                  portalActions={portalActions}
+                  onPortalAction={handlePortalAction}
                 />
               )}
 

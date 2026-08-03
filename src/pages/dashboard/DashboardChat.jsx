@@ -17,6 +17,8 @@ export default function DashboardChat({
   setRetryState,
   chatContainerRef,
   messagesEndRef,
+  portalActions,
+  onPortalAction,
   fileInputRef,
   user,
 }) {
@@ -73,6 +75,21 @@ export default function DashboardChat({
                 <p className={`text-xs mt-1 ${message.sender === 'user' ? 'text-sage-200' : 'text-sage-400'}`}>
                   {new Date(message.created_at).toLocaleString()}
                 </p>
+
+                {/* Sage offered to file something into a section of the portal.
+                    She has already said so in words above; this is the shortcut. */}
+                {portalActions?.messageId === message.id && portalActions.actions.map((action, i) => (
+                  <button
+                    key={i}
+                    onClick={() => onPortalAction(action)}
+                    className="mt-2 w-full text-left bg-white border border-sage-200 rounded-lg px-3 py-2 hover:border-sage-400 hover:shadow-sm transition-all"
+                  >
+                    <span className="block text-sm font-medium text-sage-700">{action.label} →</span>
+                    {action.detail && (
+                      <span className="block text-xs text-sage-400 mt-0.5">{action.detail}</span>
+                    )}
+                  </button>
+                ))}
               </div>
             </div>
           ))
