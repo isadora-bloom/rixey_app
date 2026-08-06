@@ -217,11 +217,25 @@ export default function SeatingImportDialog({ weddingId, onComplete }) {
                   <div>
                     <p className="font-semibold text-stone-800">Seating chart imported</p>
                     <p className="text-sm text-stone-400 mt-1">
-                      {result.created > 0 && `${result.created} guests added`}
-                      {result.created > 0 && result.updated > 0 && ' · '}
-                      {result.updated > 0 && `${result.updated} guests updated`}
+                      {[
+                        result.created > 0 && `${result.created} guests added`,
+                        result.updated > 0 && `${result.updated} guests updated`,
+                        // Named on the chart but they live on their host's row,
+                        // so seating the host is what seats them.
+                        result.seatedAsPlusOne > 0 && `${result.seatedAsPlusOne} seated with their host`,
+                      ].filter(Boolean).join(' · ')}
                     </p>
                   </div>
+                  {/* Anything we could not place without overriding a decision
+                      already made. Silence here would look like success. */}
+                  {result.warnings?.length > 0 && (
+                    <div className="w-full text-left bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
+                      <p className="text-xs font-semibold text-amber-800 mb-1">Needs a look</p>
+                      <ul className="text-xs text-amber-700 space-y-1 list-disc list-inside">
+                        {result.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                      </ul>
+                    </div>
+                  )}
                   <button
                     onClick={handleClose}
                     className="px-5 py-2 text-sm rounded-lg bg-sage-600 text-white hover:bg-sage-700 transition-colors font-medium"

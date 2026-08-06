@@ -1,3 +1,5 @@
+import { guestFullName, plusOneDisplayName, hasPlusOne } from './guest-names.js';
+
 /**
  * The extra questions a couple can add to their RSVP form.
  *
@@ -54,6 +56,33 @@ export function isFieldOn(rsvpConfig, key) {
 export function sendsConfirmation(rsvpConfig) {
   const v = rsvpConfig?.fields?.send_confirmation;
   return v === undefined ? true : !!v;
+}
+
+/**
+ * Everyone who has asked for a seat on a shuttle.
+ *
+ * The question was being asked on the RSVP form and the answer went nowhere:
+ * the shuttle schedule is hand-entered runs with hand-typed seat counts and
+ * had no idea anyone had replied. Asked per person, so a party where one
+ * drives and the other rides counts as one seat, not two and not none.
+ *
+ * Anyone who has declined is left out. The `Shuttle` tag is honoured too,
+ * since the CSV importer has been creating it from sheet columns for months.
+ */
+export function shuttleRequests(guests) {
+  const yes = v => typeof v === 'string' && /^(yes|y|true|1)$/i.test(v.trim());
+  const out = [];
+  for (const g of guests || []) {
+    const x = (g && typeof g.rsvp_extras === 'object' && g.rsvp_extras) || {};
+    const tagged = Array.isArray(g?.tags) && g.tags.some(t => String(t).toLowerCase() === 'shuttle');
+    if ((yes(x.shuttle) || tagged) && g?.rsvp !== 'no') {
+      out.push({ name: guestFullName(g), isPlusOne: false, host: null, viaTag: !yes(x.shuttle) && tagged });
+    }
+    if (hasPlusOne(g) && yes(x[plusOneExtraKey('shuttle')]) && g.plus_one_rsvp !== 'no') {
+      out.push({ name: plusOneDisplayName(g), isPlusOne: true, host: guestFullName(g), viaTag: false });
+    }
+  }
+  return out;
 }
 
 /**

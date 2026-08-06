@@ -66,6 +66,31 @@ export function hasPlusOne(guest) {
   return !!(guest?.plus_one_name && String(guest.plus_one_name).trim());
 }
 
+/** What we write when a couple says a guest gets a plus one but not who. */
+export const UNNAMED_PLUS_ONE = '+1';
+
+/**
+ * Read a spreadsheet cell that is meant to say whether a guest gets a plus one.
+ *
+ * Three outcomes, because there are three real states, and collapsing them is
+ * how a phantom guest called "No" ends up on a seating chart. A blank or an
+ * explicit no means no plus one and nothing is stored. A yes means one was
+ * granted without a name. Anything else is taken as written, including a
+ * couple's own marker like "X", so importing a list you exported gives you
+ * back what you had.
+ */
+export function parsePlusOneCell(raw) {
+  // Emptiness is judged before tidying. A cell of ".." is someone the couple
+  // did grant a plus one and then gave up describing, and tidying it to
+  // nothing first would quietly delete that person.
+  const original = String(raw == null ? '' : raw).trim();
+  if (!original) return { granted: false, name: null };
+  if (/^(no|n|none|nope|false|0|n\.?\/?a\.?|-+|—)$/i.test(original)) return { granted: false, name: null };
+  if (/^(yes|y|true|1)$/i.test(original)) return { granted: true, name: UNNAMED_PLUS_ONE };
+  const s = tidy(original);
+  return { granted: true, name: s || UNNAMED_PLUS_ONE };
+}
+
 /** What to call a plus one on screen or in print. Never a placeholder. */
 export function plusOneDisplayName(guest) {
   if (!hasPlusOne(guest)) return '';
@@ -108,6 +133,36 @@ export function partyMembers(guest) {
 /** Every person on a guest list, hosts and plus ones alike. */
 export function allPeople(guests) {
   return (guests || []).flatMap(partyMembers);
+}
+
+/**
+ * Every dietary note recorded on the guest list, one per person.
+ *
+ * Dietary information lives in three unconnected places: this, the plus one's
+ * own column, and the hand-keyed allergy registry, which is the only one the
+ * printed pack reads. So an allergy a guest typed into their RSVP never
+ * reached the kitchen. These two helpers let the registry show what it is
+ * missing without copying anything, which would only create a second copy to
+ * drift.
+ */
+export function dietaryNotes(guests) {
+  const out = [];
+  for (const g of guests || []) {
+    const own = String(g?.dietary_restrictions || '').trim();
+    if (own) out.push({ name: guestFullName(g), note: own, isPlusOne: false, host: null, guestId: g.id });
+    if (hasPlusOne(g)) {
+      const theirs = String(g.plus_one_dietary || '').trim();
+      if (theirs) out.push({ name: plusOneDisplayName(g), note: theirs, isPlusOne: true, host: guestFullName(g), guestId: g.id });
+    }
+  }
+  return out;
+}
+
+/** Guest-list dietary notes with nobody of that name in the allergy registry. */
+export function dietaryNotInRegistry(guests, registryRows) {
+  const norm = s => String(s || '').toLowerCase().replace(/[^a-z ]/g, '').replace(/\s+/g, ' ').trim();
+  const known = new Set((registryRows || []).map(r => norm(r.guest_name)).filter(Boolean));
+  return dietaryNotes(guests).filter(d => !known.has(norm(d.name)));
 }
 
 /** Headcounts that all mean the same thing wherever they are shown. */

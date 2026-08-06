@@ -13,7 +13,7 @@ import { validateBody } from './middleware/validate.js';
 import { coerceBody } from './middleware/coerce.js';
 import { fetchAllTabs, SheetFetchError } from './lib/sheet-fetcher.js';
 import { buildDiff, applyChoices } from './lib/sheet-diff/index.js';
-import { guestFullName, plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, headcount } from '../shared/guest-names.js';
+import { guestFullName, plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, headcount, parsePlusOneCell } from '../shared/guest-names.js';
 import { sendsConfirmation } from '../shared/rsvp-fields.js';
 import { rsvpConfirmationHtml } from './lib/rsvp-confirmation.js';
 import cron from 'node-cron';
@@ -8044,19 +8044,34 @@ app.post('/api/guests/bulk', async (req, res) => {
     if (!weddingId || !Array.isArray(guests) || guests.length === 0) {
       return res.status(400).json({ error: 'weddingId and guests array required' });
     }
-    const rows = guests.map(g => ({
-      wedding_id: weddingId,
-      first_name: g.first_name || g.firstName || '',
-      last_name: g.last_name || g.lastName || null,
-      email: g.email || null,
-      phone: g.phone || null,
-      address: g.address || null,
-      rsvp: g.rsvp || 'pending',
-      dietary_restrictions: g.dietary_restrictions || g.dietary || null,
-      tags: Array.isArray(g.tags) ? g.tags : [],
-      notes: g.notes || null,
-      updated_at: new Date().toISOString(),
-    })).filter(g => g.first_name.trim());
+    const rows = guests.map(g => {
+      // A plus one is only ever created because the sheet says so. "No", "n/a"
+      // and blank all mean no plus one; a bare "yes" means one was granted
+      // without a name; anything else is kept as written. Without this, a
+      // column of Yes/No produced guests called "No".
+      const plusOne = parsePlusOneCell(g.plus_one_name || g.plus_one || g.plusone || g.plus_1 || '');
+      return {
+        wedding_id: weddingId,
+        first_name: g.first_name || g.firstName || '',
+        last_name: g.last_name || g.lastName || null,
+        email: g.email || null,
+        phone: g.phone || null,
+        address: g.address || null,
+        rsvp: g.rsvp || 'pending',
+        dietary_restrictions: g.dietary_restrictions || g.dietary || null,
+        meal_choice: g.meal_choice || g.meal || null,
+        table_assignment: g.table_assignment || g.table || null,
+        tags: Array.isArray(g.tags) ? g.tags : [],
+        notes: g.notes || null,
+        // These were dropped entirely, so exporting a guest list and importing
+        // it back deleted every plus one it contained.
+        plus_one_name: plusOne.name,
+        plus_one_rsvp: plusOne.granted ? parseRsvpValue(g.plus_one_rsvp || '') : 'pending',
+        plus_one_meal_choice: plusOne.granted ? (g.plus_one_meal_choice || null) : null,
+        plus_one_dietary: plusOne.granted ? (g.plus_one_dietary || null) : null,
+        updated_at: new Date().toISOString(),
+      };
+    }).filter(g => g.first_name.trim());
     // Auto-create any tag options that don't exist yet
     const allTags = [...new Set(rows.flatMap(r => r.tags))].filter(Boolean);
     if (allTags.length > 0) {
@@ -9387,21 +9402,55 @@ async function commitSeatingToGuests(weddingId, tables, replaceExisting) {
 
   const { data: existingGuests } = await supabaseAdmin
     .from('wedding_guests')
-    .select('id, first_name, last_name')
+    .select('id, first_name, last_name, plus_one_name')
     .eq('wedding_id', weddingId);
 
-  const nameIndex = new Map();
+  const norm = s => (s || '').toLowerCase().trim().replace(/\s+/g, ' ');
+  const nameKey = full => norm(full);
+
+  // Two indexes. Seating charts list every person by name, including plus
+  // ones, who have no row of their own. Matching on host names alone meant a
+  // charted plus one was never found and got inserted as a duplicate guest,
+  // sitting alongside the same person's name on their host's row.
+  const hostIndex = new Map();
+  const plusOneIndex = new Map();
   for (const g of existingGuests || []) {
-    const key = `${(g.first_name || '').toLowerCase().trim()}|${(g.last_name || '').toLowerCase().trim()}`;
-    nameIndex.set(key, g.id);
+    hostIndex.set(nameKey(guestFullName(g)), g.id);
+    if (hasPlusOne(g) && isNamedPerson(g.plus_one_name)) {
+      plusOneIndex.set(nameKey(plusOneFullName(g.plus_one_name, g.last_name)), g.id);
+      plusOneIndex.set(nameKey(g.plus_one_name), g.id);
+    }
   }
 
-  let created = 0, updated = 0;
+  let created = 0, updated = 0, seatedAsPlusOne = 0;
+  const warnings = [];
+  const assignedTable = new Map(); // host row id -> table we have already set
 
   for (const table of tables) {
     for (const guest of table.guests) {
-      const key = `${guest.first_name.toLowerCase().trim()}|${(guest.last_name || '').toLowerCase().trim()}`;
-      const existingId = nameIndex.get(key);
+      const full = [guest.first_name, guest.last_name].filter(Boolean).join(' ');
+      const key = nameKey(full);
+      const existingId = hostIndex.get(key);
+
+      // Matched a plus one rather than a guest row. Seat their host: a party
+      // shares a row, so that is what puts both of them at the table. Never
+      // create a row for them, and never silently move a host who is already
+      // seated somewhere else.
+      if (!existingId && plusOneIndex.has(key)) {
+        const hostId = plusOneIndex.get(key);
+        const already = assignedTable.get(hostId);
+        if (already && already !== guest.table_assignment) {
+          warnings.push(`${full} is charted at ${guest.table_assignment} but is a plus one of someone already seated at ${already}. Left as ${already}.`);
+        } else {
+          await supabaseAdmin
+            .from('wedding_guests')
+            .update({ table_assignment: guest.table_assignment, updated_at: new Date().toISOString() })
+            .eq('id', hostId);
+          assignedTable.set(hostId, guest.table_assignment);
+          seatedAsPlusOne++;
+        }
+        continue;
+      }
 
       const payload = {
         first_name: guest.first_name,
@@ -9415,20 +9464,26 @@ async function commitSeatingToGuests(weddingId, tables, replaceExisting) {
 
       if (existingId) {
         await supabaseAdmin.from('wedding_guests').update(payload).eq('id', existingId);
+        assignedTable.set(existingId, guest.table_assignment);
         updated++;
       } else {
+        // A name on the chart that matches nobody. Inserted as a guest in their
+        // own right, with no plus one, because nothing here says they have one.
         const { data: newGuest } = await supabaseAdmin
           .from('wedding_guests')
           .insert({ wedding_id: weddingId, ...payload })
           .select('id')
           .single();
-        if (newGuest) nameIndex.set(key, newGuest.id);
+        if (newGuest) {
+          hostIndex.set(key, newGuest.id);
+          assignedTable.set(newGuest.id, guest.table_assignment);
+        }
         created++;
       }
     }
   }
 
-  return { created, updated };
+  return { created, updated, seatedAsPlusOne, warnings };
 }
 
 // POST /api/seating/import — parse (action=parse) or commit (action=commit)

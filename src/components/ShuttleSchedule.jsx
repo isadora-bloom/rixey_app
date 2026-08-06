@@ -3,6 +3,7 @@ import { API_URL } from '../config/api'
 import { apiFetch } from '../utils/api'
 import { Button, Input } from './ui'
 import { useToast } from './ui/Toast'
+import { shuttleRequests } from '../../shared/rsvp-fields'
 
 
 // ── time helpers ──────────────────────────────────────────────────
@@ -228,8 +229,12 @@ export default function ShuttleSchedule({ weddingId, userId }) {
     notes: '',
   });
 
+  const [guests, setGuests] = useState([]);
+  const [showDemand, setShowDemand] = useState(false);
+
   useEffect(() => {
     fetchRuns();
+    fetchGuests();
   }, [weddingId]);
 
   async function fetchRuns() {
@@ -244,6 +249,21 @@ export default function ShuttleSchedule({ weddingId, userId }) {
       setLoading(false);
     }
   }
+
+  // Guests are read only to work out who asked for a seat. If it fails, the
+  // schedule still works exactly as it did before, just without the demand.
+  async function fetchGuests() {
+    try {
+      const data = await apiFetch(`${API_URL}/api/guests/${weddingId}`);
+      setGuests(data?.guests || []);
+    } catch {
+      setGuests([]);
+    }
+  }
+
+  const shuttleDemand = shuttleRequests(guests);
+  const scheduledSeats = runs.reduce((n, r) => n + (parseInt(r.seat_count, 10) || 0), 0);
+  const seatsShort = scheduledSeats > 0 ? Math.max(0, shuttleDemand.length - scheduledSeats) : 0;
 
   function handleFormChange(e) {
     const { name, value } = e.target;
@@ -393,6 +413,44 @@ export default function ShuttleSchedule({ weddingId, userId }) {
       <div className="bg-cream-100 border border-cream-300 rounded-lg px-4 py-3 text-sm text-sage-600">
         Please avoid having guests arrive too early — aim for pickup 5 mins before they're needed.
       </div>
+
+      {/* Who has actually asked for a seat. These answers were being collected
+          on the RSVP form and read by nothing, so runs were sized on a guess. */}
+      {shuttleDemand.length > 0 && (
+        <div className={`rounded-lg px-4 py-3 border ${seatsShort > 0 ? 'bg-amber-50 border-amber-200' : 'bg-sage-50 border-sage-200'}`}>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className={`text-sm font-medium ${seatsShort > 0 ? 'text-amber-800' : 'text-sage-700'}`}>
+                {shuttleDemand.length} {shuttleDemand.length === 1 ? 'person has' : 'people have'} asked for a shuttle seat
+              </p>
+              <p className={`text-xs mt-0.5 ${seatsShort > 0 ? 'text-amber-700' : 'text-sage-500'}`}>
+                {scheduledSeats > 0
+                  ? `${scheduledSeats} seat${scheduledSeats === 1 ? '' : 's'} scheduled across ${runs.length} run${runs.length === 1 ? '' : 's'}`
+                  : 'No seat counts entered on your runs yet'}
+                {seatsShort > 0 && ` · ${seatsShort} short`}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowDemand(v => !v)}
+              className="text-xs text-sage-600 underline shrink-0 mt-0.5"
+            >
+              {showDemand ? 'Hide names' : 'Show names'}
+            </button>
+          </div>
+          {showDemand && (
+            <ul className="mt-3 grid sm:grid-cols-2 gap-x-6 gap-y-1">
+              {shuttleDemand.map((p, i) => (
+                <li key={i} className="text-xs text-sage-600">
+                  {p.name}
+                  {p.isPlusOne && <span className="text-sage-400"> · with {p.host}</span>}
+                  {p.viaTag && <span className="text-sage-400"> · from guest list tag</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {/* Suggested schedule generator */}
       <SuggestedSchedule onGenerateRuns={handleGenerateRuns} />

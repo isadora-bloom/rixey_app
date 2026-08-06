@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { API_URL } from '../config/api'
 import { authHeaders } from '../utils/api'
 import { formatDateOnly } from '../utils/dates'
-import { partyMembers } from '../../shared/guest-names'
+import { partyMembers, dietaryNotInRegistry } from '../../shared/guest-names'
 
 
 // All timeline event definitions (mirrored from TimelineBuilder for rendering)
@@ -916,39 +916,75 @@ export default function PrintView() {
         )}
 
         {/* ALLERGIES */}
-        {sections.allergies && allergies.length > 0 && (
+        {(() => {
+          // The registry is hand-keyed and used to be the only source here, so
+          // anything a guest typed into their own RSVP never reached the
+          // kitchen. Both are printed now, kept visibly separate because only
+          // the registry has been checked and passed to the caterer.
+          const fromGuests = dietaryNotInRegistry(guests, allergies)
+          if (!sections.allergies || (allergies.length === 0 && fromGuests.length === 0)) return null
+          return (
           <div className="print-section section-start">
             <SectionHeader title="Dietary Restrictions & Allergies" icon="⚠️" />
-            <table className="allergy-table">
-              <thead>
-                <tr>
-                  <th>Guest Name</th>
-                  <th>Allergy</th>
-                  <th>Severity</th>
-                  <th>Caterer</th>
-                  <th>Overnight</th>
-                  <th>Notes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {allergies.map(a => (
-                  <tr key={a.id}>
-                    <td>{a.guest_name || '—'}</td>
-                    <td>{a.allergy || '—'}</td>
-                    <td>
-                      {a.severity && (
-                        <span className={`allergy-severity ${a.severity.toLowerCase()}`}>{a.severity}</span>
-                      )}
-                    </td>
-                    <td>{a.caterer_alerted ? '✓ Alerted' : ''}</td>
-                    <td>{a.staying_overnight ? '✓' : ''}</td>
-                    <td>{a.notes || ''}</td>
+            {allergies.length > 0 && (
+              <table className="allergy-table">
+                <thead>
+                  <tr>
+                    <th>Guest Name</th>
+                    <th>Allergy</th>
+                    <th>Severity</th>
+                    <th>Caterer</th>
+                    <th>Overnight</th>
+                    <th>Notes</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {allergies.map(a => (
+                    <tr key={a.id}>
+                      <td>{a.guest_name || '—'}</td>
+                      <td>{a.allergy || '—'}</td>
+                      <td>
+                        {a.severity && (
+                          <span className={`allergy-severity ${a.severity.toLowerCase()}`}>{a.severity}</span>
+                        )}
+                      </td>
+                      <td>{a.caterer_alerted ? '✓ Alerted' : ''}</td>
+                      <td>{a.staying_overnight ? '✓' : ''}</td>
+                      <td>{a.notes || ''}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {fromGuests.length > 0 && (
+              <div style={{ marginTop: allergies.length > 0 ? 16 : 0 }}>
+                <p style={{ fontWeight: 600, fontSize: 12, marginBottom: 2 }}>
+                  Also on the guest list, not yet in the registry
+                </p>
+                <p style={{ fontSize: 10, color: '#888', marginTop: 0, marginBottom: 6 }}>
+                  Told to us by the guest. Not checked, and not confirmed with the caterer.
+                </p>
+                <table className="allergy-table">
+                  <thead>
+                    <tr><th>Guest Name</th><th>What they told us</th></tr>
+                  </thead>
+                  <tbody>
+                    {fromGuests.map((d, i) => (
+                      <tr key={i}>
+                        <td>
+                          {d.name}
+                          {d.isPlusOne && <span style={{ color: '#888', fontSize: 10 }}> · with {d.host}</span>}
+                        </td>
+                        <td>{d.note}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-        )}
+          )
+        })()}
 
         {/* WEDDING DETAILS */}
         {sections.details && weddingDetails && (

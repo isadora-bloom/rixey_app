@@ -3,6 +3,7 @@ import { API_URL } from '../config/api'
 import { authHeaders, apiFetch } from '../utils/api'
 import { Button, Input, ConfirmDialog } from './ui'
 import { useToast } from './ui/Toast'
+import { dietaryNotInRegistry } from '../../shared/guest-names'
 const PlusIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
 const PencilIcon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
 const Trash2Icon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
@@ -63,10 +64,31 @@ export default function AllergyRegistry({ weddingId, userId }) {
   const [confirmTarget, setConfirmTarget] = useState(null)
   const { error: toastError } = useToast()
 
+  const [guests, setGuests] = useState([])
+
   useEffect(() => {
     if (!weddingId) return
     fetchAllergies()
+    // Read-only, purely to spot dietary notes on the guest list that never
+    // made it into this registry and so never reached the caterer.
+    apiFetch(`${API_URL}/api/guests/${weddingId}`)
+      .then(d => setGuests(d?.guests || []))
+      .catch(() => setGuests([]))
   }, [weddingId])
+
+  // Prefill the form from a guest-list note. Deliberately not auto-inserted:
+  // severity and whether the caterer has been told are judgements, and a copy
+  // made without them would look checked when it is not.
+  const handleAdoptNote = (d) => {
+    setEditingId(null)
+    setFormData({
+      ...emptyForm,
+      guest_name: d.name,
+      allergy: d.note,
+      notes: d.isPlusOne ? `Plus one of ${d.host}. From their RSVP.` : 'From the guest list.',
+    })
+    setShowForm(true)
+  }
 
   const fetchAllergies = async () => {
     setLoading(true)
@@ -176,6 +198,8 @@ export default function AllergyRegistry({ weddingId, userId }) {
     )
   }
 
+  const unregistered = dietaryNotInRegistry(guests, allergies)
+
   return (
     <div className="space-y-4">
       {/* Amber banner */}
@@ -198,6 +222,38 @@ export default function AllergyRegistry({ weddingId, userId }) {
           >
             <XIcon />
           </button>
+        </div>
+      )}
+
+      {/* Dietary notes sitting on the guest list that this registry has never
+          seen. They print on the day-of pack now, but unchecked, so this is
+          where they get looked at properly. */}
+      {unregistered.length > 0 && (
+        <div className="border border-cream-300 bg-cream-50 rounded-lg px-4 py-3">
+          <p className="text-sm font-medium text-sage-700">
+            {unregistered.length} dietary {unregistered.length === 1 ? 'note' : 'notes'} on your guest list {unregistered.length === 1 ? 'is' : 'are'} not in this registry
+          </p>
+          <p className="text-xs text-sage-500 mt-0.5 mb-3">
+            Guests told you these when they RSVP&apos;d or when the list was imported. Add the ones that matter so they reach your caterer.
+          </p>
+          <ul className="space-y-1.5">
+            {unregistered.map((d, i) => (
+              <li key={i} className="flex items-center justify-between gap-3 text-sm">
+                <span className="text-sage-700">
+                  <span className="font-medium">{d.name}</span>
+                  {d.isPlusOne && <span className="text-sage-400 text-xs"> · with {d.host}</span>}
+                  <span className="text-sage-500"> — {d.note}</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleAdoptNote(d)}
+                  className="text-xs px-2.5 py-1 rounded-lg border border-sage-300 text-sage-600 hover:bg-white transition shrink-0"
+                >
+                  Add
+                </button>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
