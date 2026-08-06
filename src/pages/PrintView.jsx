@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { API_URL } from '../config/api'
 import { authHeaders } from '../utils/api'
 import { formatDateOnly } from '../utils/dates'
+import { partyMembers } from '../../shared/guest-names'
 
 
 // All timeline event definitions (mirrored from TimelineBuilder for rendering)
@@ -1069,30 +1070,36 @@ export default function PrintView() {
           <div className="print-section section-start">
             <SectionHeader title="Seating Chart" icon="🪑" />
             {(() => {
+              // A table seats people, not rows. Plus ones used to be dropped
+              // here entirely, so a table of two printed one name and "(1
+              // guest)" on the document the venue works from.
               const byTable = {}
               const unassigned = []
               guests.forEach(g => {
+                const seats = partyMembers(g)
                 if (g.table_assignment) {
                   if (!byTable[g.table_assignment]) byTable[g.table_assignment] = []
-                  byTable[g.table_assignment].push(g)
+                  byTable[g.table_assignment].push(...seats)
                 } else {
-                  unassigned.push(g)
+                  unassigned.push(...seats)
                 }
               })
+              const Person = ({ p }) => (
+                <p style={{ paddingLeft: p.isPlusOne ? 26 : 12, lineHeight: 1.6, color: p.isPlusOne ? '#555' : undefined }}>
+                  {p.name}
+                  {p.isPlusOne && <span style={{ color: '#888', fontSize: 10, marginLeft: 6 }}>+1, {p.host}</span>}
+                  {p.dietary && <span style={{ color: '#c53030', marginLeft: 8, fontSize: 10 }}>⚠ {p.dietary}</span>}
+                  {p.mealChoice && <span style={{ color: '#666', marginLeft: 8, fontSize: 10 }}>({p.mealChoice})</span>}
+                </p>
+              )
               return (
                 <div style={{ fontSize: 12 }}>
-                  {Object.entries(byTable).sort((a, b) => a[0].localeCompare(b[0])).map(([table, tableGuests]) => (
+                  {Object.entries(byTable).sort((a, b) => a[0].localeCompare(b[0])).map(([table, seated]) => (
                     <div key={table} style={{ marginBottom: 12 }}>
                       <p style={{ fontWeight: 600, borderBottom: '1px solid #ccc', paddingBottom: 2, marginBottom: 4 }}>
-                        {table} <span style={{ fontWeight: 400, color: '#888' }}>({tableGuests.length} guest{tableGuests.length !== 1 ? 's' : ''})</span>
+                        {table} <span style={{ fontWeight: 400, color: '#888' }}>({seated.length} guest{seated.length !== 1 ? 's' : ''})</span>
                       </p>
-                      {tableGuests.map(g => (
-                        <p key={g.id} style={{ paddingLeft: 12, lineHeight: 1.6 }}>
-                          {g.first_name} {g.last_name || ''}
-                          {g.dietary_restrictions && <span style={{ color: '#c53030', marginLeft: 8, fontSize: 10 }}>⚠ {g.dietary_restrictions}</span>}
-                          {g.meal_choice && <span style={{ color: '#666', marginLeft: 8, fontSize: 10 }}>({g.meal_choice})</span>}
-                        </p>
-                      ))}
+                      {seated.map(p => <Person key={p.id} p={p} />)}
                     </div>
                   ))}
                   {unassigned.length > 0 && (
@@ -1100,9 +1107,7 @@ export default function PrintView() {
                       <p style={{ fontWeight: 600, borderBottom: '1px solid #ccc', paddingBottom: 2, marginBottom: 4 }}>
                         Unassigned <span style={{ fontWeight: 400, color: '#888' }}>({unassigned.length})</span>
                       </p>
-                      {unassigned.map(g => (
-                        <p key={g.id} style={{ paddingLeft: 12, lineHeight: 1.6 }}>{g.first_name} {g.last_name || ''}</p>
-                      ))}
+                      {unassigned.map(p => <Person key={p.id} p={p} />)}
                     </div>
                   )}
                 </div>

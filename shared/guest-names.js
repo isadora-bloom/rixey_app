@@ -51,3 +51,74 @@ export function plusOneFullName(plusOneName, hostLastName) {
   if (/\s/.test(s)) return s; // already more than one word, take it as written
   return hostLastName ? `${s} ${hostLastName.trim()}` : s;
 }
+
+/**
+ * Does this guest have a plus one?
+ *
+ * Only the couple decides this, and they say so by putting something in
+ * plus_one_name. A blank means no plus one and must never be read as an
+ * unfilled one. Placeholders are a deliberate third state: Cat & Josh mark 15
+ * guests "X" and name 11 others while leaving 96 blank, and 6 of Isabella and
+ * Angelina's 8 "+1" entries have already RSVP'd yes. Those are real people
+ * whose names nobody has collected yet. They count. They are not named.
+ */
+export function hasPlusOne(guest) {
+  return !!(guest?.plus_one_name && String(guest.plus_one_name).trim());
+}
+
+/** What to call a plus one on screen or in print. Never a placeholder. */
+export function plusOneDisplayName(guest) {
+  if (!hasPlusOne(guest)) return '';
+  return isNamedPerson(guest.plus_one_name)
+    ? plusOneFullName(guest.plus_one_name, guest.last_name)
+    : 'Guest';
+}
+
+/**
+ * Expand a wedding_guests row into the people it represents.
+ *
+ * A row is a party, not a person, and the app kept forgetting: some counts
+ * were of parties and some of people, sitting next to each other in the same
+ * summary bar. Anything that needs a headcount should flatten through here.
+ */
+export function partyMembers(guest) {
+  const people = [{
+    id: `${guest?.id}`,
+    name: guestFullName(guest),
+    rsvp: guest?.rsvp || 'pending',
+    mealChoice: guest?.meal_choice || null,
+    dietary: guest?.dietary_restrictions || null,
+    isPlusOne: false,
+    host: null,
+  }];
+  if (hasPlusOne(guest)) {
+    people.push({
+      id: `${guest.id}:+1`,
+      name: plusOneDisplayName(guest),
+      rsvp: guest.plus_one_rsvp || 'pending',
+      mealChoice: guest.plus_one_meal_choice || null,
+      dietary: guest.plus_one_dietary || null,
+      isPlusOne: true,
+      host: guestFullName(guest),
+    });
+  }
+  return people;
+}
+
+/** Every person on a guest list, hosts and plus ones alike. */
+export function allPeople(guests) {
+  return (guests || []).flatMap(partyMembers);
+}
+
+/** Headcounts that all mean the same thing wherever they are shown. */
+export function headcount(guests) {
+  const people = allPeople(guests);
+  const by = status => people.filter(p => p.rsvp === status).length;
+  return {
+    total: people.length,
+    attending: by('yes'),
+    declined: by('no'),
+    maybe: by('maybe'),
+    pending: people.length - by('yes') - by('no') - by('maybe'),
+  };
+}

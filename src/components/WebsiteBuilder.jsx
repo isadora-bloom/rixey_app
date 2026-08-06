@@ -6,6 +6,7 @@ import { Input } from './ui'
 import { useToast } from './ui/Toast'
 import { useAutosave } from '../hooks/useAutosave'
 import SaveIndicator from './ui/SaveIndicator'
+import { headcount } from '../../shared/guest-names'
 
 const APP_URL = import.meta.env.VITE_APP_URL || window.location.origin
 
@@ -173,9 +174,9 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
         const party = Array.isArray(pData) ? pData : []
         const shuttles = Array.isArray(sData) ? sData : []
         const photos = Array.isArray(phData) ? phData : []
-        const yes = guests.filter(g => g.rsvp === 'yes').length
-        const no = guests.filter(g => g.rsvp === 'no').length
-        setRsvpCounts({ total: guests.length, yes, no, pending: guests.length - yes - no })
+        // Headcount, so the couple's RSVP tally matches their guest list.
+        const hc = headcount(guests)
+        setRsvpCounts({ total: hc.total, yes: hc.attending, no: hc.declined, pending: hc.pending + hc.maybe })
         setDataCounts({
           party: party.filter(m => m.include_on_website !== false).length,
           shuttle: shuttles.length,

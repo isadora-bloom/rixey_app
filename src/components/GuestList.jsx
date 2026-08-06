@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, Fragment } from 'react'
 import { API_URL } from '../config/api'
 import { authHeaders, apiFetch } from '../utils/api'
 import { describeExtras } from '../../shared/rsvp-fields'
-import { plusOneFullName } from '../../shared/guest-names'
+import { plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, partyMembers, allPeople, headcount } from '../../shared/guest-names'
 import { useToast } from './ui/Toast'
 
 
@@ -1019,31 +1019,31 @@ export default function GuestList({ weddingId, userId }) {
     return <span className="ml-1">{sortDir === 'asc' ? '↑' : '↓'}</span>
   }
 
-  // Seat usage per table: count guest + plus_one per assignment
+  // Seat usage per table: a party takes a seat per person, not per row.
   const tableCounts = guests.reduce((acc, g) => {
     if (g.table_assignment) {
-      acc[g.table_assignment] = (acc[g.table_assignment] || 0) + 1 + (g.plus_one_name ? 1 : 0)
+      acc[g.table_assignment] = (acc[g.table_assignment] || 0) + partyMembers(g).length
     }
     return acc
   }, {})
 
-  // Summary stats
-  const plusOneCount = guests.filter(g => g.plus_one_name).length
-  const totalPeople = guests.length + plusOneCount
-  const confirmed = guests.filter(g => g.rsvp === 'yes').length +
-    guests.filter(g => g.plus_one_name && g.plus_one_rsvp === 'yes').length
-  const declined = guests.filter(g => g.rsvp === 'no').length
-  const pending = guests.filter(g => g.rsvp === 'pending').length
-  const maybe = guests.filter(g => g.rsvp === 'maybe').length
+  // Summary stats. Every figure here is a headcount of people. They used to be
+  // a mix: total and confirmed counted people while declined, pending and
+  // maybe counted parties, so the buckets never added up to the total.
+  const plusOneCount = guests.filter(hasPlusOne).length
+  const { total: totalPeople, attending: confirmed, declined, pending, maybe } = headcount(guests)
 
-  // Meal counts (if plated)
+  // Meal counts (if plated). Anyone who has declined is left out: their choice
+  // is stale and the kitchen should not be cooking it. Pending people are kept,
+  // since couples often fill meals in from a sheet before replies come back.
   const mealCounts = platedMeal
-    ? mealOptions.reduce((acc, opt) => {
-        acc[opt.label] =
-          guests.filter(g => g.meal_choice === opt.label).length +
-          guests.filter(g => g.plus_one_meal_choice === opt.label).length
-        return acc
-      }, {})
+    ? (() => {
+        const eating = allPeople(guests).filter(p => p.rsvp !== 'no')
+        return mealOptions.reduce((acc, opt) => {
+          acc[opt.label] = eating.filter(p => p.mealChoice === opt.label).length
+          return acc
+        }, {})
+      })()
     : {}
 
   if (loading) {
@@ -1126,7 +1126,13 @@ export default function GuestList({ weddingId, userId }) {
         {/* Summary stats */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
           {[
-            { label: 'Total People', value: totalPeople, color: 'text-sage-700' },
+            // All four are headcounts of people, so the last three add up to
+            // the first. The sub-line spells out the difference between a
+            // person and an invitation, which is what used to be muddled.
+            {
+              label: 'Total People', value: totalPeople, color: 'text-sage-700',
+              sub: plusOneCount > 0 ? `${guests.length} invitations, ${plusOneCount} with a plus one` : `${guests.length} invitations`,
+            },
             { label: 'Confirmed', value: confirmed, color: 'text-green-600' },
             { label: 'Declined', value: declined, color: 'text-red-500' },
             { label: 'Pending / Maybe', value: pending + maybe, color: 'text-amber-600' },
@@ -1134,6 +1140,7 @@ export default function GuestList({ weddingId, userId }) {
             <div key={s.label} className="bg-cream-50 rounded-xl px-4 py-3 text-center">
               <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
               <p className="text-xs text-sage-400 mt-0.5">{s.label}</p>
+              {s.sub && <p className="text-[10px] text-sage-300 mt-0.5 leading-tight">{s.sub}</p>}
             </div>
           ))}
         </div>
@@ -1310,9 +1317,13 @@ export default function GuestList({ weddingId, userId }) {
                       {guest.dietary_restrictions || <span className="text-sage-300">—</span>}
                     </td>
                     <td className="px-4 py-3">
-                      {guest.plus_one_name ? (
+                      {hasPlusOne(guest) ? (
                         <div className="space-y-0.5">
-                          <p className="text-xs text-sage-700">{guest.plus_one_name}</p>
+                          {/* "Guest" where the couple recorded a plus one but
+                              no name, so a placeholder never reads as one. */}
+                          <p className={`text-xs ${isNamedPerson(guest.plus_one_name) ? 'text-sage-700' : 'text-sage-400 italic'}`}>
+                            {plusOneDisplayName(guest)}
+                          </p>
                           <RsvpBadge rsvp={guest.plus_one_rsvp} />
                         </div>
                       ) : (

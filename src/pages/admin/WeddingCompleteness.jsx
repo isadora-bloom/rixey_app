@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { API_URL } from '../../config/api'
 import { authHeaders, apiFetch } from '../../utils/api'
 import { useToast } from '../../components/ui/Toast'
+import { headcount } from '../../../shared/guest-names'
 
 // Each check: { label, check: (data) => boolean, tab?, inlineField? }
 // tab = clicking "Go" switches to that admin tab
@@ -165,8 +166,9 @@ export default function WeddingCompleteness({ weddingId, wedding, onSwitchTab })
         contractCount: (contractData.contracts?.length || 0) + (contractData.vendorContracts?.length || 0),
         contracts: contractData.contracts || [],
         vendorContracts: contractData.vendorContracts || [],
-        guestCount: guestList.length,
-        rsvpDone: guestList.filter(g => g.rsvp === 'yes').length,
+        // People, not invitations. A row can be two guests.
+        guestCount: headcount(guestList).total,
+        rsvpDone: headcount(guestList).attending,
         allergyCount: allergyList.length,
         hasTimeline: !!(timeline?.events && Object.keys(timeline.events).length > 0),
         hasTableLayout: !!(tables?.tables),

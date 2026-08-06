@@ -13,7 +13,7 @@ import { validateBody } from './middleware/validate.js';
 import { coerceBody } from './middleware/coerce.js';
 import { fetchAllTabs, SheetFetchError } from './lib/sheet-fetcher.js';
 import { buildDiff, applyChoices } from './lib/sheet-diff/index.js';
-import { guestFullName, plusOneFullName, isNamedPerson } from '../shared/guest-names.js';
+import { guestFullName, plusOneFullName, isNamedPerson, headcount } from '../shared/guest-names.js';
 import cron from 'node-cron';
 import * as XLSX from 'xlsx';
 // PDF parsing removed - using Claude vision for all documents
@@ -2481,8 +2481,7 @@ async function buildWeddingContext(weddingId, { noteLimit = 400 } = {}) {
       { data: guestCareRows },
       { data: internalNotes },
       { data: wedding },
-      { count: guestCount },
-      { count: rsvpYesCount },
+      { data: guestRows },
     ] = await Promise.all([
       supabaseAdmin.from('contracts').select('filename, extracted_text').eq('wedding_id', weddingId),
       supabaseAdmin.from('planning_notes').select('category, content, source_message, created_at').eq('wedding_id', weddingId).order('created_at', { ascending: false }),
@@ -2503,8 +2502,9 @@ async function buildWeddingContext(weddingId, { noteLimit = 400 } = {}) {
       supabaseAdmin.from('wedding_guest_care').select('guest_name, note_type, notes').eq('wedding_id', weddingId),
       supabaseAdmin.from('wedding_internal_notes').select('content, category, created_at').eq('wedding_id', weddingId).order('created_at', { ascending: false }).limit(20),
       supabaseAdmin.from('weddings').select('*').eq('id', weddingId).maybeSingle(),
-      supabaseAdmin.from('wedding_guests').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId),
-      supabaseAdmin.from('wedding_guests').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).eq('rsvp', 'yes'),
+      // Rows, not people. Pulled in full so plus ones can be counted: a head
+      // count of rows told couples half the truth about who is coming.
+      supabaseAdmin.from('wedding_guests').select('id, first_name, last_name, rsvp, plus_one_name, plus_one_rsvp').eq('wedding_id', weddingId),
     ]);
 
     // Build comprehensive context
@@ -2524,7 +2524,12 @@ async function buildWeddingContext(weddingId, { noteLimit = 400 } = {}) {
       // single most useful number to have in front of you.
       const plannedGuests = staffingRow?.answers?.guestCount;
       if (plannedGuests) fullContext += `Planned guest count: ${plannedGuests}\n`;
-      if (guestCount) fullContext += `Guest list: ${guestCount} entered, ${rsvpYesCount || 0} RSVP'd yes\n`;
+      // People, including plus ones, since that is what Sage gets asked about.
+      const heads = headcount(guestRows || []);
+      if (heads.total) {
+        fullContext += `Guest list: ${heads.total} people across ${(guestRows || []).length} invitations, `
+          + `${heads.attending} RSVP'd yes, ${heads.declined} no, ${heads.pending + heads.maybe} still to reply\n`;
+      }
       if (wedding.plated_meal) fullContext += `Service style: plated meal\n`;
       if (wedding.archived) fullContext += `Status: archived\n`;
       fullContext += '\n';
