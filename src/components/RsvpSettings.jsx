@@ -4,18 +4,7 @@ import { authHeaders, apiFetch } from '../utils/api'
 import { useToast } from './ui/Toast'
 import { useAutosave } from '../hooks/useAutosave'
 import SaveIndicator from './ui/SaveIndicator'
-
-const RSVP_FIELDS = [
-  { key: 'ask_dietary', label: 'Dietary restrictions / allergies', default: true },
-  { key: 'ask_phone', label: 'Phone number', default: false },
-  { key: 'ask_email', label: 'Email address', default: false },
-  { key: 'ask_address', label: 'Mailing address', default: false },
-  { key: 'ask_hotel', label: 'Hotel preference', default: false },
-  { key: 'ask_shuttle', label: 'Shuttle preference', default: false },
-  { key: 'ask_accessibility', label: 'Accessibility needs', default: false },
-  { key: 'ask_song', label: 'Song request', default: false },
-  { key: 'ask_message', label: 'Message to the couple', default: false },
-]
+import { RSVP_FIELDS } from '../../shared/rsvp-fields'
 
 export default function RsvpSettings({ weddingId }) {
   const [config, setConfig] = useState({})
@@ -94,6 +83,8 @@ export default function RsvpSettings({ weddingId }) {
 
       <p className="text-sage-600 text-xs bg-sage-50 rounded-lg px-4 py-3 border border-sage-200">
         Attending/not attending and meal choice (if plated) are always included. Toggle the extra fields below.
+        Answers appear under each guest in your <span className="font-medium">Guest List</span>, and come through on
+        the printed list and the CSV export. Switching a question off later doesn&apos;t delete replies you already have.
       </p>
 
       {/* Field toggles */}

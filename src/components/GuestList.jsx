@@ -1,6 +1,8 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, Fragment } from 'react'
 import { API_URL } from '../config/api'
 import { authHeaders, apiFetch } from '../utils/api'
+import { describeExtras } from '../../shared/rsvp-fields'
+import { plusOneFullName } from '../../shared/guest-names'
 import { useToast } from './ui/Toast'
 
 
@@ -68,6 +70,17 @@ function csvEscape(value) {
     return '"' + str.replace(/"/g, '""') + '"'
   }
   return str
+}
+
+// The print views build HTML by hand. Guest-supplied text goes through here
+// first, otherwise an ampersand or a stray angle bracket in someone's note or
+// message eats the rest of the table.
+function h(value) {
+  return (value == null ? '' : String(value))
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
 }
 
 function RsvpBadge({ rsvp }) {
@@ -601,6 +614,7 @@ export default function GuestList({ weddingId, userId }) {
   const [mealOptions, setMealOptions] = useState([])
   const [tableOptions, setTableOptions] = useState([]) // [{label, capacity}] from table layout
   const [platedMeal, setPlatedMeal] = useState(false)
+  const [rsvpConfig, setRsvpConfig] = useState(null) // labels for rsvp_extras answers
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [filterRsvp, setFilterRsvp] = useState('all')
@@ -625,14 +639,18 @@ export default function GuestList({ weddingId, userId }) {
     setLoading(true)
     try {
       const hdrs = await authHeaders()
-      const [gRes, sRes, tRes] = await Promise.all([
+      const [gRes, sRes, tRes, wRes] = await Promise.all([
         fetch(`${API_URL}/api/guests/${weddingId}`, { headers: hdrs }),
         fetch(`${API_URL}/api/guest-settings/${weddingId}`, { headers: hdrs }),
         fetch(`${API_URL}/api/table-layout/${weddingId}`, { headers: hdrs }),
+        // Only for the custom-question labels, so RSVP answers read as words
+        // rather than custom_0. Failing this must not break the guest list.
+        fetch(`${API_URL}/api/wedding-website/${weddingId}`, { headers: hdrs }),
       ])
       const gData = await gRes.json()
       const sData = await sRes.json()
       const tData = await tRes.json()
+      setRsvpConfig(wRes.ok ? (await wRes.json())?.rsvp_config || null : null)
       setGuests(gData.guests || [])
       setTagOptions(sData.tagOptions || [])
       setMealOptions(sData.mealOptions || [])
@@ -759,14 +777,25 @@ export default function GuestList({ weddingId, userId }) {
 
   const handleCsvExport = () => {
     const tagLabels = tagOptions.map(t => t.label)
+    // One column per RSVP question anyone actually answered. Built from the
+    // data rather than the current toggles, so answers to a question since
+    // switched off still come out.
+    const answersByGuest = new Map(guests.map(g => [g.id, describeExtras(g.rsvp_extras, rsvpConfig)]))
+    const answerCols = []
+    for (const list of answersByGuest.values()) {
+      for (const a of list) if (!answerCols.some(c => c.key === a.key)) answerCols.push({ key: a.key, label: a.label })
+    }
     const headerCols = [
       'first_name', 'last_name', 'email', 'phone', 'rsvp',
       'dietary_restrictions', 'meal_choice', 'table_assignment',
-      'plus_one_name', 'notes',
+      'plus_one_name', 'plus_one_rsvp', 'plus_one_meal_choice', 'plus_one_dietary',
+      'notes',
       ...tagLabels,
+      ...answerCols.map(c => c.label),
     ]
     const rows = [headerCols.map(csvEscape).join(',')]
     guests.forEach(g => {
+      const answers = answersByGuest.get(g.id) || []
       const row = [
         csvEscape(g.first_name),
         csvEscape(g.last_name),
@@ -777,8 +806,12 @@ export default function GuestList({ weddingId, userId }) {
         csvEscape(g.meal_choice),
         csvEscape(g.table_assignment),
         csvEscape(g.plus_one_name),
+        csvEscape(g.plus_one_name ? g.plus_one_rsvp : ''),
+        csvEscape(g.plus_one_name ? g.plus_one_meal_choice : ''),
+        csvEscape(g.plus_one_name ? g.plus_one_dietary : ''),
         csvEscape(g.notes),
         ...tagLabels.map(tl => csvEscape((g.tags || []).includes(tl) ? 'yes' : '')),
+        ...answerCols.map(c => csvEscape(answers.find(a => a.key === c.key)?.value || '')),
       ]
       rows.push(row.join(','))
     })
@@ -818,19 +851,24 @@ export default function GuestList({ weddingId, userId }) {
   }
 
   const printFullList = () => {
-    const guestRows = sorted.map(g => `
+    const rsvpWord = g => g.rsvp === 'yes' ? 'Accepted' : g.rsvp === 'no' ? 'Declined' : g.rsvp === 'maybe' ? 'Maybe' : 'Pending'
+    const guestRows = sorted.map(g => {
+      const answers = describeExtras(g.rsvp_extras, rsvpConfig)
+      return `
       <tr>
-        <td style="padding:4px 8px;white-space:nowrap">${g.first_name} ${g.last_name || ''}</td>
-        <td style="padding:4px 8px">${g.rsvp === 'yes' ? 'Accepted' : g.rsvp === 'no' ? 'Declined' : g.rsvp === 'maybe' ? 'Maybe' : 'Pending'}</td>
-        <td style="padding:4px 8px;font-size:11px">${g.phone || ''}</td>
-        <td style="padding:4px 8px;font-size:11px">${g.email || ''}</td>
-        <td style="padding:4px 8px;font-size:11px;max-width:200px">${g.address || ''}</td>
-        <td style="padding:4px 8px">${g.dietary_restrictions || ''}</td>
-        <td style="padding:4px 8px">${(g.tags || []).join(', ')}</td>
-        <td style="padding:4px 8px">${g.table_assignment || ''}</td>
-        <td style="padding:4px 8px">${g.plus_one_name || ''}</td>
-        <td style="padding:4px 8px;font-size:11px">${g.notes || ''}</td>
-      </tr>`).join('')
+        <td style="padding:4px 8px;white-space:nowrap">${h(g.first_name)} ${h(g.last_name)}</td>
+        <td style="padding:4px 8px">${rsvpWord(g)}</td>
+        <td style="padding:4px 8px;font-size:11px">${h(g.phone)}</td>
+        <td style="padding:4px 8px;font-size:11px">${h(g.email)}</td>
+        <td style="padding:4px 8px;font-size:11px;max-width:200px">${h(g.address)}</td>
+        <td style="padding:4px 8px">${h(g.dietary_restrictions)}</td>
+        <td style="padding:4px 8px">${h((g.tags || []).join(', '))}</td>
+        <td style="padding:4px 8px">${h(g.table_assignment)}</td>
+        <td style="padding:4px 8px">${h(g.plus_one_name)}</td>
+        <td style="padding:4px 8px;font-size:11px">${h(g.notes)}</td>
+        <td style="padding:4px 8px;font-size:11px">${answers.map(a => `${h(a.short)}: ${h(a.value)}`).join('<br>')}</td>
+      </tr>`
+    }).join('')
 
     const html = `<!DOCTYPE html><html><head><title>Guest List</title>
       <style>body{font-family:sans-serif;padding:20px;font-size:12px}
@@ -845,7 +883,7 @@ export default function GuestList({ weddingId, userId }) {
       <p class="stats">${totalPeople} total people | ${confirmed} confirmed | ${declined} declined | ${pending + maybe} pending</p>
       <table>
         <thead><tr>
-          <th>Name</th><th>RSVP</th><th>Phone</th><th>Email</th><th>Address</th><th>Dietary</th><th>Tags</th><th>Table</th><th>Plus One</th><th>Notes</th>
+          <th>Name</th><th>RSVP</th><th>Phone</th><th>Email</th><th>Address</th><th>Dietary</th><th>Tags</th><th>Table</th><th>Plus One</th><th>Notes</th><th>RSVP answers</th>
         </tr></thead>
         <tbody>${guestRows}</tbody>
       </table>
@@ -871,13 +909,24 @@ export default function GuestList({ weddingId, userId }) {
     })
     const unassigned = guests.filter(g => !g.table_assignment)
 
-    const tableRows = (guestList) => guestList.map(g => `
+    // The plus one is a row of their own, a sibling of their host's. It used to
+    // be emitted inside the host's <tr>, which is not valid table markup and
+    // left the browser to guess where the row ended.
+    const tableRows = (guestList) => guestList.map(g => {
+      const host = `
       <tr>
-        <td style="padding:4px 8px">${g.first_name} ${g.last_name || ''}</td>
-        <td style="padding:4px 8px">${g.dietary_restrictions || ''}</td>
-        ${platedMeal ? `<td style="padding:4px 8px">${g.meal_choice || ''}</td>` : ''}
-        ${g.plus_one_name ? `<tr><td style="padding:4px 8px 4px 24px;color:#666">${g.plus_one_name} (+1)</td><td style="padding:4px 8px;color:#666">${g.plus_one_dietary || ''}</td>${platedMeal ? `<td style="padding:4px 8px;color:#666">${g.plus_one_meal_choice || ''}</td>` : ''}</tr>` : ''}
-      </tr>`).join('')
+        <td style="padding:4px 8px">${h(g.first_name)} ${h(g.last_name)}</td>
+        <td style="padding:4px 8px">${h(g.dietary_restrictions)}</td>
+        ${platedMeal ? `<td style="padding:4px 8px">${h(g.meal_choice)}</td>` : ''}
+      </tr>`
+      if (!g.plus_one_name) return host
+      return host + `
+      <tr>
+        <td style="padding:4px 8px 4px 24px;color:#666">${h(plusOneFullName(g.plus_one_name, g.last_name))} (+1)</td>
+        <td style="padding:4px 8px;color:#666">${h(g.plus_one_dietary)}</td>
+        ${platedMeal ? `<td style="padding:4px 8px;color:#666">${h(g.plus_one_meal_choice)}</td>` : ''}
+      </tr>`
+    }).join('')
 
     const html = `<!DOCTYPE html><html><head><title>Seating by Table</title>
       <style>body{font-family:sans-serif;padding:20px;font-size:13px}
@@ -1189,8 +1238,11 @@ export default function GuestList({ weddingId, userId }) {
                 </tr>
               </thead>
               <tbody>
-                {sorted.map(guest => (
-                  <tr key={guest.id} className="border-b border-cream-100 hover:bg-cream-50/60 transition">
+                {sorted.map(guest => {
+                  const answers = describeExtras(guest.rsvp_extras, rsvpConfig)
+                  return (
+                  <Fragment key={guest.id}>
+                  <tr className={`hover:bg-cream-50/60 transition ${answers.length ? '' : 'border-b border-cream-100'}`}>
                     <td className="px-4 py-3">
                       <p className="font-medium text-sage-800">{guest.first_name} {guest.last_name}</p>
                       {guest.phone && (
@@ -1290,7 +1342,25 @@ export default function GuestList({ weddingId, userId }) {
                       </div>
                     </td>
                   </tr>
-                ))}
+                  {/* What this party told you when they RSVP'd. Sits in its own
+                      row so a long message or address doesn't squeeze the
+                      columns above it. */}
+                  {answers.length > 0 && (
+                    <tr className="border-b border-cream-100 bg-cream-50/40">
+                      <td colSpan={7 + (tableOptions.length > 0 ? 1 : 0) + (platedMeal ? 1 : 0)} className="px-4 pb-3 pt-0">
+                        <div className="flex flex-wrap gap-x-5 gap-y-1">
+                          {answers.map(a => (
+                            <span key={a.key} className="text-xs text-sage-600">
+                              <span className="text-sage-400">{a.short}:</span> {a.value}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
+                  )
+                })}
               </tbody>
             </table>
           </div>

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import { API_URL } from '../config/api'
+import { isFieldOn } from '../../shared/rsvp-fields'
 
 
 // ── FadeIn wrapper (Intersection Observer) ───────────────────────────────────
@@ -453,9 +454,10 @@ function SectionHeading({ t, label, title }) {
 // ── RSVP Section ──────────────────────────────────────────────────────────────
 
 function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
-  const rsvpConfig = settings.rsvp_config?.fields || {}
   const customQuestions = settings.rsvp_config?.custom_questions || []
-  const askField = (key, defaultVal = false) => rsvpConfig[key] !== undefined ? rsvpConfig[key] : defaultVal
+  // Defaults live in shared/rsvp-fields.js alongside the toggle list, so a
+  // question the couple switched off is actually switched off here.
+  const askField = (key) => isFieldOn(settings.rsvp_config, key)
 
   const [query, setQuery]         = useState('')
   const [results, setResults]     = useState([])
@@ -707,16 +709,18 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
                     </select>
                   </div>
                 )}
-                <div>
-                  <label className={`block text-sm font-medium mb-2 ${t.accent}`}>Dietary restrictions or allergies</label>
-                  <input
-                    type="text"
-                    value={form.dietary_restrictions}
-                    onChange={e => setForm(f => ({ ...f, dietary_restrictions: e.target.value }))}
-                    placeholder="None, vegetarian, nut allergy…"
-                    className={inputClass}
-                  />
-                </div>
+                {askField('ask_dietary') && (
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${t.accent}`}>Dietary restrictions or allergies</label>
+                    <input
+                      type="text"
+                      value={form.dietary_restrictions}
+                      onChange={e => setForm(f => ({ ...f, dietary_restrictions: e.target.value }))}
+                      placeholder="None, vegetarian, nut allergy…"
+                      className={inputClass}
+                    />
+                  </div>
+                )}
 
                 {/* Dynamic extra fields from RSVP settings */}
                 {askField('ask_phone') && (
@@ -843,7 +847,7 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
                     {mealOptions.map(o => <option key={o.id} value={o.label}>{o.label}</option>)}
                   </select>
                 )}
-                {form.plus_one_rsvp === 'yes' && (
+                {form.plus_one_rsvp === 'yes' && askField('ask_dietary') && (
                   <input
                     type="text"
                     value={form.plus_one_dietary}
