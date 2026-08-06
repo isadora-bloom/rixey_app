@@ -468,9 +468,17 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
     plus_one_rsvp: '', plus_one_meal_choice: '', plus_one_dietary: '',
   })
   const [extras, setExtras]       = useState({})
+  const [plusOneNameInput, setPlusOneNameInput] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [done, setDone]           = useState(false)
   const [error, setError]         = useState('')
+
+  // Whether the couple recorded a name for the plus one or only a marker like
+  // "X" or "+1". Placeholders must never be shown back to a guest as a name.
+  const plusOneKnown = !!selected?.plus_one_named
+  const plusOneLabel = plusOneKnown
+    ? (selected.plus_one_display || selected.plus_one_name)
+    : (plusOneNameInput.trim() || 'your guest')
 
   // Deadline check
   const deadlinePassed = settings.rsvp_deadline
@@ -499,6 +507,7 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
     // Fetch this guest's current RSVP status (not included in search
     // results to avoid leaking other guests' attendance info)
     setForm({ rsvp: '', meal_choice: '', dietary_restrictions: '', plus_one_rsvp: '', plus_one_meal_choice: '', plus_one_dietary: '' })
+    setPlusOneNameInput('')
     try {
       const res = await fetch(`${API_URL}/api/rsvp/${slug}/guest/${guest.id}`)
       if (res.ok) {
@@ -531,6 +540,9 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
         payload.plus_one_rsvp = form.plus_one_rsvp || 'pending'
         if (platedMeal && form.plus_one_rsvp === 'yes') payload.plus_one_meal_choice = form.plus_one_meal_choice
         payload.plus_one_dietary = form.plus_one_dietary || null
+        // Only sent when the couple left the name blank. The server checks
+        // this again against the stored row before it writes anything.
+        if (!plusOneKnown && plusOneNameInput.trim()) payload.plus_one_name = plusOneNameInput.trim()
       }
       // Extra RSVP fields (phone, song request, accessibility, custom questions, etc.)
       if (Object.keys(extras).length > 0) payload.rsvp_extras = extras
@@ -670,7 +682,7 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
               </div>
               <button
                 type="button"
-                onClick={() => { setSelected(null); setForm({ rsvp:'', meal_choice:'', dietary_restrictions:'', plus_one_rsvp:'', plus_one_meal_choice:'', plus_one_dietary:'' }) }}
+                onClick={() => { setSelected(null); setPlusOneNameInput(''); setForm({ rsvp:'', meal_choice:'', dietary_restrictions:'', plus_one_rsvp:'', plus_one_meal_choice:'', plus_one_dietary:'' }) }}
                 className={`text-xs ${t.body} opacity-60 hover:opacity-100`}
               >
                 Not me →
@@ -819,11 +831,12 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
               </>
             )}
 
-            {/* Plus one */}
+            {/* Plus one. Shown only when the couple gave this guest one: it is
+                their decision, and the form never offers to create one. */}
             {selected.plus_one_name && (
               <div className={`border rounded-xl p-4 space-y-4 ${t === THEMES.warm ? 'border-cream-200' : 'border-gray-200'}`}>
                 <p className={`text-sm font-medium ${t.accent}`}>
-                  And {selected.plus_one_name}?
+                  {plusOneKnown ? `And ${plusOneLabel}?` : 'And your guest?'}
                 </p>
                 <div className="grid grid-cols-2 gap-3">
                   {['yes', 'no'].map(val => (
@@ -841,9 +854,24 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
                     </button>
                   ))}
                 </div>
+                {/* The couple recorded a plus one but never got a name. This is
+                    the one moment someone who knows it is sitting right here. */}
+                {form.plus_one_rsvp === 'yes' && !plusOneKnown && (
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${t.accent}`}>Who are you bringing?</label>
+                    <input
+                      type="text"
+                      value={plusOneNameInput}
+                      onChange={e => setPlusOneNameInput(e.target.value)}
+                      placeholder="Their full name"
+                      className={inputClass}
+                      maxLength={80}
+                    />
+                  </div>
+                )}
                 {form.plus_one_rsvp === 'yes' && platedMeal && mealOptions.length > 0 && (
                   <select value={form.plus_one_meal_choice} onChange={e => setForm(f => ({ ...f, plus_one_meal_choice: e.target.value }))} className={selectClass}>
-                    <option value="">{selected.plus_one_name}'s meal…</option>
+                    <option value="">{plusOneLabel}&apos;s meal…</option>
                     {mealOptions.map(o => <option key={o.id} value={o.label}>{o.label}</option>)}
                   </select>
                 )}
@@ -852,7 +880,7 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
                     type="text"
                     value={form.plus_one_dietary}
                     onChange={e => setForm(f => ({ ...f, plus_one_dietary: e.target.value }))}
-                    placeholder={`${selected.plus_one_name}'s dietary needs…`}
+                    placeholder={`${plusOneLabel}'s dietary needs…`}
                     className={inputClass}
                   />
                 )}

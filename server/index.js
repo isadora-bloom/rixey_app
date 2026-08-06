@@ -13,7 +13,7 @@ import { validateBody } from './middleware/validate.js';
 import { coerceBody } from './middleware/coerce.js';
 import { fetchAllTabs, SheetFetchError } from './lib/sheet-fetcher.js';
 import { buildDiff, applyChoices } from './lib/sheet-diff/index.js';
-import { guestFullName, plusOneFullName, isNamedPerson, headcount } from '../shared/guest-names.js';
+import { guestFullName, plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, headcount } from '../shared/guest-names.js';
 import cron from 'node-cron';
 import * as XLSX from 'xlsx';
 // PDF parsing removed - using Claude vision for all documents
@@ -8876,6 +8876,10 @@ app.get('/api/rsvp/:slug/search', async (req, res) => {
           name: hostName,
           host_name: hostName,
           plus_one_name: g.plus_one_name || null,
+          // What to call them, and whether we have a name at all. The form
+          // uses the second to decide whether to ask who they're bringing.
+          plus_one_display: hasPlusOne(g) ? plusOneDisplayName(g) : null,
+          plus_one_named: isNamedPerson(g.plus_one_name),
           is_plus_one: false,
         });
       }
@@ -8889,6 +8893,8 @@ app.get('/api/rsvp/:slug/search', async (req, res) => {
             name: p1Name,
             host_name: hostName,
             plus_one_name: g.plus_one_name,
+            plus_one_display: plusOneDisplayName(g),
+            plus_one_named: true,
             is_plus_one: true,
           });
         }
@@ -8914,7 +8920,7 @@ app.get('/api/rsvp/:slug/search', async (req, res) => {
 // Submit RSVP — writes back to wedding_guests
 app.post('/api/rsvp/:slug', async (req, res) => {
   try {
-    const { guest_id, rsvp, meal_choice, dietary_restrictions, plus_one_rsvp, plus_one_meal_choice, plus_one_dietary, rsvp_extras } = req.body;
+    const { guest_id, rsvp, meal_choice, dietary_restrictions, plus_one_name, plus_one_rsvp, plus_one_meal_choice, plus_one_dietary, rsvp_extras } = req.body;
     if (!guest_id || !rsvp) return res.status(400).json({ error: 'guest_id and rsvp required' });
 
     // Verify guest belongs to this wedding via slug
@@ -8928,7 +8934,7 @@ app.post('/api/rsvp/:slug', async (req, res) => {
 
     const { data: guest, error: ge } = await supabaseAdmin
       .from('wedding_guests')
-      .select('id, wedding_id')
+      .select('id, wedding_id, plus_one_name')
       .eq('id', guest_id)
       .eq('wedding_id', settings.wedding_id)
       .single();
@@ -8944,6 +8950,20 @@ app.post('/api/rsvp/:slug', async (req, res) => {
     if (plus_one_meal_choice !== undefined) update.plus_one_meal_choice = plus_one_meal_choice;
     if (plus_one_dietary !== undefined) update.plus_one_dietary = plus_one_dietary;
     if (rsvp_extras) update.rsvp_extras = rsvp_extras;
+
+    // A guest may name the plus one they were given. They may not award
+    // themselves one, and they may not rename one the couple already named.
+    // Only the couple decides who gets a plus one, and this is where that
+    // holds: three conditions, all required, checked against the stored row
+    // rather than anything the form sent.
+    if (typeof plus_one_name === 'string') {
+      const proposed = plus_one_name.trim().replace(/\s+/g, ' ').slice(0, 80);
+      const wasGranted = hasPlusOne(guest);
+      const stillUnnamed = !isNamedPerson(guest.plus_one_name);
+      if (wasGranted && stillUnnamed && isNamedPerson(proposed)) {
+        update.plus_one_name = proposed;
+      }
+    }
 
     const { error: ue } = await supabaseAdmin
       .from('wedding_guests')
