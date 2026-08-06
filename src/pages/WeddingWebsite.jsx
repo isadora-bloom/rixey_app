@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import { API_URL } from '../config/api'
-import { isFieldOn } from '../../shared/rsvp-fields'
+import { isFieldOn, sendsConfirmation } from '../../shared/rsvp-fields'
 
 
 // ── FadeIn wrapper (Intersection Observer) ───────────────────────────────────
@@ -458,10 +458,12 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
   // Defaults live in shared/rsvp-fields.js alongside the toggle list, so a
   // question the couple switched off is actually switched off here.
   const askField = (key) => isFieldOn(settings.rsvp_config, key)
+  const confirmationsOn = sendsConfirmation(settings.rsvp_config)
 
   const [query, setQuery]         = useState('')
   const [results, setResults]     = useState([])
   const [searching, setSearching] = useState(false)
+  const [searchFailed, setSearchFailed] = useState(false)
   const [selected, setSelected]   = useState(null)
   const [form, setForm]           = useState({
     rsvp: '', meal_choice: '', dietary_restrictions: '',
@@ -469,6 +471,7 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
   })
   const [extras, setExtras]       = useState({})
   const [plusOneNameInput, setPlusOneNameInput] = useState('')
+  const [sentTo, setSentTo]       = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [done, setDone]           = useState(false)
   const [error, setError]         = useState('')
@@ -487,14 +490,21 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
 
   // Debounced name search
   useEffect(() => {
-    if (query.length < 2) { setResults([]); return }
+    if (query.length < 2) { setResults([]); setSearchFailed(false); return }
     const timer = setTimeout(async () => {
       setSearching(true)
       try {
         const res = await fetch(`${API_URL}/api/rsvp/${slug}/search?q=${encodeURIComponent(query)}`)
+        if (!res.ok) throw new Error(res.status)
         const data = await res.json()
         setResults(Array.isArray(data) ? data : [])
-      } catch {}
+        setSearchFailed(false)
+      } catch {
+        // A failed request used to look identical to "you are not on the list",
+        // which is a miserable thing to tell an invited guest by accident.
+        setResults([])
+        setSearchFailed(true)
+      }
       setSearching(false)
     }, 350)
     return () => clearTimeout(timer)
@@ -552,6 +562,8 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
         body: JSON.stringify(payload),
       })
       if (!res.ok) throw new Error()
+      const body = await res.json().catch(() => ({}))
+      setSentTo(body?.confirmationSentTo || null)
       setDone(true)
     } catch {
       setError('Something went wrong. Please try again or contact us directly.')
@@ -578,6 +590,15 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
   }
 
   if (done) {
+    // A receipt, not just a thank-you. Most guests have no email on file, so
+    // this screen is the only proof they get that the answer landed, and not
+    // knowing is what sends people back to re-submit.
+    const recorded = [
+      { who: selected.host_name || selected.name, rsvp: form.rsvp, meal: form.meal_choice },
+      ...(selected.plus_one_name
+        ? [{ who: plusOneLabel, rsvp: form.plus_one_rsvp, meal: form.plus_one_meal_choice }]
+        : []),
+    ].filter(r => r.rsvp)
     return (
       <Section t={t} alt id="rsvp">
         <div className="text-center max-w-md mx-auto py-4">
@@ -585,10 +606,33 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
           <h2 className={`${t.heading} text-2xl mb-3`}>
             {form.rsvp === 'yes' ? 'See you there!' : 'We\'ll miss you'}
           </h2>
-          <p className={`${t.body}`}>
+          <p className={`${t.body} mb-6`}>
             {form.rsvp === 'yes'
-              ? `Thanks for confirming, ${selected.name}. We can't wait to celebrate with you.`
-              : `Thanks for letting us know, ${selected.name}. You'll be missed.`}
+              ? 'Thanks for confirming. We can\'t wait to celebrate with you.'
+              : 'Thanks for letting us know. You\'ll be missed.'}
+          </p>
+
+          <div className={`text-left rounded-xl border p-4 mb-5 ${t === THEMES.warm ? 'border-cream-200 bg-white/60' : 'border-gray-200 bg-white'}`}>
+            <p className={`text-xs uppercase tracking-wide mb-2 ${t.body} opacity-60`}>What we&apos;ve got down</p>
+            {recorded.map((r, i) => (
+              <div key={i} className={`flex items-baseline justify-between gap-3 py-1 ${i ? 'border-t border-dashed border-current/10' : ''}`}>
+                <span className={`text-sm font-medium ${t.accent}`}>{r.who}</span>
+                <span className={`text-sm ${t.body}`}>
+                  {r.rsvp === 'yes' ? 'Attending' : 'Not attending'}
+                  {r.rsvp === 'yes' && r.meal ? ` · ${r.meal}` : ''}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {sentTo && (
+            <p className={`text-xs ${t.body} opacity-70 mb-2`}>A copy is on its way to {sentTo}.</p>
+          )}
+          <p className={`text-xs ${t.body} opacity-70`}>
+            Changed your mind? Search your name again
+            {settings.rsvp_deadline && !deadlinePassed
+              ? ` any time before ${new Date(settings.rsvp_deadline + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}`
+              : ' any time'}.
           </p>
         </div>
       </Section>
@@ -659,9 +703,15 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
             )}
 
             {query.length >= 2 && !searching && results.length === 0 && (
-              <p className={`mt-2 text-sm ${t.body} opacity-70`}>
-                No one found with that name. Try a different spelling or contact the couple directly.
-              </p>
+              searchFailed ? (
+                <p className="mt-2 text-sm text-red-500">
+                  We couldn&apos;t reach the guest list just now. Check your connection and try again in a moment.
+                </p>
+              ) : (
+                <p className={`mt-2 text-sm ${t.body} opacity-70`}>
+                  No one found with that name. Try your surname on its own, or the name your invitation was addressed to.
+                </p>
+              )
             )}
           </div>
         )}
@@ -745,6 +795,18 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
                 {askField('ask_email') && (
                   <div>
                     <label className={`block text-sm font-medium mb-2 ${t.accent}`}>Email address</label>
+                    <input type="email" value={extras.email || ''} onChange={e => setExtras(p => ({ ...p, email: e.target.value }))}
+                      placeholder="you@email.com" className={inputClass} />
+                  </div>
+                )}
+                {/* Where the couple isn't collecting emails, still offer one so
+                    the guest can have something in writing. Optional, and it
+                    says plainly what it's for. */}
+                {!askField('ask_email') && confirmationsOn && (
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${t.accent}`}>
+                      Email address <span className="font-normal opacity-60">(optional, for your confirmation)</span>
+                    </label>
                     <input type="email" value={extras.email || ''} onChange={e => setExtras(p => ({ ...p, email: e.target.value }))}
                       placeholder="you@email.com" className={inputClass} />
                   </div>

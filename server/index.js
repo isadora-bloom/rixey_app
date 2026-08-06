@@ -14,6 +14,8 @@ import { coerceBody } from './middleware/coerce.js';
 import { fetchAllTabs, SheetFetchError } from './lib/sheet-fetcher.js';
 import { buildDiff, applyChoices } from './lib/sheet-diff/index.js';
 import { guestFullName, plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, headcount } from '../shared/guest-names.js';
+import { sendsConfirmation } from '../shared/rsvp-fields.js';
+import { rsvpConfirmationHtml } from './lib/rsvp-confirmation.js';
 import cron from 'node-cron';
 import * as XLSX from 'xlsx';
 // PDF parsing removed - using Claude vision for all documents
@@ -8926,7 +8928,7 @@ app.post('/api/rsvp/:slug', async (req, res) => {
     // Verify guest belongs to this wedding via slug
     const { data: settings, error: se } = await supabaseAdmin
       .from('wedding_website_settings')
-      .select('wedding_id')
+      .select('wedding_id, rsvp_config, rsvp_deadline')
       .eq('slug', req.params.slug)
       .eq('published', true)
       .single();
@@ -8934,7 +8936,7 @@ app.post('/api/rsvp/:slug', async (req, res) => {
 
     const { data: guest, error: ge } = await supabaseAdmin
       .from('wedding_guests')
-      .select('id, wedding_id, plus_one_name')
+      .select('id, wedding_id, first_name, last_name, email, plus_one_name')
       .eq('id', guest_id)
       .eq('wedding_id', settings.wedding_id)
       .single();
@@ -8971,7 +8973,36 @@ app.post('/api/rsvp/:slug', async (req, res) => {
       .eq('id', guest_id);
     if (ue) throw ue;
 
-    res.json({ ok: true });
+    // Confirmation email. Best effort and strictly after the save: the RSVP is
+    // already recorded, so nothing here is allowed to fail the request. Sends
+    // only to an address this guest gave us or one already on their row, and
+    // only to that one address.
+    let confirmationSentTo = null;
+    try {
+      const to = String(rsvp_extras?.email || guest.email || '').trim();
+      if (to && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to) && sendsConfirmation(settings.rsvp_config)) {
+        const { data: wedding } = await supabaseAdmin
+          .from('weddings').select('couple_names, wedding_date').eq('id', settings.wedding_id).maybeSingle();
+        const finalName = update.plus_one_name || guest.plus_one_name;
+        const party = [
+          { who: guestFullName(guest), status: rsvp, meal: update.meal_choice },
+          ...(finalName ? [{
+            who: plusOneDisplayName({ ...guest, plus_one_name: finalName }),
+            status: update.plus_one_rsvp,
+            meal: update.plus_one_meal_choice,
+          }] : []),
+        ].filter(p => p.status);
+        const couple = wedding?.couple_names || 'the couple';
+        const sent = await sendEmail(to, `Your RSVP for ${couple}`, rsvpConfirmationHtml({
+          couple, weddingDate: wedding?.wedding_date, party, deadline: settings.rsvp_deadline,
+        }));
+        if (sent) confirmationSentTo = to;
+      }
+    } catch (mailErr) {
+      console.error('[RSVP] confirmation email failed (RSVP itself is saved):', mailErr.message);
+    }
+
+    res.json({ ok: true, confirmationSentTo });
   } catch (err) {
     console.error('RSVP submit error:', err);
     res.status(500).json({ error: err.message });

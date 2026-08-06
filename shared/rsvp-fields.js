@@ -29,6 +29,19 @@ export function isFieldOn(rsvpConfig, key) {
 }
 
 /**
+ * Should guests get an email confirming what they submitted?
+ *
+ * Not one of the questions above, so it is kept out of RSVP_FIELDS, but it
+ * lives in the same config blob. On by default: a guest with no receipt comes
+ * back to check, and until recently the site told them the wrong thing when
+ * they did. Only ever sends where an address is available.
+ */
+export function sendsConfirmation(rsvpConfig) {
+  const v = rsvpConfig?.fields?.send_confirmation;
+  return v === undefined ? true : !!v;
+}
+
+/**
  * Turn a stored rsvp_extras blob into labelled answers, ready to display.
  *
  * Answers outlive their question on purpose. If a couple switches a toggle off

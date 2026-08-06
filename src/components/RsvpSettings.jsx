@@ -4,7 +4,7 @@ import { authHeaders, apiFetch } from '../utils/api'
 import { useToast } from './ui/Toast'
 import { useAutosave } from '../hooks/useAutosave'
 import SaveIndicator from './ui/SaveIndicator'
-import { RSVP_FIELDS } from '../../shared/rsvp-fields'
+import { RSVP_FIELDS, isFieldOn, sendsConfirmation } from '../../shared/rsvp-fields'
 
 export default function RsvpSettings({ weddingId }) {
   const [config, setConfig] = useState({})
@@ -28,8 +28,16 @@ export default function RsvpSettings({ weddingId }) {
     })()
   }, [weddingId])
 
+  // Flip the *effective* value, not the stored one. Anything defaulting to on
+  // is absent from config until first touched, and `!undefined` is true, so
+  // the old version needed two clicks to switch a default-on field off.
   const toggle = (key) => {
-    setConfig(prev => ({ ...prev, [key]: !prev[key] }))
+    setConfig(prev => {
+      const on = key === 'send_confirmation'
+        ? sendsConfirmation({ fields: prev })
+        : isFieldOn({ fields: prev }, key)
+      return { ...prev, [key]: !on }
+    })
   }
 
   const { schedule: scheduleSave, state: saveState } = useAutosave(
@@ -87,10 +95,27 @@ export default function RsvpSettings({ weddingId }) {
         the printed list and the CSV export. Switching a question off later doesn&apos;t delete replies you already have.
       </p>
 
+      {/* Confirmation email. Not a question, so it sits above the question
+          list rather than inside it. */}
+      <div className="border border-cream-200 rounded-xl px-5 py-3.5 flex items-center justify-between gap-4">
+        <div>
+          <p className="text-sm text-sage-700">Email guests a confirmation</p>
+          <p className="text-xs text-sage-400 mt-0.5">
+            Sends a receipt of exactly what they submitted, where we have an email for them.
+          </p>
+        </div>
+        <div
+          onClick={() => toggle('send_confirmation')}
+          className={`w-10 h-6 rounded-full transition-colors flex-shrink-0 cursor-pointer relative ${sendsConfirmation({ fields: config }) ? 'bg-sage-500' : 'bg-cream-300'}`}
+        >
+          <div className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${sendsConfirmation({ fields: config }) ? 'translate-x-5' : 'translate-x-1'}`} />
+        </div>
+      </div>
+
       {/* Field toggles */}
       <div className="border border-cream-200 rounded-xl divide-y divide-cream-100">
         {RSVP_FIELDS.map(field => {
-          const isOn = config[field.key] !== undefined ? config[field.key] : field.default
+          const isOn = isFieldOn({ fields: config }, field.key)
           return (
             <div key={field.key} className="flex items-center justify-between px-5 py-3.5">
               <span className="text-sm text-sage-700">{field.label}</span>
