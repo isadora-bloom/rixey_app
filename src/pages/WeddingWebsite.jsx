@@ -628,12 +628,10 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
                     onClick={() => selectGuest(guest)}
                     className={`w-full text-left px-4 py-3 text-sm flex items-center justify-between gap-3 hover:bg-sage-50 transition border-b last:border-0 ${t === THEMES.warm ? 'border-cream-100' : 'border-gray-100'}`}
                   >
+                    {/* No attendance badge here. The search endpoint deliberately
+                        withholds rsvp so results can't be used to read other
+                        guests' answers; status appears once you pick yourself. */}
                     <span className={`font-medium ${t.accent}`}>{guest.name}</span>
-                    {guest.rsvp !== 'pending' && (
-                      <span className={`text-xs px-2 py-0.5 rounded-full ${guest.rsvp === 'yes' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-                        {guest.rsvp === 'yes' ? 'Attending' : 'Not attending'}
-                      </span>
-                    )}
                   </button>
                 ))}
               </div>
