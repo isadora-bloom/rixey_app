@@ -623,7 +623,7 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
               <div className={`mt-1 border rounded-xl overflow-hidden shadow-lg ${t === THEMES.warm ? 'border-cream-200' : 'border-gray-200'}`}>
                 {results.map(guest => (
                   <button
-                    key={guest.id}
+                    key={`${guest.id}-${guest.is_plus_one ? 'p1' : 'host'}`}
                     type="button"
                     onClick={() => selectGuest(guest)}
                     className={`w-full text-left px-4 py-3 text-sm flex items-center justify-between gap-3 hover:bg-sage-50 transition border-b last:border-0 ${t === THEMES.warm ? 'border-cream-100' : 'border-gray-100'}`}
@@ -631,7 +631,14 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
                     {/* No attendance badge here. The search endpoint deliberately
                         withholds rsvp so results can't be used to read other
                         guests' answers; status appears once you pick yourself. */}
-                    <span className={`font-medium ${t.accent}`}>{guest.name}</span>
+                    <span>
+                      <span className={`font-medium ${t.accent}`}>{guest.name}</span>
+                      {guest.is_plus_one && (
+                        <span className={`block text-xs ${t.body} opacity-70`}>
+                          invited with {guest.host_name}
+                        </span>
+                      )}
+                    </span>
                   </button>
                 ))}
               </div>
@@ -649,7 +656,16 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
         {selected && (
           <div className="space-y-5">
             <div className={`flex items-center justify-between gap-3 p-3 rounded-xl ${t === THEMES.warm ? 'bg-sage-50' : 'bg-gray-50'}`}>
-              <p className={`font-medium ${t.accent}`}>{selected.name}</p>
+              {/* One RSVP covers the whole party, so a plus one who found
+                  herself gets the party's form, not a form addressed to her. */}
+              <div>
+                <p className={`font-medium ${t.accent}`}>{selected.host_name || selected.name}</p>
+                {selected.is_plus_one && (
+                  <p className={`text-xs ${t.body} opacity-70 mt-0.5`}>
+                    Found you as {selected.name}. Please answer for you both.
+                  </p>
+                )}
+              </div>
               <button
                 type="button"
                 onClick={() => { setSelected(null); setForm({ rsvp:'', meal_choice:'', dietary_restrictions:'', plus_one_rsvp:'', plus_one_meal_choice:'', plus_one_dietary:'' }) }}

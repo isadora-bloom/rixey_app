@@ -13,6 +13,7 @@ import { validateBody } from './middleware/validate.js';
 import { coerceBody } from './middleware/coerce.js';
 import { fetchAllTabs, SheetFetchError } from './lib/sheet-fetcher.js';
 import { buildDiff, applyChoices } from './lib/sheet-diff/index.js';
+import { guestFullName, plusOneFullName, isNamedPerson } from '../shared/guest-names.js';
 import cron from 'node-cron';
 import * as XLSX from 'xlsx';
 // PDF parsing removed - using Claude vision for all documents
@@ -8850,24 +8851,55 @@ app.get('/api/rsvp/:slug/search', async (req, res) => {
       .single();
     if (se || !settings) return res.status(404).json({ error: 'Not found' });
 
+    // Filtered in JS rather than SQL: matching a plus one needs the host's
+    // surname, which ILIKE cannot reach across columns. Guest lists top out in
+    // the low hundreds, so the whole list is cheap to pull.
     const { data: guests, error: ge } = await supabaseAdmin
       .from('wedding_guests')
-      .select('id, first_name, last_name, rsvp, plus_one_name, plus_one_rsvp')
-      .eq('wedding_id', settings.wedding_id)
-      .or(`first_name.ilike.%${q.replace(/%/g, '\\%').replace(/_/g, '\\_')}%,last_name.ilike.%${q.replace(/%/g, '\\%').replace(/_/g, '\\_')}%`);
+      .select('id, first_name, last_name, plus_one_name')
+      .eq('wedding_id', settings.wedding_id);
     if (ge) throw ge;
 
-    // Only return names for search results — don't leak attendance
-    // status of other guests. RSVP status is shown after selection.
-    const results = (guests || [])
-      .filter(g => `${g.first_name} ${g.last_name || ''}`.toLowerCase().includes(q.toLowerCase()))
-      .slice(0, 8)
-      .map(g => ({
-        id: g.id,
-        name: [g.first_name, g.last_name].filter(Boolean).join(' '),
-        plus_one_name: g.plus_one_name || null,
-      }));
-    res.json(results);
+    const needle = q.toLowerCase();
+    const results = [];
+
+    for (const g of guests || []) {
+      const hostName = guestFullName(g);
+      if (hostName.toLowerCase().includes(needle)) {
+        results.push({
+          id: g.id,
+          name: hostName,
+          host_name: hostName,
+          plus_one_name: g.plus_one_name || null,
+          is_plus_one: false,
+        });
+      }
+      // A plus one has no row, so they are only findable through their host.
+      // plusOneFullName gives them the host's surname when none was recorded.
+      if (isNamedPerson(g.plus_one_name)) {
+        const p1Name = plusOneFullName(g.plus_one_name, g.last_name);
+        if (p1Name.toLowerCase().includes(needle)) {
+          results.push({
+            id: g.id,
+            name: p1Name,
+            host_name: hostName,
+            plus_one_name: g.plus_one_name,
+            is_plus_one: true,
+          });
+        }
+      }
+    }
+
+    // Names that start with what was typed are far likelier to be the person
+    // typing, so float those up before the cap bites.
+    results.sort((a, b) => {
+      const as = a.name.toLowerCase().startsWith(needle) ? 0 : 1;
+      const bs = b.name.toLowerCase().startsWith(needle) ? 0 : 1;
+      return as - bs || a.name.localeCompare(b.name);
+    });
+
+    // Only names go back. Attendance stays private until you pick yourself.
+    res.json(results.slice(0, 12));
   } catch (err) {
     console.error('RSVP search error:', err);
     res.status(500).json({ error: err.message });
