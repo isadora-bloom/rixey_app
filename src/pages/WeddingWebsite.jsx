@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import { API_URL } from '../config/api'
-import { isFieldOn, sendsConfirmation } from '../../shared/rsvp-fields'
+import { isFieldOn, sendsConfirmation, RSVP_FIELDS } from '../../shared/rsvp-fields'
 
 
 // ── FadeIn wrapper (Intersection Observer) ───────────────────────────────────
@@ -554,8 +554,20 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
         // this again against the stored row before it writes anything.
         if (!plusOneKnown && plusOneNameInput.trim()) payload.plus_one_name = plusOneNameInput.trim()
       }
-      // Extra RSVP fields (phone, song request, accessibility, custom questions, etc.)
-      if (Object.keys(extras).length > 0) payload.rsvp_extras = extras
+      // Extra RSVP fields (phone, song request, accessibility, custom questions).
+      // Only send answers to questions that were actually on screen: someone who
+      // fills the form in, then switches to not attending, should not have a
+      // song request submitted on their behalf.
+      const kept = {}
+      for (const [k, v] of Object.entries(extras)) {
+        if (v === undefined || v === null || String(v).trim() === '') continue
+        if (k.startsWith('plus_one_')) {
+          if (form.plus_one_rsvp === 'yes') kept[k] = v
+          continue
+        }
+        if (form.rsvp === 'yes' || RSVP_FIELDS.find(f => f.extra === k)?.alsoWhenDeclining) kept[k] = v
+      }
+      if (Object.keys(kept).length > 0) payload.rsvp_extras = kept
       const res = await fetch(`${API_URL}/api/rsvp/${slug}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -854,14 +866,6 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
                       placeholder="What song gets you on the dance floor?" className={inputClass} />
                   </div>
                 )}
-                {askField('ask_message') && (
-                  <div>
-                    <label className={`block text-sm font-medium mb-2 ${t.accent}`}>Message for the couple</label>
-                    <textarea value={extras.message || ''} onChange={e => setExtras(p => ({ ...p, message: e.target.value }))}
-                      placeholder="A note, a wish, a memory..." rows={3}
-                      className={`${inputClass} resize-none`} />
-                  </div>
-                )}
                 {customQuestions.map((q, i) => (
                   <div key={i}>
                     <label className={`block text-sm font-medium mb-2 ${t.accent}`}>{q.label}</label>
@@ -946,6 +950,49 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
                     className={inputClass}
                   />
                 )}
+                {/* Shuttle and accessibility genuinely differ between two
+                    people. Asked once for the party, the venue gets a seat
+                    count and an access list that are quietly wrong. */}
+                {form.plus_one_rsvp === 'yes' && askField('ask_shuttle') && (
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${t.accent}`}>
+                      Will {plusOneLabel} need shuttle service?
+                    </label>
+                    <div className="grid grid-cols-2 gap-3">
+                      {['Yes', 'No'].map(val => (
+                        <button key={val} type="button"
+                          onClick={() => setExtras(p => ({ ...p, plus_one_shuttle: val }))}
+                          className={`py-2 rounded-lg text-sm font-medium border-2 transition ${
+                            extras.plus_one_shuttle === val
+                              ? (t === THEMES.warm ? 'border-sage-500 bg-sage-500 text-white' : 'border-gray-900 bg-gray-900 text-white')
+                              : (t === THEMES.warm ? 'border-cream-300 text-sage-600' : 'border-gray-200 text-gray-600')
+                          }`}>{val}</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {form.plus_one_rsvp === 'yes' && askField('ask_accessibility') && (
+                  <input
+                    type="text"
+                    value={extras.plus_one_accessibility || ''}
+                    onChange={e => setExtras(p => ({ ...p, plus_one_accessibility: e.target.value }))}
+                    placeholder={`${plusOneLabel}'s accessibility needs…`}
+                    className={inputClass}
+                  />
+                )}
+              </div>
+            )}
+
+            {/* Kept out of the attending-only block above. Somebody who cannot
+                come is the person most likely to want to say something, and
+                the form used to hide this from them. */}
+            {form.rsvp && askField('ask_message') && (
+              <div>
+                <label className={`block text-sm font-medium mb-2 ${t.accent}`}>Message for the couple</label>
+                <textarea value={extras.message || ''} onChange={e => setExtras(p => ({ ...p, message: e.target.value }))}
+                  placeholder={form.rsvp === 'no' ? 'Sorry to miss it — leave them a note…' : 'A note, a wish, a memory...'}
+                  rows={3}
+                  className={`${inputClass} resize-none`} />
               </div>
             )}
 

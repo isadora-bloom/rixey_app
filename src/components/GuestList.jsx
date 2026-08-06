@@ -780,7 +780,7 @@ export default function GuestList({ weddingId, userId }) {
     // One column per RSVP question anyone actually answered. Built from the
     // data rather than the current toggles, so answers to a question since
     // switched off still come out.
-    const answersByGuest = new Map(guests.map(g => [g.id, describeExtras(g.rsvp_extras, rsvpConfig)]))
+    const answersByGuest = new Map(guests.map(g => [g.id, describeExtras(g.rsvp_extras, rsvpConfig, { plusOneName: plusOneDisplayName(g) })]))
     const answerCols = []
     for (const list of answersByGuest.values()) {
       for (const a of list) if (!answerCols.some(c => c.key === a.key)) answerCols.push({ key: a.key, label: a.label })
@@ -853,7 +853,7 @@ export default function GuestList({ weddingId, userId }) {
   const printFullList = () => {
     const rsvpWord = g => g.rsvp === 'yes' ? 'Accepted' : g.rsvp === 'no' ? 'Declined' : g.rsvp === 'maybe' ? 'Maybe' : 'Pending'
     const guestRows = sorted.map(g => {
-      const answers = describeExtras(g.rsvp_extras, rsvpConfig)
+      const answers = describeExtras(g.rsvp_extras, rsvpConfig, { plusOneName: plusOneDisplayName(g) })
       return `
       <tr>
         <td style="padding:4px 8px;white-space:nowrap">${h(g.first_name)} ${h(g.last_name)}</td>
@@ -1246,7 +1246,7 @@ export default function GuestList({ weddingId, userId }) {
               </thead>
               <tbody>
                 {sorted.map(guest => {
-                  const answers = describeExtras(guest.rsvp_extras, rsvpConfig)
+                  const answers = describeExtras(guest.rsvp_extras, rsvpConfig, { plusOneName: plusOneDisplayName(guest) })
                   return (
                   <Fragment key={guest.id}>
                   <tr className={`hover:bg-cream-50/60 transition ${answers.length ? '' : 'border-b border-cream-100'}`}>

@@ -8,6 +8,16 @@
  *
  * `extra` is the key the answer is stored under inside wedding_guests.rsvp_extras.
  * A null `extra` means the answer goes to a real column instead.
+ *
+ * `perPerson` means the two halves of a party can genuinely differ, so the plus
+ * one is asked separately and their answer is stored under `plus_one_<extra>`.
+ * One person drives while the other takes the bus; one uses a wheelchair and
+ * the other doesn't. Asking a party once and assuming both is how the venue
+ * ends up with the wrong shuttle count.
+ *
+ * `alsoWhenDeclining` means the question still makes sense from someone who is
+ * not coming. Only the message does: it is the thing a decliner most wants to
+ * leave, and it was hidden from them.
  */
 export const RSVP_FIELDS = [
   { key: 'ask_dietary',       extra: null,            label: 'Dietary restrictions / allergies', short: 'Dietary',       default: true },
@@ -15,11 +25,16 @@ export const RSVP_FIELDS = [
   { key: 'ask_email',         extra: 'email',         label: 'Email address',                    short: 'Email',         default: false },
   { key: 'ask_address',       extra: 'address',       label: 'Mailing address',                  short: 'Address',       default: false },
   { key: 'ask_hotel',         extra: 'hotel',         label: 'Hotel preference',                 short: 'Hotel',         default: false },
-  { key: 'ask_shuttle',       extra: 'shuttle',       label: 'Shuttle preference',               short: 'Shuttle',       default: false },
-  { key: 'ask_accessibility', extra: 'accessibility', label: 'Accessibility needs',              short: 'Accessibility', default: false },
+  { key: 'ask_shuttle',       extra: 'shuttle',       label: 'Shuttle preference',               short: 'Shuttle',       default: false, perPerson: true },
+  { key: 'ask_accessibility', extra: 'accessibility', label: 'Accessibility needs',              short: 'Accessibility', default: false, perPerson: true },
   { key: 'ask_song',          extra: 'song',          label: 'Song request',                     short: 'Song',          default: false },
-  { key: 'ask_message',       extra: 'message',       label: 'Message to the couple',            short: 'Message',       default: false },
+  { key: 'ask_message',       extra: 'message',       label: 'Message to the couple',            short: 'Message',       default: false, alsoWhenDeclining: true },
 ];
+
+/** Where a plus one's answer to a per-person question is stored. */
+export function plusOneExtraKey(extra) {
+  return `plus_one_${extra}`;
+}
 
 /** Is this question switched on for this wedding? */
 export function isFieldOn(rsvpConfig, key) {
@@ -48,19 +63,32 @@ export function sendsConfirmation(rsvpConfig) {
  * or deletes a custom question after guests have replied, what those guests
  * said still shows, under a plain label rather than disappearing.
  */
-export function describeExtras(extras, rsvpConfig) {
+export function describeExtras(extras, rsvpConfig, { plusOneName } = {}) {
   if (!extras || typeof extras !== 'object' || Array.isArray(extras)) return [];
   const custom = rsvpConfig?.custom_questions || [];
   const out = [];
   const seen = new Set();
 
   const present = v => v !== undefined && v !== null && String(v).trim() !== '';
+  const who = plusOneName || 'plus one';
 
   for (const f of RSVP_FIELDS) {
     if (!f.extra) continue;
     seen.add(f.extra);
-    if (!present(extras[f.extra])) continue;
-    out.push({ key: f.extra, label: f.label, short: f.short, value: String(extras[f.extra]).trim() });
+    if (present(extras[f.extra])) {
+      out.push({ key: f.extra, label: f.label, short: f.short, value: String(extras[f.extra]).trim() });
+    }
+    if (!f.perPerson) continue;
+    const pk = plusOneExtraKey(f.extra);
+    seen.add(pk);
+    if (present(extras[pk])) {
+      out.push({
+        key: pk,
+        label: `${f.label} — ${who}`,
+        short: `${f.short} (${who})`,
+        value: String(extras[pk]).trim(),
+      });
+    }
   }
 
   for (const [k, v] of Object.entries(extras)) {
