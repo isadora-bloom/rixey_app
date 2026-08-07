@@ -16,6 +16,7 @@ import { buildDiff, applyChoices } from './lib/sheet-diff/index.js';
 import { guestFullName, plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, headcount, parsePlusOneCell } from '../shared/guest-names.js';
 import { sendsConfirmation } from '../shared/rsvp-fields.js';
 import { rsvpConfirmationHtml } from './lib/rsvp-confirmation.js';
+import { WALKTHROUGH_TARGETS, TARGET_KEYS, buildNote, organisePrompt, parseItems } from './lib/walkthrough.js';
 import cron from 'node-cron';
 import * as XLSX from 'xlsx';
 // PDF parsing removed - using Claude vision for all documents
@@ -943,7 +944,7 @@ const PORTAL_SECTION_KEYS = new Set([
   'downloads', 'guestcare', 'guests', 'inbox', 'inspo', 'makeup', 'photos',
   'picks', 'preferred-vendors', 'rehearsal', 'resources', 'rsvp-settings',
   'shuttle', 'staffing', 'table-map', 'tables', 'timeline', 'vendor',
-  'website-builder', 'wedding-details', 'wedding-party', 'worksheets',
+  'walkthrough', 'website-builder', 'wedding-details', 'wedding-party', 'worksheets',
 ]);
 
 // Rixey Manor business context for AI extraction
@@ -9048,6 +9049,236 @@ app.post('/api/rsvp/:slug', async (req, res) => {
   } catch (err) {
     console.error('RSVP submit error:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ============ WALKTHROUGHS ============
+//
+// A place to type what was said in the room, and a parser that proposes where
+// each piece belongs. Everything here is admin-only except the couple-facing
+// summary at the bottom, which shows only what the venue has chosen to share.
+
+// Everything a couple can see about their own walkthroughs. Deliberately the
+// only route on this feature that is not admin-gated, and it returns the
+// shared summary alone — never raw_notes, never the items.
+app.get('/api/walkthroughs/:weddingId/shared', requireAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('walkthroughs')
+      .select('id, kind, occurred_on, attendees, shared_summary, shared_at')
+      .eq('wedding_id', req.params.weddingId)
+      .not('shared_at', 'is', null)
+      .order('occurred_on', { ascending: false });
+    if (error) throw error;
+    res.json(data || []);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/admin/walkthroughs/:weddingId', requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('walkthroughs')
+      .select('*')
+      .eq('wedding_id', req.params.weddingId)
+      .order('occurred_on', { ascending: false });
+    if (error) throw error;
+    res.json(data || []);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/admin/walkthroughs', requireAdmin, async (req, res) => {
+  try {
+    const { weddingId, kind, occurred_on, attendees } = req.body;
+    if (!weddingId) return res.status(400).json({ error: 'weddingId required' });
+    const { data, error } = await supabaseAdmin
+      .from('walkthroughs')
+      .insert({
+        wedding_id: weddingId,
+        kind: kind || 'final_walkthrough',
+        occurred_on: occurred_on || new Date().toISOString().slice(0, 10),
+        attendees: attendees || null,
+      })
+      .select().single();
+    if (error) throw error;
+    res.json(data);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/admin/walkthroughs/:id', requireAdmin, async (req, res) => {
+  try {
+    // raw_notes is the capture and it only ever comes from a person typing.
+    // Nothing on the parse or apply path is allowed to touch it.
+    const allowed = ['kind', 'occurred_on', 'attendees', 'raw_notes', 'shared_summary'];
+    const patch = { updated_at: new Date().toISOString() };
+    for (const k of allowed) if (req.body[k] !== undefined) patch[k] = req.body[k];
+    // Sharing is an explicit act, and un-sharing has to be possible.
+    if (req.body.shared === true) patch.shared_at = new Date().toISOString();
+    if (req.body.shared === false) patch.shared_at = null;
+
+    const { data, error } = await supabaseAdmin
+      .from('walkthroughs').update(patch).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    res.json(data);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/admin/walkthroughs/:id', requireAdmin, async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin.from('walkthroughs').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/admin/walkthroughs/:id/items', requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('walkthrough_items').select('*')
+      .eq('walkthrough_id', req.params.id)
+      .order('created_at');
+    if (error) throw error;
+    res.json(data || []);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Read the notes and propose where each piece goes. Writes nothing outside
+// walkthrough_items — the couple's actual planning data is untouched until
+// someone accepts an item and hits apply.
+app.post('/api/admin/walkthroughs/:id/organise', requireAdmin, aiLimiter, async (req, res) => {
+  try {
+    const { data: wt, error: we } = await supabaseAdmin
+      .from('walkthroughs').select('*').eq('id', req.params.id).single();
+    if (we || !wt) return res.status(404).json({ error: 'Walkthrough not found' });
+    if (!String(wt.raw_notes || '').trim()) return res.status(400).json({ error: 'Nothing written down yet' });
+
+    // Re-organising replaces anything still awaiting a decision, and leaves
+    // alone anything already applied or deliberately skipped. Re-running after
+    // adding a paragraph must not undo work already done.
+    await supabaseAdmin.from('walkthrough_items')
+      .delete().eq('walkthrough_id', wt.id).eq('status', 'proposed');
+
+    const [{ data: wedding }, { data: guestRows }] = await Promise.all([
+      supabaseAdmin.from('weddings').select('couple_names, wedding_date').eq('id', wt.wedding_id).maybeSingle(),
+      supabaseAdmin.from('wedding_guests').select('first_name, last_name').eq('wedding_id', wt.wedding_id).limit(200),
+    ]);
+    const knownNames = (guestRows || []).map(g => guestFullName(g)).filter(Boolean).slice(0, 120);
+    const context = [
+      RIXEY_EXTRACTION_CONTEXT,
+      wedding ? `\nThis walkthrough is for ${wedding.couple_names || 'a couple'}, wedding date ${wedding.wedding_date || 'unknown'}.` : '',
+      knownNames.length ? `\nNames already on their guest list, useful for matching a first name to a person: ${knownNames.join(', ')}` : '',
+    ].join('\n');
+
+    const prompt = organisePrompt({
+      rawNotes: String(wt.raw_notes).slice(0, 20000),
+      context,
+      kindLabel: (wt.kind || 'walkthrough').replace(/_/g, ' '),
+      occurredOn: wt.occurred_on,
+    });
+
+    let response;
+    try {
+      response = await anthropic.messages.create({
+        model: MODEL_SONNET, max_tokens: 4000, temperature: 0.2,
+        messages: [{ role: 'user', content: prompt }],
+      });
+    } catch (err) {
+      const overloaded = err.status === 529 || err.status === 503 || err.status === 429;
+      if (!overloaded) throw err;
+      response = await anthropic.messages.create({
+        model: MODEL_HAIKU, max_tokens: 4000, temperature: 0.2,
+        messages: [{ role: 'user', content: prompt }],
+      });
+    }
+    await logUsage(wt.wedding_id, null, 'walkthrough_organise', response);
+
+    const items = parseItems(response.content[0].text);
+    if (items.length) {
+      const { error: ie } = await supabaseAdmin.from('walkthrough_items').insert(
+        items.map(i => ({ ...i, walkthrough_id: wt.id, wedding_id: wt.wedding_id }))
+      );
+      if (ie) throw ie;
+    }
+    await supabaseAdmin.from('walkthroughs')
+      .update({ status: 'organised', organised_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .eq('id', wt.id);
+
+    const { data: saved } = await supabaseAdmin
+      .from('walkthrough_items').select('*').eq('walkthrough_id', wt.id).order('created_at');
+    res.json({ ok: true, items: saved || [], parsed: items.length });
+  } catch (e) {
+    console.error('Walkthrough organise error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Accept, skip or correct a single proposed item before it is applied.
+app.put('/api/admin/walkthrough-items/:id', requireAdmin, async (req, res) => {
+  try {
+    const patch = { updated_at: new Date().toISOString() };
+    if (req.body.status && ['proposed', 'accepted', 'skipped'].includes(req.body.status)) patch.status = req.body.status;
+    if (req.body.section !== undefined) patch.section = TARGET_KEYS.includes(req.body.section) ? req.body.section : null;
+    if (req.body.summary !== undefined) patch.summary = String(req.body.summary).slice(0, 400);
+    if (req.body.proposed !== undefined && typeof req.body.proposed === 'object') patch.proposed = req.body.proposed;
+
+    const { data, error } = await supabaseAdmin
+      .from('walkthrough_items').update(patch).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    res.json(data);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Write the accepted items into the portal for real.
+app.post('/api/admin/walkthroughs/:id/apply', requireAdmin, async (req, res) => {
+  try {
+    const { data: wt, error: we } = await supabaseAdmin
+      .from('walkthroughs').select('*').eq('id', req.params.id).single();
+    if (we || !wt) return res.status(404).json({ error: 'Walkthrough not found' });
+
+    const { data: items } = await supabaseAdmin
+      .from('walkthrough_items').select('*')
+      .eq('walkthrough_id', wt.id).eq('status', 'accepted');
+    if (!items?.length) return res.json({ ok: true, applied: 0, results: [] });
+
+    const label = `${(wt.kind || 'walkthrough').replace(/_/g, ' ')} on ${wt.occurred_on}`;
+    const results = [];
+
+    for (const item of items) {
+      const target = item.section ? WALKTHROUGH_TARGETS[item.section] : null;
+      // No destination, or the parser did not get enough to build a real row:
+      // it becomes a planning note rather than nothing. Losing it is the one
+      // outcome that is not allowed.
+      const useNote = !target || !target.valid(item.proposed || {});
+      const table = useNote ? 'planning_notes' : target.table;
+      const row = useNote ? buildNote(item, wt.wedding_id, label) : target.build(item.proposed || {}, wt.wedding_id);
+
+      const { data: written, error: werr } = await supabaseAdmin.from(table).insert(row).select('id').single();
+      if (werr) {
+        await supabaseAdmin.from('walkthrough_items')
+          .update({ status: 'failed', apply_error: werr.message, updated_at: new Date().toISOString() })
+          .eq('id', item.id);
+        results.push({ id: item.id, ok: false, table, error: werr.message });
+        continue;
+      }
+      await supabaseAdmin.from('walkthrough_items').update({
+        status: 'applied',
+        applied_at: new Date().toISOString(),
+        applied_table: table,
+        applied_row_id: written?.id || null,
+        apply_error: null,
+        updated_at: new Date().toISOString(),
+      }).eq('id', item.id);
+      results.push({ id: item.id, ok: true, table, rowId: written?.id, filedAsNote: useNote });
+    }
+
+    const applied = results.filter(r => r.ok).length;
+    await supabaseAdmin.from('walkthroughs')
+      .update({ status: 'applied', updated_at: new Date().toISOString() }).eq('id', wt.id);
+    await logActivity(wt.wedding_id, null, 'walkthrough_applied', `${applied} item${applied === 1 ? '' : 's'} filed from the ${label}`);
+
+    res.json({ ok: true, applied, failed: results.length - applied, results });
+  } catch (e) {
+    console.error('Walkthrough apply error:', e);
+    res.status(500).json({ error: e.message });
   }
 });
 

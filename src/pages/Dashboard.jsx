@@ -37,6 +37,7 @@ import WeddingParty from '../components/WeddingParty'
 import WebsiteBuilder from '../components/WebsiteBuilder'
 import BarPlanner from '../components/BarPlanner'
 import SectionFinaliser from '../components/SectionFinaliser'
+import WalkthroughSummaries from '../components/WalkthroughSummaries'
 import { API_URL } from '../config/api'
 import { apiFetch, authHeaders } from '../utils/api'
 import { useToast } from '../components/ui/Toast'
@@ -857,6 +858,13 @@ export default function Dashboard() {
               {!['chat', 'photos', 'website-builder', 'wedding-party', 'preferred-vendors', 'downloads', 'picks', 'booking', 'resources'].includes(activeSection) && !profile?.wedding_id && !profileLoading && (
                 <div className="p-8 text-center">
                   <p className="text-sage-400 text-sm">This account isn't linked to a wedding — please sign in with your couple account.</p>
+                </div>
+              )}
+
+              {/* What the venue wrote up after walking the place with them */}
+              {activeSection === 'walkthrough' && profile?.wedding_id && (
+                <div className="p-4 sm:p-6">
+                  <WalkthroughSummaries weddingId={profile.wedding_id} />
                 </div>
               )}
 

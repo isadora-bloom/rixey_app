@@ -33,6 +33,7 @@ import UsageStats from '../../components/UsageStats'
 import DirectMessagesPanel from './DirectMessagesPanel'
 import ContractPanel from './ContractPanel'
 import WeddingCompleteness from './WeddingCompleteness'
+import WalkthroughNotes from '../../components/WalkthroughNotes'
 import { ESCALATION_KEYWORDS, getLastActivity, getCategoryIcon, getCategoryLabel } from './adminUtils'
 
 export default function AdminWeddingProfile({
@@ -411,6 +412,7 @@ export default function AdminWeddingProfile({
                   { section: 'Planning' },
                   { tab: 'completeness', label: 'File Completeness', icon: '/icons/checklist.svg' },
                   { tab: 'notes', label: 'Planning Notes', icon: '/icons/planning-notes.svg', badge: planningNotes.filter(n => n.status === 'pending').length },
+                  { tab: 'walkthrough', label: 'Walkthroughs', icon: '/icons/planning-notes.svg' },
                   { tab: 'wedding-details', label: 'Wedding Details', icon: '/icons/overview.svg' },
                   { tab: 'allergies', label: 'Allergy Registry', icon: '/icons/guest-care.svg' },
                   { tab: 'ceremony-order', label: 'Ceremony Order', icon: '/icons/timeline.svg' },
@@ -1226,6 +1228,10 @@ export default function AdminWeddingProfile({
 
               {activeTab === 'wedding-details' && (
                 <WeddingDetails weddingId={viewingWedding.id} userId={null} />
+              )}
+
+              {activeTab === 'walkthrough' && (
+                <WalkthroughNotes weddingId={viewingWedding.id} />
               )}
 
               {activeTab === 'allergies' && (

@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { key: 'worksheets', label: 'Worksheets', icon: '/icons/checklist.svg' },
   { key: 'wedding-details', label: 'Wedding Details', icon: '/icons/overview.svg' },
   { key: 'checklist', label: 'Checklist', icon: '/icons/checklist.svg' },
+  { key: 'walkthrough', label: 'Walkthrough Notes', icon: '/icons/planning-notes.svg' },
   { section: 'Plan' },
   { key: 'budget', label: 'Budget', icon: '/icons/budget.svg', dotKey: 'budget' },
   { key: 'guests', label: 'Guest List', icon: '/icons/guest-care.svg' },
