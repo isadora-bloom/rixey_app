@@ -6401,6 +6401,23 @@ app.post('/api/admin/notifications', async (req, res) => {
 });
 
 // Get all weddings with profiles for admin dashboard (bypasses RLS)
+// Accounts that can log in but are attached to no wedding. Their portal
+// renders as an empty shell and they have no way to tell whether that is a
+// fault or just an early stage, so nobody reports it. One did sit unnoticed
+// for a month.
+app.get('/api/admin/unlinked-profiles', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('profiles')
+      .select('id, name, email, role, created_at')
+      .is('wedding_id', null)
+      .neq('is_admin', true)
+      .order('created_at');
+    if (error) throw error;
+    res.json(data || []);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/admin/weddings', async (req, res) => {
   try {
     const { data: weddings, error } = await supabaseAdmin

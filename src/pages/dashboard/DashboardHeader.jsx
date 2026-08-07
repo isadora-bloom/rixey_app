@@ -1,6 +1,7 @@
 // Top header bar: logo, profile edit button, sign out, notification bell, mobile menu
 import { useNavigate } from 'react-router-dom'
 import NotificationBell from '../../components/NotificationBell'
+import { NAV_ITEMS } from './DashboardNav'
 
 export default function DashboardHeader({
   user,
@@ -79,7 +80,37 @@ export default function DashboardHeader({
 
       {/* Mobile menu */}
       {mobileMenuOpen && (
-        <div className="lg:hidden border-t border-cream-200 bg-white px-4 py-3 space-y-2">
+        <div className="lg:hidden border-t border-cream-200 bg-white px-4 py-3 space-y-2 max-h-[75vh] overflow-y-auto">
+          {/* Every planning section, first. This menu used to hold only the two
+              resource links and the two course links below, so on a phone the
+              portal looked like it had four things in it. */}
+          <button
+            onClick={() => { setActiveSection('chat'); setMobileMenuOpen(false) }}
+            className="block w-full text-left px-3 py-2 rounded-lg text-sage-700 font-medium hover:bg-sage-50"
+          >
+            💬 Chat with Sage
+          </button>
+          {NAV_ITEMS.map((item, idx) => (
+            item.section ? (
+              <p key={`s-${idx}`} className="text-xs font-semibold text-sage-400 uppercase tracking-wide px-3 pt-3 pb-1">
+                {item.section}
+              </p>
+            ) : (
+              <button
+                key={item.key}
+                onClick={() => {
+                  if (item.href) { navigate(item.href); setMobileMenuOpen(false); return }
+                  setActiveSection(item.key)
+                  setMobileMenuOpen(false)
+                }}
+                className="block w-full text-left px-3 py-2 rounded-lg text-sage-600 hover:bg-sage-50"
+              >
+                {item.label}
+              </button>
+            )
+          ))}
+
+          <p className="text-xs font-semibold text-sage-400 uppercase tracking-wide px-3 pt-3 pb-1">Elsewhere</p>
           {wedding?.google_sheets_link && (
             <a
               href={wedding.google_sheets_link}

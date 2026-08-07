@@ -89,6 +89,8 @@ export default function Admin() {
   const [collapsedNoteCategories, setCollapsedNoteCategories] = useState({})
   const [sortBy, setSortBy] = useState('lastActivity') // 'lastActivity' or 'weddingDate'
   const [uncertainQuestions, setUncertainQuestions] = useState([])
+  // Logins with no wedding attached — see /api/admin/unlinked-profiles.
+  const [unlinkedProfiles, setUnlinkedProfiles] = useState([])
   const [answeringQuestion, setAnsweringQuestion] = useState(null)
   const [adminAnswer, setAdminAnswer] = useState('')
   const [addToKb, setAddToKb] = useState(false)
@@ -160,6 +162,7 @@ export default function Admin() {
     checkQuoStatus()
     checkZoomStatus()
     loadUncertainQuestions()
+    loadUnlinkedProfiles()
     loadAllCouplePhotos()
     fetchUnreadMessages()
     const interval = setInterval(fetchUnreadMessages, 60000)
@@ -374,6 +377,17 @@ export default function Admin() {
       setUncertainQuestions(data.questions || [])
     } catch (err) {
       console.error('Failed to load uncertain questions:', err)
+    }
+  }
+
+  const loadUnlinkedProfiles = async () => {
+    try {
+      const response = await fetch(`${API_URL}/api/admin/unlinked-profiles`, {
+        headers: await authHeaders()
+      })
+      setUnlinkedProfiles(response.ok ? (await response.json()) || [] : [])
+    } catch (err) {
+      console.error('Failed to load unlinked profiles:', err)
     }
   }
 
@@ -1593,6 +1607,7 @@ export default function Admin() {
         {mainView === 'weddings' && (
           <AdminWeddingList
             weddings={weddings}
+            unlinkedProfiles={unlinkedProfiles}
             displayedWeddings={displayedWeddings}
             allMessages={allMessages}
             escalations={escalations}

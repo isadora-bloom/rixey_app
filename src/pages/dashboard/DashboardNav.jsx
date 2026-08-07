@@ -53,7 +53,12 @@ const NAV_ITEMS = [
   { key: 'resources', label: 'Resources', icon: '/icons/resources.svg' },
 ]
 
-export { FINALISABLE }
+// Exported so the mobile header menu renders the same sections as the sidebar.
+// Two couples wrote in saying the portal only had four things in it, because on
+// a phone the hamburger showed the header's resource links and nothing else,
+// while the real navigation was a <select> further down the page that reads as
+// a form field. One list, used in both places, is what stops that recurring.
+export { FINALISABLE, NAV_ITEMS }
 
 export default function DashboardNav({
   activeSection,

@@ -3,6 +3,7 @@ import { formatDateOnly } from '../../utils/dates'
 
 export default function AdminWeddingList({
   weddings,
+  unlinkedProfiles,
   displayedWeddings,
   allMessages,
   escalations,
@@ -282,6 +283,31 @@ export default function AdminWeddingList({
                 </button>
               )}
             </div>
+
+            {/* People who can log in but are attached to no wedding. Their
+                portal is an empty shell and they cannot tell whether that is a
+                fault, so they tend not to report it. */}
+            {unlinkedProfiles?.length > 0 && (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-4">
+                <p className="text-sm font-medium text-amber-900">
+                  {unlinkedProfiles.length} account{unlinkedProfiles.length === 1 ? '' : 's'} not linked to a wedding
+                </p>
+                <p className="text-xs text-amber-800 mt-0.5 mb-2">
+                  They can sign in and see nothing. Link them from the wedding&apos;s Access tab.
+                </p>
+                <ul className="space-y-1">
+                  {unlinkedProfiles.map(p => (
+                    <li key={p.id} className="text-xs text-amber-900">
+                      <span className="font-medium">{p.name || 'Unnamed'}</span>{' '}
+                      <span className="opacity-70">&lt;{p.email}&gt;</span>{' '}
+                      <span className="opacity-60">
+                        {p.role || 'no role'} · since {String(p.created_at).slice(0, 10)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
             <div className="space-y-3">
               {displayedWeddings.length === 0 ? (

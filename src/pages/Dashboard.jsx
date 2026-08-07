@@ -736,6 +736,22 @@ export default function Dashboard() {
       />
 
       <main className="max-w-7xl mx-auto px-4 py-4 sm:py-6">
+        {/* An account with no wedding attached. Every section reads from
+            wedding_id, so without one the portal renders as a shell and looks
+            broken rather than unfinished. Brittany Lamback sat like this for a
+            month before anyone knew. Say so plainly, and tell them who fixes it. */}
+        {profile && !profile.wedding_id && !profile.is_admin && (
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl px-5 py-4 mb-4">
+            <p className="font-medium text-amber-900">Your account isn&apos;t linked to a wedding yet</p>
+            <p className="text-sm text-amber-800 mt-1">
+              That&apos;s why this looks empty — everything here hangs off a wedding, and yours hasn&apos;t been
+              connected. Nothing is wrong with your account and nothing you do is lost. Email{' '}
+              <a href="mailto:info@rixeymanor.com" className="underline">info@rixeymanor.com</a> and we&apos;ll
+              link it up, usually the same day.
+            </p>
+          </div>
+        )}
+
         {/* Onboarding Checklist for new users */}
         {wedding?.id && (
           <OnboardingChecklist
