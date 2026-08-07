@@ -1649,7 +1649,7 @@ app.post('/api/chat', async (req, res) => {
     const sageCallParams = {
       max_tokens: 1024,
       temperature: 0.3,
-      system: `${SAGE_SYSTEM_PROMPT}${profileContext}\n\n---\n\nADDITIONAL RIXEY MANOR KNOWLEDGE BASE:\n\n${knowledge}${weddingContext}\n\n---\n\nIMPORTANT: After your response, on a new line, add a confidence assessment in this exact format:\n[CONFIDENCE: XX]\nWhere XX is a number from 0-100 representing how confident you are in your answer based on the knowledge base and Rixey Manor information available to you. Use 100 for facts you know for certain, lower numbers for things you're less sure about or had to generalize.`,
+      system: `${SAGE_SYSTEM_PROMPT}${profileContext}\n\n---\n\nADDITIONAL RIXEY MANOR KNOWLEDGE BASE:\n\n${knowledge}${weddingContext}\n\n---\n\nIMPORTANT: After your response, on a new line, add a confidence assessment in this exact format:\n[CONFIDENCE: XX]\nWhere XX is a number from 0-100 representing how confident you are in your answer based on the knowledge base and Rixey Manor information available to you. Use 100 for facts you know for certain, lower numbers for things you're less sure about or had to generalize.\n\nThen, on the next line, say whether a human at Rixey needs to follow this up:\n[ESCALATE: yes]\nor\n[ESCALATE: no]\n\nSay yes ONLY when all of these are true:\n- They asked something that genuinely needs an answer\n- It is specific to Rixey, their contract or their wedding, so a general answer will not do\n- You could not answer it properly from what you were given\n\nSay no when the message is not really a question at all: a thank you, an acknowledgement like "sure" or "yes please", a statement of their plans, a list or a document they have pasted in for you to read, or small talk. Say no when you answered it fully, and no when it is general wedding advice you handled well. An unnecessary yes puts a job on a real person's desk, so use it sparingly and mean it.`,
       messages: messages
     };
 
@@ -1672,6 +1672,18 @@ app.post('/api/chat', async (req, res) => {
       confidence = parseInt(confidenceMatch[1], 10);
       // Remove the confidence tag from the visible message
       assistantMessage = assistantMessage.replace(/\n?\[CONFIDENCE:\s*\d+\]/i, '').trim();
+    }
+
+    // Sage's own read on whether this needs a human. Confidence alone was a
+    // poor proxy: it flagged "yes please", "This is helpful thank you" and a
+    // couple pasting in their own processional, because a low number can mean
+    // "I am unsure" or simply "that was not a question". Absent tag = null,
+    // which the rules below treat as "no opinion" and fall back to confidence.
+    let sageWantsHuman = null;
+    const escalateMatch = assistantMessage.match(/\[ESCALATE:\s*(yes|no)\]/i);
+    if (escalateMatch) {
+      sageWantsHuman = escalateMatch[1].toLowerCase() === 'yes';
+      assistantMessage = assistantMessage.replace(/\n?\[ESCALATE:\s*(yes|no)\]/i, '').trim();
     }
 
     // Pull out Sage's offers to file something into a portal section. She writes
@@ -1707,9 +1719,51 @@ app.post('/api/chat', async (req, res) => {
     // Log usage
     await logUsage(weddingId, userId, 'chat', response);
 
-    // If confidence is below 85%, save as uncertain question for admin review
-    // and add a note to the response letting the client know
-    if (confidence < 85 && weddingId) {
+    // Does this need a person?
+    //
+    // The old rule was confidence < 85 and nothing else, which put 51 of 53
+    // items on the queue. Reading them back, the 70-79 band was full of real
+    // venue questions worth answering (table dimensions, silverware, tent
+    // sizes) while 80-84 was almost entirely acknowledgements and pasted
+    // notes. So the bar moves to 80, and Sage's own judgement can veto or
+    // override it.
+    //
+    // - She says no  -> trust her, unless she is genuinely lost (< 60)
+    // - She says yes -> flag it, whatever the number says
+    // - No opinion   -> fall back to the number alone
+    const LOST = 60, UNSURE = 80;
+
+    // Sage telling the couple to go and ask a person is a deferral, whatever
+    // number she put on it. This list used to be a separate insert path that
+    // could double-file the same question; it is now just one more input.
+    const deferralPhrases = [
+      'confirm with the', 'confirm directly with', 'check with the rixey', 'check with isadora',
+      'check with grace', 'reach out to the rixey', 'contact the rixey team', 'ask the team',
+      'double-check with', 'double check with', 'verify with the', 'i\'d confirm that',
+      "i'd check that", 'best to confirm', 'best to check', 'i\'m not confident',
+      "i'm not certain", 'i believe x', 'not 100% sure', 'not 100% certain'
+    ];
+    const lowerResponse = assistantMessage.toLowerCase();
+    const sageDeferred = deferralPhrases.some(phrase => lowerResponse.includes(phrase));
+
+    const flagAsUncertain = sageWantsHuman === false
+      ? confidence < LOST
+      : (sageWantsHuman === true || sageDeferred || confidence < UNSURE);
+
+    // The same question asked twice should not become two jobs. "Can we use
+    // real glass during the reception?" is sitting on the queue three times.
+    let alreadyOpen = false;
+    if (flagAsUncertain && weddingId) {
+      const { data: openOnes } = await supabaseAdmin
+        .from('uncertain_questions')
+        .select('id, question')
+        .eq('wedding_id', weddingId)
+        .is('admin_answer', null);
+      const tidy = s => String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+      alreadyOpen = (openOnes || []).some(o => tidy(o.question) === tidy(message));
+    }
+
+    if (flagAsUncertain && !alreadyOpen && weddingId) {
       try {
         await supabaseAdmin.from('uncertain_questions').insert({
           wedding_id: weddingId,
@@ -1718,7 +1772,7 @@ app.post('/api/chat', async (req, res) => {
           sage_response: assistantMessage,
           confidence_level: confidence
         });
-        console.log(`Low confidence (${confidence}%) question logged for admin review`);
+        console.log(`Flagged for review (confidence ${confidence}%, Sage escalate=${sageWantsHuman})`);
 
         const { data: weddingForAlert } = await supabaseAdmin
           .from('weddings').select('couple_names').eq('id', weddingId).single();
@@ -1734,39 +1788,6 @@ app.post('/api/chat', async (req, res) => {
         assistantMessage += "\n\n---\n*I want to make sure I'm giving you the right info on this one, so I've flagged it for the human team to double-check. They'll follow up if there's anything to add or clarify!*";
       } catch (err) {
         console.error('Error saving uncertain question:', err);
-      }
-    }
-
-    // If Sage deferred to the team in its response, flag for admin review even if confidence was high
-    const deferralPhrases = [
-      'confirm with the', 'confirm directly with', 'check with the rixey', 'check with isadora',
-      'check with grace', 'reach out to the rixey', 'contact the rixey team', 'ask the team',
-      'double-check with', 'double check with', 'verify with the', 'i\'d confirm that',
-      "i'd check that", 'best to confirm', 'best to check', 'i\'m not confident',
-      "i'm not certain", 'i believe x', 'not 100% sure', 'not 100% certain'
-    ];
-    const lowerResponse = assistantMessage.toLowerCase();
-    const sageDeferred = deferralPhrases.some(phrase => lowerResponse.includes(phrase));
-
-    if (sageDeferred && weddingId && confidence >= 85) {
-      // Only save if not already saved by the low-confidence block above
-      try {
-        await supabaseAdmin.from('uncertain_questions').insert({
-          wedding_id: weddingId,
-          user_id: userId,
-          question: message,
-          sage_response: assistantMessage,
-          confidence_level: confidence
-        });
-        await createNotification(
-          weddingId, 'admin', 'sage_uncertain',
-          'Sage deferred to the team',
-          `A client asked: "${message.substring(0, 120)}${message.length > 120 ? '...' : ''}"`,
-          process.env.ADMIN_EMAIL
-        );
-        console.log(`Sage deferral detected — flagged for admin review`);
-      } catch (err) {
-        console.error('Error saving Sage deferral flag:', err);
       }
     }
 
