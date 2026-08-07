@@ -25,6 +25,144 @@ const SECTION_LABELS = {
 
 const kindLabel = k => KINDS.find(x => x.value === k)?.label || 'Walkthrough'
 
+/**
+ * Photos and voice notes.
+ *
+ * Half of a walkthrough is pointing at something, and "that corner" does not
+ * survive being typed. Audio is recorded and stored even though nothing can
+ * read it yet: Rixey has no transcription provider, and a recording nobody
+ * has transcribed still beats losing what was said.
+ */
+function MediaStrip({ walkthroughId, media, onChange, toastError }) {
+  const [recording, setRecording] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const recorderRef = useRef(null)
+  const chunksRef = useRef([])
+  const startedAt = useRef(0)
+  const fileRef = useRef(null)
+
+  const upload = async (file, extra = {}) => {
+    setUploading(true)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      for (const [k, v] of Object.entries(extra)) form.append(k, v)
+      const saved = await apiFetch(`${API_URL}/api/admin/walkthroughs/${walkthroughId}/media`, { method: 'POST', body: form })
+      onChange(prev => [...prev, saved])
+    } catch (err) {
+      toastError(`Could not save that: ${err.message}`)
+    }
+    setUploading(false)
+  }
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      // Let the browser pick its own container. Chrome gives webm, Safari mp4,
+      // and forcing one of them is how this breaks on half the phones.
+      const rec = new MediaRecorder(stream)
+      chunksRef.current = []
+      rec.ondataavailable = e => { if (e.data.size) chunksRef.current.push(e.data) }
+      rec.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop())
+        const blob = new Blob(chunksRef.current, { type: rec.mimeType })
+        const secs = Math.round((Date.now() - startedAt.current) / 1000)
+        const ext = rec.mimeType.includes('mp4') ? 'mp4' : 'webm'
+        await upload(new File([blob], `voice-note.${ext}`, { type: rec.mimeType }), { duration_secs: secs })
+      }
+      startedAt.current = Date.now()
+      rec.start()
+      recorderRef.current = rec
+      setRecording(true)
+    } catch (err) {
+      toastError(`Could not start recording: ${err.message}. Check the browser has microphone permission.`)
+    }
+  }
+
+  const stopRecording = () => {
+    recorderRef.current?.stop()
+    recorderRef.current = null
+    setRecording(false)
+  }
+
+  const remove = async (m) => {
+    const snapshot = media
+    onChange(prev => prev.filter(x => x.id !== m.id))
+    try { await apiFetch(`${API_URL}/api/admin/walkthrough-media/${m.id}`, { method: 'DELETE' }) }
+    catch (err) { onChange(snapshot); toastError(`Could not delete that: ${err.message}`) }
+  }
+
+  const canRecord = typeof window !== 'undefined' && !!navigator.mediaDevices?.getUserMedia && typeof MediaRecorder !== 'undefined'
+  const photos = media.filter(m => m.kind === 'photo')
+  const audio = media.filter(m => m.kind === 'audio')
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          ref={fileRef} type="file" accept="image/*" capture="environment" multiple hidden
+          onChange={async e => {
+            const files = Array.from(e.target.files || [])
+            for (const f of files) await upload(f)
+            e.target.value = ''
+          }}
+        />
+        <button type="button" disabled={uploading} onClick={() => fileRef.current?.click()}
+          className="text-xs px-3 py-1.5 rounded-lg border border-cream-300 text-sage-600 hover:bg-cream-50 transition disabled:opacity-50">
+          {uploading ? 'Saving…' : '+ Photo'}
+        </button>
+
+        {canRecord ? (
+          <button type="button" disabled={uploading}
+            onClick={recording ? stopRecording : startRecording}
+            className={`text-xs px-3 py-1.5 rounded-lg border transition disabled:opacity-50 ${
+              recording ? 'bg-red-500 border-red-500 text-white' : 'border-cream-300 text-sage-600 hover:bg-cream-50'
+            }`}>
+            {recording ? '■ Stop recording' : '● Record a voice note'}
+          </button>
+        ) : (
+          <span className="text-xs text-sage-400">Recording not supported on this browser</span>
+        )}
+      </div>
+
+      {audio.length > 0 && (
+        <div className="space-y-2">
+          {audio.map(m => (
+            <div key={m.id} className="flex items-center gap-3">
+              <audio controls src={m.url} className="h-8 flex-1 min-w-0" />
+              <span className="text-xs text-sage-400 shrink-0">
+                {m.duration_secs ? `${Math.floor(m.duration_secs / 60)}:${String(m.duration_secs % 60).padStart(2, '0')}` : ''}
+              </span>
+              <button type="button" onClick={() => remove(m)} className="text-xs text-sage-400 hover:text-red-500 shrink-0">Delete</button>
+            </div>
+          ))}
+          {/* Said plainly rather than left to be discovered: these are stored,
+              not read, and nothing in the portal is listening to them. */}
+          <p className="text-xs text-sage-400">
+            Voice notes are saved but not transcribed — type the bits that matter into the notes above.
+          </p>
+        </div>
+      )}
+
+      {photos.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {photos.map(m => (
+            <div key={m.id} className="relative group">
+              <a href={m.url} target="_blank" rel="noreferrer">
+                <img src={m.url} alt={m.caption || 'Walkthrough photo'} className="w-20 h-20 object-cover rounded-lg border border-cream-200" />
+              </a>
+              <button type="button" onClick={() => remove(m)}
+                className="absolute -top-1.5 -right-1.5 bg-white border border-cream-300 rounded-full w-5 h-5 text-xs text-sage-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition">
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ItemRow({ item, onChange, busy }) {
   const [open, setOpen] = useState(false)
   const applied = item.status === 'applied'
@@ -111,6 +249,7 @@ export default function WalkthroughNotes({ weddingId }) {
   const [active, setActive] = useState(null)
   const [items, setItems] = useState([])
   const [notes, setNotes] = useState('')
+  const [media, setMedia] = useState([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState('')
   const loadedFor = useRef(null)
@@ -135,6 +274,8 @@ export default function WalkthroughNotes({ weddingId }) {
     loadedFor.current = w.id
     try { setItems(await apiFetch(`${API_URL}/api/admin/walkthroughs/${w.id}/items`) || []) }
     catch { setItems([]) }
+    try { setMedia(await apiFetch(`${API_URL}/api/admin/walkthroughs/${w.id}/media`) || []) }
+    catch { setMedia([]) }
   }
 
   const { schedule: scheduleSave, flush: flushSave, state: saveState } = useAutosave(
@@ -284,6 +425,8 @@ export default function WalkthroughNotes({ weddingId }) {
             <p className="text-xs text-sage-400">
               Saved as you type. This stays private to the venue whatever you file from it.
             </p>
+
+            <MediaStrip walkthroughId={active.id} media={media} onChange={setMedia} toastError={toastError} />
           </div>
 
           <div className="flex flex-wrap gap-2">

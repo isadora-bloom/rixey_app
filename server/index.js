@@ -44,8 +44,13 @@ const dayOfMediaUpload = multer({
     const allowed = [
       'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'image/gif',
       'video/mp4', 'video/quicktime', 'video/webm', 'video/x-msvideo',
+      // Walkthrough voice notes. What a browser produces varies by device:
+      // Chrome gives audio/webm, Safari audio/mp4, and codec suffixes come
+      // along for the ride, so the base type is what gets matched below.
+      'audio/webm', 'audio/mp4', 'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/x-m4a', 'audio/aac',
     ];
-    if (allowed.includes(file.mimetype)) {
+    const baseType = String(file.mimetype || '').split(';')[0].trim();
+    if (allowed.includes(baseType)) {
       cb(null, true);
     } else {
       cb(new Error(`File type not allowed: ${file.mimetype}`));
@@ -9165,6 +9170,68 @@ app.put('/api/admin/walkthroughs/:id', requireAdmin, async (req, res) => {
 app.delete('/api/admin/walkthroughs/:id', requireAdmin, async (req, res) => {
   try {
     const { error } = await supabaseAdmin.from('walkthroughs').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Photos and voice notes. Stored under the existing day-of-media bucket with a
+// walkthroughs/ prefix so no new bucket has to be created before this works.
+app.get('/api/admin/walkthroughs/:id/media', requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('walkthrough_media').select('*')
+      .eq('walkthrough_id', req.params.id).order('created_at');
+    if (error) throw error;
+    res.json(data || []);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/admin/walkthroughs/:id/media', requireAdmin, dayOfMediaUpload.single('file'), async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: 'No file provided' });
+    const { data: wt, error: we } = await supabaseAdmin
+      .from('walkthroughs').select('id, wedding_id').eq('id', req.params.id).single();
+    if (we || !wt) return res.status(404).json({ error: 'Walkthrough not found' });
+
+    const isAudio = String(file.mimetype || '').startsWith('audio/');
+    const safeExt = (file.originalname.split('.').pop() || (isAudio ? 'webm' : 'jpg')).toLowerCase().replace(/[^a-z0-9]/g, '');
+    const path = `${wt.wedding_id}/walkthroughs/${wt.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${safeExt}`;
+
+    const { error: upErr } = await supabaseAdmin.storage
+      .from('day-of-media').upload(path, file.buffer, { contentType: file.mimetype, upsert: false });
+    if (upErr) throw upErr;
+    const { data: { publicUrl } } = supabaseAdmin.storage.from('day-of-media').getPublicUrl(path);
+
+    const { data, error } = await supabaseAdmin.from('walkthrough_media').insert({
+      walkthrough_id: wt.id,
+      wedding_id: wt.wedding_id,
+      kind: isAudio ? 'audio' : 'photo',
+      url: publicUrl,
+      storage_path: path,
+      caption: req.body.caption || null,
+      duration_secs: req.body.duration_secs ? parseInt(req.body.duration_secs, 10) || null : null,
+    }).select().single();
+    if (error) throw error;
+    res.json(data);
+  } catch (e) {
+    console.error('Walkthrough media upload error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/api/admin/walkthrough-media/:id', requireAdmin, async (req, res) => {
+  try {
+    const { data: row } = await supabaseAdmin
+      .from('walkthrough_media').select('storage_path').eq('id', req.params.id).maybeSingle();
+    // Remove the file too, and do not report success if that fails: a deleted
+    // row with an orphaned file is how storage quietly fills up.
+    if (row?.storage_path) {
+      const { error: rmErr } = await supabaseAdmin.storage.from('day-of-media').remove([row.storage_path]);
+      if (rmErr) console.error('Walkthrough media file remove failed:', rmErr.message);
+    }
+    const { error } = await supabaseAdmin.from('walkthrough_media').delete().eq('id', req.params.id);
     if (error) throw error;
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
