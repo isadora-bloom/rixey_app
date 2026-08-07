@@ -109,6 +109,18 @@ const aiLimiter = rateLimit({
   message: { error: 'Too many requests, please try again later' }
 });
 
+// Guest-name lookup on a public wedding website. Two letters at a time, an
+// unthrottled search will enumerate a couple's entire guest list, so this is
+// deliberately tighter than the general limit while still leaving room for
+// someone typing, deleting and retyping their own name.
+const rsvpSearchLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many lookups. Please wait a moment and try again.' }
+});
+
 // Apply general rate limiter to all routes
 app.use(generalLimiter);
 
@@ -8872,14 +8884,49 @@ app.get('/api/w/:slug', async (req, res) => {
 
 // ── Public RSVP endpoints ─────────────────────────────────────────────────────
 
+/**
+ * Find a published site by slug and check the visitor may see it.
+ *
+ * The site itself has been password-gated since access_password shipped, but
+ * these RSVP routes never checked it. Anyone with a slug could type two
+ * letters and page through a couple's entire guest list without ever seeing
+ * the password screen. The gate belongs on every route that reads guest data,
+ * not just the one that renders the page.
+ */
+async function openWeddingSite(slug, providedPw) {
+  const { data: settings, error } = await supabaseAdmin
+    .from('wedding_website_settings')
+    .select('wedding_id, rsvp_config, rsvp_deadline, access_password')
+    .eq('slug', slug)
+    .eq('published', true)
+    .single();
+  if (error || !settings) return { error: 'notfound' };
+  if (settings.access_password && String(providedPw || '') !== settings.access_password) {
+    return { error: 'locked' };
+  }
+  return { settings };
+}
+
+function siteGateFailed(res, result) {
+  if (result.error === 'locked') return res.status(401).json({ error: 'Password required', passwordRequired: true });
+  return res.status(404).json({ error: 'Not found' });
+}
+
 // Search guests by name (for the RSVP form on the public website)
 // Fetch a single guest's RSVP data (after they select themselves from search)
-app.get('/api/rsvp/:slug/guest/:guestId', async (req, res) => {
+app.get('/api/rsvp/:slug/guest/:guestId', rsvpSearchLimiter, async (req, res) => {
   try {
+    const gate = await openWeddingSite(req.params.slug, req.query.pw);
+    if (gate.error) return siteGateFailed(res, gate);
+
+    // Scoped to this wedding as well as gated. The slug used to be decorative
+    // here: any guest id returned that person's answers, so an id lifted from
+    // one couple's site read a guest's RSVP on another's.
     const { data: guest, error } = await supabaseAdmin
       .from('wedding_guests')
       .select('rsvp, meal_choice, dietary_restrictions, plus_one_rsvp, plus_one_meal_choice, plus_one_dietary')
       .eq('id', req.params.guestId)
+      .eq('wedding_id', gate.settings.wedding_id)
       .single();
     if (error || !guest) return res.status(404).json({ error: 'Not found' });
     res.json(guest);
@@ -8888,18 +8935,14 @@ app.get('/api/rsvp/:slug/guest/:guestId', async (req, res) => {
   }
 });
 
-app.get('/api/rsvp/:slug/search', async (req, res) => {
+app.get('/api/rsvp/:slug/search', rsvpSearchLimiter, async (req, res) => {
   try {
     const q = (req.query.q || '').trim();
     if (!q || q.length < 2) return res.json([]);
 
-    const { data: settings, error: se } = await supabaseAdmin
-      .from('wedding_website_settings')
-      .select('wedding_id')
-      .eq('slug', req.params.slug)
-      .eq('published', true)
-      .single();
-    if (se || !settings) return res.status(404).json({ error: 'Not found' });
+    const gate = await openWeddingSite(req.params.slug, req.query.pw);
+    if (gate.error) return siteGateFailed(res, gate);
+    const settings = gate.settings;
 
     // Filtered in JS rather than SQL: matching a plus one needs the host's
     // surname, which ILIKE cannot reach across columns. Guest lists top out in
@@ -8968,14 +9011,11 @@ app.post('/api/rsvp/:slug', async (req, res) => {
     const { guest_id, rsvp, meal_choice, dietary_restrictions, plus_one_name, plus_one_rsvp, plus_one_meal_choice, plus_one_dietary, rsvp_extras } = req.body;
     if (!guest_id || !rsvp) return res.status(400).json({ error: 'guest_id and rsvp required' });
 
-    // Verify guest belongs to this wedding via slug
-    const { data: settings, error: se } = await supabaseAdmin
-      .from('wedding_website_settings')
-      .select('wedding_id, rsvp_config, rsvp_deadline')
-      .eq('slug', req.params.slug)
-      .eq('published', true)
-      .single();
-    if (se || !settings) return res.status(404).json({ error: 'Not found' });
+    // Verify guest belongs to this wedding via slug, and that whoever is
+    // submitting got past the site password if there is one.
+    const gate = await openWeddingSite(req.params.slug, req.body.pw ?? req.query.pw);
+    if (gate.error) return siteGateFailed(res, gate);
+    const settings = gate.settings;
 
     const { data: guest, error: ge } = await supabaseAdmin
       .from('wedding_guests')

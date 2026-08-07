@@ -453,7 +453,10 @@ function SectionHeading({ t, label, title }) {
 
 // ── RSVP Section ──────────────────────────────────────────────────────────────
 
-function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
+function RsvpSection({ t, slug, settings, platedMeal, mealOptions, sitePassword }) {
+  // Appended to every RSVP request. Empty when the site has no password, in
+  // which case the server does not ask for one.
+  const pwParam = sitePassword ? `&pw=${encodeURIComponent(sitePassword)}` : ''
   const customQuestions = settings.rsvp_config?.custom_questions || []
   // Defaults live in shared/rsvp-fields.js alongside the toggle list, so a
   // question the couple switched off is actually switched off here.
@@ -494,7 +497,7 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
     const timer = setTimeout(async () => {
       setSearching(true)
       try {
-        const res = await fetch(`${API_URL}/api/rsvp/${slug}/search?q=${encodeURIComponent(query)}`)
+        const res = await fetch(`${API_URL}/api/rsvp/${slug}/search?q=${encodeURIComponent(query)}${pwParam}`)
         if (!res.ok) throw new Error(res.status)
         const data = await res.json()
         setResults(Array.isArray(data) ? data : [])
@@ -519,7 +522,7 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
     setForm({ rsvp: '', meal_choice: '', dietary_restrictions: '', plus_one_rsvp: '', plus_one_meal_choice: '', plus_one_dietary: '' })
     setPlusOneNameInput('')
     try {
-      const res = await fetch(`${API_URL}/api/rsvp/${slug}/guest/${guest.id}`)
+      const res = await fetch(`${API_URL}/api/rsvp/${slug}/guest/${guest.id}?_=1${pwParam}`)
       if (res.ok) {
         const g = await res.json()
         setForm({
@@ -541,6 +544,7 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions }) {
     setSubmitting(true)
     try {
       const payload = {
+        pw: sitePassword || undefined,
         guest_id: selected.id,
         rsvp: form.rsvp,
         dietary_restrictions: form.dietary_restrictions || null,
@@ -1731,6 +1735,9 @@ export default function WeddingWebsite() {
           settings={settings}
           platedMeal={wedding.plated_meal}
           mealOptions={meal_options || []}
+          /* The RSVP routes are password-gated too now, so they need the same
+             password the visitor already used to get through the front door. */
+          sitePassword={sessionStorage.getItem(`wedding_pw_${slug}`) || ''}
         />
         </div>
       )}
