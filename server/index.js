@@ -4198,7 +4198,13 @@ app.get('/api/uncertain-questions', async (req, res) => {
   try {
     const { weddingId, unansweredOnly } = req.query;
 
-    let query = supabase
+    // Service role, like every other query in this file. This was the one
+    // place still using the anon client. It happens to work because
+    // uncertain_questions is readable, but the route is already admin-gated
+    // and an RLS policy added later would have quietly returned fewer rows
+    // rather than an error, which is how a queue of unanswered questions
+    // disappears without anyone noticing.
+    let query = supabaseAdmin
       .from('uncertain_questions')
       .select(`
         *,

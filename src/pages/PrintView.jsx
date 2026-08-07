@@ -112,6 +112,7 @@ export default function PrintView() {
     decor: false,
     bar: false,
     borrow: false,
+    weddingParty: false,
     vendors: false,
     allergies: false,
     guestCare: false,
@@ -140,6 +141,10 @@ export default function PrintView() {
   // The bar and the borrow list are things the couple fills in and the venue
   // has to act on: somebody pulls those items off a shelf and somebody mixes
   // those drinks. Neither was anywhere in this pack.
+  // 116 named wedding party members across the book. The pack printed only the
+  // head counts, and 8 weddings have a party list but no ceremony order, so
+  // for those the venue had no bridal party names at all.
+  const [weddingParty, setWeddingParty] = useState([])
   const [barItems, setBarItems] = useState([])
   const [barRecipes, setBarRecipes] = useState([])
   const [barNotes, setBarNotes] = useState(null)
@@ -156,7 +161,7 @@ export default function PrintView() {
           ceremonyRes, bedroomsRes, rehearsalRes, shuttleRes,
           makeupRes, decorRes, vendorsRes, allergiesRes,
           ceremonyChairsRes, guestCareRes, guestsRes,
-          detailsRes, barItemsRes, barRecipesRes, barNotesRes, borrowRes,
+          detailsRes, barItemsRes, barRecipesRes, barNotesRes, borrowRes, partyRes,
         ] = await Promise.all([
           fetch(`${API_URL}/api/admin/weddings`, { headers: hdrs }),
           fetch(`${API_URL}/api/timeline/${weddingId}`, { headers: hdrs }),
@@ -178,6 +183,7 @@ export default function PrintView() {
           fetch(`${API_URL}/api/bar-recipes/${weddingId}`, { headers: hdrs }),
           fetch(`${API_URL}/api/bar-notes/${weddingId}`, { headers: hdrs }),
           fetch(`${API_URL}/api/borrow-selections/${weddingId}`, { headers: hdrs }),
+          fetch(`${API_URL}/api/wedding-party/${weddingId}`, { headers: hdrs }),
         ])
 
         const weddingsData = await weddingsRes.json()
@@ -222,6 +228,7 @@ export default function PrintView() {
         await optional('bar recipes', barRecipesRes, d => setBarRecipes(Array.isArray(d) ? d : []))
         await optional('bar notes', barNotesRes, d => setBarNotes(d || null))
         await optional('borrow selections', borrowRes, d => setBorrowItems(Array.isArray(d) ? d : (d?.selections || [])))
+        await optional('wedding party', partyRes, d => setWeddingParty(Array.isArray(d) ? d : []))
 
       } catch (err) {
         console.error('PrintView fetch error:', err)
@@ -622,6 +629,7 @@ export default function PrintView() {
           shuttle: '🚌 Shuttle',
           makeup: '💄 Makeup',
           decor: '🌿 Decor',
+          weddingParty: '👰 Wedding Party',
           borrow: '📦 Borrowing',
           bar: '🍸 Bar',
           vendors: '📇 Vendors',
@@ -910,6 +918,36 @@ export default function PrintView() {
                 </table>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* WEDDING PARTY — names and roles, not just how many of them there are */}
+        {sections.weddingParty && weddingParty.length > 0 && (
+          <div className="print-section section-start">
+            <SectionHeader title="Wedding Party" icon="👰" />
+            {(() => {
+              const byGroup = {}
+              for (const m of weddingParty) {
+                ;(byGroup[m.group_label || m.role || 'Wedding Party'] ||= []).push(m)
+              }
+              return (
+                <div style={{ fontSize: 12 }}>
+                  {Object.entries(byGroup).map(([group, members]) => (
+                    <div key={group} style={{ marginBottom: 10 }}>
+                      <p style={{ fontWeight: 600, borderBottom: '1px solid #ccc', paddingBottom: 2, marginBottom: 4 }}>
+                        {group} <span style={{ fontWeight: 400, color: '#888' }}>({members.length})</span>
+                      </p>
+                      {members.map(m => (
+                        <p key={m.id} style={{ paddingLeft: 12, lineHeight: 1.6 }}>
+                          {m.member_name || <span style={{ color: '#c0b5a8' }}>Unnamed</span>}
+                          {m.role && m.role !== group && <span style={{ color: '#666', fontSize: 10 }}> &mdash; {m.role}</span>}
+                        </p>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )
+            })()}
           </div>
         )}
 
