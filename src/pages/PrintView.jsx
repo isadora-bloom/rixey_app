@@ -708,6 +708,13 @@ export default function PrintView() {
                   <DataRow label="Chargers" value={tables.chair_sash ? `Yes — ${tables.guest_count || ''} needed (reduces ~2 seats per round; ~6" centre space on rectangles)` : 'No'} />
                   <DataRow label="Linen Color" value={tables.linen_color} />
                   <DataRow label="Napkin Color" value={tables.napkin_color} />
+                  {/* Three linen fields were collected next to the colour and
+                      never printed. linen_notes is where per-table exceptions
+                      live, e.g. "Card table: NOT WHITE (132x90)", which is an
+                      instruction for whoever lays the cloths. */}
+                  <DataRow label="Linen Drop" value={tables.linen_drop} />
+                  <DataRow label="Linens From" value={tables.linen_venue_choice === true ? 'Venue' : tables.linen_venue_choice === false ? 'Couple / rental' : null} />
+                  <DataRow label="Linen Notes" value={tables.linen_notes} />
                   <DataRow label="Head Table" value={tables.head_table ? `Yes — ${tables.head_table_size || ''} seats` : 'No'} />
                   <DataRow label="Sweetheart Table" value={tables.sweetheart_table ? 'Yes' : 'No'} />
                   <DataRow label="Kids Table" value={tables.kids_count > 0 ? `${tables.kids_count} kids` : null} />
