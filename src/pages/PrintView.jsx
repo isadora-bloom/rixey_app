@@ -110,6 +110,8 @@ export default function PrintView() {
     shuttle: false,
     makeup: false,
     decor: false,
+    bar: false,
+    borrow: false,
     vendors: false,
     allergies: false,
     guestCare: false,
@@ -135,6 +137,13 @@ export default function PrintView() {
   const [ceremonyChairs, setCeremonyChairs] = useState(null)
   const [guestCare, setGuestCare] = useState([])
   const [guests, setGuests] = useState([])
+  // The bar and the borrow list are things the couple fills in and the venue
+  // has to act on: somebody pulls those items off a shelf and somebody mixes
+  // those drinks. Neither was anywhere in this pack.
+  const [barItems, setBarItems] = useState([])
+  const [barRecipes, setBarRecipes] = useState([])
+  const [barNotes, setBarNotes] = useState(null)
+  const [borrowItems, setBorrowItems] = useState([])
   const [highlights, setHighlights] = useState(null)
   const [loadingHighlights, setLoadingHighlights] = useState(true)
 
@@ -147,7 +156,7 @@ export default function PrintView() {
           ceremonyRes, bedroomsRes, rehearsalRes, shuttleRes,
           makeupRes, decorRes, vendorsRes, allergiesRes,
           ceremonyChairsRes, guestCareRes, guestsRes,
-          detailsRes,
+          detailsRes, barItemsRes, barRecipesRes, barNotesRes, borrowRes,
         ] = await Promise.all([
           fetch(`${API_URL}/api/admin/weddings`, { headers: hdrs }),
           fetch(`${API_URL}/api/timeline/${weddingId}`, { headers: hdrs }),
@@ -165,6 +174,10 @@ export default function PrintView() {
           fetch(`${API_URL}/api/guest-care/${weddingId}`, { headers: hdrs }),
           fetch(`${API_URL}/api/guests/${weddingId}`, { headers: hdrs }),
           fetch(`${API_URL}/api/wedding-details/${weddingId}`, { headers: hdrs }),
+          fetch(`${API_URL}/api/bar-shopping/${weddingId}`, { headers: hdrs }),
+          fetch(`${API_URL}/api/bar-recipes/${weddingId}`, { headers: hdrs }),
+          fetch(`${API_URL}/api/bar-notes/${weddingId}`, { headers: hdrs }),
+          fetch(`${API_URL}/api/borrow-selections/${weddingId}`, { headers: hdrs }),
         ])
 
         const weddingsData = await weddingsRes.json()
@@ -197,6 +210,18 @@ export default function PrintView() {
         try { const gd = await guestsRes.json(); setGuests(gd?.guests || []) } catch {}
 
         setWeddingDetails(await detailsRes.json() || null)
+
+        // Optional sections: a failure here must not take down the whole pack,
+        // but it must not be silent either. A section that quietly prints
+        // nothing looks exactly like a couple who planned nothing.
+        const optional = async (label, res, apply) => {
+          try { apply(await res.json()) }
+          catch (e) { console.error(`PrintView: could not load ${label} —`, e.message) }
+        }
+        await optional('bar shopping list', barItemsRes, d => setBarItems(Array.isArray(d) ? d : []))
+        await optional('bar recipes', barRecipesRes, d => setBarRecipes(Array.isArray(d) ? d : []))
+        await optional('bar notes', barNotesRes, d => setBarNotes(d || null))
+        await optional('borrow selections', borrowRes, d => setBorrowItems(Array.isArray(d) ? d : (d?.selections || [])))
 
       } catch (err) {
         console.error('PrintView fetch error:', err)
@@ -597,6 +622,8 @@ export default function PrintView() {
           shuttle: '🚌 Shuttle',
           makeup: '💄 Makeup',
           decor: '🌿 Decor',
+          borrow: '📦 Borrowing',
+          bar: '🍸 Bar',
           vendors: '📇 Vendors',
           allergies: '⚠️ Allergies',
           guestCare: '💝 Guest Care',
@@ -883,6 +910,89 @@ export default function PrintView() {
                 </table>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* BORROWING FROM THE MANOR — somebody has to pull these off a shelf */}
+        {sections.borrow && borrowItems.length > 0 && (
+          <div className="print-section section-start">
+            <SectionHeader title="Borrowing From Rixey" icon="📦" />
+            {(() => {
+              const byCategory = {}
+              for (const it of borrowItems) {
+                const cat = it.category || it.borrow_catalog?.category || 'Other'
+                const nm = it.item_name || it.borrow_catalog?.item_name
+                if (nm) (byCategory[cat] ||= []).push(nm)
+              }
+              return (
+                <div style={{ fontSize: 12 }}>
+                  <p style={{ fontSize: 11, color: '#666', marginTop: 0, marginBottom: 8 }}>
+                    {borrowItems.length} item{borrowItems.length === 1 ? '' : 's'} the couple has asked to borrow. To be pulled and set out.
+                  </p>
+                  {Object.entries(byCategory).sort((a, b) => a[0].localeCompare(b[0])).map(([cat, names]) => (
+                    <div key={cat} style={{ marginBottom: 10 }}>
+                      <p style={{ fontWeight: 600, borderBottom: '1px solid #ccc', paddingBottom: 2, marginBottom: 4 }}>
+                        {cat} <span style={{ fontWeight: 400, color: '#888' }}>({names.length})</span>
+                      </p>
+                      {names.slice().sort().map((n, i) => (
+                        <p key={i} style={{ paddingLeft: 12, lineHeight: 1.6 }}>&#9744;&nbsp;&nbsp;{n}</p>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )
+            })()}
+          </div>
+        )}
+
+        {/* BAR — what is being poured, and what the couple wrote about it */}
+        {sections.bar && (barItems.length > 0 || barRecipes.length > 0 || (barNotes && Object.values(barNotes).some(v => String(v || '').trim()))) && (
+          <div className="print-section section-start">
+            <SectionHeader title="Bar" icon="🍸" />
+            <div style={{ fontSize: 12 }}>
+              {barItems.length > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <p style={{ fontWeight: 600, borderBottom: '1px solid #ccc', paddingBottom: 2, marginBottom: 4 }}>
+                    Shopping list <span style={{ fontWeight: 400, color: '#888' }}>({barItems.length})</span>
+                  </p>
+                  {barItems.map(i => (
+                    <p key={i.id} style={{ paddingLeft: 12, lineHeight: 1.6 }}>
+                      &#9744;&nbsp;&nbsp;{i.item_name}
+                      {i.quantity ? <span style={{ color: '#555' }}> &mdash; {i.quantity} {i.unit || ''}</span> : null}
+                      {i.notes ? <span style={{ color: '#888', fontSize: 10 }}> ({i.notes})</span> : null}
+                    </p>
+                  ))}
+                </div>
+              )}
+              {barRecipes.length > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <p style={{ fontWeight: 600, borderBottom: '1px solid #ccc', paddingBottom: 2, marginBottom: 4 }}>
+                    Cocktails <span style={{ fontWeight: 400, color: '#888' }}>({barRecipes.length})</span>
+                  </p>
+                  {barRecipes.map(r => (
+                    <div key={r.id} style={{ paddingLeft: 12, marginBottom: 6 }}>
+                      <p style={{ fontWeight: 600 }}>{r.name}</p>
+                      {r.ingredients && (
+                        <p style={{ whiteSpace: 'pre-wrap', color: '#555', fontSize: 11, margin: 0 }}>
+                          {typeof r.ingredients === 'string' ? r.ingredients : JSON.stringify(r.ingredients)}
+                        </p>
+                      )}
+                      {r.notes && <p style={{ color: '#888', fontSize: 10, margin: 0 }}>{r.notes}</p>}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {barNotes && Object.entries(barNotes)
+                .filter(([, v]) => String(v || '').trim())
+                .map(([key, v]) => (
+                  <div key={key} style={{ marginBottom: 8 }}>
+                    <p style={{ fontWeight: 600, borderBottom: '1px solid #ccc', paddingBottom: 2, marginBottom: 4, textTransform: 'capitalize' }}>
+                      Notes &mdash; {key}
+                    </p>
+                    <p style={{ paddingLeft: 12, whiteSpace: 'pre-wrap', margin: 0 }}>{v}</p>
+                  </div>
+                ))}
+            </div>
           </div>
         )}
 
