@@ -9,6 +9,7 @@ import multer from 'multer';
 import { google } from 'googleapis';
 import rateLimit from 'express-rate-limit';
 import { requireAuth, requireAdmin } from './middleware/auth.js';
+import { createWeddingAccess } from './middleware/weddingAccess.js';
 import { validateBody } from './middleware/validate.js';
 import { coerceBody } from './middleware/coerce.js';
 import { fetchAllTabs, SheetFetchError } from './lib/sheet-fetcher.js';
@@ -235,6 +236,16 @@ const supabaseAdmin = createClient(
   process.env.VITE_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY
 );
+
+// Wedding-scope authorisation. Mounted here rather than beside the other
+// app.use calls above because it needs supabaseAdmin, which is declared on the
+// line above this. Still ahead of every route handler, and after the soft-auth
+// middleware that sets req.userId, which is what it reads.
+//
+// SHIPS IN AUDIT MODE: it works out what it would refuse, logs that, and lets
+// the request through unchanged. Deploying it alters no behaviour. Set
+// WEDDING_ACCESS_MODE=enforce once the audit log is quiet.
+app.use('/api', createWeddingAccess(supabaseAdmin));
 
 // ============ USAGE TRACKING ============
 
@@ -1194,7 +1205,13 @@ app.post('/api/chat', async (req, res) => {
 
     // Get wedding-specific context (vendors, inspo, planning notes, contracts)
     let weddingContext = '';
-    const weddingId = profile?.wedding_id || await getWeddingIdForUser(userId);
+    // Resolved from the signed-in user, never from the request body. This used
+    // to prefer profile.wedding_id off req.body, so a caller could name any
+    // wedding and have Sage read out that couple's vendors, contracts,
+    // planning notes and budget. req.userId comes from the verified token;
+    // req.body.userId does not, so it is only a fallback for callers that
+    // predate soft auth and it goes through the same profiles lookup.
+    const weddingId = await getWeddingIdForUser(req.userId || userId);
     if (weddingId) {
       try {
         // Get vendors (use admin to bypass RLS)

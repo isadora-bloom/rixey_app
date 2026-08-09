@@ -941,7 +941,11 @@ export default function GuestList({ weddingId, userId }) {
       <h1>Seating Chart</h1>
       ${Object.entries(groups).map(([label, guestList]) => {
         const cap = tableOptions.find(t => t.label === label)?.capacity || 0
-        const used = guestList.reduce((n, g) => n + 1 + (g.plus_one_name ? 1 : 0), 0)
+        // Same seat maths as tableCounts. This used to open-code it as
+        // `1 + (g.plus_one_name ? 1 : 0)`, which is subtly different: it counts
+        // a whitespace-only plus_one_name as a person where hasPlusOne does not,
+        // so the printed seat count and the on-screen one could disagree.
+        const used = guestList.reduce((n, g) => n + partyMembers(g).length, 0)
         return `<h2>${label}<span class="capacity">${used}/${cap} seats</span></h2>
         <table><thead><tr><th>Guest</th><th>Dietary</th>${platedMeal ? '<th>Meal</th>' : ''}</tr></thead>
         <tbody>${tableRows(guestList)}</tbody></table>`
