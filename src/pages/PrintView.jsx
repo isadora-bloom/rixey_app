@@ -4,26 +4,29 @@ import { API_URL } from '../config/api'
 import { authHeaders } from '../utils/api'
 import { formatDateOnly } from '../utils/dates'
 import { partyMembers, dietaryNotInRegistry } from '../../shared/guest-names'
+import { partnerLabels, fillLabel } from '../../shared/partner-labels'
 
 
-// All timeline event definitions (mirrored from TimelineBuilder for rendering)
+// All timeline event definitions (mirrored from TimelineBuilder for rendering).
+// {p1}/{p2} are filled from the couple's own names — see shared/partner-labels.js.
+// These must stay in step with the definitions in TimelineBuilder.jsx.
 const ALL_TIMELINE_EVENTS = {
   'hair-makeup-done': 'Hair & Makeup Complete',
   'buffer-break': 'Buffer / Lunch Break',
-  'bridesmaids-dressed': 'Bridesmaids & Groomsmen Get Dressed',
-  'bride-dress': 'Bride Gets Dressed',
-  'groom-getting-ready': 'Groom Getting Ready Photos',
-  'bride-getting-ready-photos': 'Bride Getting Ready Photos',
+  'bridesmaids-dressed': 'Wedding Party Gets Dressed',
+  'bride-dress': '{p1} Gets Dressed',
+  'groom-getting-ready': '{p2} Getting Ready Photos',
+  'bride-getting-ready-photos': '{p1} Getting Ready Photos',
   'details-photos': 'Details Photos',
   'robe-photos': 'Robe / Casual Photos',
-  'first-look-dad': 'First Look with Dad',
-  'first-look-groom': 'First Look with Groom',
+  'first-look-dad': 'First Look with a Parent',
+  'first-look-groom': 'First Look with {p2}',
   'private-vows': 'Private Vows',
   'couple-portraits': 'Couple Portraits',
   'wedding-party-photos': 'Wedding Party Photos',
   'family-formals': 'Immediate Family Photos',
   'extended-family': 'Extended Family Photos',
-  'hide-bride': 'Put Bride Away',
+  'hide-bride': 'Keep {p1} Out of Sight',
   'last-shuttle': 'Last Shuttle Arrives',
   'travel-to-church': 'Travel to Ceremony Venue',
   'guests-arrive': 'Guest Arrival',
@@ -270,7 +273,12 @@ export default function PrintView() {
     Object.entries(events).forEach(([id, ev]) => {
       if (!ev.included) return
       if (!ev.time) return
-      const name = ALL_TIMELINE_EVENTS[id] || ev.name || id
+      // The template wins over ev.name deliberately. ev.name is whatever was
+      // frozen into the row when the timeline was first saved, which for older
+      // weddings is "Bride Gets Dressed" regardless of who is getting married.
+      const name = ALL_TIMELINE_EVENTS[id]
+        ? fillLabel(ALL_TIMELINE_EVENTS[id], partnerLabels(wedding))
+        : (ev.name || id)
       rows.push({ time: formatTime12h(ev.time), name, duration: ev.duration, id })
     })
     customEvents.forEach(ev => {

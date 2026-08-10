@@ -887,7 +887,7 @@ export default function Dashboard() {
               {/* Timeline section */}
               {activeSection === 'timeline' && profile?.wedding_id && (
                 <div className="p-4 sm:p-6">
-                  <TimelineBuilder weddingId={profile.wedding_id} weddingDate={wedding?.wedding_date} userId={user?.id} />
+                  <TimelineBuilder weddingId={profile.wedding_id} weddingDate={wedding?.wedding_date} userId={user?.id} wedding={wedding} />
                 </div>
               )}
 

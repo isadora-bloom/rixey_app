@@ -1439,7 +1439,7 @@ export default function AdminWeddingProfile({
 
               {/* Timeline Tab */}
               {activeTab === 'timeline' && (
-                <TimelineBuilder weddingId={viewingWedding.id} weddingDate={viewingWedding.wedding_date} isAdmin />
+                <TimelineBuilder weddingId={viewingWedding.id} weddingDate={viewingWedding.wedding_date} wedding={viewingWedding} isAdmin />
               )}
 
               {/* Tables Tab */}

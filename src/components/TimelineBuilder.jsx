@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
+import { partnerLabels, fillLabel } from '../../shared/partner-labels'
 import { authHeaders, apiFetch } from '../utils/api'
 import { useToast } from './ui/Toast'
 import { useAutosave } from '../hooks/useAutosave'
@@ -13,29 +14,29 @@ import SaveIndicator from './ui/SaveIndicator'
 const PREP_EVENTS = [
   { id: 'hair-makeup-done', name: 'Hair & Makeup Complete', icon: '💄', defaultDuration: 0, description: 'Time all hair & makeup should be finished', isTimeMarker: true, isAnchor: true, alwaysIncluded: true },
   { id: 'buffer-break', name: 'Buffer / Lunch Break', icon: '☕', defaultDuration: 30, description: 'Break for lunch and bathroom before getting dressed', alwaysIncluded: true },
-  { id: 'bridesmaids-dressed', name: 'Bridesmaids & Groomsmen Get Dressed', icon: '👗', defaultDuration: 30, description: 'Wedding party puts on their attire', tips: 'Guys and gals happen at same time with 2 photographers', alwaysIncluded: true },
-  { id: 'bride-dress', name: 'Bride Gets Dressed', icon: '👰', defaultDuration: 30, description: 'Bride puts on dress - includes dressing photos', alwaysIncluded: true },
-  { id: 'groom-getting-ready', name: 'Groom Getting Ready Photos', icon: '🤵', defaultDuration: 30, description: 'Groomsmen photos while bride finishes', canBeConcurrent: true, parallelWith: 'bride-dress' },
-  { id: 'bride-getting-ready-photos', name: 'Bride Getting Ready Photos', icon: '📸', defaultDuration: 30, description: 'Final bride portraits before ceremony' },
+  { id: 'bridesmaids-dressed', name: 'Wedding Party Gets Dressed', icon: '👗', defaultDuration: 30, description: 'Wedding party puts on their attire', tips: 'Both sides can happen at the same time with 2 photographers', alwaysIncluded: true },
+  { id: 'bride-dress', name: '{p1} Gets Dressed', icon: '👰', defaultDuration: 30, description: 'Includes dressing photos', alwaysIncluded: true },
+  { id: 'groom-getting-ready', name: '{p2} Getting Ready Photos', icon: '🤵', defaultDuration: 30, description: 'Getting ready photos, often while {p1} finishes', canBeConcurrent: true, parallelWith: 'bride-dress' },
+  { id: 'bride-getting-ready-photos', name: '{p1} Getting Ready Photos', icon: '📸', defaultDuration: 30, description: 'Final portraits before the ceremony' },
   { id: 'details-photos', name: 'Details Photos', icon: '💍', defaultDuration: 20, description: 'Rings, shoes, invitations, dress details', tips: 'Can be done during hair/makeup or after', canBeConcurrent: true },
-  { id: 'robe-photos', name: 'Robe / Casual Photos', icon: '👘', defaultDuration: 20, description: 'Casual getting ready moments with bridesmaids' },
+  { id: 'robe-photos', name: 'Robe / Casual Photos', icon: '👘', defaultDuration: 20, description: 'Casual getting ready moments with the wedding party' },
 ]
 
 const FIRST_LOOK_EVENTS = [
-  { id: 'first-look-dad', name: 'First Look with Dad', icon: '👨‍👧', defaultDuration: 10, description: 'Private moment with father', tips: 'If doing both, this should be BEFORE groom first look', chain: 'first-look' },
-  { id: 'first-look-groom', name: 'First Look with Groom', icon: '👀', defaultDuration: 15, description: 'Private reveal between couple', chain: 'first-look' },
+  { id: 'first-look-dad', name: 'First Look with a Parent', icon: '👨‍👧', defaultDuration: 10, description: 'A private moment before the ceremony', tips: 'If doing both, this should come BEFORE the first look with {p2}', chain: 'first-look' },
+  { id: 'first-look-groom', name: 'First Look with {p2}', icon: '👀', defaultDuration: 15, description: 'Private reveal between the couple', chain: 'first-look' },
   { id: 'private-vows', name: 'Private Vows', icon: '💕', defaultDuration: 15, description: 'Exchange personal vows privately', tips: 'Can be before ceremony or during cocktail hour', chain: 'first-look' },
 ]
 
 const PHOTO_EVENTS = [
   { id: 'couple-portraits', name: 'Couple Portraits', icon: '📸', defaultDuration: 30, cocktailDuration: 15, description: 'Romantic photos of just the two of you', chain: 'photos' },
-  { id: 'wedding-party-photos', name: 'Wedding Party Photos', icon: '👯', defaultDuration: 30, cocktailDuration: 20, description: 'Photos with bridesmaids and groomsmen', chain: 'photos' },
+  { id: 'wedding-party-photos', name: 'Wedding Party Photos', icon: '👯', defaultDuration: 30, cocktailDuration: 20, description: 'Photos with the wedding party', chain: 'photos' },
   { id: 'family-formals', name: 'Immediate Family Photos', icon: '👨‍👩‍👧‍👦', defaultDuration: 30, cocktailDuration: 15, description: 'Parents, siblings, grandparents', tips: 'Make a shot list to stay on schedule', chain: 'photos' },
   { id: 'extended-family', name: 'Extended Family Photos', icon: '👪', defaultDuration: 20, cocktailDuration: 10, description: 'Aunts, uncles, cousins - during cocktail hour', tips: 'Only if not doing first look, or for extra family', cocktailHourOnly: true },
 ]
 
 const PRE_CEREMONY_EVENTS = [
-  { id: 'hide-bride', name: 'Put Bride Away', icon: '🙈', defaultDuration: 30, description: 'Bride hidden away before guests start arriving' },
+  { id: 'hide-bride', name: 'Keep {p1} Out of Sight', icon: '🙈', defaultDuration: 30, description: 'Tucked away before guests start arriving' },
   { id: 'last-shuttle', name: 'Last Shuttle Arrives', icon: '🚌', defaultDuration: 0, description: 'Final guest shuttle before ceremony', isTimeMarker: true },
   { id: 'travel-to-church', name: 'Travel to Ceremony Venue', icon: '🚗', defaultDuration: 30, description: 'If ceremony is off-site', conditional: 'offsite' },
 ]
@@ -149,7 +150,10 @@ function calculateSunset(dateStr) {
   return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`
 }
 
-export default function TimelineBuilder({ weddingId, weddingDate, userId, isAdmin = false }) {
+export default function TimelineBuilder({ weddingId, weddingDate, userId, wedding, isAdmin = false }) {
+  // What to call each half of this couple. Event labels are templates so the
+  // same definitions serve two brides, two grooms, or anyone else.
+  const labels = partnerLabels(wedding)
   const [events, setEvents] = useState({})
   const [shuttleArrivals, setShuttleArrivals] = useState([])
   const [shuttleDepartures, setShuttleDepartures] = useState([])
@@ -741,6 +745,9 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, isAdmi
     allEvents.forEach(e => {
       initial[e.id] = {
         ...e,
+        name: fillLabel(e.name, labels),
+        description: fillLabel(e.description, labels),
+        tips: e.tips ? fillLabel(e.tips, labels) : e.tips,
         included: e.alwaysIncluded || false, // Auto-include events marked as alwaysIncluded
         time: '',
         duration: e.defaultDuration,
@@ -846,10 +853,25 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, isAdmi
             manualTime: false
           }
 
-          // Merge saved events
+          // Merge saved events.
+          //
+          // name/description/tips are deliberately taken back from the code
+          // after the spread. They are labels, not the couple's data, and a
+          // timeline saved last year has "Bride Gets Dressed" frozen into it.
+          // Letting the stored copy win means a wording fix never reaches an
+          // existing wedding — which is exactly what was wrong for Isabella
+          // and Angelina. Anything the couple actually typed (times,
+          // durations, eventNotes, included, manualTime) still wins.
           Object.keys(savedData.events).forEach(key => {
             if (initial[key]) {
-              initial[key] = { ...initial[key], ...savedData.events[key] }
+              const label = initial[key]
+              initial[key] = {
+                ...initial[key],
+                ...savedData.events[key],
+                name: label.name,
+                description: label.description,
+                tips: label.tips,
+              }
             }
           })
 
