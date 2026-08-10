@@ -1239,7 +1239,7 @@ export default function AdminWeddingProfile({
               )}
 
               {activeTab === 'ceremony-order' && (
-                <CeremonyOrder weddingId={viewingWedding.id} userId={null} />
+                <CeremonyOrder weddingId={viewingWedding.id} userId={null} wedding={viewingWedding} />
               )}
 
               {activeTab === 'ceremony-chairs' && (

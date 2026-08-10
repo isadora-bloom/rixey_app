@@ -1049,7 +1049,7 @@ export default function Dashboard() {
               )}
               {activeSection === 'ceremony-order' && profile?.wedding_id && (
                 <div className="p-4 sm:p-6">
-                  <CeremonyOrder weddingId={profile.wedding_id} userId={user?.id} />
+                  <CeremonyOrder weddingId={profile.wedding_id} userId={user?.id} wedding={wedding} />
                 </div>
               )}
               {activeSection === 'ceremony-chairs' && profile?.wedding_id && (

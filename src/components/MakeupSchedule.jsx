@@ -238,7 +238,7 @@ export default function MakeupSchedule({ weddingId, userId }) {
           </p>
         )}
         <p className="text-sm text-sage-500">
-          Allow <strong>45 mins per service</strong> for the bride (hair + makeup = <strong>90 mins total</strong>). Schedule bridesmaids and family around her.
+          Allow <strong>45 mins per service</strong> for whoever is getting ready first (hair + makeup = <strong>90 mins total</strong>). Schedule the wedding party and family around them.
         </p>
       </div>
 

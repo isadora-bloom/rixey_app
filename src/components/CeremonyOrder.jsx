@@ -4,6 +4,7 @@ import { authHeaders, apiFetch } from '../utils/api'
 import SaveIndicator from './ui/SaveIndicator'
 import { Button } from './ui'
 import { useToast } from './ui/Toast'
+import { partnerLabels } from '../../shared/partner-labels'
 
 
 const SECTIONS = [
@@ -12,8 +13,14 @@ const SECTIONS = [
   { key: 'recessional', label: 'Recessional', num: 3 },
 ];
 
-const ROLE_CHIPS = [
-  // Couple
+// Built per wedding so the couple's own names are offered first. Two brides
+// both picking "Bride" is legal but ambiguous everywhere downstream — on the
+// processional card, in the print pack, and in the traditional sort, where two
+// identical roles rank identically and nobody is left at the altar.
+const buildRoleChips = (labels) => [
+  // This couple, by name
+  labels.p1, labels.p2,
+  // Couple, traditional
   'Bride', 'Groom',
   // Wedding party — traditional
   'Bridesmaid', 'Groomsman', 'Maid of Honor', 'Best Man',
@@ -32,12 +39,14 @@ const ROLE_CHIPS = [
 // Traditional American processional order (lower index = walks earlier)
 // Grandparents → groom's parents → mother of bride → groom →
 // groomsmen → bridesmaids → maid of honor → kids → bride with escort
-const TRAD_ORDER = [
+const buildTradOrder = (labels) => [
   'Officiant',
   'Grandparent',
   'Mother of Groom', 'Father of Groom', 'Parent of Groom',
   'Mother of Bride',
-  'Groom',
+  // The partner who waits at the altar. Matches the timeline, where {p2} is
+  // the "getting ready photos" half and {p1} is the one kept out of sight.
+  'Groom', labels.p2,
   'Usher',
   'Groomsman', 'Groom\'s Person',
   'Best Man', 'Best Woman',
@@ -47,12 +56,16 @@ const TRAD_ORDER = [
   'Maid of Honor', 'Man of Honor',
   'Ring Bearer', 'Flower Girl',
   'Father of Bride', 'Parent of Bride',
-  'Bride',
+  // The partner who walks last.
+  'Bride', labels.p1,
   'Reader', 'Musician',
 ];
-const roleRank = (role) => {
-  const i = TRAD_ORDER.indexOf(role);
-  return i === -1 ? 99 : i;
+const makeRoleRank = (labels) => {
+  const order = buildTradOrder(labels);
+  return (role) => {
+    const i = order.indexOf(role);
+    return i === -1 ? 99 : i;
+  };
 };
 
 // Group a flat sorted array into steps: [[e1,e2], [e3], [e4,e5]]
@@ -185,7 +198,8 @@ function StepRow({ step, stepNum, draggingId, onDragStart, onDragEnd, onDelete, 
 
 // ── Add Person Form ───────────────────────────────────────────────────────────
 
-function AddPersonForm({ onAdd, onCancel }) {
+function AddPersonForm({ onAdd, onCancel, labels }) {
+  const roleChips = buildRoleChips(labels)
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
   const [custom, setCustom] = useState('');
@@ -213,7 +227,7 @@ function AddPersonForm({ onAdd, onCancel }) {
       <div>
         <p className="text-xs text-sage-500 font-medium mb-2">Role</p>
         <div className="flex flex-wrap gap-1.5 mb-2">
-          {ROLE_CHIPS.map(r => (
+          {roleChips.map(r => (
             <button
               key={r}
               type="button"
@@ -250,7 +264,8 @@ function AddPersonForm({ onAdd, onCancel }) {
 
 // ── Section Builder ───────────────────────────────────────────────────────────
 
-function SectionBuilder({ section, sectionEntries, onAdd, onDelete, onReorder, onSaveStateChange }) {
+function SectionBuilder({ section, sectionEntries, onAdd, onDelete, onReorder, onSaveStateChange, labels }) {
+  const roleRank = makeRoleRank(labels)
   const [draggingId, setDraggingId] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const { error: toastError } = useToast();
@@ -373,7 +388,7 @@ function SectionBuilder({ section, sectionEntries, onAdd, onDelete, onReorder, o
 
       {/* Add / button */}
       {showAdd ? (
-        <AddPersonForm onAdd={handleAdd} onCancel={() => setShowAdd(false)} />
+        <AddPersonForm labels={labels} onAdd={handleAdd} onCancel={() => setShowAdd(false)} />
       ) : (
         <div className="px-4 py-3 border-t border-cream-100">
           <button
@@ -390,7 +405,8 @@ function SectionBuilder({ section, sectionEntries, onAdd, onDelete, onReorder, o
 
 // ── Main Component ────────────────────────────────────────────────────────────
 
-export default function CeremonyOrder({ weddingId }) {
+export default function CeremonyOrder({ weddingId, wedding }) {
+  const labels = partnerLabels(wedding)
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -498,8 +514,7 @@ export default function CeremonyOrder({ weddingId }) {
             </span>
             {label}
           </h3>
-          <SectionBuilder
-            section={key}
+          <SectionBuilder labels={labels} section={key}
             sectionEntries={entries.filter(e => e.section === key)}
             onAdd={handleAdd}
             onDelete={handleDelete}
