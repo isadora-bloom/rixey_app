@@ -277,13 +277,166 @@ function questionEntries(docRows) {
   }));
 }
 
+/**
+ * Guests, which is usually the biggest thing in one of these files and the
+ * most delicate to import.
+ *
+ * Entries are frequently written surname-first and often name two people:
+ * "Ashby, Brooke and McClanahan, Cole" with a count of 2. Splitting that into
+ * a first and last name is guesswork — is "Ashby" a surname or a first name?
+ * are these two guests or a couple? — so nothing here splits anything. The
+ * whole string goes in first_name, the count is reported, and a person
+ * decides. Getting a guest's name wrong is how a place card ends up misspelt.
+ *
+ * A plus one is never inferred. Party size is shown so a human can act on it;
+ * it does not create a second person, because the couple has not said who that
+ * person is. Same rule as everywhere else in this codebase.
+ */
+function guestEntries(docRows, portal) {
+  const existing = portal.wedding_guests || [];
+  const known = new Set(existing.map(g => norm(`${g.first_name || ''} ${g.last_name || ''}`)));
+  // Also index by surname-first, since a document may write "Ayala, Audrey"
+  // for a guest the portal holds as "Audrey Ayala".
+  const flipped = new Set(existing.map(g => norm(`${g.last_name || ''} ${g.first_name || ''}`)));
+
+  return (docRows || []).filter(g => present(g.name)).map((g, i) => {
+    const name = String(g.name).trim();
+    const n = norm(name);
+    const nFlipped = norm(name.split(',').reverse().join(' '));
+    const match = known.has(n) || known.has(nFlipped) || flipped.has(n);
+    const size = Number.isFinite(+g.party_size) ? Math.max(1, Math.round(+g.party_size)) : null;
+
+    return makeEntry({
+      id: `doc:guest:${n || i}`,
+      section: 'Guest list',
+      field: name,
+      sheetValue: [size ? `${size} ${size === 1 ? 'person' : 'people'}` : null, g.category, g.rsvp ? `RSVP ${g.rsvp}` : null]
+        .filter(Boolean).join(' · ') || 'listed',
+      portalValue: match ? 'already on the guest list' : null,
+      status: match ? 'agree' : 'missing',
+      notes: !match && size > 1
+        ? `Listed as ${size} people in one entry. Imported as one row — split it, or add the second person as a plus one, by hand.`
+        : undefined,
+      applyOp: match ? { type: 'noop' } : {
+        type: 'insert',
+        table: 'wedding_guests',
+        row: {
+          // Taken whole. Nothing here guesses which part is the surname.
+          first_name: name.slice(0, 120),
+          last_name: null,
+          address: g.address ? String(g.address).slice(0, 300) : null,
+          rsvp: ['yes', 'no', 'maybe'].includes(String(g.rsvp || '').toLowerCase()) ? String(g.rsvp).toLowerCase() : 'pending',
+          notes: [g.category ? `Category: ${g.category}` : null, size > 1 ? `Listed as ${size} people` : null, 'From an uploaded planning document.']
+            .filter(Boolean).join(' '),
+          tags: [],
+        },
+      },
+    });
+  });
+}
+
+/** Table assignments. Only ever offered for guests the portal already knows. */
+function seatingEntries(docRows, portal) {
+  const existing = portal.wedding_guests || [];
+  const byName = new Map();
+  for (const g of existing) {
+    byName.set(norm(`${g.first_name || ''} ${g.last_name || ''}`), g);
+    byName.set(norm(`${g.last_name || ''} ${g.first_name || ''}`), g);
+  }
+
+  return (docRows || []).filter(s => present(s.guest_name) && present(s.table_name)).map((s, i) => {
+    const n = norm(s.guest_name);
+    const match = byName.get(n) || byName.get(norm(String(s.guest_name).split(',').reverse().join(' ')));
+    const table = String(s.table_name).trim().slice(0, 120);
+
+    return makeEntry({
+      id: `doc:seating:${n || i}`,
+      section: 'Seating',
+      field: s.guest_name,
+      sheetValue: table,
+      portalValue: match?.table_assignment || (match ? 'no table set' : null),
+      status: !match ? 'sheet-only'
+        : (sameish(match.table_assignment, table) ? 'agree' : (match.table_assignment ? 'conflict' : 'missing')),
+      notes: !match ? 'Not on the guest list yet — add them first, then this can be seated.' : undefined,
+      applyOp: !match ? { type: 'noop' } : {
+        type: 'patch',
+        table: 'wedding_guests',
+        match: { id: match.id },
+        patch: { table_assignment: table },
+      },
+    });
+  });
+}
+
+function hairMakeupEntries(docRows, portal) {
+  const existing = portal.makeup_schedule || [];
+  return (docRows || []).filter(h => present(h.person)).map((h, i) => {
+    const match = findByName(existing, h.person, 'participant_name');
+    const when = [h.service, h.time].filter(Boolean).join(' at ');
+    return makeEntry({
+      id: `doc:hair:${norm(h.person)}:${norm(h.service) || i}`,
+      section: 'Hair & Makeup',
+      field: `${h.person}${h.service ? ` — ${h.service}` : ''}`,
+      sheetValue: when || 'listed',
+      portalValue: match ? [match.hair_start_time, match.makeup_start_time].filter(Boolean).join(' / ') || 'on the schedule' : null,
+      status: match ? 'agree' : 'missing',
+      applyOp: match ? { type: 'noop' } : {
+        type: 'insert',
+        table: 'makeup_schedule',
+        row: {
+          participant_name: String(h.person).trim().slice(0, 120),
+          // The portal keeps hair and makeup as separate times on one row; a
+          // document usually lists them as separate appointments.
+          hair_start_time: /hair/i.test(h.service || '') ? (h.time || null) : null,
+          makeup_start_time: /makeup|mua/i.test(h.service || '') ? (h.time || null) : null,
+          notes: [h.stylist ? `With ${h.stylist}` : null, 'From an uploaded planning document.'].filter(Boolean).join(' '),
+        },
+      },
+    });
+  });
+}
+
+/**
+ * Everything the portal has no column for.
+ *
+ * Payments, music, favours, parking, gifts, shower plans. A planning document
+ * is the couple telling the venue everything they know, and a fact with no
+ * home is still a fact — dropping it because there is no field for it is the
+ * one outcome that is never acceptable. These land in planning_notes, which is
+ * where every other unstructured signal in this system already goes.
+ */
+function otherEntries(docRows) {
+  return (docRows || []).filter(o => present(o.detail)).map((o, i) => makeEntry({
+    id: `doc:other:${norm(o.heading) || 'note'}:${i}`,
+    section: o.heading ? `Other — ${o.heading}` : 'Other',
+    field: o.heading || 'Note',
+    sheetValue: o.detail,
+    portalValue: null,
+    status: 'missing',
+    applyOp: {
+      type: 'insert',
+      table: 'planning_notes',
+      row: {
+        category: 'note',
+        content: `${o.heading ? `${o.heading}: ` : ''}${String(o.detail).trim()}`.slice(0, 1000),
+        source_message: 'From an uploaded planning document.',
+        status: 'pending',
+      },
+    },
+  }));
+}
+
 const BUILDERS = {
   dietary: dietaryEntries,
   vendors: vendorEntries,
   bedrooms: bedroomEntries,
   bar: barEntries,
   decor: decorEntries,
+  guests: guestEntries,
+  seating: seatingEntries,
+  hair_makeup: hairMakeupEntries,
   questions: (rows) => questionEntries(rows),
+  other: (rows) => otherEntries(rows),
 };
 
 /**

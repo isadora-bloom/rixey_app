@@ -58,14 +58,29 @@ export default function DocumentSyncPanel({ weddingId }) {
     setBusy('')
   }
 
+  // Reading runs in the background — a big document takes minutes and several
+  // model calls — so this starts it and then waits for parsed_at to appear.
   const parse = async (id) => {
     setBusy('parse')
     try {
       const res = await apiFetch(`${API_URL}/api/admin/documents/${id}/parse`, { method: 'POST' })
-      const found = Object.entries(res.counts || {}).map(([k, v]) => `${v} ${k}`).join(', ')
-      toastSuccess(found ? `Found ${found}.` : 'Nothing recognisable in that document.')
-      await load()
-      await openDiff(id)
+      toastSuccess(`Reading it — ${res.chunks} section${res.chunks === 1 ? '' : 's'} to work through. This can take a couple of minutes.`)
+
+      const startedAt = Date.now()
+      while (Date.now() - startedAt < 10 * 60 * 1000) {
+        await new Promise(r => setTimeout(r, 5000))
+        const list = await apiFetch(`${API_URL}/api/admin/documents/${weddingId}`) || []
+        setDocs(list)
+        const doc = list.find(d => d.id === id)
+        if (doc?.parse_error && !doc?.parsed_at) { toastError(`Could not read it: ${doc.parse_error}`); break }
+        if (doc?.parsed_at) {
+          const found = Object.entries(doc.sectionCounts || {}).filter(([, v]) => v).map(([k, v]) => `${v} ${k}`).join(', ')
+          toastSuccess(found ? `Found ${found}.` : 'Nothing recognisable in that document.')
+          if (doc.parse_error) toastError(`Partly read only: ${doc.parse_error}`)
+          await openDiff(id)
+          break
+        }
+      }
     } catch (err) { toastError(`Could not read it: ${err.message}`) }
     setBusy('')
   }

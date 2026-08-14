@@ -56,11 +56,39 @@ export const DOC_SECTIONS = [
     hint: 'Drinks to be bought or provided. Free-text instructions like "trade port city for yuengling" belong in notes on the item they concern, or as their own item if they name a drink.',
   },
   {
+    key: 'guests',
+    label: 'Guest list',
+    table: 'wedding_guests',
+    fields: 'name (the whole entry exactly as written, even when it names two people), party_size (the number in a "#" or count column, if there is one), address, rsvp (yes, no, or leave out if not stated), category (their grouping, e.g. "Sarah\'s Friends", "Bridal Party")',
+    hint: 'Usually the largest table in the document. Entries are often written surname-first and may cover a couple: "Ashby, Brooke and McClanahan, Cole" is one entry for two people. Copy the whole string into name and put the count in party_size — do NOT split it yourself. A row like "Yes" or "No" on its own is a section heading marking the RSVP status of everything under it, not a guest.',
+  },
+  {
+    key: 'seating',
+    label: 'Seating chart',
+    table: 'wedding_guests',
+    fields: 'guest_name, table_name (the table label as written, e.g. "Table 1" or "TABLE 3 - 5 ft round"), dietary (anything noted beside their name)',
+    hint: 'Sometimes a list per table, sometimes blocks of columns laid out side by side across the page with a table name heading each block. Each person sits at exactly one table.',
+  },
+  {
+    key: 'hair_makeup',
+    label: 'Hair and makeup schedule',
+    table: 'makeup_schedule',
+    fields: 'person (whose hair or makeup it is), service (hair, makeup, or both), time (24h "HH:MM"), stylist (who is doing it, if the document says)',
+    hint: 'Often a grid with a time column beside each stylist, so one row can hold several people at the same time under different stylists. A heading row of bare names is usually the stylists themselves, not clients. Ignore anyone listed only as a column heading.',
+  },
+  {
     key: 'questions',
     label: 'Open questions for the venue',
     table: null,
     fields: 'question (what they are asking or waiting on), topic (a short label like Catering, Timeline, Rooms)',
     hint: 'Many plans end with a list of unresolved points aimed at the venue. These are the single most useful thing in the document and are never anywhere else. Capture them even when phrased as a fragment.',
+  },
+  {
+    key: 'other',
+    label: 'Everything else',
+    table: null,
+    fields: 'heading (what part of the document this came from, e.g. "Payments", "Music Selections", "Gifts"), detail (the fact itself, in one line)',
+    hint: 'The catch-all, and it matters. These documents are the couple telling us everything they know, and anything the portal has no column for still has to be readable somewhere rather than dropped. Payments and who owes what, music selections, favours, send-off, gifts, parking, cake details, shower plans, contract terms, anything at all. One entry per fact. Do not repeat something already captured in a section above.',
   },
 ];
 
@@ -71,8 +99,14 @@ export const SECTION_KEYS = DOC_SECTIONS.map(s => s.key);
  *
  * Splitting mid-table would hand the model half a vendor list and invite it to
  * guess the rest. The markers extract.js writes are the natural seams.
+ *
+ * Chunks are small on purpose. Asked to extract everything from a spreadsheet
+ * with 88 guests in one call, the model spent over eight minutes generating a
+ * single enormous reply — long enough to time out in production and long
+ * enough that a failure costs the whole document. Several bounded calls are
+ * slower in total and far more likely to finish.
  */
-export function chunkDocument(text, maxChars = 45_000) {
+export function chunkDocument(text, maxChars = 12_000) {
   const blocks = String(text || '').split(/(?======\s+(?:PAGE|TAB))/);
   const chunks = [];
   let current = '';
@@ -93,19 +127,23 @@ export function sectionsPrompt({ chunk, coupleNames, weddingDate, part, total })
 
   return `This is part of a wedding planning document for ${coupleNames || 'a couple'}${weddingDate ? `, married ${weddingDate}` : ''}, at Rixey Manor. It was written by the couple or their planner, so it follows no particular format.
 
-Pull out only the things listed below, in exactly these shapes. This is not a summary and not a transcription — anything that does not fit one of these belongs nowhere and should be left out.
+Pull out the things listed below, in exactly these shapes. Be thorough: this document is the couple telling the venue everything they know, and anything missed here is lost. The last category, "other", is a catch-all for facts the earlier ones have no place for — use it rather than dropping something.
 
 ${spec}
 
 Return a JSON object. Every key optional; omit a key entirely rather than returning an empty array.
 
 {
-  "dietary":   [ { "guest_name": "...", "allergy": "...", "severity": "...", "notes": "..." } ],
-  "vendors":   [ { "vendor_type": "...", "vendor_name": "...", "vendor_contact": "...", "notes": "..." } ],
-  "bedrooms":  [ { "room_name": "...", "occupants": "...", "night": "..." } ],
-  "decor":     [ { "item_name": "...", "space_name": "...", "source": "...", "notes": "..." } ],
-  "bar":       [ { "item_name": "...", "quantity": "...", "unit": "...", "notes": "..." } ],
-  "questions": [ { "question": "...", "topic": "..." } ]
+  "dietary":     [ { "guest_name": "...", "allergy": "...", "severity": "...", "notes": "..." } ],
+  "vendors":     [ { "vendor_type": "...", "vendor_name": "...", "vendor_contact": "...", "notes": "..." } ],
+  "bedrooms":    [ { "room_name": "...", "occupants": "...", "night": "..." } ],
+  "decor":       [ { "item_name": "...", "space_name": "...", "source": "...", "notes": "..." } ],
+  "bar":         [ { "item_name": "...", "quantity": "...", "unit": "...", "notes": "..." } ],
+  "guests":      [ { "name": "...", "party_size": 2, "address": "...", "rsvp": "...", "category": "..." } ],
+  "seating":     [ { "guest_name": "...", "table_name": "...", "dietary": "..." } ],
+  "hair_makeup": [ { "person": "...", "service": "...", "time": "...", "stylist": "..." } ],
+  "questions":   [ { "question": "...", "topic": "..." } ],
+  "other":       [ { "heading": "...", "detail": "..." } ]
 }
 
 Rules that matter more than completeness:

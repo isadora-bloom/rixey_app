@@ -66,24 +66,38 @@ export function extractXlsx(buffer) {
   return { text: parts.join('\n\n'), pageCount: wb.SheetNames.length };
 }
 
-/** PDFs are read page by page, with the page number kept as a locator. */
+/**
+ * PDFs, via pdf-parse.
+ *
+ * This first used pdfjs-dist directly, which worked locally and died on the
+ * server with "DOMMatrix is not defined". Two reasons, and the second is the
+ * real one: pdfjs wants browser globals in Node, and — more to the point —
+ * pdfjs-dist is not in server/package.json, which is what Railway installs
+ * from. It only existed locally as a transitive dependency of pdf-parse.
+ *
+ * So use pdf-parse itself. It is a declared server dependency, it does not
+ * need the DOM, and it is already what the contract reader uses.
+ */
 export async function extractPdf(buffer) {
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const doc = await pdfjs.getDocument({
-    data: new Uint8Array(buffer),
-    useSystemFonts: true,
-    // No worker in a server process, and no need for one.
-    disableWorker: true,
-    verbosity: 0,
-  }).promise;
-
-  const pages = [];
-  for (let p = 1; p <= doc.numPages; p++) {
-    const tc = await (await doc.getPage(p)).getTextContent();
-    const text = tc.items.map(i => i.str).join(' ').replace(/[ \t]+/g, ' ').trim();
-    if (text) pages.push(`===== PAGE ${p} =====\n${text}`);
+  const { PDFParse } = await import('pdf-parse');
+  const parser = new PDFParse({ data: new Uint8Array(buffer) });
+  try {
+    const result = await parser.getText();
+    const pages = Array.isArray(result.pages) ? result.pages : [];
+    if (pages.length) {
+      const parts = pages
+        .map((p, i) => {
+          const text = String(p?.text ?? p ?? '').replace(/[ \t]+/g, ' ').trim();
+          return text ? `===== PAGE ${i + 1} =====\n${text}` : '';
+        })
+        .filter(Boolean);
+      return { text: parts.join('\n\n'), pageCount: result.total || pages.length };
+    }
+    return { text: String(result.text || '').trim(), pageCount: result.total || null };
+  } finally {
+    // Frees the worker; without it a long-running server leaks one per upload.
+    await parser.destroy?.().catch(() => {});
   }
-  return { text: pages.join('\n\n'), pageCount: doc.numPages };
 }
 
 export async function extractDocx(buffer) {

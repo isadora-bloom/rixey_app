@@ -9326,45 +9326,71 @@ app.post('/api/admin/documents/:id/parse', requireAdmin, aiLimiter, async (req, 
       .from('weddings').select('couple_names, wedding_date').eq('id', doc.wedding_id).maybeSingle();
 
     const chunks = chunkDocument(doc.extracted_text);
-    const results = [];
-    for (let i = 0; i < chunks.length; i++) {
-      const prompt = sectionsPrompt({
-        chunk: chunks[i],
-        coupleNames: wedding?.couple_names,
-        weddingDate: wedding?.wedding_date,
-        part: i + 1,
-        total: chunks.length,
-      });
-      let response;
+
+    // Answer now, read in the background.
+    //
+    // A spreadsheet with 88 guests took over eight minutes to extract in one
+    // call — long past any proxy timeout, and a failure at minute seven cost
+    // the whole document. It now runs as several bounded calls after the
+    // response, marking progress as it goes, and the panel polls.
+    await supabaseAdmin.from('wedding_documents')
+      .update({ parse_error: null, parsed_at: null }).eq('id', doc.id);
+    res.json({ ok: true, started: true, chunks: chunks.length });
+
+    (async () => {
+      const results = [];
       try {
-        response = await anthropic.messages.create({
-          model: MODEL_SONNET, max_tokens: 8000, temperature: 0.1,
-          messages: [{ role: 'user', content: prompt }],
-        });
+        for (let i = 0; i < chunks.length; i++) {
+          const prompt = sectionsPrompt({
+            chunk: chunks[i],
+            coupleNames: wedding?.couple_names,
+            weddingDate: wedding?.wedding_date,
+            part: i + 1,
+            total: chunks.length,
+          });
+          let response;
+          try {
+            response = await anthropic.messages.create({
+              model: MODEL_SONNET, max_tokens: 8000, temperature: 0.1,
+              messages: [{ role: 'user', content: prompt }],
+            });
+          } catch (err) {
+            const overloaded = err.status === 529 || err.status === 503 || err.status === 429;
+            if (!overloaded) throw err;
+            response = await anthropic.messages.create({
+              model: MODEL_HAIKU, max_tokens: 8000, temperature: 0.1,
+              messages: [{ role: 'user', content: prompt }],
+            });
+          }
+          await logUsage(doc.wedding_id, null, 'document_parse', response);
+          results.push(parseSectionsResponse(response.content[0].text));
+
+          // Save after every chunk. If chunk three fails, the first two are
+          // still readable rather than the whole read being lost.
+          await supabaseAdmin.from('wedding_documents')
+            .update({ sections: mergeSections(results) }).eq('id', doc.id);
+          console.log(`[doc-parse] ${doc.id}: chunk ${i + 1}/${chunks.length}`);
+        }
+        await supabaseAdmin.from('wedding_documents')
+          .update({ sections: mergeSections(results), parsed_at: new Date().toISOString(), parse_error: null })
+          .eq('id', doc.id);
+        console.log(`[doc-parse] ${doc.id}: done`);
       } catch (err) {
-        const overloaded = err.status === 529 || err.status === 503 || err.status === 429;
-        if (!overloaded) throw err;
-        response = await anthropic.messages.create({
-          model: MODEL_HAIKU, max_tokens: 8000, temperature: 0.1,
-          messages: [{ role: 'user', content: prompt }],
-        });
+        console.error(`[doc-parse] ${doc.id} failed:`, err.message);
+        await supabaseAdmin.from('wedding_documents').update({
+          // Whatever was read before the failure is kept and marked finished,
+          // so a partial read is usable rather than thrown away.
+          sections: results.length ? mergeSections(results) : null,
+          parsed_at: results.length ? new Date().toISOString() : null,
+          parse_error: String(err.message).slice(0, 500),
+        }).eq('id', doc.id);
       }
-      await logUsage(doc.wedding_id, null, 'document_parse', response);
-      results.push(parseSectionsResponse(response.content[0].text));
-    }
-
-    const sections = mergeSections(results);
-    await supabaseAdmin.from('wedding_documents').update({
-      sections, parsed_at: new Date().toISOString(), parse_error: null,
-    }).eq('id', doc.id);
-
-    const counts = Object.fromEntries(Object.entries(sections).map(([k, v]) => [k, v.length]));
-    res.json({ ok: true, counts, chunks: chunks.length });
+    })();
   } catch (e) {
     console.error('Document parse error:', e);
     await supabaseAdmin.from('wedding_documents')
       .update({ parse_error: String(e.message).slice(0, 500) }).eq('id', req.params.id);
-    res.status(500).json({ error: e.message });
+    if (!res.headersSent) res.status(500).json({ error: e.message });
   }
 });
 
