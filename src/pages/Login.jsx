@@ -62,15 +62,16 @@ export default function Login() {
 
     if (!date) return
 
-    // Check if this date already has a wedding
-    const { data: existingWedding } = await supabase
-      .from('weddings')
-      .select('id, event_code, couple_names')
-      .eq('wedding_date', date)
-      .single()
-
-    if (existingWedding) {
-      setDateBlocked(true)
+    // Asked of the server, not the database. The old version queried weddings
+    // directly with the anon key — before sign-in — and selected the event_code
+    // and couple_names of whoever held the date, which is how every event code
+    // in the system became readable by anyone who opened the page.
+    try {
+      const res = await fetch(`${API_URL}/api/join/date-available?date=${encodeURIComponent(date)}`)
+      const data = await res.json()
+      if (data?.taken) setDateBlocked(true)
+    } catch {
+      // Leave it unblocked: a failed check should not stop someone signing up.
     }
   }
 
@@ -114,14 +115,15 @@ export default function Login() {
           return
         }
 
-        // Look up wedding by event code
-        const { data: wedding, error: weddingError } = await supabase
-          .from('weddings')
-          .select('id, wedding_date')
-          .eq('event_code', eventCode.trim().toUpperCase())
-          .single()
+        // Server-side so the browser never reads the weddings table.
+        const lookupRes = await fetch(`${API_URL}/api/join/lookup`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ event_code: eventCode.trim().toUpperCase() }),
+        })
+        const wedding = lookupRes.ok ? await lookupRes.json() : null
 
-        if (weddingError || !wedding) {
+        if (!wedding?.id) {
           setError('Event code not found. Please check and try again.')
           setLoading(false)
           return

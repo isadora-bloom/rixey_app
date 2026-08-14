@@ -9018,6 +9018,65 @@ app.get('/api/w/:slug', async (req, res) => {
   }
 });
 
+// ── Sign-up lookups ───────────────────────────────────────────────────────────
+//
+// These two exist so the browser never needs to read the weddings table
+// directly. It used to, with the anon key, before the visitor had an account —
+// which is why every event code in the system was readable by anyone who
+// opened the site. Once the client stops doing that, weddings can be locked
+// down (migration 019).
+//
+// Both are deliberately stingy: they answer the question asked and nothing
+// more. The date check returns a boolean rather than the wedding that occupies
+// the date, and the code lookup returns nothing that would help someone
+// guessing codes.
+
+const joinLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts. Please wait a few minutes and try again.' }
+});
+
+// Is this date already taken? Used by the sign-up form before an account
+// exists. Returns only yes or no — the old client-side query selected the
+// event_code and couple_names of whoever had the date.
+app.get('/api/join/date-available', joinLimiter, async (req, res) => {
+  try {
+    const date = String(req.query.date || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'A date is required' });
+    const { data, error } = await supabaseAdmin
+      .from('weddings').select('id').eq('wedding_date', date).limit(1);
+    if (error) throw error;
+    res.json({ taken: (data || []).length > 0 });
+  } catch (e) {
+    console.error('Date availability error:', e);
+    res.status(500).json({ error: 'Could not check that date' });
+  }
+});
+
+// Exchange an event code for the wedding it belongs to, so someone can join.
+// Rate limited because this is the one endpoint where guessing pays.
+app.post('/api/join/lookup', joinLimiter, async (req, res) => {
+  try {
+    const code = String(req.body?.event_code || '').trim().toUpperCase();
+    if (code.length < 4) return res.status(400).json({ error: 'Enter your event code' });
+    const { data, error } = await supabaseAdmin
+      .from('weddings')
+      .select('id, wedding_date')
+      .eq('event_code', code)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Event code not found. Please check and try again.' });
+    // Only what the sign-up form needs to attach a profile.
+    res.json({ id: data.id, wedding_date: data.wedding_date });
+  } catch (e) {
+    console.error('Event code lookup error:', e);
+    res.status(500).json({ error: 'Could not check that code' });
+  }
+});
+
 // ── Public RSVP endpoints ─────────────────────────────────────────────────────
 
 /**
