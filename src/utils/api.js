@@ -67,13 +67,29 @@ export async function authHeaders(extra = {}) {
  * so a forgotten try/catch never causes silent data loss.
  */
 export class ApiError extends Error {
-  constructor(message, { status, url } = {}) {
+  constructor(message, { status, url, signedOut = false } = {}) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.url = url
+    // True when the request failed because there was no usable session, rather
+    // than because the save itself was wrong. Different problem, different fix.
+    this.signedOut = signedOut
   }
 }
+
+/**
+ * Paths that legitimately have no signed-in user. Mirrors PUBLIC_PREFIXES in
+ * server/middleware/weddingAccess.js — guests RSVPing have no account and never
+ * will, so these must not be blocked for want of a token.
+ */
+const PUBLIC_PATHS = [
+  '/api/w/', '/api/rsvp/', '/api/vendor-portal/', '/api/vendor-directory',
+  '/api/wedding-website/check-slug/', '/api/health',
+]
+
+const SIGNED_OUT_MESSAGE =
+  'You have been signed out, so that did not save. Sign in again and re-enter it.'
 
 /**
  * Wrapper around fetch that:
@@ -89,10 +105,32 @@ export async function apiFetch(url, options = {}) {
   if (isFormData) {
     delete headers['Content-Type']
   }
+  // Never send a write with no credentials.
+  //
+  // Until 14 August the server accepted requests with no Authorization header
+  // at all, so a browser that had lost its token carried on saving and nobody
+  // could tell. Now those are refused, and the couple sees "Save failed —
+  // please try again", which is the one thing that will never work: retrying a
+  // dead session produces the same failure for ever.
+  //
+  // So catch it here, before the request leaves, and say the true thing.
+  const method = String(options.method || 'GET').toUpperCase()
+  const isPublicPath = PUBLIC_PATHS.some(p => url.includes(p))
+  if (method !== 'GET' && method !== 'HEAD' && !isPublicPath && !headers['Authorization']) {
+    throw new ApiError(SIGNED_OUT_MESSAGE, { status: 401, url, signedOut: true })
+  }
+
   const res = await fetch(url, { ...options, headers })
   if (!res.ok) {
     let msg
     try { msg = (await res.json()).error } catch { msg = res.statusText }
+    // A refusal on a path that needed a session is a sign-in problem, whatever
+    // wording the server chose. Say so rather than passing along "you do not
+    // have access to this wedding", which reads like a permissions fault to
+    // someone looking at their own wedding.
+    if ((res.status === 401 || res.status === 403) && !isPublicPath) {
+      throw new ApiError(SIGNED_OUT_MESSAGE, { status: res.status, url, signedOut: true })
+    }
     throw new ApiError(msg || `HTTP ${res.status}`, { status: res.status, url })
   }
   if (res.status === 204) return null

@@ -3097,13 +3097,15 @@ app.get('/api/gmail/status', async (req, res) => {
 });
 
 // Fetch and process emails from registered client email addresses
-app.post('/api/gmail/sync', async (req, res) => {
-  try {
+app.post('/api/gmail/sync', backgroundSync('gmail', runGmailSync));
+
+async function runGmailSync(body, { bump }) {
+  {
     // Load tokens (with automatic refresh if expired)
     const tokens = await loadAndRefreshGmailTokens();
 
     if (!tokens) {
-      return res.status(400).json({ error: 'Gmail not connected' });
+      throw new Error('Gmail is not connected. Reconnect it in the admin panel.');
     }
 
     // Get all weddings with profiles (registered client emails)
@@ -3113,10 +3115,7 @@ app.post('/api/gmail/sync', async (req, res) => {
       .select('id, couple_names, profiles(email)');
 
     if (!weddings || weddings.length === 0) {
-      return res.json({
-        processed: 0,
-        message: 'No weddings with registered clients found.'
-      });
+      return { processed: 0, detail: { message: 'No weddings with registered clients found.' } };
     }
 
     // Build email-to-wedding lookup
@@ -3133,10 +3132,7 @@ app.post('/api/gmail/sync', async (req, res) => {
     }
 
     if (clientEmails.length === 0) {
-      return res.json({
-        processed: 0,
-        message: 'No client email addresses registered yet.'
-      });
+      return { processed: 0, detail: { message: 'No client email addresses registered yet.' } };
     }
 
     console.log(`Searching for emails from/about ${clientEmails.length} registered client addresses`);
@@ -3151,6 +3147,8 @@ app.post('/api/gmail/sync', async (req, res) => {
     let notesExtracted = 0;
 
     // Search for emails from each client AND emails containing their email (form submissions)
+    await bump({ total: clientEmails.length });
+
     for (const clientEmail of clientEmails) {
       // Two searches: emails FROM client, and emails CONTAINING client email (pricing calculator, etc.)
       const searchQueries = [
@@ -3268,21 +3266,20 @@ app.post('/api/gmail/sync', async (req, res) => {
         console.error(`Error searching "${searchQuery}":`, searchErr.message);
       }
       } // end searchQueries loop
+
+      // Progress after every client, not at the end. A run that dies partway
+      // through 73 addresses used to leave nothing behind saying so.
+      await bump({ processed: newlyProcessed, last_item: clientEmail });
     } // end clientEmails loop
 
     console.log(`Processed ${newlyProcessed} new emails, extracted ${notesExtracted} planning notes`);
-    res.json({
+    return {
       processed: newlyProcessed,
-      notesExtracted,
-      clientsSearched: clientEmails.length,
-      message: `Synced ${newlyProcessed} new emails from ${clientEmails.length} registered clients. Extracted ${notesExtracted} planning notes.`
-    });
-
-  } catch (error) {
-    console.error('Gmail sync error:', error);
-    res.status(500).json({ error: 'Failed to sync emails: ' + error.message });
+      matched: newlyProcessed,
+      detail: { notesExtracted, clientsSearched: clientEmails.length },
+    };
   }
-});
+}
 
 // Disconnect Gmail
 app.post('/api/gmail/disconnect', async (req, res) => {
@@ -3339,13 +3336,15 @@ app.post('/api/quo/clear-processed', async (req, res) => {
 });
 
 // Sync messages from Quo
-app.post('/api/quo/sync', async (req, res) => {
-  try {
+app.post('/api/quo/sync', backgroundSync('quo', runQuoSync));
+
+async function runQuoSync(body, { bump }) {
+  {
     if (!QUO_API_KEY) {
-      return res.status(400).json({ error: 'Quo API key not configured' });
+      throw new Error('Quo API key is not configured');
     }
 
-    const { forceReprocess } = req.body || {};
+    const { forceReprocess } = body || {};
 
     // If force reprocess, clear the processed table first
     if (forceReprocess) {
@@ -3363,10 +3362,7 @@ app.post('/api/quo/sync', async (req, res) => {
       .not('phone', 'is', null);
 
     if (!profiles || profiles.length === 0) {
-      return res.json({
-        processed: 0,
-        message: 'No client phone numbers registered. Add phone numbers to client profiles first.'
-      });
+      return { processed: 0, detail: { message: 'No client phone numbers registered. Add phone numbers to client profiles first.' } };
     }
 
     // Build phone-to-wedding lookup
@@ -3434,7 +3430,7 @@ app.post('/api/quo/sync', async (req, res) => {
     if (!phoneNumbersResponse.ok) {
       const errText = await phoneNumbersResponse.text();
       console.error('Quo phone numbers error:', errText);
-      return res.status(500).json({ error: 'Failed to fetch Quo phone numbers' });
+      throw new Error(`Could not fetch Quo phone numbers (${phoneNumbersResponse.status})`);
     }
 
     const phoneNumbersData = await phoneNumbersResponse.json();
@@ -3663,34 +3659,26 @@ app.post('/api/quo/sync', async (req, res) => {
 
     console.log(`Quo sync: processed ${newlyProcessed} messages + ${callsProcessed} calls, saved ${planningNotesSaved} planning notes, extracted ${notesExtracted} additional notes`);
 
-    // Include detailed debug info in response
     const registeredPhones = Object.keys(phoneToWedding);
-    res.json({
+    return {
       processed: newlyProcessed,
-      callsProcessed: callsProcessed,
-      planningNotesSaved,
-      notesExtracted,
-      message: `Synced ${newlyProcessed} messages + ${callsProcessed} call transcripts. Saved ${planningNotesSaved} to planning notes.`,
-      debug: {
+      matched: newlyProcessed,
+      detail: {
+        callsProcessed,
+        planningNotesSaved,
+        notesExtracted,
         profileCount: profiles.length,
         profilesWithWeddingId: profiles.filter(p => p.wedding_id).length,
-        registeredPhones: registeredPhones,
-        registeredPhonesE164: registeredPhonesE164,
-        quoPhoneNumbers: quoPhoneNumbers.map(p => p.phoneNumber || p.phone || p.number || JSON.stringify(p).substring(0, 100)),
+        registeredPhoneCount: registeredPhones.length,
         quoPhoneCount: quoPhoneNumbers.length,
-        totalMessagesFound: totalMessagesFound,
-        totalCallsFound: totalCallsFound,
+        totalMessagesFound,
+        totalCallsFound,
         alreadyProcessedCount: processedIds.size,
         planningNotesErrors: planningNotesErrors.slice(0, 5),
-        sampleMessages: sampleMessages
-      }
-    });
-
-  } catch (error) {
-    console.error('Quo sync error:', error);
-    res.status(500).json({ error: 'Failed to sync Quo messages: ' + error.message });
+      },
+    };
   }
-});
+}
 
 // Generate AI highlights from planning notes
 app.post('/api/notes-highlights', async (req, res) => {
@@ -4247,6 +4235,69 @@ async function fileZoomMeeting({ weddingId, topic, startTime, transcriptText }) 
 }
 
 // ============ SYNC VISIBILITY ============
+
+/**
+ * Run a long import in the background, against a row that says how it went.
+ *
+ * Every ingestion here does unbounded work: Gmail walks 73 addresses with two
+ * searches each, Quo walks every registered number, Zoom downloads a transcript
+ * and runs a Claude extraction per meeting. All three were single HTTP requests
+ * that had to survive to the end, and on 14 August none of them did. The
+ * browser reported two of them as CORS failures, because a connection that dies
+ * carries no headers, and the third silently skipped the two newest meetings.
+ *
+ * The runner gets `bump` to record progress as it goes, and returns a summary.
+ * Throwing marks the job failed with the message attached, so an error has
+ * somewhere to land instead of a console nobody is reading.
+ */
+function backgroundSync(kind, runner) {
+  return async (req, res) => {
+    const { data: job, error } = await supabaseAdmin.from('sync_jobs')
+      .insert({
+        kind,
+        trigger: req.body?.trigger === 'scheduled' ? 'scheduled' : 'manual',
+        detail: req.body || {},
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error(`Could not open a ${kind} sync job:`, error.message);
+      return res.status(500).json({ error: 'Could not start the sync' });
+    }
+
+    const bump = (fields) => supabaseAdmin.from('sync_jobs')
+      .update({ ...fields, heartbeat_at: new Date().toISOString() }).eq('id', job.id);
+
+    res.status(202).json({
+      jobId: job.id,
+      status: 'running',
+      message: `${kind} sync started. It runs in the background — watch the sync panel for progress.`,
+    });
+
+    runner(req.body || {}, { jobId: job.id, bump })
+      .then(async (summary) => {
+        const s = summary || {};
+        await bump({
+          status: 'finished',
+          finished_at: new Date().toISOString(),
+          processed: s.processed || 0,
+          matched: s.matched || 0,
+          needs_review: s.needsReview || 0,
+          failed: s.failed || 0,
+          detail: s.detail || {},
+        });
+      })
+      .catch(async (err) => {
+        console.error(`${kind} sync failed:`, err);
+        await bump({
+          status: 'failed',
+          finished_at: new Date().toISOString(),
+          last_error: String(err?.message || err),
+        });
+      });
+  };
+}
 
 // What have the syncs been doing? Answers "did it finish, and if not where did
 // it stop", which nothing could answer before.
