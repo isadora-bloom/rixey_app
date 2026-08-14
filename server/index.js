@@ -4137,8 +4137,8 @@ app.get('/api/zoom/transcripts', async (req, res) => {
   try {
     const { data: meetings } = await supabaseAdmin
       .from('processed_zoom_meetings')
-      .select('zoom_meeting_id, meeting_topic, wedding_id, created_at, transcript_text')
-      .order('created_at', { ascending: false });
+      .select('zoom_meeting_id, meeting_topic, wedding_id, processed_at, transcript_text')
+      .order('processed_at', { ascending: false });
 
     // Also check planning_notes for zoom_transcript entries
     const { data: transcriptNotes } = await supabaseAdmin
@@ -4151,7 +4151,8 @@ app.get('/api/zoom/transcripts', async (req, res) => {
       id: m.zoom_meeting_id,
       topic: m.meeting_topic,
       wedding_id: m.wedding_id,
-      created_at: m.created_at,
+      // processed_at is when we ingested it; the table has no created_at.
+      created_at: m.processed_at,
       transcript_length: m.transcript_text?.length || 0,
       transcript_preview: m.transcript_text?.substring(0, 300) || null,
       parsed_preview: m.transcript_text ? parseVttToText(m.transcript_text).substring(0, 300) : null
@@ -6375,25 +6376,40 @@ app.get('/api/admin/last-24h', async (req, res) => {
   }
 });
 
+// Admin notifications live in `notifications` with recipient_type 'admin',
+// which is where createNotification has been putting them all along.
+//
+// These three endpoints used to read and write `admin_notifications`, a table
+// that has never existed. The GET even carried a comment saying "if table
+// doesn't exist, just return empty array" and did exactly that, so the admin
+// notification panel has shown nothing since it shipped while a perfectly good
+// table filled up beside it. The POST, called by createWedding on every new
+// wedding, threw a 500 into a swallowed catch.
+//
+// The shape is mapped to what the UI already reads — `message` and `read` —
+// rather than changing three components to match the column names.
+const asAdminNotification = (n) => ({
+  id: n.id,
+  type: n.type,
+  message: [n.title, n.body].filter(Boolean).join(' — '),
+  wedding_id: n.wedding_id,
+  read: !!n.is_read,
+  created_at: n.created_at,
+});
+
 app.get('/api/admin/notifications', async (req, res) => {
   try {
-    const { data: notifications, error } = await supabaseAdmin
-      .from('admin_notifications')
-      .select('*')
+    const { data, error } = await supabaseAdmin
+      .from('notifications')
+      .select('id, type, title, body, wedding_id, is_read, created_at')
+      .eq('recipient_type', 'admin')
       .order('created_at', { ascending: false })
       .limit(50);
-
-    // If table doesn't exist, just return empty array
-    if (error && error.code === '42P01') {
-      return res.json({ notifications: [] });
-    }
     if (error) throw error;
-
-    res.json({ notifications: notifications || [] });
+    res.json({ notifications: (data || []).map(asAdminNotification) });
   } catch (error) {
     console.error('Get admin notifications error:', error);
-    // Return empty array instead of 500 if table doesn't exist
-    res.json({ notifications: [] });
+    res.status(500).json({ error: 'Failed to load notifications' });
   }
 });
 
@@ -6403,15 +6419,15 @@ app.put('/api/admin/notifications/:id/read', async (req, res) => {
     const { id } = req.params;
 
     const { data, error } = await supabaseAdmin
-      .from('admin_notifications')
-      .update({ read: true })
+      .from('notifications')
+      .update({ is_read: true })
       .eq('id', id)
-      .select()
+      .select('id, type, title, body, wedding_id, is_read, created_at')
       .single();
 
     if (error) throw error;
 
-    res.json({ notification: data });
+    res.json({ notification: asAdminNotification(data) });
   } catch (error) {
     console.error('Mark notification read error:', error);
     res.status(500).json({ error: 'Failed to mark notification as read' });
@@ -6421,23 +6437,24 @@ app.put('/api/admin/notifications/:id/read', async (req, res) => {
 // Create admin notification (bypasses RLS)
 app.post('/api/admin/notifications', async (req, res) => {
   try {
-    const { type, message, wedding_id, user_id } = req.body;
+    const { type, message, wedding_id } = req.body;
 
     const { data, error } = await supabaseAdmin
-      .from('admin_notifications')
+      .from('notifications')
       .insert({
-        type,
-        message,
-        wedding_id,
-        user_id,
-        read: false
+        wedding_id: wedding_id || null,
+        recipient_type: 'admin',
+        type: type || 'admin_alert',
+        title: String(message || '').slice(0, 120),
+        body: message || '',
+        is_read: false,
       })
-      .select()
+      .select('id, type, title, body, wedding_id, is_read, created_at')
       .single();
 
     if (error) throw error;
 
-    res.json({ notification: data });
+    res.json({ notification: asAdminNotification(data) });
   } catch (error) {
     console.error('Create admin notification error:', error);
     res.status(500).json({ error: 'Failed to create notification' });
@@ -6524,9 +6541,9 @@ app.get('/api/communication-pulse/:weddingId', async (req, res) => {
     const safeCount = async (fn) => { try { const r = await fn(); return r.count || 0; } catch { return 0; } };
 
     const [emailCt, textCt, zoomCt, sageCt, dmCt, actCt] = await Promise.all([
-      safeCount(() => supabaseAdmin.from('processed_emails').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).gte('created_at', since)),
-      safeCount(() => supabaseAdmin.from('processed_quo_messages').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).eq('direction', 'inbound').gte('created_at', since)),
-      safeCount(() => supabaseAdmin.from('processed_zoom_meetings').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).gte('created_at', since)),
+      safeCount(() => supabaseAdmin.from('processed_emails').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).gte('processed_at', since)),
+      safeCount(() => supabaseAdmin.from('processed_quo_messages').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).eq('direction', 'inbound').gte('processed_at', since)),
+      safeCount(() => supabaseAdmin.from('processed_zoom_meetings').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).gte('processed_at', since)),
       safeCount(() => profileIds.length ? supabaseAdmin.from('messages').select('id', { count: 'exact', head: true }).in('user_id', profileIds).eq('sender', 'user').gte('created_at', since) : Promise.resolve({ count: 0 })),
       safeCount(() => supabaseAdmin.from('direct_messages').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).eq('sender_type', 'client').gte('created_at', since)),
       safeCount(() => supabaseAdmin.from('activity_log').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).gte('created_at', since)),
@@ -6577,9 +6594,9 @@ app.get('/api/communication-pulse', async (req, res) => {
     profiles.forEach(p => { if (p.id && p.wedding_id) userToWedding[p.id] = p.wedding_id; });
 
     const [emails, texts, zooms, sageMsgs, directMsgs, activity] = await Promise.all([
-      safeQ(() => supabaseAdmin.from('processed_emails').select('wedding_id').gte('created_at', since)),
-      safeQ(() => supabaseAdmin.from('processed_quo_messages').select('wedding_id').eq('direction', 'inbound').gte('created_at', since)),
-      safeQ(() => supabaseAdmin.from('processed_zoom_meetings').select('wedding_id').gte('created_at', since)),
+      safeQ(() => supabaseAdmin.from('processed_emails').select('wedding_id').gte('processed_at', since)),
+      safeQ(() => supabaseAdmin.from('processed_quo_messages').select('wedding_id').eq('direction', 'inbound').gte('processed_at', since)),
+      safeQ(() => supabaseAdmin.from('processed_zoom_meetings').select('wedding_id').gte('processed_at', since)),
       safeQ(() => supabaseAdmin.from('messages').select('user_id').eq('sender', 'user').gte('created_at', since)),
       safeQ(() => supabaseAdmin.from('direct_messages').select('wedding_id').eq('sender_type', 'client').gte('created_at', since)),
       safeQ(() => supabaseAdmin.from('activity_log').select('wedding_id').gte('created_at', since)),
@@ -6912,21 +6929,39 @@ app.post('/api/checkin/:weddingId', async (req, res) => {
   try {
     const { weddingId } = req.params;
 
-    // Get the user_id for this wedding
+    // Who to send it to.
+    //
+    // This used to select weddings.user_id, a column that does not exist, so
+    // every check-in 500'd on a PostgREST 42703 and no couple has ever
+    // received one. weddings.created_by looks like the obvious replacement but
+    // is unreliable — it matches an existing profile on only 40 of 47 weddings
+    // — so the couple's own profile is the sounder source.
     const { data: wedding, error: weddingErr } = await supabaseAdmin
       .from('weddings')
-      .select('user_id, couple_names')
+      .select('couple_names')
       .eq('id', weddingId)
       .single();
 
     if (weddingErr || !wedding) return res.status(404).json({ error: 'Wedding not found' });
+
+    // Prefer a couple; fall back to anyone attached to the wedding. Sage
+    // threads key on user_id, so without one there is nowhere to put this.
+    const { data: people } = await supabaseAdmin
+      .from('profiles')
+      .select('id, role')
+      .eq('wedding_id', weddingId)
+      .neq('is_admin', true);
+    const recipient = (people || []).find(p => String(p.role || '').startsWith('couple')) || (people || [])[0];
+    if (!recipient) {
+      return res.status(400).json({ error: 'Nobody is signed up to this wedding yet, so there is no chat to put this in.' });
+    }
 
     const message = "Hey! It's been a minute since we've checked in — how's planning going? Anything you'd like to update in your portal, or questions you've been sitting on? We're here! 💛";
 
     // Inject into their Sage chat thread
     const { error: msgErr } = await supabaseAdmin
       .from('messages')
-      .insert([{ user_id: wedding.user_id, content: message, sender: 'sage', is_team_note: true }]);
+      .insert([{ user_id: recipient.id, content: message, sender: 'sage', is_team_note: true }]);
 
     if (msgErr) throw msgErr;
 
