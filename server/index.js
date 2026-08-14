@@ -21,6 +21,7 @@ import { WALKTHROUGH_TARGETS, TARGET_KEYS, buildNote, organisePrompt, parseItems
 import { extractDocument } from './lib/doc-sync/extract.js';
 import { chunkDocument, sectionsPrompt, mergeSections, parseSectionsResponse } from './lib/doc-sync/sections.js';
 import { buildDocumentDiff, diffSections } from './lib/doc-sync/diff.js';
+import { transcribeAudio, transcriptionConfigured } from './lib/transcribe.js';
 import { buildPortalSnapshot } from './lib/sheet-diff/portal-snapshot.js';
 import cron from 'node-cron';
 import * as XLSX from 'xlsx';
@@ -9496,7 +9497,32 @@ app.post('/api/admin/walkthroughs/:id/media', requireAdmin, dayOfMediaUpload.sin
       duration_secs: req.body.duration_secs ? parseInt(req.body.duration_secs, 10) || null : null,
     }).select().single();
     if (error) throw error;
-    res.json(data);
+
+    // Answer now, transcribe after.
+    //
+    // A ninety-minute walkthrough takes Deepgram a while, and holding the
+    // request open for it risks a proxy timeout that would look to the user
+    // like the recording failed — when the audio is already safely stored.
+    // The row is updated when it finishes and the panel picks it up.
+    res.json({ ...data, transcriptionPending: isAudio && transcriptionConfigured() });
+
+    if (isAudio && transcriptionConfigured()) {
+      transcribeAudio(file.buffer, file.mimetype)
+        .then(async (r) => {
+          if (r.ok) {
+            await supabaseAdmin.from('walkthrough_media').update({
+              transcript: r.transcript,
+              duration_secs: r.durationSecs || data.duration_secs || null,
+            }).eq('id', data.id);
+            console.log(`[transcribe] ${data.id}: ${r.transcript.length} chars`);
+          } else {
+            // Recorded but not readable. Left null so the UI keeps saying
+            // "not transcribed" rather than implying the recording was empty.
+            console.error(`[transcribe] ${data.id} failed: ${r.error}`);
+          }
+        })
+        .catch(err => console.error('[transcribe] unexpected:', err.message));
+    }
   } catch (e) {
     console.error('Walkthrough media upload error:', e);
     res.status(500).json({ error: e.message });

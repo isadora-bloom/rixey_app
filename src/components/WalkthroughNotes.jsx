@@ -33,7 +33,7 @@ const kindLabel = k => KINDS.find(x => x.value === k)?.label || 'Walkthrough'
  * read it yet: Rixey has no transcription provider, and a recording nobody
  * has transcribed still beats losing what was said.
  */
-function MediaStrip({ walkthroughId, media, onChange, toastError }) {
+function MediaStrip({ walkthroughId, media, onChange, toastError, onUseTranscript }) {
   const [recording, setRecording] = useState(false)
   const [uploading, setUploading] = useState(false)
   const recorderRef = useRef(null)
@@ -136,10 +136,27 @@ function MediaStrip({ walkthroughId, media, onChange, toastError }) {
               <button type="button" onClick={() => remove(m)} className="text-xs text-sage-400 hover:text-red-500 shrink-0">Delete</button>
             </div>
           ))}
-          {/* Said plainly rather than left to be discovered: these are stored,
-              not read, and nothing in the portal is listening to them. */}
+          {audio.map(m => m.transcript ? (
+            <div key={`t-${m.id}`} className="border border-cream-200 rounded-lg p-3 bg-white">
+              <div className="flex items-center justify-between gap-3 mb-1.5">
+                <p className="text-xs font-medium text-sage-600">What was said</p>
+                {/* Dropped into the notes rather than filed directly: the
+                    organiser already turns notes into reviewable items, and
+                    a transcript should go through the same gate as anything
+                    typed by hand. */}
+                <button
+                  type="button"
+                  onClick={() => onUseTranscript(m.transcript)}
+                  className="text-xs px-2.5 py-1 rounded-lg border border-sage-300 text-sage-600 hover:bg-sage-50 transition shrink-0"
+                >
+                  Add to notes
+                </button>
+              </div>
+              <p className="text-xs text-sage-600 whitespace-pre-wrap max-h-40 overflow-y-auto leading-relaxed">{m.transcript}</p>
+            </div>
+          ) : null)}
           <p className="text-xs text-sage-400">
-            Voice notes are saved but not transcribed — type the bits that matter into the notes above.
+            Transcribing takes about a minute per ten minutes of audio. Refresh if it hasn&apos;t appeared.
           </p>
         </div>
       )}
@@ -277,6 +294,28 @@ export default function WalkthroughNotes({ weddingId }) {
     try { setMedia(await apiFetch(`${API_URL}/api/admin/walkthroughs/${w.id}/media`) || []) }
     catch { setMedia([]) }
   }
+
+  // Transcription finishes after the upload has already responded, so poll
+  // while anything is still waiting. Stops as soon as every recording has
+  // text, and gives up after five minutes rather than polling for ever on a
+  // recording that failed.
+  useEffect(() => {
+    if (!active) return
+    const pending = media.some(m => m.kind === 'audio' && !m.transcript)
+    if (!pending) return
+    let stop = false
+    const startedAt = Date.now()
+    const tick = async () => {
+      if (stop || Date.now() - startedAt > 5 * 60 * 1000) return
+      try {
+        const fresh = await apiFetch(`${API_URL}/api/admin/walkthroughs/${active.id}/media`)
+        if (!stop && Array.isArray(fresh)) setMedia(fresh)
+      } catch { /* a failed poll is not worth telling anyone about */ }
+      if (!stop) timer = setTimeout(tick, 8000)
+    }
+    let timer = setTimeout(tick, 8000)
+    return () => { stop = true; clearTimeout(timer) }
+  }, [active, media])
 
   const { schedule: scheduleSave, flush: flushSave, state: saveState } = useAutosave(
     async (payload) => { await apiFetch(`${API_URL}/api/admin/walkthroughs/${payload.id}`, { method: 'PUT', body: JSON.stringify(payload.body) }) },
@@ -426,7 +465,13 @@ export default function WalkthroughNotes({ weddingId }) {
               Saved as you type. This stays private to the venue whatever you file from it.
             </p>
 
-            <MediaStrip walkthroughId={active.id} media={media} onChange={setMedia} toastError={toastError} />
+            <MediaStrip
+              walkthroughId={active.id}
+              media={media}
+              onChange={setMedia}
+              toastError={toastError}
+              onUseTranscript={(t) => setNotes(prev => (prev ? `${prev.trimEnd()}\n\n` : '') + t)}
+            />
           </div>
 
           <div className="flex flex-wrap gap-2">
