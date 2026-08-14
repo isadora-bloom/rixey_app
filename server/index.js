@@ -182,7 +182,7 @@ app.get('/api/gmail-callback-debug', (req, res) => {
   res.json(LAST_GMAIL_CALLBACK);
 });
 
-app.get('/api/google-debug', (req, res) => {
+app.get('/api/google-debug', requireAdmin, (req, res) => {
   const cid = process.env.GOOGLE_CLIENT_ID || '';
   const fe = process.env.FRONTEND_URL || '(unset)';
   res.json({
@@ -3035,7 +3035,7 @@ app.post('/api/admin/sheet-sync/:weddingId/apply', async (req, res) => {
   }
 });
 
-app.get('/api/sheet-sync-apply-debug', (req, res) => {
+app.get('/api/sheet-sync-apply-debug', requireAdmin, (req, res) => {
   res.json(LAST_APPLY);
 });
 
@@ -6052,7 +6052,7 @@ app.put('/api/onboarding/:weddingId', async (req, res) => {
 // ============ CALENDLY INTEGRATION ============
 
 // Get upcoming Calendly events
-app.get('/api/calendly/events', async (req, res) => {
+app.get('/api/calendly/events', requireAdmin, async (req, res) => {
   try {
     const token = process.env.CALENDLY_API_TOKEN;
     if (!token) {
@@ -6128,7 +6128,7 @@ app.get('/api/calendly/events', async (req, res) => {
 });
 
 // Get single event details
-app.get('/api/calendly/events/:eventUuid', async (req, res) => {
+app.get('/api/calendly/events/:eventUuid', requireAdmin, async (req, res) => {
   try {
     const token = process.env.CALENDLY_API_TOKEN;
     if (!token) {
@@ -6287,7 +6287,7 @@ app.get('/api/messages/unread/:weddingId', async (req, res) => {
 });
 
 // Get all unread counts for admin (counts client messages per wedding)
-app.get('/api/messages/admin/unread', async (req, res) => {
+app.get('/api/messages/admin/unread', requireAdmin, async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
       .from('direct_messages')
@@ -6312,7 +6312,7 @@ app.get('/api/messages/admin/unread', async (req, res) => {
 });
 
 // Get all conversations for admin (latest message per wedding)
-app.get('/api/messages/admin/conversations', async (req, res) => {
+app.get('/api/messages/admin/conversations', requireAdmin, async (req, res) => {
   try {
     // Get all messages grouped by wedding, with latest first
     const { data, error } = await supabaseAdmin
@@ -6576,7 +6576,7 @@ app.get('/api/communication-pulse/:weddingId', async (req, res) => {
 });
 
 // Batch pulse for all weddings (used by admin list view)
-app.get('/api/communication-pulse', async (req, res) => {
+app.get('/api/communication-pulse', requireAdmin, async (req, res) => {
   try {
     const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
@@ -6632,7 +6632,7 @@ app.get('/api/communication-pulse', async (req, res) => {
 });
 
 // Get all couple photos for admin dashboard (bypasses RLS)
-app.get('/api/couple-photos/all', async (req, res) => {
+app.get('/api/couple-photos/all', requireAdmin, async (req, res) => {
   try {
     const { data: photos, error } = await supabaseAdmin
       .from('couple_photos')
@@ -6881,9 +6881,19 @@ app.get('/api/borrow-catalog', async (req, res) => {
 });
 
 // Get messages for a specific user (for Dashboard)
-app.get('/api/sage-messages/user/:userId', async (req, res) => {
+// A couple reading their own Sage thread, or an admin reading anyone's.
+// Cannot be requireAdmin — the couple's own dashboard calls this — and cannot
+// be open either, because the user id is in the URL and Sage threads contain
+// everything a couple has ever asked.
+app.get('/api/sage-messages/user/:userId', requireAuth, async (req, res) => {
   try {
     const { userId } = req.params;
+
+    if (userId !== req.userId) {
+      const { data: me } = await supabaseAdmin
+        .from('profiles').select('is_admin').eq('id', req.userId).maybeSingle();
+      if (!me?.is_admin) return res.status(403).json({ error: 'Not your conversation' });
+    }
 
     const { data: messages, error } = await supabaseAdmin
       .from('messages')
@@ -6982,7 +6992,7 @@ app.post('/api/checkin/:weddingId', async (req, res) => {
 });
 
 // Admin injects a team note into a couple's Sage chat thread
-app.post('/api/sage-messages/inject', async (req, res) => {
+app.post('/api/sage-messages/inject', requireAdmin, async (req, res) => {
   try {
     const { user_id, content, addToKb, kbCategory, kbSubcategory } = req.body;
     if (!user_id || !content) {
@@ -7016,7 +7026,7 @@ app.post('/api/sage-messages/inject', async (req, res) => {
 });
 
 // Get all Sage chat messages for all weddings (admin view - for escalation detection)
-app.get('/api/sage-messages/all', async (req, res) => {
+app.get('/api/sage-messages/all', requireAdmin, async (req, res) => {
   try {
     // Get all messages using admin client
     const { data: messages, error } = await supabaseAdmin

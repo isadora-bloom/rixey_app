@@ -1,16 +1,51 @@
 import { supabase } from '../lib/supabase'
 
 /**
- * Get the current user's auth token for API calls.
- * Returns the Bearer token string or null if not authenticated.
+ * The current access token, cached.
+ *
+ * This used to call supabase.auth.getSession() on every single API request.
+ * gotrue serialises those behind one lock, and a screen like the admin
+ * dashboard fires dozens of requests at once, so they queue up and start
+ * timing out:
+ *
+ *   Lock "lock:sb-...-auth-token" acquisition timed out after 10000ms
+ *
+ * The old catch then returned null, which is the damaging part: the request
+ * went out with **no Authorization header at all** and came back 404 or 401.
+ * So a busy page intermittently looked like missing data or a broken feature,
+ * when the token was there the whole time.
+ *
+ * Now the token is held in memory and only re-read when it is missing or close
+ * to expiry, which turns dozens of lock acquisitions per page into roughly
+ * one. onAuthStateChange keeps it current across sign-in, sign-out and refresh.
  */
+let cachedToken = null
+let cachedExpiry = 0        // seconds since epoch, as Supabase reports it
+let inFlight = null         // de-duplicates concurrent refreshes
+
+supabase.auth.onAuthStateChange((_event, session) => {
+  cachedToken = session?.access_token || null
+  cachedExpiry = session?.expires_at || 0
+})
+
 async function getAuthToken() {
-  try {
-    const { data: { session } } = await supabase.auth.getSession()
-    return session?.access_token || null
-  } catch {
-    return null
+  // 60s of headroom so a token never expires between here and the server.
+  const now = Math.floor(Date.now() / 1000)
+  if (cachedToken && cachedExpiry - 60 > now) return cachedToken
+
+  // Several callers arriving at once share one lookup rather than one each,
+  // which is what caused the pile-up in the first place.
+  if (!inFlight) {
+    inFlight = supabase.auth.getSession()
+      .then(({ data: { session } }) => {
+        cachedToken = session?.access_token || null
+        cachedExpiry = session?.expires_at || 0
+        return cachedToken
+      })
+      .catch(() => cachedToken)   // keep the last good token rather than dropping auth
+      .finally(() => { inFlight = null })
   }
+  return inFlight
 }
 
 /**

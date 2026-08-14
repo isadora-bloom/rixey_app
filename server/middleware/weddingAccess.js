@@ -31,7 +31,14 @@
  * switch is there because "expectation" is not "evidence".
  */
 
-const MODE = () => (process.env.WEDDING_ACCESS_MODE || 'audit').toLowerCase();
+// Enforcing by default now. It shipped in audit mode so a live season could
+// not be broken by a retrofit, and the one thing that would have caused false
+// refusals — apiFetch losing its token to a gotrue lock timeout and sending no
+// Authorization header at all — has been fixed separately by caching the token.
+//
+// Set WEDDING_ACCESS_MODE=audit to go back to log-only without a deploy, if
+// something legitimate turns out to be refused.
+const MODE = () => (process.env.WEDDING_ACCESS_MODE || 'enforce').toLowerCase();
 
 /**
  * Routes with no wedding to check against, or that legitimately serve people
@@ -53,6 +60,51 @@ const ADMIN_PREFIXES = [
 ];
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Routes keyed on a row id rather than a wedding id.
+ *
+ * 36 write routes took `/api/thing/:id` and edited or deleted that row without
+ * ever asking whose wedding it belonged to. A couple with any valid uuid could
+ * change another couple's guests, allergies, ceremony order or planning notes.
+ * The id is not a secret — they appear in API responses all over the app.
+ *
+ * Mapping the path to its table lets the row be loaded, its wedding_id read,
+ * and the same membership rule applied as everywhere else. One place, rather
+ * than 36 hand-written checks that would drift.
+ */
+const ROW_TABLES = {
+  'vendors': 'vendor_checklist',
+  'inspo': 'inspo_gallery',
+  'checklist': 'planning_checklist',
+  'planning-notes': 'planning_notes',
+  'internal-notes': 'wedding_internal_notes',
+  'allergies': 'allergy_registry',
+  'bedrooms': 'bedroom_assignments',
+  'ceremony-order': 'ceremony_order',
+  'decor': 'decor_inventory',
+  'makeup': 'makeup_schedule',
+  'shuttle': 'shuttle_schedule',
+  'guests': 'wedding_guests',
+  'guest-tags': 'guest_tag_options',
+  'meal-options': 'guest_meal_options',
+  'bar-shopping': 'bar_shopping_list',
+  'bar-recipes': 'bar_recipes',
+  'day-of-media': 'day_of_media',
+  'wedding-party': 'wedding_party',
+};
+
+/** `/api/<thing>/<uuid>` → { table, id }, when <thing> is one we can resolve. */
+function rowLookupFor(path) {
+  const parts = String(path || '').split('/').filter(Boolean);
+  // req.path is relative to the /api mount, so parts[0] is the resource.
+  const [resource, id] = parts;
+  if (!resource || !id || !UUID.test(id)) return null;
+  // The wedding itself: the id in the path is the wedding id.
+  if (resource === 'weddings') return { weddingId: id };
+  const table = ROW_TABLES[resource];
+  return table ? { table, id } : null;
+}
 
 /**
  * Pull the wedding id out of wherever this codebase happens to put it. Routes
@@ -115,15 +167,45 @@ export function createWeddingAccess(supabaseAdmin) {
     if (PUBLIC_PREFIXES.some(p => fullPath.startsWith(p))) return next();
     if (ADMIN_PREFIXES.some(p => fullPath.startsWith(p))) return next();
 
-    const weddingId = weddingIdFrom(req);
+    // Work out which wedding this request is about, in order of certainty.
+    //
+    // The order matters and getting it wrong is not theoretical: an earlier
+    // version took the uuid out of the path, asked "is that a wedding?", got
+    // no, and allowed the request — so an unauthenticated PUT to
+    // /api/guests/<guest id> renamed a real guest. The uuid in a row route is
+    // deliberately NOT a wedding id, so "not a wedding" must mean "look the
+    // row up", never "let it through".
+    let weddingId = null;
 
-    // No wedding in the request means this middleware cannot judge it. Many
-    // routes are keyed on a row id instead and would need the row loaded to
-    // resolve its wedding. Those are logged as undetermined and allowed —
-    // closing them is the next pass, and guessing here would break them.
-    if (!weddingId || !UUID.test(String(weddingId))) {
-      if (MODE() === 'enforce') return next();
-      return next();
+    const stated = weddingIdFrom(req);
+    if (stated && UUID.test(String(stated)) && await isWeddingId(stated)) {
+      weddingId = stated;                       // /api/thing/:weddingId, or in the body
+    } else {
+      const lookup = rowLookupFor(req.path);
+      if (lookup?.weddingId) {
+        weddingId = lookup.weddingId;           // /api/weddings/:id/...
+      } else if (lookup?.table) {
+        try {
+          const { data } = await supabaseAdmin
+            .from(lookup.table).select('wedding_id').eq('id', lookup.id).maybeSingle();
+          // A row that does not exist is the route's own 404 to give, not ours.
+          if (!data?.wedding_id) return next();
+          weddingId = data.wedding_id;
+        } catch (err) {
+          console.error('[weddingAccess] row lookup failed, allowing:', err.message);
+          return next();
+        }
+      } else if (stated && UUID.test(String(stated))) {
+        // A uuid we cannot attribute to any wedding, on a route we have no
+        // mapping for. Logged so the gap is visible rather than silent.
+        if (MODE() !== 'enforce') {
+          console.warn(`[weddingAccess:audit] unresolved uuid on ${req.method} ${fullPath}`);
+        }
+        return next();
+      } else {
+        // No wedding, no resolvable row: nothing for this middleware to judge.
+        return next();
+      }
     }
 
     const decide = async () => {
@@ -133,12 +215,8 @@ export function createWeddingAccess(supabaseAdmin) {
         if (profile?.is_admin) return { allow: true, why: 'admin' };
         if (profile?.wedding_id && profile.wedding_id === weddingId) return { allow: true, why: 'member' };
       }
-      // Not theirs. Before refusing, make sure this uuid is even a wedding —
-      // otherwise it is a vendor or a note id and this middleware has no
-      // business judging it.
-      const isWedding = await isWeddingId(weddingId);
-      if (isWedding === null) return { allow: true, why: 'wedding list unavailable' };
-      if (!isWedding) return { allow: true, why: 'not a wedding id' };
+      // weddingId is already known to be a real wedding by this point — it was
+      // either confirmed against the wedding list or read off the row itself.
       if (!req.userId) return { allow: false, why: 'no token' };
       const profile = await profileFor(req.userId);
       if (!profile) return { allow: false, why: 'no profile' };
