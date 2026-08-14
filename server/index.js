@@ -18,6 +18,10 @@ import { guestFullName, plusOneFullName, plusOneDisplayName, isNamedPerson, hasP
 import { sendsConfirmation } from '../shared/rsvp-fields.js';
 import { rsvpConfirmationHtml } from './lib/rsvp-confirmation.js';
 import { WALKTHROUGH_TARGETS, TARGET_KEYS, buildNote, organisePrompt, parseItems } from './lib/walkthrough.js';
+import { extractDocument } from './lib/doc-sync/extract.js';
+import { chunkDocument, sectionsPrompt, mergeSections, parseSectionsResponse } from './lib/doc-sync/sections.js';
+import { buildDocumentDiff, diffSections } from './lib/doc-sync/diff.js';
+import { buildPortalSnapshot } from './lib/sheet-diff/portal-snapshot.js';
 import cron from 'node-cron';
 import * as XLSX from 'xlsx';
 // PDF parsing removed - using Claude vision for all documents
@@ -56,6 +60,26 @@ const dayOfMediaUpload = multer({
     } else {
       cb(new Error(`File type not allowed: ${file.mimetype}`));
     }
+  }
+});
+
+// Planning documents couples and planners send in: PDFs, spreadsheets, Word.
+// 30MB covers a 53-page illustrated plan with room to spare.
+const documentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 30 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowed = [
+      'application/pdf',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/msword',
+      'text/csv', 'text/plain',
+    ];
+    const base = String(file.mimetype || '').split(';')[0].trim();
+    if (allowed.includes(base)) return cb(null, true);
+    cb(new Error(`Not a document we can read: ${file.mimetype}`));
   }
 });
 
@@ -9129,6 +9153,230 @@ app.post('/api/rsvp/:slug', async (req, res) => {
     console.error('RSVP submit error:', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// ============ DOCUMENT SYNC ============
+//
+// Upload a planning document, read it, and see what it says that the portal
+// does not. Deliberately four separate steps rather than one button: reading
+// costs money and takes seconds, and nothing should be written without a
+// person having looked at it first.
+
+app.get('/api/admin/documents/:weddingId', requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('wedding_documents')
+      // extracted_text is deliberately not selected — it is up to 30k characters
+      // and the list only needs to say what exists.
+      .select('id, wedding_id, filename, kind, byte_size, page_count, text_hash, parsed_at, parse_error, version, supersedes_id, created_at, sections')
+      .eq('wedding_id', req.params.weddingId)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    // Report only whether each section found anything, not the contents.
+    res.json((data || []).map(d => ({
+      ...d,
+      sections: undefined,
+      sectionCounts: d.sections
+        ? Object.fromEntries(Object.entries(d.sections).map(([k, v]) => [k, Array.isArray(v) ? v.length : 0]))
+        : null,
+    })));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/admin/documents/:weddingId/upload', requireAdmin, documentUpload.single('file'), async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: 'No file provided' });
+
+    const { kind, text, pageCount, textHash } = await extractDocument(file.buffer, file.originalname, file.mimetype);
+    if (!text || text.length < 40) {
+      return res.status(400).json({ error: 'Could not read any text from that file. If it is a scan rather than a document, it needs a different route.' });
+    }
+
+    // Same content as something already here means a re-upload of an unchanged
+    // file. Say so rather than making a second version nobody asked for.
+    const { data: existing } = await supabaseAdmin
+      .from('wedding_documents')
+      .select('id, filename, created_at')
+      .eq('wedding_id', req.params.weddingId)
+      .eq('text_hash', textHash)
+      .maybeSingle();
+    if (existing) {
+      return res.json({ duplicateOf: existing, message: `Identical to "${existing.filename}" uploaded ${String(existing.created_at).slice(0, 10)}. Nothing new to read.` });
+    }
+
+    // Version within this wedding, so "v3 of their plan" means something.
+    const { data: prior } = await supabaseAdmin
+      .from('wedding_documents')
+      .select('id, version')
+      .eq('wedding_id', req.params.weddingId)
+      .order('version', { ascending: false })
+      .limit(1);
+    const previous = prior?.[0] || null;
+
+    let storagePath = null;
+    try {
+      const safeExt = (file.originalname.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '');
+      storagePath = `${req.params.weddingId}/documents/${Date.now()}-${Math.random().toString(36).slice(2)}.${safeExt}`;
+      const { error: upErr } = await supabaseAdmin.storage
+        .from('day-of-media').upload(storagePath, file.buffer, { contentType: file.mimetype, upsert: false });
+      if (upErr) throw upErr;
+    } catch (storeErr) {
+      // The extracted text is what everything downstream uses, so a storage
+      // failure must not lose the upload. Keep the text, note the miss.
+      console.error('[doc-sync] original file not stored:', storeErr.message);
+      storagePath = null;
+    }
+
+    const { data, error } = await supabaseAdmin.from('wedding_documents').insert({
+      wedding_id: req.params.weddingId,
+      filename: file.originalname,
+      kind,
+      storage_path: storagePath,
+      byte_size: file.size,
+      extracted_text: text,
+      text_hash: textHash,
+      page_count: pageCount,
+      version: (previous?.version || 0) + 1,
+      supersedes_id: previous?.id || null,
+      uploaded_by: req.userId || null,
+    }).select('id, filename, kind, page_count, version, created_at').single();
+    if (error) throw error;
+
+    res.json({ ...data, chars: text.length });
+  } catch (e) {
+    console.error('Document upload error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Read the document into the portal's vocabulary. Separate from upload so a
+// failed or improved read can be retried without re-uploading.
+app.post('/api/admin/documents/:id/parse', requireAdmin, aiLimiter, async (req, res) => {
+  try {
+    const { data: doc, error: de } = await supabaseAdmin
+      .from('wedding_documents').select('*').eq('id', req.params.id).single();
+    if (de || !doc) return res.status(404).json({ error: 'Document not found' });
+    if (!doc.extracted_text) return res.status(400).json({ error: 'No extracted text on this document' });
+
+    const { data: wedding } = await supabaseAdmin
+      .from('weddings').select('couple_names, wedding_date').eq('id', doc.wedding_id).maybeSingle();
+
+    const chunks = chunkDocument(doc.extracted_text);
+    const results = [];
+    for (let i = 0; i < chunks.length; i++) {
+      const prompt = sectionsPrompt({
+        chunk: chunks[i],
+        coupleNames: wedding?.couple_names,
+        weddingDate: wedding?.wedding_date,
+        part: i + 1,
+        total: chunks.length,
+      });
+      let response;
+      try {
+        response = await anthropic.messages.create({
+          model: MODEL_SONNET, max_tokens: 8000, temperature: 0.1,
+          messages: [{ role: 'user', content: prompt }],
+        });
+      } catch (err) {
+        const overloaded = err.status === 529 || err.status === 503 || err.status === 429;
+        if (!overloaded) throw err;
+        response = await anthropic.messages.create({
+          model: MODEL_HAIKU, max_tokens: 8000, temperature: 0.1,
+          messages: [{ role: 'user', content: prompt }],
+        });
+      }
+      await logUsage(doc.wedding_id, null, 'document_parse', response);
+      results.push(parseSectionsResponse(response.content[0].text));
+    }
+
+    const sections = mergeSections(results);
+    await supabaseAdmin.from('wedding_documents').update({
+      sections, parsed_at: new Date().toISOString(), parse_error: null,
+    }).eq('id', doc.id);
+
+    const counts = Object.fromEntries(Object.entries(sections).map(([k, v]) => [k, v.length]));
+    res.json({ ok: true, counts, chunks: chunks.length });
+  } catch (e) {
+    console.error('Document parse error:', e);
+    await supabaseAdmin.from('wedding_documents')
+      .update({ parse_error: String(e.message).slice(0, 500) }).eq('id', req.params.id);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// What this document says that the portal does not, plus what changed since
+// the previous upload. Computed fresh every time, never stored: the portal
+// moves underneath it and a cached diff would quietly go stale.
+app.get('/api/admin/documents/:id/diff', requireAdmin, async (req, res) => {
+  try {
+    const { data: doc, error: de } = await supabaseAdmin
+      .from('wedding_documents').select('*').eq('id', req.params.id).single();
+    if (de || !doc) return res.status(404).json({ error: 'Document not found' });
+    if (!doc.sections) return res.status(400).json({ error: 'Not read yet — parse it first', needsParse: true });
+
+    const portal = await buildPortalSnapshot(supabaseAdmin, doc.wedding_id);
+    const { entries, counts } = buildDocumentDiff({ sections: doc.sections, portal });
+
+    let sinceLast = null;
+    if (doc.supersedes_id) {
+      const { data: prev } = await supabaseAdmin
+        .from('wedding_documents').select('filename, version, sections').eq('id', doc.supersedes_id).maybeSingle();
+      if (prev?.sections) {
+        sinceLast = {
+          filename: prev.filename,
+          version: prev.version,
+          changes: diffSections(prev.sections, doc.sections),
+        };
+      }
+    }
+
+    res.json({ entries, counts, sinceLast, document: { id: doc.id, filename: doc.filename, version: doc.version } });
+  } catch (e) {
+    console.error('Document diff error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Writes, and only what was accepted. Reuses sheet-sync's executor and audit
+// trail wholesale, so document imports appear in the same log as sheet ones.
+app.post('/api/admin/documents/:id/apply', requireAdmin, async (req, res) => {
+  try {
+    const { decisions } = req.body;
+    if (!Array.isArray(decisions) || !decisions.length) {
+      return res.status(400).json({ error: 'No decisions supplied' });
+    }
+    const { data: doc, error: de } = await supabaseAdmin
+      .from('wedding_documents').select('id, wedding_id, filename').eq('id', req.params.id).single();
+    if (de || !doc) return res.status(404).json({ error: 'Document not found' });
+
+    const result = await applyChoices({
+      supabase: supabaseAdmin,
+      weddingId: doc.wedding_id,
+      decisions,
+      appliedBy: req.userId || null,
+    });
+    await logActivity(doc.wedding_id, req.userId || null, 'document_imported',
+      `${result.appliedCount} item${result.appliedCount === 1 ? '' : 's'} from ${doc.filename}`);
+    res.json(result);
+  } catch (e) {
+    console.error('Document apply error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/api/admin/documents/:id', requireAdmin, async (req, res) => {
+  try {
+    const { data: row } = await supabaseAdmin
+      .from('wedding_documents').select('storage_path').eq('id', req.params.id).maybeSingle();
+    if (row?.storage_path) {
+      const { error: rmErr } = await supabaseAdmin.storage.from('day-of-media').remove([row.storage_path]);
+      if (rmErr) console.error('[doc-sync] file remove failed:', rmErr.message);
+    }
+    const { error } = await supabaseAdmin.from('wedding_documents').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ============ WALKTHROUGHS ============
