@@ -67,16 +67,29 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   if (testWeddingId) {
+    // Six of the twelve names here did not exist: budget_items,
+    // timeline_events, tables, guests, wedding_worksheets and internal_notes.
+    // Paired with `.then(() => {}, () => {})`, which swallows the error, the
+    // cleanup has always looked like it worked while leaving guest, timeline
+    // and budget rows behind on every run.
     const childTables = [
-      'budget_items', 'timeline_events', 'table_layouts', 'tables',
-      'guests', 'vendor_checklist', 'wedding_worksheets',
-      'activity_log', 'notifications', 'planning_checklist',
-      'internal_notes', 'section_finalisations',
+      'wedding_budget', 'wedding_timeline', 'table_layouts', 'wedding_tables',
+      'wedding_guests', 'vendor_checklist', 'activity_log', 'notifications',
+      'planning_checklist', 'wedding_internal_notes', 'section_finalisations',
+      'planning_notes', 'wedding_guest_care', 'allergy_registry',
     ]
+    const failures = []
     for (const t of childTables) {
-      await admin.from(t).delete().eq('wedding_id', testWeddingId).then(() => {}, () => {})
+      const { error } = await admin.from(t).delete().eq('wedding_id', testWeddingId)
+      if (error) failures.push(`${t}: ${error.message}`)
     }
-    await admin.from('weddings').delete().eq('id', testWeddingId)
+    // Say so rather than swallowing it. A cleanup that quietly fails leaves
+    // test data in a live database, and the next person to notice is whoever
+    // wonders why a wedding has guests nobody invited.
+    if (failures.length) console.error('[test cleanup] could not clear:', failures.join(' | '))
+
+    const { error: wErr } = await admin.from('weddings').delete().eq('id', testWeddingId)
+    if (wErr) console.error('[test cleanup] wedding not removed:', wErr.message)
   }
   if (testUserId) {
     await admin.from('profiles').delete().eq('id', testUserId)

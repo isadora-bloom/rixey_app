@@ -760,7 +760,7 @@ export default function GuestList({ weddingId, userId }) {
         body: JSON.stringify({ weddingId, guests: normalised }),
       })
       setGuests(prev => [...prev, ...data.guests])
-      setCsvResult({ success: true, count: data.imported })
+      setCsvResult({ success: true, count: data.imported, warning: data.duplicateWarning })
     } catch (err) {
       setCsvResult({ success: false, error: err.message })
       toastError(`Could not import guests: ${err.message}`)
@@ -1414,6 +1414,9 @@ export default function GuestList({ weddingId, userId }) {
           {csvResult.success
             ? `✓ Imported ${csvResult.count} guest${csvResult.count !== 1 ? 's' : ''}`
             : `Import failed: ${csvResult.error}`}
+          {csvResult.warning && (
+            <span className="block mt-1 text-xs opacity-90">{csvResult.warning}</span>
+          )}
           <button onClick={() => setCsvResult(null)} className="ml-4 opacity-75 hover:opacity-100">×</button>
         </div>
       )}

@@ -22,6 +22,7 @@ import { extractDocument } from './lib/doc-sync/extract.js';
 import { chunkDocument, sectionsPrompt, mergeSections, parseSectionsResponse } from './lib/doc-sync/sections.js';
 import { buildDocumentDiff, diffSections } from './lib/doc-sync/diff.js';
 import { transcribeAudio, transcriptionConfigured } from './lib/transcribe.js';
+import { guestCareContext } from '../shared/guest-care.js';
 import { buildPortalSnapshot } from './lib/sheet-diff/portal-snapshot.js';
 import cron from 'node-cron';
 import * as XLSX from 'xlsx';
@@ -1439,7 +1440,7 @@ app.post('/api/chat', async (req, res) => {
           supabaseAdmin.from('wedding_staffing').select('friday_bartenders, friday_extra_hands, friday_total, saturday_bartenders, saturday_extra_hands, saturday_total, total_staff, total_cost').eq('wedding_id', weddingId).maybeSingle(),
           supabaseAdmin.from('planning_checklist').select('task_text, category, is_completed').eq('wedding_id', weddingId).order('category'),
           supabaseAdmin.from('wedding_borrow_selections').select('item_name, category, quantity, notes').eq('wedding_id', weddingId),
-          supabaseAdmin.from('wedding_guest_care').select('guest_name, note_type, notes').eq('wedding_id', weddingId),
+          supabaseAdmin.from('wedding_guest_care').select('data').eq('wedding_id', weddingId).maybeSingle(),
         ]);
 
         if (timelineRow) {
@@ -1495,12 +1496,12 @@ app.post('/api/chat', async (req, res) => {
           });
         }
 
-        if (guestCareNotes && guestCareNotes.length > 0) {
-          weddingContext += '\n\nGUEST CARE NOTES:\n';
-          guestCareNotes.forEach(g => {
-            weddingContext += `- ${g.guest_name}: ${g.notes}${g.note_type ? ` [${g.note_type}]` : ''}\n`;
-          });
-        }
+        // One row per wedding holding a jsonb blob, not one row per note. This
+        // used to select guest_name/note_type/notes — columns that do not
+        // exist — so PostgREST returned 42703 every time and Sage has never
+        // seen a word of any couple's guest care answers.
+        const guestCareText = guestCareContext(guestCareNotes?.data);
+        if (guestCareText) weddingContext += `\n\n${guestCareText}`;
         // ── End additional context ────────────────────────────────────────
 
         // Check if the question is contract/vendor related
@@ -2582,7 +2583,7 @@ async function buildWeddingContext(weddingId, { noteLimit = 400 } = {}) {
       supabaseAdmin.from('wedding_staffing').select('friday_bartenders, friday_extra_hands, saturday_bartenders, saturday_extra_hands, total_staff, total_cost').eq('wedding_id', weddingId).maybeSingle(),
       supabaseAdmin.from('planning_checklist').select('task_text, category, is_completed').eq('wedding_id', weddingId).order('category'),
       supabaseAdmin.from('wedding_borrow_selections').select('item_name, category, quantity, notes').eq('wedding_id', weddingId),
-      supabaseAdmin.from('wedding_guest_care').select('guest_name, note_type, notes').eq('wedding_id', weddingId),
+      supabaseAdmin.from('wedding_guest_care').select('data').eq('wedding_id', weddingId).maybeSingle(),
       supabaseAdmin.from('wedding_internal_notes').select('content, category, created_at').eq('wedding_id', weddingId).order('created_at', { ascending: false }).limit(20),
       supabaseAdmin.from('weddings').select('*').eq('id', weddingId).maybeSingle(),
       // Rows, not people. Pulled in full so plus ones can be counted: a head
@@ -2742,8 +2743,9 @@ async function buildWeddingContext(weddingId, { noteLimit = 400 } = {}) {
     if (borrowSelections?.length) {
       fullContext += `BORROW CATALOG SELECTIONS:\n${borrowSelections.map(b => `- ${b.item_name}${b.category ? ` [${b.category}]` : ''}${b.quantity > 1 ? ` x${b.quantity}` : ''}${b.notes ? ` — ${b.notes}` : ''}`).join('\n')}\n\n`;
     }
-    if (guestCareRows?.length) {
-      fullContext += `GUEST CARE NOTES:\n${guestCareRows.map(g => `- ${g.guest_name} [${g.note_type}]: ${g.notes}`).join('\n')}\n\n`;
+    const guestCareText = guestCareContext(guestCareRows?.data);
+    if (guestCareText) {
+      fullContext += `${guestCareText}\n`;
     }
     if (internalNotes?.length) {
       fullContext += `INTERNAL COORDINATOR NOTES:\n${internalNotes.map(n => `- ${n.category ? `[${n.category}] ` : ''}${n.content}`).join('\n')}\n\n`;
@@ -8192,12 +8194,37 @@ app.post('/api/guests/bulk', async (req, res) => {
       }
     }
 
+    // This is a plain insert, not an upsert, so importing a list that is
+    // already here creates a second copy of everyone. Exporting the guest list
+    // and importing it back — an entirely reasonable thing to try — silently
+    // doubled it, and with no unique constraint on the table nothing stopped
+    // it. Rather than change that behaviour and risk dropping a genuine second
+    // guest with the same name, the import now says what it is about to do.
+    const { data: already } = await supabaseAdmin
+      .from('wedding_guests')
+      .select('first_name, last_name')
+      .eq('wedding_id', weddingId);
+    const key = (f, l) => `${String(f || '').trim().toLowerCase()}|${String(l || '').trim().toLowerCase()}`;
+    const existingNames = new Set((already || []).map(g => key(g.first_name, g.last_name)));
+    const duplicates = rows
+      .filter(r => existingNames.has(key(r.first_name, r.last_name)))
+      .map(r => [r.first_name, r.last_name].filter(Boolean).join(' '));
+
     const { data, error } = await supabaseAdmin
       .from('wedding_guests')
       .insert(rows)
       .select();
     if (error) throw error;
-    res.json({ guests: data, imported: data.length });
+    res.json({
+      guests: data,
+      imported: data.length,
+      duplicates,
+      // Two people can genuinely share a name, so this reports rather than
+      // decides. The couple knows which it is; the server does not.
+      duplicateWarning: duplicates.length
+        ? `${duplicates.length} of these ${duplicates.length === 1 ? 'name was' : 'names were'} already on the guest list, so ${duplicates.length === 1 ? 'it is' : 'they are'} now listed twice. Check for duplicates if this was a re-import.`
+        : null,
+    });
   } catch (err) {
     console.error('Bulk import error:', err);
     res.status(500).json({ error: 'Failed to import guests' });
