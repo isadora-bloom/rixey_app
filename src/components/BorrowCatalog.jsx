@@ -25,6 +25,8 @@ export default function BorrowCatalog({ onAskSage, weddingId, isAdmin, refreshKe
   const [loading, setLoading] = useState(true)
   const [activeCategory, setActiveCategory] = useState('All')
   const [hoveredItem, setHoveredItem] = useState(null)
+  // The item being viewed full size. Same pattern as InspoGallery's lightbox.
+  const [zoomed, setZoomed] = useState(null)
   // Set of selected item IDs (for couple mode) or from server (for admin read-only)
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [toggling, setToggling] = useState(new Set()) // item IDs being toggled
@@ -201,15 +203,39 @@ export default function BorrowCatalog({ onAskSage, weddingId, isAdmin, refreshKe
                   </div>
                 )}
 
-                {/* Image */}
-                <div className="aspect-square bg-cream-100 overflow-hidden">
+                {/* Image.
+                    object-contain, not object-cover. These are decor items
+                    photographed however they happened to be photographed, and
+                    most of them are wider than they are tall — arbors,
+                    benches, long tables. Cropping to a square cut the ends off,
+                    so you saw the middle of an arbor rather than an arbor.
+                    A 4:3 box with the whole item inside it fits far more of
+                    them, and nothing is hidden. */}
+                <div className="relative aspect-[4/3] bg-cream-50 overflow-hidden">
                   {item.image_url ? (
-                    <img
-                      src={item.image_url}
-                      alt={item.item_name}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                      loading="lazy"
-                    />
+                    <>
+                      <img
+                        src={item.image_url}
+                        alt={item.item_name}
+                        className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-300"
+                        loading="lazy"
+                      />
+                      {/* Always visible, not hover-only: on a phone there is no
+                          hover, and a thumbnail with no way to enlarge it was
+                          the other half of why these were hard to see.
+                          stopPropagation because tapping the card itself
+                          selects the item. */}
+                      <button
+                        type="button"
+                        aria-label={`View ${item.item_name} larger`}
+                        onClick={(e) => { e.stopPropagation(); setZoomed(item) }}
+                        className="absolute bottom-2 right-2 p-2 rounded-full bg-white/85 border border-cream-300 text-sage-600 hover:bg-white shadow-sm"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16zM11 8v6M8 11h6" />
+                        </svg>
+                      </button>
+                    </>
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-4xl text-cream-300">
                       📦
@@ -241,6 +267,41 @@ export default function BorrowCatalog({ onAskSage, weddingId, isAdmin, refreshKe
           })}
         </div>
       )}
+
+      {/* Full-size view. Decor gets chosen off these pictures, so being able
+          to actually look at one matters more than the grid being tidy. */}
+      {zoomed && (
+        <div
+          className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
+          onClick={() => setZoomed(null)}
+        >
+          <div className="w-full max-w-3xl bg-white rounded-xl overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="relative bg-cream-50">
+              <img
+                src={zoomed.image_url}
+                alt={zoomed.item_name}
+                className="max-h-[70vh] w-auto mx-auto object-contain"
+              />
+              <button
+                type="button"
+                onClick={() => setZoomed(null)}
+                aria-label="Close"
+                className="absolute top-2 right-2 p-2 bg-black/50 text-white rounded-full hover:bg-black/70"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-4">
+              <p className="font-medium text-sage-800">{zoomed.item_name}</p>
+              {zoomed.description && <p className="text-sage-500 text-sm mt-1">{zoomed.description}</p>}
+              {zoomed.category && <p className="text-sage-400 text-xs mt-2">{zoomed.category}</p>}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
+
   )
 }
