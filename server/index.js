@@ -244,6 +244,16 @@ app.get('/api/health', (req, res) => {
     bootedAt: BOOTED_AT,
     uptimeSecs: Math.round(process.uptime()),
     commit: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) || null,
+    // Nothing pins the Node version for deploys, so the server can be running a
+    // different one from any laptop. A PDF that extracts fine locally and dies
+    // on the server with "DOMMatrix is not defined" is exactly the shape of bug
+    // that causes, and it took a while to think of looking.
+    node: process.version,
+    pdfGlobals: {
+      DOMMatrix: typeof globalThis.DOMMatrix !== 'undefined',
+      Path2D: typeof globalThis.Path2D !== 'undefined',
+      ImageData: typeof globalThis.ImageData !== 'undefined',
+    },
   });
 });
 
@@ -9661,7 +9671,12 @@ app.post('/api/admin/documents/:weddingId/upload', requireAdmin, documentUpload.
     res.json({ ...data, chars: text.length });
   } catch (e) {
     console.error('Document upload error:', e);
-    res.status(500).json({ error: e.message });
+    // Keep the underlying message, it is what makes these reportable, but say
+    // which stage failed. "DOMMatrix is not defined" on its own tells the
+    // person uploading a wedding plan precisely nothing.
+    res.status(500).json({
+      error: `Could not read that file on the server (${e.message}). Nothing was saved.`,
+    });
   }
 });
 

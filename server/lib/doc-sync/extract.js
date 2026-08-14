@@ -23,6 +23,56 @@ import * as XLSX from 'xlsx';
 
 const require = createRequire(import.meta.url);
 
+/**
+ * Browser globals that pdfjs expects and Node does not have.
+ *
+ * pdf-parse 2.x is a wrapper around pdfjs-dist 5.4.296, and pdfjs's compiled
+ * output references DOMMatrix at module top. Node has no such global, so
+ * importing it throws "DOMMatrix is not defined" before a single byte of PDF is
+ * read. Which is why the upload failed with a message that has nothing to do
+ * with PDFs.
+ *
+ * This has to run at module top, not inside extractPdf. The reference is
+ * evaluated when pdfjs is imported, so a stub installed just before
+ * `await import('pdf-parse')` is already too late on some orderings, and the
+ * failure is intermittent in a way that will waste an afternoon.
+ *
+ * The stubs are deliberately hollow. pdfjs only really uses these while
+ * rendering to a canvas, and text extraction never goes near that path, so
+ * they exist to satisfy the reference rather than to do anything.
+ */
+function installPdfGlobals() {
+  const g = globalThis;
+
+  if (typeof g.DOMMatrix === 'undefined') {
+    g.DOMMatrix = class DOMMatrix {
+      constructor(init) {
+        const [a, b, c, d, e, f] = Array.isArray(init) ? init : [1, 0, 0, 1, 0, 0];
+        Object.assign(this, { a, b, c, d, e, f });
+      }
+      translateSelf(tx = 0, ty = 0) { this.e += tx; this.f += ty; return this; }
+      scaleSelf(sx = 1, sy = sx) { this.a *= sx; this.d *= sy; return this; }
+      multiplySelf() { return this; }
+    };
+  }
+
+  if (typeof g.Path2D === 'undefined') {
+    g.Path2D = class Path2D {
+      addPath() {} moveTo() {} lineTo() {} bezierCurveTo() {}
+      quadraticCurveTo() {} closePath() {} rect() {}
+    };
+  }
+
+  if (typeof g.ImageData === 'undefined') {
+    g.ImageData = class ImageData {
+      constructor(data, width, height) {
+        this.data = data; this.width = width; this.height = height;
+      }
+    };
+  }
+}
+installPdfGlobals();
+
 /** Excel stores times as a fraction of a day. 0.3333 is 08:00, not a number. */
 function excelFractionToTime(v) {
   if (typeof v !== 'number' || v < 0 || v >= 1) return null;
@@ -75,8 +125,13 @@ export function extractXlsx(buffer) {
  * pdfjs-dist is not in server/package.json, which is what Railway installs
  * from. It only existed locally as a transitive dependency of pdf-parse.
  *
- * So use pdf-parse itself. It is a declared server dependency, it does not
- * need the DOM, and it is already what the contract reader uses.
+ * So use pdf-parse itself, which is a declared server dependency and is
+ * already what the contract reader uses.
+ *
+ * The claim that used to be here, that pdf-parse "does not need the DOM", was
+ * wrong. v2 is a wrapper around pdfjs-dist and needs exactly the same browser
+ * globals, which is why the upload went on failing with DOMMatrix afterwards.
+ * See installPdfGlobals at the top of this file.
  */
 export async function extractPdf(buffer) {
   const { PDFParse } = await import('pdf-parse');
