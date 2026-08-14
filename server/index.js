@@ -228,6 +228,36 @@ app.use('/api', (req, res, next) => {
     .catch(() => next());
 });
 
+// Is the server up, and which build is it running? Answers before any auth or
+// database work, so it stays truthful when something downstream is broken.
+//
+// weddingAccess has always listed /api/health as public but the route was never
+// written, so it answered 404. It exists now because "did Railway restart mid
+// request?" is a question that came up during a real incident and could not be
+// answered: a sync POST died with no response, which the browser reports as a
+// CORS failure, which sends you looking at CORS instead of at the restart.
+const BOOTED_AT = new Date().toISOString();
+app.get('/api/health', (req, res) => {
+  res.json({
+    ok: true,
+    bootedAt: BOOTED_AT,
+    uptimeSecs: Math.round(process.uptime()),
+    commit: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) || null,
+  });
+});
+
+// Node exits on an unhandled rejection, which on Railway looks like a restart:
+// every in-flight request dies without a response, and the browser blames CORS
+// because a dead connection carries no headers. Log it loudly and stay up. The
+// process is a long-lived sync server, so surviving a stray promise is better
+// than dropping an admin's half-finished Gmail import.
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason?.stack || reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err?.stack || err);
+});
+
 // Admin-only route groups
 app.use('/api/admin', requireAdmin);
 app.use('/api/gmail', requireAdmin);
@@ -6705,11 +6735,27 @@ app.post('/api/admin/weddings/archive-past', async (req, res) => {
     today.setHours(0, 0, 0, 0);
     const todayStr = today.toISOString().slice(0, 10); // YYYY-MM-DD
 
+    // Two steps rather than one. PostgREST resolves an `or=` filter in the
+    // wrong scope on an UPDATE and answers 42703 "column weddings.archived does
+    // not exist" even though it plainly does — the same filter is fine on a
+    // SELECT. So find the rows, then update them by id. This endpoint has been
+    // returning 500 on every click; nothing has been auto-archived since it
+    // was written.
+    const { data: due, error: findError } = await supabaseAdmin
+      .from('weddings')
+      .select('id')
+      .lt('wedding_date', todayStr)
+      .or('archived.is.null,archived.eq.false');
+
+    if (findError) throw findError;
+
+    const ids = (due || []).map(w => w.id);
+    if (!ids.length) return res.json({ count: 0, weddingIds: [] });
+
     const { data, error } = await supabaseAdmin
       .from('weddings')
       .update({ archived: true })
-      .lt('wedding_date', todayStr)
-      .or('archived.is.null,archived.eq.false')
+      .in('id', ids)
       .select('id');
 
     if (error) throw error;
