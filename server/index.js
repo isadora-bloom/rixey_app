@@ -23,6 +23,7 @@ import { chunkDocument, sectionsPrompt, mergeSections, parseSectionsResponse } f
 import { buildDocumentDiff, diffSections } from './lib/doc-sync/diff.js';
 import { transcribeAudio, transcriptionConfigured } from './lib/transcribe.js';
 import { guestCareContext } from '../shared/guest-care.js';
+import { buildDirectory, matchMeeting } from '../shared/meeting-match.js';
 import { buildPortalSnapshot } from './lib/sheet-diff/portal-snapshot.js';
 import cron from 'node-cron';
 import * as XLSX from 'xlsx';
@@ -3913,40 +3914,80 @@ async function getZoomAccessToken() {
 }
 
 // Sync Zoom meeting transcripts
+/**
+ * Kick off a Zoom sync and answer straight away.
+ *
+ * This used to do the whole import inside the request. Each meeting costs a
+ * transcript download and a Claude extraction, so a full run takes minutes,
+ * and on 14 August it did not survive one: nine meetings were written and the
+ * connection died before the two newest. In the browser that surfaced as
+ * "No Access-Control-Allow-Origin", because a dead connection carries no
+ * headers, which is a long way from the truth.
+ *
+ * Now the run gets a sync_jobs row and happens after the response. Poll
+ * GET /api/sync-jobs to see how far it got. Meetings already on file are
+ * skipped, so re-running resumes rather than starting over.
+ */
 app.post('/api/zoom/sync', async (req, res) => {
-  try {
+  const { sinceDays, reprocess, trigger } = req.body || {};
+
+  const { data: job, error: jobErr } = await supabaseAdmin.from('sync_jobs')
+    .insert({
+      kind: 'zoom',
+      trigger: trigger === 'scheduled' ? 'scheduled' : 'manual',
+      detail: { sinceDays: sinceDays || 30, reprocess: !!reprocess },
+    })
+    .select()
+    .single();
+
+  if (jobErr) {
+    console.error('Could not open a sync job:', jobErr.message);
+    return res.status(500).json({ error: 'Could not start the sync' });
+  }
+
+  res.status(202).json({
+    jobId: job.id,
+    status: 'running',
+    message: 'Zoom sync started. It runs in the background — watch the sync panel for progress.',
+  });
+
+  runZoomSync({ jobId: job.id, sinceDays, reprocess }).catch(async err => {
+    console.error('Zoom sync crashed:', err);
+    await supabaseAdmin.from('sync_jobs').update({
+      status: 'failed', finished_at: new Date().toISOString(), last_error: String(err?.message || err),
+    }).eq('id', job.id);
+  });
+});
+
+async function runZoomSync({ jobId, sinceDays, reprocess }) {
+  const bump = (fields) => supabaseAdmin.from('sync_jobs')
+    .update({ ...fields, heartbeat_at: new Date().toISOString() }).eq('id', jobId);
+  const fail = async (message) => {
+    console.error('Zoom sync failed:', message);
+    await bump({ status: 'failed', finished_at: new Date().toISOString(), last_error: message });
+  };
+
+  {
     const accessToken = await getZoomAccessToken();
     if (!accessToken) {
-      return res.status(400).json({ error: 'Zoom not connected' });
+      return fail('Zoom is not connected. Reconnect it in the admin panel.');
     }
 
-    // Get all weddings with profiles for name matching
+    // wedding_date comes along because it is one of the three things allowed to
+    // settle a match: a first and last name, both halves of the couple, or a
+    // name with the wedding date.
     const { data: weddings } = await supabaseAdmin
       .from('weddings')
-      .select('id, couple_names, profiles(name, email)');
+      .select('id, couple_names, wedding_date, profiles(name, email)');
 
-    // Build name-to-wedding lookup (lowercase for matching)
-    const nameToWedding = {};
-    for (const wedding of (weddings || [])) {
-      // Add couple names
-      if (wedding.couple_names) {
-        const names = wedding.couple_names.toLowerCase().split(/[&,]/).map(n => n.trim());
-        names.forEach(name => {
-          if (name) nameToWedding[name] = wedding.id;
-        });
-      }
-      // Add profile names
-      for (const profile of (wedding.profiles || [])) {
-        if (profile.name) {
-          const firstName = profile.name.toLowerCase().split(' ')[0];
-          const fullName = profile.name.toLowerCase();
-          nameToWedding[firstName] = wedding.id;
-          nameToWedding[fullName] = wedding.id;
-        }
-      }
-    }
+    // Each wedding keeps its own names and is scored against the whole title,
+    // rather than every wedding writing its first names into one shared map
+    // where the last one to load won. See shared/meeting-match.js for what that
+    // cost: 148 of Anne Throckmorton's planning notes lived on Chris & Emily's
+    // record because both weddings had an Anne.
+    const directory = buildDirectory(weddings);
 
-    console.log(`Searching Zoom for meetings, matching against ${Object.keys(nameToWedding).length} known names`);
+    console.log(`Searching Zoom for meetings, scoring against ${directory.length} weddings`);
 
     // Get processed meeting IDs
     const { data: processed } = await supabaseAdmin
@@ -3961,7 +4002,6 @@ app.post('/api/zoom/sync', async (req, res) => {
     // others were lost that way. Walk the whole period in 30-day windows
     // instead. Already-processed meetings are skipped, so reaching further back
     // costs a few API calls and nothing else.
-    const { sinceDays, reprocess } = req.body || {};
     const lookbackDays = Math.max(1, Math.min(Number(sinceDays) || 30, 800));
 
     const windows = [];
@@ -4000,7 +4040,7 @@ app.post('/api/zoom/sync', async (req, res) => {
           : recordingsResponse.status === 124
           ? ' Your Zoom account plan may not support cloud recordings.'
           : '';
-        return res.status(500).json({ error: `Zoom recordings API returned ${recordingsResponse.status} for ${from}..${to}.${hint}` });
+        return fail(`Zoom recordings API returned ${recordingsResponse.status} for ${from}..${to}.${hint}`);
       }
 
       const windowData = await recordingsResponse.json();
@@ -4021,6 +4061,9 @@ app.post('/api/zoom/sync', async (req, res) => {
     let notesExtracted = 0;
     let matched = 0;
     let skipped = 0;
+    let needsReview = 0;
+
+    await bump({ total: meetings.length });
 
     for (const meeting of meetings) {
       const meetingId = meeting.uuid;
@@ -4053,14 +4096,29 @@ app.post('/api/zoom/sync', async (req, res) => {
         participantNames.push(...topicNames.map(n => n.toLowerCase()));
       }
 
-      // Try to match to a wedding
-      let matchedWeddingId = null;
-      for (const name of participantNames) {
-        if (nameToWedding[name]) {
-          matchedWeddingId = nameToWedding[name];
-          matched++;
-          break;
-        }
+      // Score every wedding against the whole title, and refuse to file on a
+      // shared first name alone. When it is not sure it asks rather than
+      // guesses: the meeting goes to ingest_review with its candidates.
+      const verdict = matchMeeting(meeting.topic, directory, { transcript: transcriptText });
+      const matchedWeddingId = verdict.weddingId;
+      if (matchedWeddingId) matched++;
+
+      if (!matchedWeddingId) {
+        needsReview++;
+        const { error: reviewErr } = await supabaseAdmin.from('ingest_review').upsert({
+          source: 'zoom',
+          external_id: meetingId,
+          title: meeting.topic || 'Untitled meeting',
+          occurred_at: meeting.start_time || null,
+          excerpt: parseVttToText(transcriptText).slice(0, 600),
+          suggested_wedding_id: verdict.runnerUp?.weddingId || null,
+          confidence: verdict.confidence,
+          reason: verdict.reason,
+          candidates: verdict.runnerUp ? [verdict.runnerUp] : [],
+          status: 'open',
+        }, { onConflict: 'source,external_id' });
+        if (reviewErr) console.error('Could not queue meeting for review:', reviewErr.message);
+        console.log(`  Needs a human: "${meeting.topic}" — ${verdict.reason}`);
       }
 
       // Mark the meeting as processed FIRST. This row is the only thing
@@ -4076,7 +4134,11 @@ app.post('/api/zoom/sync', async (req, res) => {
         wedding_id: matchedWeddingId,
         meeting_topic: meeting.topic,
         participant_names: participantNames,
-        transcript_text: transcriptText
+        transcript_text: transcriptText,
+        // Why it landed where it landed, in words, next to the row itself.
+        match_confidence: verdict.confidence,
+        match_reason: verdict.reason,
+        matched_by: matchedWeddingId ? 'auto' : null,
       }, { onConflict: 'zoom_meeting_id' });
       if (insertErr) {
         console.error(`Zoom sync: could not mark "${meeting.topic}" as processed, skipping it to avoid duplicates:`, insertErr.message);
@@ -4086,79 +4148,203 @@ app.post('/api/zoom/sync', async (req, res) => {
 
       // Save full transcript as a planning note so Sage can search it
       if (matchedWeddingId && transcriptText) {
-        const cleanTranscript = parseVttToText(transcriptText);
-        const meetingLabel = meeting.topic || 'Untitled';
-        const meetingDate = meeting.start_time ? new Date(meeting.start_time).toLocaleDateString() : 'unknown date';
-
-        const transcriptSource = `Zoom meeting on ${meetingDate}`;
-
-        const noteBody = `[Zoom Meeting: ${meetingLabel} — ${meetingDate}]\n${cleanTranscript}`;
-
-        // Don't re-file a transcript we already hold for this meeting. If the
-        // copy on file is shorter, though, it was written under the old 40,000
-        // character cap and the full one is worth having, so replace it.
-        const { data: priorTranscript } = await supabaseAdmin
-          .from('planning_notes')
-          .select('id, content')
-          .eq('wedding_id', matchedWeddingId)
-          .eq('category', 'zoom_transcript')
-          .eq('source_message', transcriptSource)
-          .limit(1);
-
-        if (priorTranscript?.length) {
-          const existing = priorTranscript[0];
-          if (noteBody.length > (existing.content || '').length) {
-            await supabaseAdmin.from('planning_notes').update({ content: noteBody }).eq('id', existing.id);
-            console.log(`  Replaced truncated transcript for "${meetingLabel}" (${existing.content.length} → ${noteBody.length} chars)`);
-          } else {
-            console.log(`  Transcript for "${meetingLabel}" already on file, not duplicating`);
-          }
-        } else {
-          const { error: noteError } = await supabaseAdmin.from('planning_notes').insert({
-            wedding_id: matchedWeddingId,
-            user_id: null,
-            category: 'zoom_transcript',
-            content: noteBody,
-            source_message: transcriptSource,
-            status: 'confirmed'
-          });
-
-          if (noteError) {
-            console.error('Error saving Zoom transcript to planning_notes:', noteError);
-          }
-        }
-
-        // AI-powered extraction of specific planning details.
-        // The fourth argument matters: without it this defaults to 'message',
-        // which skips the VTT cleanup and reads only the first 2,000 characters
-        // of raw transcript, i.e. the greeting. Every meeting was being mined
-        // from its first thirty seconds.
-        const source = `Zoom meeting: ${meetingLabel} (${meetingDate})`;
-        const notes = await extractPlanningNotesAI(transcriptText, matchedWeddingId, source, 'transcript');
-        if (notes.length > 0) {
-          await savePlanningNotes(notes);
-          notesExtracted += notes.length;
-          console.log(`  Extracted ${notes.length} planning notes from "${meetingLabel}"`);
-        }
+        notesExtracted += await fileZoomMeeting({
+          weddingId: matchedWeddingId,
+          topic: meeting.topic,
+          startTime: meeting.start_time,
+          transcriptText,
+        });
       }
 
       newlyProcessed++;
       processedIds.add(meetingId);
+
+      // Written after every meeting, not at the end. The whole point is that a
+      // run which stops halfway leaves a truthful count behind rather than
+      // looking like a run that had nothing to do.
+      await bump({
+        processed: newlyProcessed,
+        matched,
+        needs_review: needsReview,
+        failed: skipped,
+        last_item: meeting.topic || null,
+      });
     }
 
-    console.log(`Zoom sync: processed ${newlyProcessed} meetings, ${matched} matched, ${notesExtracted} notes extracted, ${skipped} skipped`);
-    res.json({
+    console.log(`Zoom sync: processed ${newlyProcessed} meetings, ${matched} matched, ${needsReview} need review, ${notesExtracted} notes extracted, ${skipped} skipped`);
+    await bump({
+      status: 'finished',
+      finished_at: new Date().toISOString(),
       processed: newlyProcessed,
       matched,
-      notesExtracted,
-      skipped,
-      message: `Synced ${newlyProcessed} meeting transcripts. ${matched} matched to clients. Extracted ${notesExtracted} planning notes.`
-        + (skipped ? ` ${skipped} skipped because they could not be marked as processed — check the server log.` : '')
+      needs_review: needsReview,
+      failed: skipped,
+      detail: { notesExtracted, lookbackDays, windows: windows.length },
+    });
+  }
+}
+
+/**
+ * Put a meeting's transcript and its extracted notes onto a wedding.
+ *
+ * Shared by the sync and by the "this one is theirs" button, so a meeting filed
+ * by hand gets exactly the same treatment as one filed automatically. Two
+ * versions of this would drift, and the one used less often would be the one
+ * that quietly stopped working.
+ *
+ * @returns {Promise<number>} how many planning notes were extracted
+ */
+async function fileZoomMeeting({ weddingId, topic, startTime, transcriptText }) {
+  const cleanTranscript = parseVttToText(transcriptText);
+  const meetingLabel = topic || 'Untitled';
+  const meetingDate = startTime ? new Date(startTime).toLocaleDateString() : 'unknown date';
+  const transcriptSource = `Zoom meeting on ${meetingDate}`;
+  const noteBody = `[Zoom Meeting: ${meetingLabel} — ${meetingDate}]\n${cleanTranscript}`;
+
+  // Don't re-file a transcript we already hold for this meeting. If the copy on
+  // file is shorter, though, it was written under the old 40,000 character cap
+  // and the full one is worth having, so replace it.
+  const { data: priorTranscript } = await supabaseAdmin
+    .from('planning_notes')
+    .select('id, content')
+    .eq('wedding_id', weddingId)
+    .eq('category', 'zoom_transcript')
+    .eq('source_message', transcriptSource)
+    .limit(1);
+
+  if (priorTranscript?.length) {
+    const existing = priorTranscript[0];
+    if (noteBody.length > (existing.content || '').length) {
+      await supabaseAdmin.from('planning_notes').update({ content: noteBody }).eq('id', existing.id);
+      console.log(`  Replaced truncated transcript for "${meetingLabel}" (${existing.content.length} → ${noteBody.length} chars)`);
+    } else {
+      console.log(`  Transcript for "${meetingLabel}" already on file, not duplicating`);
+    }
+  } else {
+    const { error: noteError } = await supabaseAdmin.from('planning_notes').insert({
+      wedding_id: weddingId,
+      user_id: null,
+      category: 'zoom_transcript',
+      content: noteBody,
+      source_message: transcriptSource,
+      status: 'confirmed',
+    });
+    if (noteError) console.error('Error saving Zoom transcript to planning_notes:', noteError);
+  }
+
+  // AI-powered extraction of specific planning details.
+  // The fourth argument matters: without it this defaults to 'message', which
+  // skips the VTT cleanup and reads only the first 2,000 characters of raw
+  // transcript, i.e. the greeting. Every meeting was being mined from its first
+  // thirty seconds.
+  const source = `Zoom meeting: ${meetingLabel} (${meetingDate})`;
+  const notes = await extractPlanningNotesAI(transcriptText, weddingId, source, 'transcript');
+  if (notes.length > 0) {
+    await savePlanningNotes(notes);
+    console.log(`  Extracted ${notes.length} planning notes from "${meetingLabel}"`);
+  }
+  return notes.length;
+}
+
+// ============ SYNC VISIBILITY ============
+
+// What have the syncs been doing? Answers "did it finish, and if not where did
+// it stop", which nothing could answer before.
+app.get('/api/admin/sync-jobs', async (req, res) => {
+  try {
+    const { kind, limit } = req.query;
+    let q = supabaseAdmin.from('sync_jobs').select('*')
+      .order('started_at', { ascending: false })
+      .limit(Math.min(Number(limit) || 20, 100));
+    if (kind) q = q.eq('kind', kind);
+    const { data, error } = await q;
+    if (error) throw error;
+
+    // A job still marked running whose heartbeat stopped was killed, not
+    // finished. Without this it sits there claiming to be working for ever.
+    const STALE_MS = 5 * 60 * 1000;
+    const jobs = (data || []).map(j => ({
+      ...j,
+      stalled: j.status === 'running' && Date.now() - new Date(j.heartbeat_at).getTime() > STALE_MS,
+    }));
+    res.json({ jobs });
+  } catch (error) {
+    console.error('sync-jobs error:', error);
+    res.status(500).json({ error: 'Could not load sync history' });
+  }
+});
+
+// Meetings the matcher would not guess at.
+app.get('/api/admin/ingest-review', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('ingest_review')
+      .select('*, suggested:suggested_wedding_id(id, couple_names, wedding_date)')
+      .eq('status', 'open')
+      .order('occurred_at', { ascending: false });
+    if (error) throw error;
+    res.json({ items: data || [] });
+  } catch (error) {
+    console.error('ingest-review error:', error);
+    res.status(500).json({ error: 'Could not load items needing review' });
+  }
+});
+
+// "This one is theirs." Files the meeting properly: same path the sync uses.
+app.post('/api/admin/ingest-review/:id/assign', async (req, res) => {
+  try {
+    const { weddingId } = req.body || {};
+    if (!weddingId) return res.status(400).json({ error: 'weddingId is required' });
+
+    const { data: item, error: itemErr } = await supabaseAdmin
+      .from('ingest_review').select('*').eq('id', req.params.id).maybeSingle();
+    if (itemErr) throw itemErr;
+    if (!item) return res.status(404).json({ error: 'Not found' });
+
+    const { data: meeting, error: mErr } = await supabaseAdmin
+      .from('processed_zoom_meetings').select('*').eq('zoom_meeting_id', item.external_id).maybeSingle();
+    if (mErr) throw mErr;
+    if (!meeting) return res.status(404).json({ error: 'The transcript for this meeting is no longer on file' });
+
+    const { error: updErr } = await supabaseAdmin.from('processed_zoom_meetings').update({
+      wedding_id: weddingId,
+      matched_by: 'admin',
+      match_reason: 'Filed by hand from the review queue',
+    }).eq('zoom_meeting_id', item.external_id);
+    if (updErr) throw updErr;
+
+    const notes = await fileZoomMeeting({
+      weddingId,
+      topic: meeting.meeting_topic,
+      startTime: item.occurred_at,
+      transcriptText: meeting.transcript_text || '',
     });
 
+    await supabaseAdmin.from('ingest_review').update({
+      status: 'resolved',
+      resolved_wedding_id: weddingId,
+      resolved_by: req.userId || null,
+      resolved_at: new Date().toISOString(),
+    }).eq('id', item.id);
+
+    res.json({ ok: true, notesExtracted: notes });
   } catch (error) {
-    console.error('Zoom sync error:', error);
-    res.status(500).json({ error: 'Failed to sync Zoom: ' + error.message });
+    console.error('assign review item error:', error);
+    res.status(500).json({ error: 'Could not file that meeting: ' + error.message });
+  }
+});
+
+// Not a client meeting at all, e.g. an internal call.
+app.post('/api/admin/ingest-review/:id/ignore', async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin.from('ingest_review').update({
+      status: 'ignored', resolved_by: req.userId || null, resolved_at: new Date().toISOString(),
+    }).eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('ignore review item error:', error);
+    res.status(500).json({ error: 'Could not dismiss that item' });
   }
 });
 
@@ -10112,6 +10298,41 @@ async function sendDailyDigest({ dryRun = false } = {}) {
 
 // 8 AM ET daily
 cron.schedule('0 8 * * *', () => { sendDailyDigest().catch(err => console.error('[Digest] Error:', err.message)); }, { timezone: 'America/New_York' });
+
+/**
+ * Pull Zoom on a timer instead of waiting for somebody to press a button.
+ *
+ * Daniel and Griffin's onboarding was recorded at 15:28 and was still missing
+ * that evening, because the only thing that fetches it is a manual click and
+ * the click that did happen died partway through. Nobody presses sync on the
+ * off-chance. Zoom also takes a while to produce a transcript, so the meeting
+ * is frequently not ready at the moment anyone would think to look.
+ *
+ * Hourly at twenty past. Meetings already on file are skipped, so a run with
+ * nothing new to do costs one API call.
+ */
+cron.schedule('20 * * * *', async () => {
+  try {
+    // Don't stack runs. A long import is normal; two at once means duplicate
+    // Claude extractions and a race on the processed-marker rows.
+    const { data: running } = await supabaseAdmin
+      .from('sync_jobs').select('id, heartbeat_at').eq('kind', 'zoom').eq('status', 'running');
+    const live = (running || []).filter(j => Date.now() - new Date(j.heartbeat_at).getTime() < 15 * 60 * 1000);
+    if (live.length) {
+      console.log('[Zoom cron] a sync is already running, skipping this hour');
+      return;
+    }
+
+    const { data: job, error } = await supabaseAdmin.from('sync_jobs')
+      .insert({ kind: 'zoom', trigger: 'scheduled', detail: { sinceDays: 30 } })
+      .select().single();
+    if (error) throw error;
+
+    await runZoomSync({ jobId: job.id, sinceDays: 30, reprocess: false });
+  } catch (err) {
+    console.error('[Zoom cron] Error:', err.message);
+  }
+});
 
 // Look at today's memo without waiting until 8am, and without sending it.
 // Pass { send: true } to actually put it in the inbox.

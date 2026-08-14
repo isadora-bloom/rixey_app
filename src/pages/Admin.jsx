@@ -83,6 +83,10 @@ export default function Admin() {
   const [zoomConnected, setZoomConnected] = useState(false)
   const [zoomSyncing, setZoomSyncing] = useState(false)
   const [zoomStatus, setZoomStatus] = useState('')
+  // Meetings the matcher would not guess at, and the wedding you picked for each.
+  const [reviewItems, setReviewItems] = useState([])
+  const [reviewChoice, setReviewChoice] = useState({})
+  const [reviewBusy, setReviewBusy] = useState(null)
   const [notesHighlights, setNotesHighlights] = useState('')
   const [loadingHighlights, setLoadingHighlights] = useState(false)
   const [notesSearchQuery, setNotesSearchQuery] = useState('')
@@ -158,6 +162,7 @@ export default function Admin() {
 
   useEffect(() => {
     loadData()
+    loadReviewItems()
     checkGmailStatus()
     checkQuoStatus()
     checkZoomStatus()
@@ -298,13 +303,101 @@ export default function Admin() {
     }
   }
 
+  // Meetings the matcher would not file on a guess. Loaded on the way in so
+  // they are sitting there waiting, rather than needing to be gone looking for.
+  const loadReviewItems = async () => {
+    try {
+      const data = await apiFetch(`${API_URL}/api/admin/ingest-review`)
+      setReviewItems(data.items || [])
+    } catch (err) {
+      console.error('Could not load meetings needing review:', err)
+    }
+  }
+
+  const assignReviewItem = async (item) => {
+    const weddingId = reviewChoice[item.id]
+    if (!weddingId) return
+    setReviewBusy(item.id)
+    try {
+      const data = await apiFetch(`${API_URL}/api/admin/ingest-review/${item.id}/assign`, {
+        method: 'POST',
+        body: JSON.stringify({ weddingId }),
+      })
+      setReviewItems(prev => prev.filter(i => i.id !== item.id))
+      toastSuccess(`Filed, and pulled ${data.notesExtracted} planning notes out of it`)
+      loadData()
+    } catch (err) {
+      toastError(`Could not file that meeting: ${err.message}`)
+    }
+    setReviewBusy(null)
+  }
+
+  const ignoreReviewItem = async (item) => {
+    setReviewBusy(item.id)
+    try {
+      await apiFetch(`${API_URL}/api/admin/ingest-review/${item.id}/ignore`, { method: 'POST' })
+      setReviewItems(prev => prev.filter(i => i.id !== item.id))
+    } catch (err) {
+      toastError(`Could not dismiss that: ${err.message}`)
+    }
+    setReviewBusy(null)
+  }
+
+  /**
+   * The sync now answers straight away and works in the background, so this
+   * follows the job instead of holding a request open for minutes. The old way
+   * died partway through on 14 August and reported itself as a CORS error,
+   * having quietly skipped the two newest meetings.
+   */
+  const followSyncJob = async (jobId) => {
+    const started = Date.now()
+    while (Date.now() - started < 20 * 60 * 1000) {
+      await new Promise(r => setTimeout(r, 4000))
+      let job
+      try {
+        const data = await apiFetch(`${API_URL}/api/admin/sync-jobs?kind=zoom&limit=10`)
+        job = (data.jobs || []).find(j => j.id === jobId)
+      } catch {
+        continue                       // a blip in polling is not a failed sync
+      }
+      if (!job) continue
+
+      const seen = job.total ? ` of ${job.total}` : ''
+      if (job.status === 'running' && !job.stalled) {
+        setZoomStatus(`Working: ${job.processed}${seen} meetings${job.last_item ? ` — ${job.last_item}` : ''}`)
+        continue
+      }
+      if (job.stalled) {
+        setZoomStatus(`Stopped after ${job.processed}${seen} meetings. Press Sync again to carry on from there.`)
+        return
+      }
+      if (job.status === 'failed') {
+        setZoomStatus(`Failed after ${job.processed}${seen}: ${job.last_error || 'unknown error'}`)
+        return
+      }
+      setZoomStatus(
+        `Done. ${job.processed}${seen} meetings, ${job.matched} filed to couples`
+        + (job.needs_review ? `, ${job.needs_review} need you to say whose they are` : '')
+        + (job.failed ? `, ${job.failed} skipped` : '')
+      )
+      return
+    }
+    setZoomStatus('Still running after 20 minutes — check the sync history.')
+  }
+
   const syncZoom = async () => {
     setZoomSyncing(true)
     setZoomStatus('')
     try {
       const data = await apiFetch(`${API_URL}/api/zoom/sync`, { method: 'POST' })
-      setZoomStatus(data.message || data.error)
-      loadData()
+      if (!data.jobId) {
+        setZoomStatus(data.message || data.error || 'Sync did not start')
+      } else {
+        setZoomStatus('Started. Looking at Zoom…')
+        await followSyncJob(data.jobId)
+        await loadReviewItems()
+        loadData()
+      }
     } catch (err) {
       setZoomStatus('Failed to sync Zoom meetings')
       toastError(`Could not sync Zoom: ${err.message}`)
@@ -1593,6 +1686,64 @@ export default function Admin() {
               </p>
             </div>
             {renderUncertainList()}
+          </div>
+        )}
+
+        {/* Meetings the matcher would not guess at.
+            Sits above every view on purpose: a queue nobody passes is a queue
+            nobody answers, and the whole point is that it asks rather than
+            files a meeting on a shared first name. */}
+        {reviewItems.length > 0 && (
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 sm:p-6 mb-6">
+            <h3 className="font-serif text-lg text-amber-900">
+              {reviewItems.length === 1 ? 'One meeting I can’t place' : `${reviewItems.length} meetings I can’t place`}
+            </h3>
+            <p className="text-amber-800 text-sm mt-1 mb-4">
+              I only file a meeting when I’m sure: a first and last name, both partners, or a name with the
+              wedding date. These didn’t reach that, so I’ve left them for you rather than guessing.
+            </p>
+            <div className="space-y-3">
+              {reviewItems.map(item => (
+                <div key={item.id} className="bg-white rounded-xl border border-amber-200 p-3 sm:p-4">
+                  <div className="font-medium text-sage-700">{item.title || 'Untitled meeting'}</div>
+                  <div className="text-xs text-sage-500 mt-0.5">
+                    {item.occurred_at ? new Date(item.occurred_at).toLocaleString() : 'no date'}
+                    {item.reason ? ` · ${item.reason}` : ''}
+                  </div>
+                  {item.excerpt && (
+                    <p className="text-sm text-sage-600 mt-2 line-clamp-3 italic">“{item.excerpt.slice(0, 240)}…”</p>
+                  )}
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    <select
+                      value={reviewChoice[item.id] || item.suggested_wedding_id || ''}
+                      onChange={e => setReviewChoice(prev => ({ ...prev, [item.id]: e.target.value }))}
+                      className="flex-1 min-w-[200px] border border-cream-300 rounded-lg px-3 py-2 text-sm"
+                    >
+                      <option value="">Whose meeting is this?</option>
+                      {weddings.map(w => (
+                        <option key={w.id} value={w.id}>
+                          {w.couple_names}{w.wedding_date ? ` — ${w.wedding_date}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => assignReviewItem(item)}
+                      disabled={reviewBusy === item.id || !(reviewChoice[item.id] || item.suggested_wedding_id)}
+                      className="px-4 py-2 rounded-lg text-sm bg-sage-600 text-white disabled:opacity-40"
+                    >
+                      {reviewBusy === item.id ? 'Filing…' : 'File it'}
+                    </button>
+                    <button
+                      onClick={() => ignoreReviewItem(item)}
+                      disabled={reviewBusy === item.id}
+                      className="px-4 py-2 rounded-lg text-sm border border-cream-300 text-sage-600"
+                    >
+                      Not a client meeting
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
