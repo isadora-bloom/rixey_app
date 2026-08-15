@@ -4002,21 +4002,35 @@ async function runZoomSync({ jobId, sinceDays, reprocess }) {
     // costs a few API calls and nothing else.
     const lookbackDays = Math.max(1, Math.min(Number(sinceDays) || 30, 800));
 
+    // Walk the period in 30-day windows, and include today.
+    //
+    // The previous version compared timestamps rather than dates. Starting at
+    // "now minus 30 days", the first window ran to 29 days later, the cursor
+    // advanced one day to exactly now, and `cursor < end` was false. So it
+    // built one window ending YESTERDAY and stopped, and every meeting recorded
+    // today fell outside every window it asked Zoom about.
+    //
+    // That is why Daniel and Griffin's onboarding was missing on the evening of
+    // the day it was recorded, and Melissa Pike's with it. Not a sync dying
+    // partway, which is what the evidence looked like at first and what I said
+    // it was: the two newest meetings were simply never requested. A sync could
+    // have run all night and would never have picked them up until the calendar
+    // rolled over.
+    //
+    // Comparing dates, not instants, is the whole fix. Zoom's from/to are
+    // inclusive whole days, so the loop has to be too.
     const windows = [];
     {
+      const DAY_MS = 86_400_000;
       const end = new Date();
-      const start = new Date();
-      start.setDate(start.getDate() - lookbackDays);
+      const start = new Date(end.getTime() - lookbackDays * DAY_MS);
+      const dayOf = (d) => d.toISOString().split('T')[0];
       let cursor = new Date(start);
-      while (cursor < end) {
-        const windowEnd = new Date(cursor);
-        windowEnd.setDate(windowEnd.getDate() + 29);
-        windows.push([
-          cursor.toISOString().split('T')[0],
-          (windowEnd < end ? windowEnd : end).toISOString().split('T')[0],
-        ]);
-        cursor = new Date(windowEnd);
-        cursor.setDate(cursor.getDate() + 1);
+      while (dayOf(cursor) <= dayOf(end)) {
+        const windowEnd = new Date(cursor.getTime() + 29 * DAY_MS);
+        const to = windowEnd < end ? windowEnd : end;
+        windows.push([dayOf(cursor), dayOf(to)]);
+        cursor = new Date(to.getTime() + DAY_MS);
       }
     }
 
