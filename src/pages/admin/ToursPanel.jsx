@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { apiFetch } from '../../utils/api'
 import { useToast } from '../../components/ui/Toast'
 import WalkthroughNotes from '../../components/WalkthroughNotes'
+import { venueWhen, venueDate, venueToday, venueDateTime } from '../../../shared/venue-time'
 
 const API_URL = import.meta.env.VITE_API_URL || ''
 
@@ -21,18 +22,20 @@ const API_URL = import.meta.env.VITE_API_URL || ''
 
 const isTour = (kind) => /tour|site visit|venue visit/i.test(String(kind || ''))
 
+/**
+ * Meeting times are the venue's, not the reader's.
+ *
+ * Calendly hands back UTC and the browser renders in whatever timezone it is
+ * set to. Correct on a laptop in Virginia, wrong by four hours on one that is
+ * not, and silently so. A tour at 11am reading as 3pm is the sort of mistake
+ * that is only noticed by missing it.
+ */
 function whenLabel(iso) {
   if (!iso) return 'no date'
   const d = new Date(iso)
-  const now = new Date()
-  const days = Math.round((d - now) / 86_400_000)
-  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-  const date = d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })
-  if (days < -1) return `${date} (past)`
-  if (d.toDateString() === now.toDateString()) return `Today ${time}`
-  const tomorrow = new Date(now); tomorrow.setDate(now.getDate() + 1)
-  if (d.toDateString() === tomorrow.toDateString()) return `Tomorrow ${time}`
-  return `${date} ${time}`
+  if (Number.isNaN(d.getTime())) return 'no date'
+  if (venueDate(d) < venueToday()) return `${venueDateTime(d)} (past)`
+  return venueWhen(d)
 }
 
 function Brief({ enquiry, onClose }) {

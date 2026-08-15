@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { venueTime, venueDate, venueToday, venueDayLabel, isVenueToday, VENUE_TZ } from '../../shared/venue-time'
 import { API_URL } from '../config/api'
 import { authHeaders } from '../utils/api'
 
@@ -31,23 +32,21 @@ export default function UpcomingMeetings({ weddings = [], filterWedding = null, 
     setLoading(false)
   }
 
+  // Meeting times are the venue's, not the reader's. Calendly returns UTC and
+  // an unpinned toLocaleTimeString renders in whatever timezone the browser
+  // happens to be in — right on a laptop in Virginia, four hours out on one
+  // that is not, with nothing to show it is wrong.
   const formatDate = (dateStr) => {
     const date = new Date(dateStr)
     return date.toLocaleDateString('en-US', {
       weekday: 'short',
       month: 'short',
-      day: 'numeric'
+      day: 'numeric',
+      timeZone: VENUE_TZ
     })
   }
 
-  const formatTime = (dateStr) => {
-    const date = new Date(dateStr)
-    return date.toLocaleTimeString('en-US', {
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true
-    })
-  }
+  const formatTime = (dateStr) => venueTime(dateStr)
 
   const getDuration = (start, end) => {
     const mins = Math.round((new Date(end) - new Date(start)) / 60000)
@@ -87,11 +86,10 @@ export default function UpcomingMeetings({ weddings = [], filterWedding = null, 
     return null
   }
 
-  const isToday = (dateStr) => {
-    const eventDate = new Date(dateStr).toDateString()
-    const today = new Date().toDateString()
-    return eventDate === today
-  }
+  // "Today" judged at the venue. After 8pm Eastern a UTC clock has already
+  // rolled over, so this used to stop saying "today" during the evening —
+  // exactly when a meeting is most likely to be imminent.
+  const isToday = (dateStr) => venueDate(dateStr) === venueToday()
 
   const isThisWeek = (dateStr) => {
     const eventDate = new Date(dateStr)
@@ -146,8 +144,10 @@ export default function UpcomingMeetings({ weddings = [], filterWedding = null, 
     return true
   })
 
+  // Grouped by the day it is at Rixey. Grouping on the browser's own date puts
+  // an evening meeting under tomorrow's heading.
   const groupedEvents = filteredEvents.reduce((groups, event) => {
-    const date = new Date(event.start_time).toDateString()
+    const date = venueDate(event.start_time) || 'unknown'
     if (!groups[date]) groups[date] = []
     groups[date].push(event)
     return groups
@@ -249,9 +249,9 @@ export default function UpcomingMeetings({ weddings = [], filterWedding = null, 
               <div key={date}>
                 <div className="flex items-center gap-2 mb-2">
                   <span className={`text-sm font-medium ${
-                    isToday(date) ? 'text-sage-700 bg-sage-100 px-2 py-0.5 rounded' : 'text-sage-500'
+                    isVenueToday(date) ? 'text-sage-700 bg-sage-100 px-2 py-0.5 rounded' : 'text-sage-500'
                   }`}>
-                    {isToday(date) ? 'Today' : formatDate(date)}
+                    {isVenueToday(date) ? 'Today' : venueDayLabel(date)}
                   </span>
                   <div className="flex-1 h-px bg-cream-200" />
                 </div>

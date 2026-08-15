@@ -23,6 +23,7 @@ import { chunkDocument, sectionsPrompt, mergeSections, parseSectionsResponse } f
 import { buildDocumentDiff, diffSections } from './lib/doc-sync/diff.js';
 import { transcribeAudio, transcriptionConfigured } from './lib/transcribe.js';
 import { enquiryFromEvent, isTour, suggestWedding, parseStatedDate } from './lib/enquiries.js';
+import { venueToday, venueDate, venueDateTime, VENUE_TZ } from '../shared/venue-time.js';
 import { guestCareContext } from '../shared/guest-care.js';
 import { buildDirectory, matchMeeting } from '../shared/meeting-match.js';
 import { buildPortalSnapshot } from './lib/sheet-diff/portal-snapshot.js';
@@ -2504,7 +2505,7 @@ app.post('/api/chat-with-file', upload.single('file'), async (req, res) => {
                   vendor_type: vendorType,
                   contract_uploaded: true,
                   contract_url: signedUrlData.signedUrl,
-                  contract_date: new Date().toISOString().split('T')[0],
+                  contract_date: venueToday(),   // the day it was signed at the venue
                   is_booked: true
                 });
                 console.log(`Created vendor checklist entry for ${vendorType} from chat upload`);
@@ -5133,7 +5134,7 @@ app.post('/api/vendors/:id/contract', upload.single('contract'), async (req, res
       .update({
         contract_uploaded: true,
         contract_url: signedUrlData.signedUrl,
-        contract_date: new Date().toISOString().split('T')[0]
+        contract_date: venueToday()   // the day it was signed at the venue
       })
       .eq('id', id)
       .select()
@@ -7506,9 +7507,10 @@ app.put('/api/weddings/:weddingId/archive', async (req, res) => {
 // can be unarchived. Weddings with no date are left alone.
 app.post('/api/admin/weddings/archive-past', async (req, res) => {
   try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const todayStr = today.toISOString().slice(0, 10); // YYYY-MM-DD
+    // Today at the venue, not today in UTC. Between 8pm and midnight Eastern
+    // it is already tomorrow in UTC, so this used to archive weddings that were
+    // happening that very evening.
+    const todayStr = venueToday();
 
     // Two steps rather than one. PostgREST resolves an `or=` filter in the
     // wrong scope on an UPDATE and answers 42703 "column weddings.archived does
@@ -10465,7 +10467,9 @@ app.post('/api/admin/walkthroughs', requireAdmin, async (req, res) => {
         wedding_id: weddingId || null,
         enquiry_id: enquiryId || null,
         kind: kind || (enquiryId ? 'tour' : 'final_walkthrough'),
-        occurred_on: occurred_on || new Date().toISOString().slice(0, 10),
+        // An evening meeting is dated the day it happened at Rixey. In UTC a
+        // tour recorded at 8pm belongs to tomorrow.
+        occurred_on: occurred_on || venueToday(),
         attendees: attendees || null,
       })
       .select().single();
