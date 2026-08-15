@@ -238,6 +238,42 @@ app.use('/api', (req, res, next) => {
 // answered: a sync POST died with no response, which the browser reports as a
 // CORS failure, which sends you looking at CORS instead of at the restart.
 const BOOTED_AT = new Date().toISOString();
+
+/**
+ * Close off any sync that was still running when the process last stopped.
+ *
+ * A background job records its own ending, so a job killed mid-run never gets
+ * to. A Gmail import sat at "running, 61 of 70 addresses" for the best part of
+ * an hour with nothing wrong except that the server had restarted underneath
+ * it, most likely for a deploy. Left alone that row claims to be working for
+ * ever, which is worse than saying nothing.
+ *
+ * Nothing is lost by this: every sync skips what it already has, so pressing
+ * the button again carries on from where it stopped.
+ */
+async function reapOrphanedSyncJobs() {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('sync_jobs')
+      .update({
+        status: 'failed',
+        finished_at: new Date().toISOString(),
+        last_error: 'The server restarted while this was running. Press Sync again to carry on from where it stopped.',
+      })
+      .eq('status', 'running')
+      .select('id, kind, processed, total');
+    if (error) throw error;
+    for (const j of data || []) {
+      console.log(`[sync] closed off an interrupted ${j.kind} job at ${j.processed}/${j.total}`);
+    }
+  } catch (err) {
+    console.error('[sync] could not close off interrupted jobs:', err.message);
+  }
+}
+// Called after supabaseAdmin exists, further down. Calling it here reads fine
+// and throws into its own catch, because `const supabaseAdmin` is not
+// initialised yet at this point in the file, so the reaper would log once and
+// silently never run.
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
@@ -307,6 +343,10 @@ const supabaseAdmin = createClient(
   process.env.VITE_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY
 );
+
+// Now that there is a client to do it with, close off any sync that was still
+// running when this process last stopped. See reapOrphanedSyncJobs above.
+reapOrphanedSyncJobs();
 
 // Wedding-scope authorisation. Mounted here rather than beside the other
 // app.use calls above because it needs supabaseAdmin, which is declared on the
@@ -3458,6 +3498,10 @@ async function runQuoSync(body, { bump }) {
 
     // Convert registered phones to E.164 format for API queries
     const registeredPhonesE164 = Object.keys(phoneToWedding).map(phone => `+1${phone}`);
+
+    // Without this the panel reads "289/0", which looks like a fault rather
+    // than a run that imported 289 messages across every registered number.
+    await bump({ total: registeredPhonesE164.length });
 
     // For each Quo phone number AND each registered client, fetch their conversation
     for (const quoPhone of quoPhoneNumbers) {
