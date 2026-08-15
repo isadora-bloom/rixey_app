@@ -3390,6 +3390,76 @@ app.post('/api/quo/clear-processed', async (req, res) => {
 });
 
 // Sync messages from Quo
+/**
+ * The transcript of a phone call, which does not come with the call.
+ *
+ * OpenPhone's /calls list returns metadata only. The old code read
+ * `call.transcript` off that list, found nothing every time, and skipped the
+ * call. Result: 67 calls found, 0 imported, no error, ever. Every phone
+ * conversation the venue has had with a couple has been absent from their
+ * record while the sync reported success.
+ *
+ * The transcript lives at /call-transcripts/{callId} and comes back as a
+ * dialogue: one entry per speaker turn. Transcription is also a paid feature
+ * and can be off, in which case this returns nothing for a real reason, and
+ * `state.reason` carries that reason up to the job row so it can be read
+ * rather than guessed at.
+ */
+async function fetchCallTranscript(call, state) {
+  // Occasionally a voicemail does carry its own transcript.
+  const inline = call.transcript || call.transcription || call.voicemail?.transcript;
+  if (inline) return String(inline);
+
+  // Once the account tells us transcription is unavailable, stop asking: it
+  // will be unavailable for all 67 of them.
+  if (state.reason) return '';
+
+  state.checked++;
+  try {
+    const res = await fetch(`${QUO_API_BASE}/call-transcripts/${call.id}`, {
+      headers: { Authorization: QUO_API_KEY },
+    });
+
+    if (res.status === 402 || res.status === 403) {
+      state.reason = 'Quo has not enabled call transcription on this account, so calls cannot be imported. Texts are unaffected.';
+      return '';
+    }
+    // 404 means this particular call has no transcript (too short, missed, not
+    // recorded). Normal, and not a reason to stop asking about the others.
+    if (res.status === 404) return '';
+    if (!res.ok) {
+      state.reason = `Quo returned ${res.status} when asked for a call transcript.`;
+      return '';
+    }
+
+    const body = await res.json();
+    const d = body.data || body;
+    if (d.status && d.status !== 'completed' && !d.dialogue) return '';
+
+    // A dialogue is speaker turns. Keep who said what: a call where only one
+    // side is legible is worth much less.
+    if (Array.isArray(d.dialogue) && d.dialogue.length) {
+      const text = d.dialogue
+        .map(turn => {
+          const who = turn.identifier || turn.userId || 'Speaker';
+          const said = String(turn.content || '').trim();
+          return said ? `${who}: ${said}` : '';
+        })
+        .filter(Boolean)
+        .join('\n');
+      if (text) { state.got++; return text; }
+      return '';
+    }
+
+    const flat = d.transcript || d.text || '';
+    if (flat) { state.got++; return String(flat); }
+    return '';
+  } catch (err) {
+    state.reason = `Could not reach Quo for call transcripts: ${err.message}`;
+    return '';
+  }
+}
+
 app.post('/api/quo/sync', backgroundSync('quo', runQuoSync));
 
 async function runQuoSync(body, { bump }) {
@@ -3628,6 +3698,11 @@ async function runQuoSync(body, { bump }) {
     // Also fetch calls with transcripts - query for each registered client
     let totalCallsFound = 0;
     let callsProcessed = 0;
+    let callsSkipped = 0;
+    // Carries why transcripts are unavailable, if they are, so the run can say
+    // "your plan does not include call transcription" instead of quietly
+    // importing nothing. See fetchCallTranscript.
+    const callTranscriptState = { reason: null, checked: 0, got: 0 };
     for (const quoPhone of quoPhoneNumbers) {
       const phoneNumberId = quoPhone.id;
 
@@ -3660,9 +3735,13 @@ async function runQuoSync(body, { bump }) {
             const callId = `call_${call.id}`;
             if (processedIds.has(callId)) continue;
 
-            // Get transcript if available
-            const transcript = call.transcript || call.transcription || call.voicemail?.transcript || '';
-            if (!transcript) continue; // Skip calls without transcripts
+            // A call in the list carries no transcript. This used to read
+            // call.transcript off the list response, find nothing every single
+            // time, and `continue` — so 67 calls were found and 0 were ever
+            // imported, silently, for as long as this has existed. Not one
+            // phone call has ever reached a couple's record.
+            const transcript = await fetchCallTranscript(call, callTranscriptState);
+            if (!transcript) { callsSkipped++; continue; }
 
             const direction = call.direction || 'inbound';
 
@@ -3723,6 +3802,16 @@ async function runQuoSync(body, { bump }) {
       matched: newlyProcessed,
       detail: {
         callsProcessed,
+        callsFound: totalCallsFound,
+        callsSkipped,
+        // Says out loud when calls were found and none could be read. The
+        // previous version of this reported callsProcessed: 0 beside
+        // totalCallsFound: 67 and left you to notice.
+        callTranscripts: callTranscriptState.reason
+          ? callTranscriptState.reason
+          : (totalCallsFound && !callsProcessed
+              ? `Found ${totalCallsFound} calls and none had a transcript.`
+              : 'ok'),
         planningNotesSaved,
         notesExtracted,
         profileCount: profiles.length,
