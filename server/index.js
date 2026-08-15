@@ -22,6 +22,7 @@ import { extractDocument } from './lib/doc-sync/extract.js';
 import { chunkDocument, sectionsPrompt, mergeSections, parseSectionsResponse } from './lib/doc-sync/sections.js';
 import { buildDocumentDiff, diffSections } from './lib/doc-sync/diff.js';
 import { transcribeAudio, transcriptionConfigured } from './lib/transcribe.js';
+import { enquiryFromEvent, isTour } from './lib/enquiries.js';
 import { guestCareContext } from '../shared/guest-care.js';
 import { buildDirectory, matchMeeting } from '../shared/meeting-match.js';
 import { buildPortalSnapshot } from './lib/sheet-diff/portal-snapshot.js';
@@ -6477,6 +6478,282 @@ app.put('/api/onboarding/:weddingId', async (req, res) => {
   }
 });
 
+// ============ ENQUIRIES (tours and people who are not couples yet) ============
+
+/**
+ * Bring the diary into the portal.
+ *
+ * Sixteen upcoming meetings sat in Calendly and the portal knew about none of
+ * them, so a venue tour — the conversation that decides whether anyone books at
+ * all — happened with nothing to hand.
+ *
+ * Each booking is matched against existing profiles by email first and phone
+ * second. A hit means it is an existing couple's meeting and belongs to their
+ * wedding; a miss means somebody new. Matched on identifiers rather than names,
+ * for the reason written up in shared/meeting-match.js.
+ */
+app.post('/api/admin/enquiries/sync', requireAdmin, async (req, res) => {
+  try {
+    const token = process.env.CALENDLY_API_TOKEN;
+    if (!token) return res.status(400).json({ error: 'Calendly API token not configured' });
+
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    const me = await fetch('https://api.calendly.com/users/me', { headers });
+    if (!me.ok) throw new Error(`Calendly rejected the token (${me.status})`);
+    const userUri = (await me.json()).resource.uri;
+
+    // A little way back as well as forward: a tour that happened yesterday
+    // still needs its outcome recording.
+    const from = new Date(Date.now() - 14 * 86_400_000).toISOString();
+    const url = `https://api.calendly.com/scheduled_events?user=${encodeURIComponent(userUri)}`
+      + `&min_start_time=${from}&status=active&count=100&sort=start_time:asc`;
+    const evRes = await fetch(url, { headers });
+    if (!evRes.ok) throw new Error(`Could not read the Calendly diary (${evRes.status})`);
+    const events = (await evRes.json()).collection || [];
+
+    const { data: profiles } = await supabaseAdmin
+      .from('profiles').select('email, phone, wedding_id').not('wedding_id', 'is', null);
+
+    let created = 0, updated = 0, existingCouples = 0, skipped = 0;
+
+    for (const event of events) {
+      let invitees = [];
+      try {
+        const iRes = await fetch(`${event.uri}/invitees`, { headers });
+        if (iRes.ok) invitees = (await iRes.json()).collection || [];
+      } catch (err) {
+        console.error('[enquiries] could not read invitees:', err.message);
+      }
+
+      const built = enquiryFromEvent({ ...event, invitees }, { profiles });
+      if (!built) { skipped++; continue; }
+      if (built.isExistingCouple) existingCouples++;
+
+      // Upsert on the Calendly event, so re-syncing updates rather than piling
+      // up. Anything the venue has typed since — status, notes, outcome — is
+      // deliberately not in this row and survives.
+      const { data: prior } = await supabaseAdmin
+        .from('enquiries').select('id').eq('calendly_event_uri', built.row.calendly_event_uri).maybeSingle();
+
+      if (prior) {
+        const { error } = await supabaseAdmin.from('enquiries')
+          .update({ ...built.row, updated_at: new Date().toISOString() }).eq('id', prior.id);
+        if (error) { console.error('[enquiries] update failed:', error.message); skipped++; continue; }
+        updated++;
+      } else {
+        const { error } = await supabaseAdmin.from('enquiries').insert(built.row);
+        if (error) { console.error('[enquiries] insert failed:', error.message); skipped++; continue; }
+        created++;
+      }
+    }
+
+    res.json({
+      created, updated, existingCouples, skipped, seen: events.length,
+      message: `${events.length} bookings in the diary. ${created} new, ${updated} updated`
+        + (existingCouples ? `, ${existingCouples} are existing couples` : '')
+        + (skipped ? `, ${skipped} could not be read` : '') + '.',
+    });
+  } catch (error) {
+    console.error('Enquiry sync error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/** The diary, newest meeting first among the upcoming ones. */
+app.get('/api/admin/enquiries', requireAdmin, async (req, res) => {
+  try {
+    const { status, includePast } = req.query;
+    let q = supabaseAdmin
+      .from('enquiries')
+      .select('*, wedding:wedding_id(id, couple_names, wedding_date)')
+      .order('meeting_at', { ascending: true });
+
+    if (status) q = q.eq('status', status);
+    if (!includePast) q = q.gte('meeting_at', new Date(Date.now() - 7 * 86_400_000).toISOString());
+
+    const { data, error } = await q;
+    if (error) throw error;
+    res.json({ enquiries: data || [] });
+  } catch (error) {
+    console.error('List enquiries error:', error);
+    res.status(500).json({ error: 'Could not load the diary' });
+  }
+});
+
+/**
+ * Everything already known about whoever you are about to meet.
+ *
+ * Their emails and texts are read live by address and phone number rather than
+ * from the ingestion tables, because those key on wedding_id and an enquiry has
+ * none. That is the whole reason this could not be built before.
+ */
+app.get('/api/admin/enquiries/:id/brief', requireAdmin, async (req, res) => {
+  try {
+    const { data: e, error } = await supabaseAdmin
+      .from('enquiries').select('*').eq('id', req.params.id).maybeSingle();
+    if (error) throw error;
+    if (!e) return res.status(404).json({ error: 'Not found' });
+
+    const addresses = [e.email, e.partner_email].filter(Boolean).map(a => a.toLowerCase());
+    const phone = String(e.phone || '').replace(/\D/g, '').slice(-10);
+
+    // Emails: sent by them, or mentioning them. from_email covers the first,
+    // and a body search covers a form submission that arrived via info@.
+    let emails = [];
+    if (addresses.length) {
+      const { data } = await supabaseAdmin
+        .from('processed_emails')
+        .select('from_email, subject, body_text, processed_at')
+        .or(addresses.map(a => `from_email.ilike.%${a}%`).join(','))
+        .order('processed_at', { ascending: false })
+        .limit(25);
+      emails = data || [];
+    }
+
+    let texts = [];
+    if (phone) {
+      const { data } = await supabaseAdmin
+        .from('processed_quo_messages')
+        .select('phone_number, direction, body_text, processed_at')
+        .ilike('phone_number', `%${phone}%`)
+        .order('processed_at', { ascending: false })
+        .limit(25);
+      texts = data || [];
+    }
+
+    const { data: recordings } = await supabaseAdmin
+      .from('walkthroughs')
+      .select('id, kind, occurred_on, status, raw_notes')
+      .eq('enquiry_id', e.id)
+      .order('occurred_on', { ascending: false });
+
+    res.json({
+      enquiry: e,
+      emails,
+      texts,
+      recordings: recordings || [],
+      // Said plainly so an empty brief is not mistaken for a lookup that failed.
+      summary: [
+        emails.length ? `${emails.length} email${emails.length === 1 ? '' : 's'} on file` : 'no emails on file',
+        phone ? (texts.length ? `${texts.length} text${texts.length === 1 ? '' : 's'}` : 'no texts on file')
+              : 'no phone number given, so no texts could be looked up',
+      ].join(' · '),
+    });
+  } catch (error) {
+    console.error('Enquiry brief error:', error);
+    res.status(500).json({ error: 'Could not build the brief' });
+  }
+});
+
+/** An enquiry's recordings. Mirrors /api/admin/walkthroughs/:weddingId. */
+app.get('/api/admin/enquiries/:id/walkthroughs', requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('walkthroughs').select('*')
+      .eq('enquiry_id', req.params.id)
+      .order('occurred_on', { ascending: false });
+    if (error) throw error;
+    res.json(data || []);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/** Status, notes, outcome. Everything the venue types rather than imports. */
+app.patch('/api/admin/enquiries/:id', requireAdmin, async (req, res) => {
+  try {
+    const allowed = ['status', 'notes', 'outcome_notes', 'name', 'email', 'phone',
+      'partner_name', 'partner_email', 'preferred_date', 'guest_estimate', 'package_interest'];
+    const patch = {};
+    for (const k of allowed) if (k in (req.body || {})) patch[k] = req.body[k];
+    if (!Object.keys(patch).length) return res.status(400).json({ error: 'Nothing to change' });
+    patch.updated_at = new Date().toISOString();
+
+    const { data, error } = await supabaseAdmin
+      .from('enquiries').update(patch).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error('Update enquiry error:', error);
+    res.status(500).json({ error: 'Could not save that' });
+  }
+});
+
+/**
+ * They booked. Turn the enquiry into a real wedding.
+ *
+ * The enquiry is kept and pointed at the new wedding rather than consumed,
+ * because how a couple arrived — which tour, what they asked, what they were
+ * told — is worth having and is otherwise lost the moment the wedding exists.
+ *
+ * Anything recorded at the tour comes across with them.
+ */
+app.post('/api/admin/enquiries/:id/convert', requireAdmin, async (req, res) => {
+  try {
+    const { data: e, error } = await supabaseAdmin
+      .from('enquiries').select('*').eq('id', req.params.id).maybeSingle();
+    if (error) throw error;
+    if (!e) return res.status(404).json({ error: 'Not found' });
+    if (e.wedding_id) return res.status(400).json({ error: 'This enquiry is already linked to a wedding' });
+
+    const { weddingDate, coupleNames } = req.body || {};
+    if (!weddingDate) return res.status(400).json({ error: 'A wedding date is needed' });
+
+    const names = coupleNames
+      || [e.name, e.partner_name].filter(Boolean).join(' & ')
+      || e.name;
+
+    const eventCode = 'R' + Math.random().toString(36).slice(2, 7).toUpperCase();
+    const { data: wedding, error: wErr } = await supabaseAdmin.from('weddings').insert({
+      couple_names: names,
+      partner1_name: e.name || null,
+      partner2_name: e.partner_name || null,
+      wedding_date: weddingDate,
+      event_code: eventCode,
+      guest_count: null,
+    }).select().single();
+    if (wErr) throw wErr;
+
+    // Carry the tour across. A recording made before they booked is about this
+    // wedding as much as anything made after.
+    await supabaseAdmin.from('walkthroughs')
+      .update({ wedding_id: wedding.id }).eq('enquiry_id', e.id);
+
+    // And what they told the booking form, so it is on the wedding rather than
+    // only on the enquiry nobody will think to open again.
+    const facts = [
+      e.preferred_date && `Date they asked for at enquiry: ${e.preferred_date}`,
+      e.guest_estimate && `Guest estimate at enquiry: ${e.guest_estimate}`,
+      e.package_interest && `Package they were interested in: ${e.package_interest}`,
+      e.heard_about && `Heard about Rixey via: ${e.heard_about}`,
+      e.phone && `Phone given at enquiry: ${e.phone}`,
+    ].filter(Boolean);
+    if (facts.length) {
+      await supabaseAdmin.from('planning_notes').insert(facts.map(content => ({
+        wedding_id: wedding.id,
+        user_id: null,
+        category: 'note',
+        content,
+        source_message: `From their ${e.meeting_kind || 'enquiry'}${e.meeting_at ? ` on ${String(e.meeting_at).slice(0, 10)}` : ''}.`,
+        status: 'confirmed',
+      })));
+    }
+
+    await supabaseAdmin.from('enquiries').update({
+      wedding_id: wedding.id,
+      status: 'booked',
+      converted_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }).eq('id', e.id);
+
+    await logActivity(wedding.id, req.userId || null, 'wedding_created',
+      `Created from ${e.name}'s ${e.meeting_kind || 'enquiry'}`);
+
+    res.json({ wedding, eventCode });
+  } catch (error) {
+    console.error('Convert enquiry error:', error);
+    res.status(500).json({ error: 'Could not create the wedding: ' + error.message });
+  }
+});
+
 // ============ CALENDLY INTEGRATION ============
 
 // Get upcoming Calendly events
@@ -10076,13 +10353,18 @@ app.get('/api/admin/walkthroughs/:weddingId', requireAdmin, async (req, res) => 
 
 app.post('/api/admin/walkthroughs', requireAdmin, async (req, res) => {
   try {
-    const { weddingId, kind, occurred_on, attendees } = req.body;
-    if (!weddingId) return res.status(400).json({ error: 'weddingId required' });
+    // Either a couple or somebody who is not a couple yet. A tour is recorded
+    // by exactly this code, which is why wedding_id became nullable in 022.
+    const { weddingId, enquiryId, kind, occurred_on, attendees } = req.body;
+    if (!weddingId && !enquiryId) {
+      return res.status(400).json({ error: 'weddingId or enquiryId required' });
+    }
     const { data, error } = await supabaseAdmin
       .from('walkthroughs')
       .insert({
-        wedding_id: weddingId,
-        kind: kind || 'final_walkthrough',
+        wedding_id: weddingId || null,
+        enquiry_id: enquiryId || null,
+        kind: kind || (enquiryId ? 'tour' : 'final_walkthrough'),
         occurred_on: occurred_on || new Date().toISOString().slice(0, 10),
         attendees: attendees || null,
       })
@@ -10135,12 +10417,15 @@ app.post('/api/admin/walkthroughs/:id/media', requireAdmin, dayOfMediaUpload.sin
     const file = req.file;
     if (!file) return res.status(400).json({ error: 'No file provided' });
     const { data: wt, error: we } = await supabaseAdmin
-      .from('walkthroughs').select('id, wedding_id').eq('id', req.params.id).single();
+      .from('walkthroughs').select('id, wedding_id, enquiry_id').eq('id', req.params.id).single();
     if (we || !wt) return res.status(404).json({ error: 'Walkthrough not found' });
 
     const isAudio = String(file.mimetype || '').startsWith('audio/');
     const safeExt = (file.originalname.split('.').pop() || (isAudio ? 'webm' : 'jpg')).toLowerCase().replace(/[^a-z0-9]/g, '');
-    const path = `${wt.wedding_id}/walkthroughs/${wt.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${safeExt}`;
+    // A tour has no wedding to file the audio under, so it goes under the
+    // enquiry instead. Same bucket, same shape of path.
+    const owner = wt.wedding_id || `enquiries/${wt.enquiry_id}`;
+    const path = `${owner}/walkthroughs/${wt.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${safeExt}`;
 
     const { error: upErr } = await supabaseAdmin.storage
       .from('day-of-media').upload(path, file.buffer, { contentType: file.mimetype, upsert: false });
@@ -10232,14 +10517,30 @@ app.post('/api/admin/walkthroughs/:id/organise', requireAdmin, aiLimiter, async 
     await supabaseAdmin.from('walkthrough_items')
       .delete().eq('walkthrough_id', wt.id).eq('status', 'proposed');
 
-    const [{ data: wedding }, { data: guestRows }] = await Promise.all([
-      supabaseAdmin.from('weddings').select('couple_names, wedding_date').eq('id', wt.wedding_id).maybeSingle(),
-      supabaseAdmin.from('wedding_guests').select('first_name, last_name').eq('wedding_id', wt.wedding_id).limit(200),
+    // A tour has no wedding and no guest list. It still has a person, and who
+    // they are is most of the context worth giving the model.
+    const [{ data: wedding }, { data: guestRows }, { data: enquiry }] = await Promise.all([
+      wt.wedding_id
+        ? supabaseAdmin.from('weddings').select('couple_names, wedding_date').eq('id', wt.wedding_id).maybeSingle()
+        : Promise.resolve({ data: null }),
+      wt.wedding_id
+        ? supabaseAdmin.from('wedding_guests').select('first_name, last_name').eq('wedding_id', wt.wedding_id).limit(200)
+        : Promise.resolve({ data: [] }),
+      wt.enquiry_id
+        ? supabaseAdmin.from('enquiries').select('*').eq('id', wt.enquiry_id).maybeSingle()
+        : Promise.resolve({ data: null }),
     ]);
     const knownNames = (guestRows || []).map(g => guestFullName(g)).filter(Boolean).slice(0, 120);
     const context = [
       RIXEY_EXTRACTION_CONTEXT,
       wedding ? `\nThis walkthrough is for ${wedding.couple_names || 'a couple'}, wedding date ${wedding.wedding_date || 'unknown'}.` : '',
+      enquiry ? `\nThis is a ${enquiry.meeting_kind || 'meeting'} with ${enquiry.name}`
+        + `${enquiry.partner_name ? ` and ${enquiry.partner_name}` : ''}, who have NOT booked yet.`
+        + `${enquiry.preferred_date ? ` They are asking about ${enquiry.preferred_date}.` : ''}`
+        + `${enquiry.guest_estimate ? ` Around ${enquiry.guest_estimate} guests.` : ''}`
+        + `${enquiry.package_interest ? ` Interested in: ${enquiry.package_interest}.` : ''}`
+        + '\nSo capture what they asked for, what they were promised, what put them off, and'
+        + ' anything to follow up on. There is no wedding to file details against yet.' : '',
       knownNames.length ? `\nNames already on their guest list, useful for matching a first name to a person: ${knownNames.join(', ')}` : '',
     ].join('\n');
 
@@ -10308,6 +10609,16 @@ app.post('/api/admin/walkthroughs/:id/apply', requireAdmin, async (req, res) => 
     const { data: wt, error: we } = await supabaseAdmin
       .from('walkthroughs').select('*').eq('id', req.params.id).single();
     if (we || !wt) return res.status(404).json({ error: 'Walkthrough not found' });
+
+    // A tour has nowhere to file an allergy or a decor item, because the
+    // wedding does not exist yet. The notes and the organised items stay on the
+    // enquiry and come across on conversion, which is what convert does.
+    if (!wt.wedding_id) {
+      return res.status(400).json({
+        error: 'This is a tour, so there is no wedding to file into yet. '
+          + 'The notes stay on the enquiry and come across when you convert them to a wedding.',
+      });
+    }
 
     const { data: items } = await supabaseAdmin
       .from('walkthrough_items').select('*')

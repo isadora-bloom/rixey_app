@@ -13,6 +13,7 @@ export default function AdminHeader({
   fetchUnreadMessages,
   setViewingWedding,
   setActiveTab,
+  tourCount = 0,
 }) {
   return (
     <header className="bg-white border-b border-cream-200 sticky top-0 z-40">
@@ -64,6 +65,7 @@ export default function AdminHeader({
               <option value="sage-help">Sage Help {unansweredCount > 0 ? `(${unansweredCount})` : ''}</option>
               <option value="vendors">Vendors</option>
               <option value="meetings">Meetings</option>
+              <option value="tours">Tours {tourCount > 0 ? `(${tourCount})` : ''}</option>
               <option value="borrow-catalog">Borrow Catalog</option>
               <option value="picks">Picks</option>
               <option value="knowledge-base">Knowledge Base</option>
@@ -80,6 +82,9 @@ export default function AdminHeader({
             { id: 'sage-help', label: 'Sage Help', count: unansweredCount, alert: unansweredCount > 0 },
             { id: 'vendors', label: 'Vendors' },
             { id: 'meetings', label: 'Meetings' },
+            // Tours sit next to Meetings on purpose: same diary, but these are
+            // the people who have not booked, who had nowhere in the portal at all.
+            { id: 'tours', label: 'Tours', count: tourCount, alert: false },
             { id: 'borrow-catalog', label: 'Borrow Catalog' },
             { id: 'picks', label: 'Picks' },
             { id: 'manor-downloads', label: 'Manor Downloads' },

@@ -261,7 +261,17 @@ function ItemRow({ item, onChange, busy }) {
   )
 }
 
-export default function WalkthroughNotes({ weddingId }) {
+/**
+ * Takes either a wedding or an enquiry. A tour is recorded, transcribed and
+ * organised by exactly this component: building a second one would have meant
+ * two recorders drifting apart, and the one used less often would be the one
+ * that quietly stopped working.
+ *
+ * The difference is only at the end. A tour has no wedding to file an allergy
+ * or a decor item into, so its organised items wait on the enquiry and come
+ * across if the couple books.
+ */
+export default function WalkthroughNotes({ weddingId, enquiryId }) {
   const { error: toastError, success: toastSuccess } = useToast()
   const [list, setList] = useState([])
   const [active, setActive] = useState(null)
@@ -272,16 +282,22 @@ export default function WalkthroughNotes({ weddingId }) {
   const [busy, setBusy] = useState('')
   const loadedFor = useRef(null)
 
-  useEffect(() => { if (weddingId) load() }, [weddingId])
+  const owner = weddingId || enquiryId
+  const isEnquiry = !weddingId && !!enquiryId
+
+  useEffect(() => { if (owner) load() }, [owner])
 
   const load = async () => {
     setLoading(true)
     try {
-      const data = await apiFetch(`${API_URL}/api/admin/walkthroughs/${weddingId}`)
+      const path = isEnquiry
+        ? `${API_URL}/api/admin/enquiries/${enquiryId}/walkthroughs`
+        : `${API_URL}/api/admin/walkthroughs/${weddingId}`
+      const data = await apiFetch(path)
       setList(data || [])
       if (data?.length) await open(data[0])
     } catch (err) {
-      toastError(`Could not load walkthroughs: ${err.message}`)
+      toastError(`Could not load notes: ${err.message}`)
     }
     setLoading(false)
   }
@@ -339,7 +355,7 @@ export default function WalkthroughNotes({ weddingId }) {
     try {
       const w = await apiFetch(`${API_URL}/api/admin/walkthroughs`, {
         method: 'POST',
-        body: JSON.stringify({ weddingId, kind }),
+        body: JSON.stringify(isEnquiry ? { enquiryId, kind: kind === 'final_walkthrough' ? 'tour' : kind } : { weddingId, kind }),
       })
       setList(prev => [w, ...prev])
       await open(w)

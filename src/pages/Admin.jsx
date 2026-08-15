@@ -7,6 +7,7 @@ import VenueSettings from '../components/VenueSettings'
 import RecommendedVendorsAdmin from '../components/RecommendedVendorsAdmin'
 import UsageStats from '../components/UsageStats'
 import UpcomingMeetings from '../components/UpcomingMeetings'
+import ToursPanel from './admin/ToursPanel'
 import AdminInbox from '../components/AdminInbox'
 import BorrowCatalog from '../components/BorrowCatalog'
 import StorefrontAdmin from '../components/StorefrontAdmin'
@@ -83,6 +84,10 @@ export default function Admin() {
   const [zoomConnected, setZoomConnected] = useState(false)
   const [zoomSyncing, setZoomSyncing] = useState(false)
   const [zoomStatus, setZoomStatus] = useState('')
+  // How many people are coming who have not booked. Counted on the way in
+  // rather than when the tab is opened, for the same reason the worksheets tab
+  // is badged: a number you only see after going looking is not a signal.
+  const [tourCount, setTourCount] = useState(0)
   // Meetings the matcher would not guess at, and the wedding you picked for each.
   const [reviewItems, setReviewItems] = useState([])
   const [reviewChoice, setReviewChoice] = useState({})
@@ -160,9 +165,19 @@ export default function Admin() {
     }
   }
 
+  const loadTourCount = async () => {
+    try {
+      const d = await apiFetch(`${API_URL}/api/admin/enquiries`)
+      setTourCount((d.enquiries || []).filter(e => !e.wedding_id && e.status !== 'lost').length)
+    } catch {
+      // The tab still works; only the badge is missing. Not worth a toast.
+    }
+  }
+
   useEffect(() => {
     loadData()
     loadReviewItems()
+    loadTourCount()
     checkGmailStatus()
     checkQuoStatus()
     checkZoomStatus()
@@ -1462,6 +1477,7 @@ export default function Admin() {
         fetchUnreadMessages={fetchUnreadMessages}
         setViewingWedding={setViewingWedding}
         setActiveTab={setActiveTab}
+        tourCount={tourCount}
       />
 
       <main className="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
@@ -1669,6 +1685,14 @@ export default function Admin() {
         {/* Meetings View */}
         {mainView === 'meetings' && (
           <UpcomingMeetings weddings={weddings} />
+        )}
+
+        {/* Tours and first meetings: the people with no wedding yet, who had
+            nowhere in this portal to exist at all. */}
+        {mainView === 'tours' && (
+          <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
+            <ToursPanel onCountChange={setTourCount} />
+          </div>
         )}
 
         {/* Messages View */}
