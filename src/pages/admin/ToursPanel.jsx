@@ -38,7 +38,7 @@ function whenLabel(iso) {
   return venueWhen(d)
 }
 
-function Brief({ enquiry, onClose }) {
+function Brief({ enquiry, onClose, onLink }) {
   const [brief, setBrief] = useState(null)
   const [loading, setLoading] = useState(true)
   const [recording, setRecording] = useState(false)
@@ -81,6 +81,50 @@ function Brief({ enquiry, onClose }) {
         </div>
 
         <div className="p-4 space-y-5">
+          {/* Before anything else. Walking into a tour not knowing the date
+              they have come to talk about is already sold is the one mistake
+              this screen exists to prevent, so it goes above the contact
+              details rather than below the fold. */}
+          {!e.wedding_id && (loading ? (
+            <p className="text-sage-400 text-sm">Checking their date…</p>
+          ) : brief?.date_verdict && (
+            <div className={`rounded-xl p-4 ${
+              brief.date_taken_by
+                ? 'bg-amber-50 border-2 border-amber-300'
+                : 'bg-cream-50 border border-cream-300'
+            }`}>
+              <p className={brief.date_taken_by ? 'text-amber-900 font-medium' : 'text-sage-700'}>
+                {brief.date_verdict}
+                {brief.date_taken_by && ` — ${brief.date_taken_by.map(w => w.coupleNames).join(', ')}.`}
+              </p>
+              {brief.date_taken_by && (
+                <>
+                  <p className="text-amber-800 text-sm mt-1">
+                    They wrote “{e.preferred_date}” on the booking form. Either that date has gone
+                    and they need to hear it today, or this meeting is about that wedding and they
+                    booked under a different name.
+                  </p>
+                  {brief.date_taken_by.length === 1 && (
+                    <button
+                      onClick={() => onLink?.(e, brief.date_taken_by[0].id)}
+                      className="mt-2 text-sm px-3 py-1.5 rounded-lg bg-amber-700 text-white">
+                      This meeting is about that wedding
+                    </button>
+                  )}
+                </>
+              )}
+
+              {/* Free is not the same as uncontested. */}
+              {brief.also_wanted_by?.length > 0 && (
+                <p className="text-sage-700 text-sm mt-2">
+                  Also being looked at by{' '}
+                  {brief.also_wanted_by.map(o => o.name).join(', ')}
+                  {brief.also_wanted_by.length === 1 ? ', who is touring too.' : ', who are touring too.'}
+                </p>
+              )}
+            </div>
+          ))}
+
           <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
             {e.email && <span className="text-sage-600">{e.email}</span>}
             {e.phone && <span className="text-sage-600">{e.phone}</span>}
@@ -418,7 +462,13 @@ export default function ToursPanel({ onCountChange }) {
         </>
       )}
 
-      {briefing && <Brief enquiry={briefing} onClose={() => setBriefing(null)} />}
+      {briefing && (
+        <Brief
+          enquiry={briefing}
+          onClose={() => setBriefing(null)}
+          onLink={async (e, weddingId) => { await link(e, weddingId); setBriefing(null) }}
+        />
+      )}
       {converting && (
         <ConvertDialog
           enquiry={converting}

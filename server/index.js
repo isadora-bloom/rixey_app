@@ -6679,11 +6679,63 @@ app.get('/api/admin/enquiries/:id/brief', requireAdmin, async (req, res) => {
       .eq('enquiry_id', e.id)
       .order('occurred_on', { ascending: false });
 
+    // Is the date they are coming to talk about still available?
+    //
+    // The single most useful sentence to have in your head walking into a
+    // tour, and it was sitting unread in the booking form. Computed here as
+    // well as in the list, because the brief is what gets opened before the
+    // meeting and it must not depend on having scrolled past the card.
+    const statedDate = parseStatedDate(e.preferred_date);
+    let dateTakenBy = null;
+    let dateVerdict;
+    if (!e.preferred_date) {
+      dateVerdict = 'They did not give a date on the booking form.';
+    } else if (!statedDate) {
+      // "August 2027" and "Sept 11," are not dates, and saying nothing here
+      // would read as "checked, and it is free".
+      dateVerdict = `They wrote “${e.preferred_date}”, which is not a specific enough date to check.`;
+    } else {
+      const { data: clash } = await supabaseAdmin
+        .from('weddings').select('id, couple_names, wedding_date, archived')
+        .eq('wedding_date', statedDate);
+      // An archived wedding is one that has already happened, so it does not
+      // hold a future date against anybody.
+      const live = (clash || []).filter(w => !w.archived);
+      if (live.length) {
+        dateTakenBy = live.map(w => ({ id: w.id, coupleNames: w.couple_names }));
+        dateVerdict = `${statedDate} is already booked.`;
+      } else {
+        dateVerdict = `${statedDate} is free.`;
+      }
+    }
+
+    // Is anyone else after the same day?
+    //
+    // Ciara Banks and Hanna Kim are both touring for 25 September 2027 and
+    // neither conversation knows about the other. Free is not the same as
+    // uncontested, and which one it is changes how the tour goes.
+    let alsoWanted = [];
+    if (statedDate) {
+      const { data: others } = await supabaseAdmin
+        .from('enquiries')
+        .select('id, name, preferred_date, meeting_at, status')
+        .neq('id', e.id)
+        .is('wedding_id', null)
+        .neq('status', 'lost');
+      alsoWanted = (others || [])
+        .filter(o => parseStatedDate(o.preferred_date) === statedDate)
+        .map(o => ({ id: o.id, name: o.name, meetingAt: o.meeting_at }));
+    }
+
     res.json({
       enquiry: e,
       emails,
       texts,
       recordings: recordings || [],
+      stated_date: statedDate,
+      date_taken_by: dateTakenBy,
+      date_verdict: dateVerdict,
+      also_wanted_by: alsoWanted,
       // Said plainly so an empty brief is not mistaken for a lookup that failed.
       summary: [
         emails.length ? `${emails.length} email${emails.length === 1 ? '' : 's'} on file` : 'no emails on file',
