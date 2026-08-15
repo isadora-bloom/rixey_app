@@ -249,6 +249,10 @@ app.get('/api/health', (req, res) => {
     // on the server with "DOMMatrix is not defined" is exactly the shape of bug
     // that causes, and it took a while to think of looking.
     node: process.version,
+    // Recording a meeting is worth nothing if the transcription key never made
+    // it into the environment, and the only way to find that out used to be to
+    // record a real ninety-minute walkthrough and get silence back.
+    transcription: transcriptionConfigured(),
     pdfGlobals: {
       DOMMatrix: typeof globalThis.DOMMatrix !== 'undefined',
       Path2D: typeof globalThis.Path2D !== 'undefined',

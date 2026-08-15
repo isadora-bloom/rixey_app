@@ -7,6 +7,7 @@ import SaveIndicator from './ui/SaveIndicator'
 
 const KINDS = [
   { value: 'final_walkthrough', label: 'Final walkthrough' },
+  { value: 'planning_meeting', label: 'Planning meeting' },
   { value: 'site_visit', label: 'Site visit' },
   { value: 'rehearsal', label: 'Rehearsal' },
   { value: 'call', label: 'Call / meeting' },
@@ -330,16 +331,19 @@ export default function WalkthroughNotes({ weddingId }) {
     scheduleSave({ id: active.id, body: { raw_notes: notes } })
   }, [notes, active, scheduleSave])
 
-  const create = async () => {
+  // Say what kind of meeting it is up front. This used to always create a final
+  // walkthrough and leave you to change it afterwards, which is fine until you
+  // are sitting down with a couple and recording starts before you notice.
+  const create = async (kind = 'final_walkthrough') => {
     setBusy('create')
     try {
       const w = await apiFetch(`${API_URL}/api/admin/walkthroughs`, {
         method: 'POST',
-        body: JSON.stringify({ weddingId, kind: 'final_walkthrough' }),
+        body: JSON.stringify({ weddingId, kind }),
       })
       setList(prev => [w, ...prev])
       await open(w)
-    } catch (err) { toastError(`Could not start a walkthrough: ${err.message}`) }
+    } catch (err) { toastError(`Could not start a meeting record: ${err.message}`) }
     setBusy('')
   }
 
@@ -402,15 +406,21 @@ export default function WalkthroughNotes({ weddingId }) {
     <div className="space-y-5 max-w-3xl">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="font-serif text-xl text-sage-700">Walkthroughs</h2>
+          <h2 className="font-serif text-xl text-sage-700">Meetings &amp; walkthroughs</h2>
           <p className="text-sage-500 text-sm mt-0.5">
-            Type as you walk. Sage sorts it afterwards, and nothing is filed until you say so.
+            Record it or type as you go. Sage sorts it afterwards, and nothing is filed until you say so.
           </p>
         </div>
-        <button onClick={create} disabled={busy === 'create'}
-          className="shrink-0 text-sm px-4 py-2 rounded-lg bg-sage-600 text-white hover:bg-sage-700 transition disabled:opacity-50">
-          + New
-        </button>
+        <div className="shrink-0 flex gap-2">
+          <button onClick={() => create('planning_meeting')} disabled={busy === 'create'}
+            className="text-sm px-4 py-2 rounded-lg bg-sage-600 text-white hover:bg-sage-700 transition disabled:opacity-50">
+            + Planning meeting
+          </button>
+          <button onClick={() => create('final_walkthrough')} disabled={busy === 'create'}
+            className="text-sm px-4 py-2 rounded-lg border border-sage-300 text-sage-700 hover:bg-cream-50 transition disabled:opacity-50">
+            + Walkthrough
+          </button>
+        </div>
       </div>
 
       {list.length > 1 && (
