@@ -22,7 +22,7 @@ import { extractDocument } from './lib/doc-sync/extract.js';
 import { chunkDocument, sectionsPrompt, mergeSections, parseSectionsResponse } from './lib/doc-sync/sections.js';
 import { buildDocumentDiff, diffSections } from './lib/doc-sync/diff.js';
 import { transcribeAudio, transcriptionConfigured } from './lib/transcribe.js';
-import { enquiryFromEvent, isTour } from './lib/enquiries.js';
+import { enquiryFromEvent, isTour, suggestWedding, parseStatedDate } from './lib/enquiries.js';
 import { guestCareContext } from '../shared/guest-care.js';
 import { buildDirectory, matchMeeting } from '../shared/meeting-match.js';
 import { buildPortalSnapshot } from './lib/sheet-diff/portal-snapshot.js';
@@ -6514,7 +6514,11 @@ app.post('/api/admin/enquiries/sync', requireAdmin, async (req, res) => {
     const { data: profiles } = await supabaseAdmin
       .from('profiles').select('email, phone, wedding_id').not('wedding_id', 'is', null);
 
-    let created = 0, updated = 0, existingCouples = 0, skipped = 0;
+    // For the near-misses. Loaded once rather than per booking.
+    const { data: weddings } = await supabaseAdmin
+      .from('weddings').select('id, couple_names, partner1_name, partner2_name, profiles(name, email)');
+
+    let created = 0, updated = 0, existingCouples = 0, skipped = 0, suggested = 0;
 
     for (const event of events) {
       let invitees = [];
@@ -6528,6 +6532,22 @@ app.post('/api/admin/enquiries/sync', requireAdmin, async (req, res) => {
       const built = enquiryFromEvent({ ...event, invitees }, { profiles });
       if (!built) { skipped++; continue; }
       if (built.isExistingCouple) existingCouples++;
+
+      // Nothing matched exactly. Is it a couple we have, spelled differently?
+      // Recorded as a suggestion for a person to confirm, never acted on.
+      if (!built.row.wedding_id) {
+        const guess = suggestWedding({
+          name: built.row.name,
+          email: built.row.email,
+          partnerName: built.row.partner_name,
+          partnerEmail: built.row.partner_email,
+        }, weddings);
+        if (guess) {
+          built.row.suggested_wedding_id = guess.weddingId;
+          built.row.suggestion_reason = guess.reason;
+          suggested++;
+        }
+      }
 
       // Upsert on the Calendly event, so re-syncing updates rather than piling
       // up. Anything the venue has typed since — status, notes, outcome — is
@@ -6548,7 +6568,7 @@ app.post('/api/admin/enquiries/sync', requireAdmin, async (req, res) => {
     }
 
     res.json({
-      created, updated, existingCouples, skipped, seen: events.length,
+      created, updated, existingCouples, skipped, suggested, seen: events.length,
       message: `${events.length} bookings in the diary. ${created} new, ${updated} updated`
         + (existingCouples ? `, ${existingCouples} are existing couples` : '')
         + (skipped ? `, ${skipped} could not be read` : '') + '.',
@@ -6573,7 +6593,38 @@ app.get('/api/admin/enquiries', requireAdmin, async (req, res) => {
 
     const { data, error } = await q;
     if (error) throw error;
-    res.json({ enquiries: data || [] });
+
+    // What the date they asked for actually means.
+    //
+    // Two different answers, and the venue can tell them apart at a glance
+    // where no rule could. Somebody touring for a date already sold needs to
+    // hear that in the room, not afterwards. Somebody whose stated date is
+    // already on the books, saying "it is booked" on the form, is probably
+    // that couple's family booking a second visit — which is how Swati Sinha
+    // appeared as a stranger while her wedding sat in the portal under
+    // somebody else's email.
+    //
+    // Computed on read rather than stored, so it cannot go stale against a
+    // wedding that moved.
+    const { data: weddingDates } = await supabaseAdmin
+      .from('weddings').select('id, couple_names, wedding_date').not('wedding_date', 'is', null);
+    const byDate = new Map();
+    for (const w of weddingDates || []) {
+      if (!byDate.has(w.wedding_date)) byDate.set(w.wedding_date, []);
+      byDate.get(w.wedding_date).push({ id: w.id, coupleNames: w.couple_names });
+    }
+
+    const enquiries = (data || []).map(e => {
+      const iso = parseStatedDate(e.preferred_date);
+      const taken = iso ? byDate.get(iso) : null;
+      return {
+        ...e,
+        stated_date: iso,
+        date_taken_by: taken && taken.length ? taken : null,
+      };
+    });
+
+    res.json({ enquiries });
   } catch (error) {
     console.error('List enquiries error:', error);
     res.status(500).json({ error: 'Could not load the diary' });
@@ -6642,6 +6693,55 @@ app.get('/api/admin/enquiries/:id/brief', requireAdmin, async (req, res) => {
   } catch (error) {
     console.error('Enquiry brief error:', error);
     res.status(500).json({ error: 'Could not build the brief' });
+  }
+});
+
+/**
+ * "Yes, that is them." Attach an enquiry to a wedding that already exists.
+ *
+ * Distinct from convert, which creates one. Samantha Sheads booked her final
+ * walkthrough with a one-letter typo in her email and appeared as a stranger;
+ * her wedding was already in the portal. This is the fix for that, done by a
+ * person rather than guessed at.
+ */
+app.post('/api/admin/enquiries/:id/link', requireAdmin, async (req, res) => {
+  try {
+    const { weddingId } = req.body || {};
+    if (!weddingId) return res.status(400).json({ error: 'weddingId is required' });
+
+    const { data: w } = await supabaseAdmin
+      .from('weddings').select('id, couple_names').eq('id', weddingId).maybeSingle();
+    if (!w) return res.status(404).json({ error: 'That wedding does not exist' });
+
+    // Recordings made before we knew who they were belong to the wedding too.
+    await supabaseAdmin.from('walkthroughs')
+      .update({ wedding_id: weddingId }).eq('enquiry_id', req.params.id);
+
+    const { data, error } = await supabaseAdmin.from('enquiries').update({
+      wedding_id: weddingId,
+      suggested_wedding_id: null,
+      suggestion_reason: null,
+      updated_at: new Date().toISOString(),
+    }).eq('id', req.params.id).select().single();
+    if (error) throw error;
+
+    res.json({ ok: true, enquiry: data, coupleNames: w.couple_names });
+  } catch (error) {
+    console.error('Link enquiry error:', error);
+    res.status(500).json({ error: 'Could not link that: ' + error.message });
+  }
+});
+
+/** No, that is somebody else. Stops the same guess being offered every sync. */
+app.post('/api/admin/enquiries/:id/dismiss-suggestion', requireAdmin, async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin.from('enquiries').update({
+      suggestion_dismissed: true, updated_at: new Date().toISOString(),
+    }).eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 

@@ -244,6 +244,27 @@ export default function ToursPanel({ onCountChange }) {
     setSyncing(false)
   }
 
+  const link = async (e, weddingId) => {
+    try {
+      const r = await apiFetch(`${API_URL}/api/admin/enquiries/${e.id}/link`, {
+        method: 'POST', body: JSON.stringify({ weddingId }),
+      })
+      toastSuccess(`Linked to ${r.coupleNames}.`)
+      await load()
+    } catch (err) {
+      toastError(`Could not link that: ${err.message}`)
+    }
+  }
+
+  const dismissSuggestion = async (e) => {
+    try {
+      await apiFetch(`${API_URL}/api/admin/enquiries/${e.id}/dismiss-suggestion`, { method: 'POST' })
+      setList(prev => prev.map(x => x.id === e.id ? { ...x, suggestion_dismissed: true } : x))
+    } catch (err) {
+      toastError(`Could not dismiss that: ${err.message}`)
+    }
+  }
+
   const setStatus = async (e, status) => {
     try {
       await apiFetch(`${API_URL}/api/admin/enquiries/${e.id}`, {
@@ -285,6 +306,41 @@ export default function ToursPanel({ onCountChange }) {
                 e.guest_estimate && `${e.guest_estimate} guests`,
                 e.package_interest].filter(Boolean).join(' · ')}
             </p>
+          )}
+
+          {/* The date they asked for is already somebody's. Said plainly rather
+              than interpreted: it is either a clash you need to raise in the
+              room, or it is their own wedding and they booked as a guest. You
+              can tell which at a glance and no rule can. */}
+          {e.date_taken_by && !e.wedding_id && (
+            <div className="mt-2 text-sm bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              <span className="text-amber-900">
+                {e.stated_date} is already {e.date_taken_by.map(w => w.coupleNames).join(', ')}.
+              </span>
+              <span className="text-amber-800">
+                {' '}Either that date is gone, or this is their own wedding booked by someone else.
+              </span>
+              {e.date_taken_by.length === 1 && (
+                <button onClick={() => link(e, e.date_taken_by[0].id)}
+                  className="ml-2 underline text-amber-900">
+                  It’s them
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* A near-miss on email or an exact name match. Suggested, never
+              applied: a wrong guess files a stranger's meeting onto a real
+              couple's record. */}
+          {e.suggested_wedding_id && !e.wedding_id && !e.suggestion_dismissed && (
+            <div className="mt-2 text-sm bg-cream-100 border border-cream-300 rounded-lg px-3 py-2">
+              <span className="text-sage-700">This might be a couple you already have.</span>
+              {e.suggestion_reason && <span className="text-sage-500"> {e.suggestion_reason}.</span>}
+              <button onClick={() => link(e, e.suggested_wedding_id)}
+                className="ml-2 underline text-sage-700">Yes, link them</button>
+              <button onClick={() => dismissSuggestion(e)}
+                className="ml-2 underline text-sage-500">No</button>
+            </div>
           )}
         </div>
         <div className="flex gap-2 shrink-0">

@@ -17,7 +17,7 @@
  *
  * Run: node scripts/test-enquiries.mjs
  */
-import { enquiryFromEvent, readAnswers, matchToWedding, isTour, normalisePhone } from '../server/lib/enquiries.js';
+import { enquiryFromEvent, readAnswers, matchToWedding, isTour, normalisePhone, suggestWedding, parseStatedDate } from '../server/lib/enquiries.js';
 
 const PROFILES = [
   { email: 'efarnsies@gmail.com', phone: null, wedding_id: 'chris-emily' },
@@ -100,6 +100,54 @@ check('an event with no invitee is skipped',
 // An unrecognised question is still kept rather than dropped.
 const odd = readAnswers([{ question: 'Anything else we should know?', answer: 'Dog ring bearer' }]);
 check('an unmapped question is still kept in answers', odd.answers.length === 1);
+
+// ── Suggesting a couple we already have, without ever filing it ────────────
+//
+// Both cases below are real, from the first sync of the diary. Neither could be
+// caught by an exact email match, and both are obvious to a person.
+
+const WEDDINGS = [
+  { id: 'samantha-austin', couple_names: 'Samantha & Austin', partner1_name: null, partner2_name: null,
+    profiles: [{ name: 'Samantha Sheads', email: 'sheadssamantha@gmail.com' }] },
+  { id: 'daniel-griffin', couple_names: 'Daniel and Griffin', partner1_name: 'Griffin Perry', partner2_name: 'Daniel Weedon',
+    profiles: [{ name: 'Daniel Weedon', email: 'dweedon98@gmail.com' }, { name: 'Kim Perry', email: 'grifanddanielwedding@gmail.com' }] },
+  { id: 'unrelated', couple_names: 'Bronwen & Thomas', partner1_name: null, partner2_name: null,
+    profiles: [{ name: 'Bronwen Low', email: 'bronwen@example.com' }] },
+];
+
+// One letter out: sheadsAamantha vs sheadsSamantha. A final walkthrough for a
+// wedding four weeks away looked like a stranger.
+const typo = suggestWedding({ name: 'Samantha Sheads', email: 'sheadsaamantha@gmail.com' }, WEDDINGS);
+check('a one-letter email typo is suggested', typo?.weddingId === 'samantha-austin');
+
+// Booked from a university address belonging to neither of them, with the
+// couple's own names in the booking.
+const byName = suggestWedding({ name: 'Griffin and Daniel', email: 'jperry32@gmu.edu' }, WEDDINGS);
+check('an exact name match on a strange email is suggested', byName?.weddingId === 'daniel-griffin');
+
+// A genuine stranger must suggest nothing. Offering a wrong couple is worse
+// than offering none: it invites a mis-link that nothing would ever catch.
+const stranger = suggestWedding({ name: 'Tatyana Rivera', email: 'mrandmrsrodriguezplanning@gmail.com' }, WEDDINGS);
+check('a genuine stranger suggests nothing', stranger === null);
+
+// A single common first name is most of a client list and must not be enough.
+const weak = suggestWedding({ name: 'Sam Other', email: 'sam@nowhere.com' }, WEDDINGS);
+check('one weak name in common is not enough', weak === null);
+
+// ── The date they typed ────────────────────────────────────────────────────
+const dates = [
+  ['May 8 2027. It is booked. Would llike to revisiy for planting', '2027-05-08'],
+  ['9/25/2027', '2027-09-25'],
+  ['10-16-2027', '2027-10-16'],
+  ['6/5/27', '2027-06-05'],
+  ['September 19, 2026 (doing a walkthrough for my client)', '2026-09-19'],
+  ['Sept 11,', null],            // no year, so not a date
+  ['August 2027', null],         // no day, so not a date
+  ['I would say 2028! But it could come way sooner!', null],
+];
+for (const [text, expected] of dates) {
+  check(`date "${text.slice(0, 34)}" → ${expected || 'not a date'}`, parseStatedDate(text) === expected);
+}
 
 console.log(failures ? `\n${failures} failure(s)` : '\nall enquiry cases pass');
 process.exit(failures ? 1 : 0);
