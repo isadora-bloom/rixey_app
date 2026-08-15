@@ -34,6 +34,7 @@ import DirectMessagesPanel from './DirectMessagesPanel'
 import ContractPanel from './ContractPanel'
 import WeddingCompleteness from './WeddingCompleteness'
 import WalkthroughNotes from '../../components/WalkthroughNotes'
+import AdminWorksheets from '../../components/admin/AdminWorksheets'
 import DocumentSyncPanel from '../../components/DocumentSyncPanel'
 import { ESCALATION_KEYWORDS, getLastActivity, getCategoryIcon, getCategoryLabel } from './adminUtils'
 
@@ -413,7 +414,19 @@ export default function AdminWeddingProfile({
                   { section: 'Planning' },
                   { tab: 'completeness', label: 'File Completeness', icon: '/icons/checklist.svg' },
                   { tab: 'notes', label: 'Planning Notes', icon: '/icons/planning-notes.svg', badge: planningNotes.filter(n => n.status === 'pending').length },
-                  { tab: 'walkthrough', label: 'Final Walkthrough', icon: '/icons/planning-notes.svg' },
+                  { tab: 'walkthrough', label: 'Meetings & Walkthroughs', icon: '/icons/planning-notes.svg' },
+                  // Badged so a filled-in worksheet announces itself. The whole
+                  // problem was that answering one produced no signal at all on
+                  // this side, so the tab alone would just be a quieter version
+                  // of the same thing. The columns arrive with the wedding, so
+                  // this costs no extra request.
+                  {
+                    tab: 'worksheets',
+                    label: 'Their Worksheets',
+                    icon: '/icons/checklist.svg',
+                    badge: ['worksheet_priorities', 'worksheet_guest_rules', 'worksheet_budget_alignment']
+                      .filter(k => viewingWedding?.[k] && Object.keys(viewingWedding[k]).length > 0).length,
+                  },
                   { tab: 'documents', label: 'Planning Documents', icon: '/icons/upload-contract.svg' },
                   { tab: 'wedding-details', label: 'Wedding Details', icon: '/icons/overview.svg' },
                   { tab: 'allergies', label: 'Allergy Registry', icon: '/icons/guest-care.svg' },
@@ -1238,6 +1251,13 @@ export default function AdminWeddingProfile({
 
               {activeTab === 'walkthrough' && (
                 <WalkthroughNotes weddingId={viewingWedding.id} />
+              )}
+
+              {/* The alignment worksheets, which until now only the couple could
+                  see. Sixteen couples had filled them in and answered into a
+                  column nothing on this side of the portal ever read. */}
+              {activeTab === 'worksheets' && (
+                <AdminWorksheets wedding={viewingWedding} />
               )}
 
               {activeTab === 'allergies' && (
