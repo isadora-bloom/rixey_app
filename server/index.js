@@ -22,7 +22,7 @@ import { extractDocument } from './lib/doc-sync/extract.js';
 import { chunkDocument, sectionsPrompt, mergeSections, parseSectionsResponse } from './lib/doc-sync/sections.js';
 import { buildDocumentDiff, diffSections } from './lib/doc-sync/diff.js';
 import { transcribeAudio, transcriptionConfigured } from './lib/transcribe.js';
-import { enquiryFromEvent, isTour, suggestWedding, parseStatedDate } from './lib/enquiries.js';
+import { enquiryFromEvent, isTour, suggestWedding, parseStatedDate, platformSearchTerms, describeEmailMatch, parseCalculatorEmail, isCalculatorEmail } from './lib/enquiries.js';
 import { venueToday, venueDate, venueDateTime, VENUE_TZ } from '../shared/venue-time.js';
 import { guestCareContext } from '../shared/guest-care.js';
 import { buildDirectory, matchMeeting } from '../shared/meeting-match.js';
@@ -6649,18 +6649,49 @@ app.get('/api/admin/enquiries/:id/brief', requireAdmin, async (req, res) => {
     const addresses = [e.email, e.partner_email].filter(Boolean).map(a => a.toLowerCase());
     const phone = String(e.phone || '').replace(/\D/g, '').slice(-10);
 
-    // Emails: sent by them, or mentioning them. from_email covers the first,
-    // and a body search covers a form submission that arrived via info@.
+    // Emails, found four ways, because most people never email the venue
+    // directly. They come through a listing site and their address never
+    // appears: The Knot puts the name in the sender, WeddingWire puts it only
+    // in the subject. Looking them up by address alone found nothing and said
+    // "no emails on file", which reads as "never been in touch".
+    const terms = platformSearchTerms({ name: e.name, partnerName: e.partner_name });
+    const filters = [
+      ...addresses.map(a => `from_email.ilike.%${a}%`),
+      ...addresses.map(a => `body_text.ilike.%${a}%`),
+      ...terms.map(t => `from_email.ilike.%${t.knot}%`),
+      ...terms.map(t => `subject.ilike.%${t.text}%`),
+      // Full name in the body as well. A pricing-calculator submission carries
+      // "Partner One Name Jamie Boyer" and no address the venue would know, so
+      // a subject-only search misses the single most useful thing in the inbox.
+      // Both parts of the name together, never a first name alone.
+      ...terms.map(t => `body_text.ilike.%${t.text}%`),
+    ];
+
     let emails = [];
-    if (addresses.length) {
-      const { data } = await supabaseAdmin
+    if (filters.length) {
+      const { data, error: emailErr } = await supabaseAdmin
         .from('processed_emails')
         .select('from_email, subject, body_text, processed_at')
-        .or(addresses.map(a => `from_email.ilike.%${a}%`).join(','))
+        .or(filters.join(','))
         .order('processed_at', { ascending: false })
-        .limit(25);
-      emails = data || [];
+        .limit(30);
+      if (emailErr) console.error('[brief] email lookup failed:', emailErr.message);
+      emails = (data || []).map(m => ({
+        from_email: m.from_email,
+        subject: m.subject,
+        processed_at: m.processed_at,
+        // Say how each one was found, so a wrong hit is obvious rather than
+        // quietly becoming part of someone's history.
+        matched_by: describeEmailMatch(m, terms, addresses),
+        excerpt: String(m.body_text || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 220),
+        calculator: isCalculatorEmail(m.from_email) ? parseCalculatorEmail(m.body_text) : null,
+      }));
     }
+
+    // The quote they built themselves, if they built one. Pulled out of the
+    // matched emails rather than fetched separately, and the most recent one
+    // wins: people run the calculator more than once as they change their mind.
+    const quote = emails.find(m => m.calculator)?.calculator || null;
 
     let texts = [];
     if (phone) {
@@ -6736,6 +6767,7 @@ app.get('/api/admin/enquiries/:id/brief', requireAdmin, async (req, res) => {
       date_taken_by: dateTakenBy,
       date_verdict: dateVerdict,
       also_wanted_by: alsoWanted,
+      quote,
       // Said plainly so an empty brief is not mistaken for a lookup that failed.
       summary: [
         emails.length ? `${emails.length} email${emails.length === 1 ? '' : 's'} on file` : 'no emails on file',

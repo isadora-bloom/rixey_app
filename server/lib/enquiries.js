@@ -286,6 +286,148 @@ export function parseStatedDate(text) {
   return null;
 }
 
+/**
+ * Finding an enquiry that arrived through The Knot or WeddingWire.
+ *
+ * Most people do not email the venue first. They come through a listing site,
+ * and the venue's inbox never sees their address at all:
+ *
+ *   The Knot   lea.nowak.772357@member.theknot.com
+ *              The name is in the sender. 772357 is Rixey's listing id, the
+ *              same on every one of them, so it is not a per-person identifier.
+ *
+ *   WeddingWire  messages@weddingwire.com, for all 31 of them
+ *                The name is only in the subject and body: "Addison e
+ *                Montgomery sent you a new message". No address anywhere.
+ *
+ * So a brief that looks these people up by email address finds nothing and
+ * says "no emails on file", which reads as "they have never been in touch"
+ * when they have.
+ *
+ * Matching is on the full name, both parts together, never a first name alone.
+ * This is for reading before a meeting rather than for filing something onto a
+ * record, so a wrong hit is a moment's confusion rather than silent corruption
+ * — but the bar stays high anyway, and every match says how it matched.
+ */
+export function platformSearchTerms({ name, partnerName }) {
+  const terms = [];
+  for (const raw of [name, partnerName]) {
+    const parts = String(raw || '').trim().split(/\s+/).filter(Boolean);
+    if (parts.length < 2) continue;
+    const first = parts[0].toLowerCase();
+    const last = parts[parts.length - 1].toLowerCase();
+    if (first.length < 2 || last.length < 2) continue;
+    terms.push({
+      // "Addison e Montgomery sent you a new message" — as written.
+      text: `${parts[0]} ${parts[parts.length - 1]}`,
+      // lea.nowak.772357@member.theknot.com
+      knot: `${first}.${last}.`,
+      full: parts.join(' '),
+    });
+  }
+  return terms;
+}
+
+/** Why an email turned up in someone's brief, in words. */
+export function describeEmailMatch(email, terms, addresses) {
+  const from = String(email.from_email || '').toLowerCase();
+  const hay = `${email.subject || ''} ${email.body_text || ''}`.toLowerCase();
+
+  for (const a of addresses || []) {
+    if (from.includes(a)) return 'from their address';
+  }
+  for (const t of terms || []) {
+    if (from.includes(t.knot)) return `The Knot enquiry from ${t.text}`;
+  }
+  if (/weddingwire/i.test(from)) {
+    for (const t of terms || []) {
+      if (hay.includes(t.text.toLowerCase())) return `WeddingWire enquiry from ${t.text}`;
+    }
+    return 'WeddingWire';
+  }
+  for (const a of addresses || []) {
+    if (hay.includes(a)) return 'their address appears in it';
+  }
+  for (const t of terms || []) {
+    if (hay.includes(t.text.toLowerCase())) return `mentions ${t.text}`;
+  }
+  return 'related';
+}
+
+/**
+ * What somebody built on the pricing calculator.
+ *
+ * These arrive from contact@interactivecalculator.com as a table of labels and
+ * values, and they are the most useful thing in the inbox before a tour:
+ *
+ *   Partner One Name Jamie Boyer
+ *   Partner One Email jamienboyer3@gmail.com
+ *   Partner Two Name Steven Santell
+ *   Total After Discounts $16,150
+ *   Do you have a Specific Date in Mind? 4/25/26
+ *
+ * Somebody who has already priced their own wedding at £16,150 and wants
+ * 25 April is a different conversation from somebody just looking. All of it
+ * has been sitting in the inbox as an unread HTML table.
+ *
+ * Label-then-value with no separator, so each field is found by looking for its
+ * label and taking what follows up to the next known label.
+ */
+const CALC_FIELDS = [
+  ['partner1Name', 'Partner One Name'],
+  ['partner1Email', 'Partner One Email'],
+  ['partner2Name', 'Partner Two Name'],
+  ['partner2Email', 'Partner Two Email'],
+  ['total', 'Total After Discounts'],
+  ['totalBeforeDiscounts', 'Total Before Discounts'],
+  ['afterTax', 'After Tax'],
+  ['eachPayment', 'Each Payment'],
+  ['statedDate', 'Do you have a Specific Date in Mind?'],
+  ['wants', 'Would you like to'],
+  ['notes', 'Is there anything else you would like to share with us?'],
+  ['season', 'Wedding Season'],
+];
+
+export function parseCalculatorEmail(bodyText) {
+  const text = String(bodyText || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&#0?39;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return null;
+
+  // Labels that are not worth keeping but do mark where a value stops. Without
+  // these, "Total Before Discounts" swallows the whole discount breakdown and
+  // the stated date runs on into the percentages.
+  const BOUNDARIES = [
+    'Discounts Total', 'Discounts', 'Percentage', 'How Many Guests Total',
+    'Upgrades Total', 'Included With All Our Weddings', 'Wedding Chairs',
+  ];
+  const labels = [...CALC_FIELDS.map(([, label]) => label), ...BOUNDARIES];
+  const out = {};
+  for (const [key, label] of CALC_FIELDS) {
+    const at = text.indexOf(label);
+    if (at === -1) continue;
+    let rest = text.slice(at + label.length).trim();
+    // Cut at whichever known label comes next.
+    let end = rest.length;
+    for (const other of labels) {
+      const i = rest.indexOf(other);
+      if (i > 0 && i < end) end = i;
+    }
+    const value = rest.slice(0, end).trim().replace(/^[:\-–]\s*/, '');
+    if (value && value !== 'N/A') out[key] = value.slice(0, 300);
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/** Is this email a calculator submission? */
+export function isCalculatorEmail(fromEmail) {
+  return /interactivecalculator|calculator/i.test(String(fromEmail || ''));
+}
+
 /** A tour is the commercially important one, and reads differently in a list. */
 export function isTour(meetingKind) {
   return /tour|site visit|venue visit/i.test(String(meetingKind || ''));

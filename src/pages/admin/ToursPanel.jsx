@@ -152,6 +152,36 @@ function Brief({ enquiry, onClose, onLink }) {
             </div>
           )}
 
+          {/* They have already priced their own wedding. Knowing the number
+              they arrived at, and the date they put against it, changes the
+              conversation entirely — and it has been sitting in the inbox as an
+              unread HTML table. */}
+          {brief?.quote && (
+            <div className="bg-sage-50 border border-sage-200 rounded-xl p-3">
+              <h4 className="text-sage-700 font-medium text-sm mb-2">
+                They built a quote on the pricing calculator
+              </h4>
+              <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
+                {brief.quote.total && (
+                  <span className="text-sage-800 font-medium">{brief.quote.total} after discounts</span>
+                )}
+                {brief.quote.afterTax && <span className="text-sage-600">{brief.quote.afterTax} with tax</span>}
+                {brief.quote.statedDate && <span className="text-sage-600">for {brief.quote.statedDate}</span>}
+                {brief.quote.wants && <span className="text-sage-600">asked to {brief.quote.wants.replace(/^\.\.\.\s*/, '')}</span>}
+              </div>
+              {(brief.quote.partner1Email || brief.quote.partner2Email) && (
+                <p className="text-sage-500 text-sm mt-1">
+                  {[brief.quote.partner1Name && `${brief.quote.partner1Name} <${brief.quote.partner1Email || '?'}>`,
+                    brief.quote.partner2Name && `${brief.quote.partner2Name} <${brief.quote.partner2Email || '?'}>`]
+                    .filter(Boolean).join(' · ')}
+                </p>
+              )}
+              {brief.quote.notes && (
+                <p className="text-sage-700 text-sm mt-2 italic">“{brief.quote.notes}”</p>
+              )}
+            </div>
+          )}
+
           <div>
             <h4 className="text-sage-700 font-medium text-sm mb-1">What we already have</h4>
             {loading ? (
@@ -161,10 +191,13 @@ function Brief({ enquiry, onClose, onLink }) {
             ) : (
               <>
                 <p className="text-sage-500 text-sm mb-2">{brief.summary}</p>
-                {brief.emails.slice(0, 6).map((m, i) => (
+                {brief.emails.slice(0, 8).map((m, i) => (
                   <div key={i} className="text-sm border-l-2 border-cream-300 pl-3 py-1">
                     <span className="text-sage-500">{String(m.processed_at || '').slice(0, 10)}</span>{' '}
-                    <span className="text-sage-700">{m.subject || '(no subject)'}</span>
+                    <span className="text-sage-700">{String(m.subject || '(no subject)').trim()}</span>
+                    {/* How it was found, so a wrong hit is visible rather than
+                        quietly becoming part of someone's history. */}
+                    {m.matched_by && <span className="text-sage-400"> — {m.matched_by}</span>}
                   </div>
                 ))}
                 {brief.texts.slice(0, 6).map((t, i) => (
