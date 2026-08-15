@@ -9698,6 +9698,58 @@ app.post('/api/admin/documents/:weddingId/upload', requireAdmin, documentUpload.
   }
 });
 
+/**
+ * A question aimed at the venue is not an optional import.
+ *
+ * The parser pulls out a section of open questions, described in sections.js as
+ * "the single most useful thing in the document", and until now they waited in
+ * the diff to be ticked like everything else. Alyssa & Brett's plan contained
+ * eleven. None were ever filed: 106 general facts and 6 vendors were accepted,
+ * and the eleven things the couple was actually asking got closed along with
+ * the screen.
+ *
+ * So they go into the Sage Needs Help queue as soon as the document is read,
+ * whether or not anybody ticks anything. Everything else in a document
+ * describes the wedding and can wait for a human to sort. A question is
+ * somebody waiting for an answer.
+ *
+ * Re-parsing the same document must not ask them all again, so anything already
+ * on file for this wedding is skipped on its text.
+ */
+async function fileOpenQuestions(doc, sections) {
+  const questions = (sections?.questions || []).filter(q => q && String(q.question || '').trim());
+  if (!questions.length) return 0;
+
+  const { data: existing } = await supabaseAdmin
+    .from('uncertain_questions').select('question').eq('wedding_id', doc.wedding_id);
+  const seen = new Set((existing || []).map(r => String(r.question || '').trim().toLowerCase()));
+
+  const rows = [];
+  for (const q of questions) {
+    const text = String(q.question).trim().slice(0, 1000);
+    if (seen.has(text.toLowerCase())) continue;
+    seen.add(text.toLowerCase());
+    rows.push({
+      wedding_id: doc.wedding_id,
+      user_id: null,
+      question: text,
+      sage_response: q.topic
+        ? `Asked in "${doc.filename}" under ${q.topic}. Nobody has answered it yet.`
+        : `Asked in "${doc.filename}". Nobody has answered it yet.`,
+      confidence_level: 'uncertain',
+    });
+  }
+  if (!rows.length) return 0;
+
+  const { error } = await supabaseAdmin.from('uncertain_questions').insert(rows);
+  if (error) {
+    console.error('[doc-parse] could not file open questions:', error.message);
+    return 0;
+  }
+  console.log(`[doc-parse] ${doc.id}: filed ${rows.length} open question(s) for an answer`);
+  return rows.length;
+}
+
 // Read the document into the portal's vocabulary. Separate from upload so a
 // failed or improved read can be retried without re-uploading.
 app.post('/api/admin/documents/:id/parse', requireAdmin, aiLimiter, async (req, res) => {
@@ -9756,9 +9808,11 @@ app.post('/api/admin/documents/:id/parse', requireAdmin, aiLimiter, async (req, 
             .update({ sections: mergeSections(results) }).eq('id', doc.id);
           console.log(`[doc-parse] ${doc.id}: chunk ${i + 1}/${chunks.length}`);
         }
+        const merged = mergeSections(results);
         await supabaseAdmin.from('wedding_documents')
-          .update({ sections: mergeSections(results), parsed_at: new Date().toISOString(), parse_error: null })
+          .update({ sections: merged, parsed_at: new Date().toISOString(), parse_error: null })
           .eq('id', doc.id);
+        await fileOpenQuestions(doc, merged);
         console.log(`[doc-parse] ${doc.id}: done`);
       } catch (err) {
         console.error(`[doc-parse] ${doc.id} failed:`, err.message);

@@ -405,25 +405,97 @@ function hairMakeupEntries(docRows, portal) {
  * one outcome that is never acceptable. These land in planning_notes, which is
  * where every other unstructured signal in this system already goes.
  */
+/**
+ * The heading the document used, turned into the category the portal uses.
+ *
+ * Everything from this section used to be filed as plain `note`. Alyssa &
+ * Brett's plan put 106 facts through here in one go: 33 timeline entries, 20
+ * contract terms, 15 wedding party roles, 10 to-dos, the key contact list. All
+ * of it landed as one undifferentiated pile, so the timeline was not a
+ * timeline and the to-dos were not to-dos, and finding any of it again meant
+ * reading all of it.
+ *
+ * The headings are the couple's own words, so match loosely and fall back to
+ * `note` rather than forcing a bad fit.
+ */
+const HEADING_CATEGORIES = [
+  [/timeline|schedule|itinerary|run.?of.?show|day.?of/i, 'timeline'],
+  [/to.?do|action|task|outstanding|follow.?up|homework/i, 'follow_up'],
+  [/contract|agreement|terms|policy|policies|insurance|liabilit/i, 'contract'],
+  [/contact|phone|email|who.?to.?call/i, 'contact'],
+  [/payment|deposit|invoice|budget|cost|balance|owe/i, 'budget'],
+  [/vendor|supplier|caterer|florist|photograph|videograph|dj|band|officiant/i, 'vendor'],
+  [/bar|alcohol|drink|beer|wine|cocktail|liquor/i, 'bar'],
+  [/food|menu|catering|tasting|dietary|allerg/i, 'catering'],
+  [/decor|flower|floral|centerpiece|linen|candle|arch|arbor/i, 'decor'],
+  [/ceremony|processional|vows|aisle|officiat/i, 'ceremony'],
+  [/reception|dinner|dance|first.?dance|cake|send.?off|toast|speech/i, 'reception'],
+  [/room|bedroom|hotel|accommodation|lodging|check.?in|check.?out/i, 'accommodations'],
+  [/shuttle|transport|bus|parking|arrival|departure/i, 'shuttle'],
+  [/guest|rsvp|headcount|attendance/i, 'guest_count'],
+  [/wedding party|bridal party|groomsm|bridesmaid|roles|attendant/i, 'wedding_party'],
+  [/music|playlist|song|dj|band/i, 'music'],
+  [/rental|supplies|equipment|hire/i, 'rentals'],
+  [/photo|video|shot list|first look/i, 'photography'],
+  [/family|parent|mother|father|grandparent/i, 'family'],
+];
+
+export function categoryForHeading(heading) {
+  const h = String(heading || '');
+  if (!h.trim()) return 'note';
+  for (const [re, cat] of HEADING_CATEGORIES) if (re.test(h)) return cat;
+  return 'note';
+}
+
+/** A to-do out of a document is a to-do, not a note about a to-do. */
+function looksLikeTask(heading) {
+  return /to.?do|action item|task|homework|outstanding/i.test(String(heading || ''));
+}
+
 function otherEntries(docRows) {
-  return (docRows || []).filter(o => present(o.detail)).map((o, i) => makeEntry({
-    id: `doc:other:${norm(o.heading) || 'note'}:${i}`,
-    section: o.heading ? `Other — ${o.heading}` : 'Other',
-    field: o.heading || 'Note',
-    sheetValue: o.detail,
-    portalValue: null,
-    status: 'missing',
-    applyOp: {
-      type: 'insert',
-      table: 'planning_notes',
-      row: {
-        category: 'note',
-        content: `${o.heading ? `${o.heading}: ` : ''}${String(o.detail).trim()}`.slice(0, 1000),
-        source_message: 'From an uploaded planning document.',
-        status: 'pending',
-      },
-    },
-  }));
+  return (docRows || []).filter(o => present(o.detail)).map((o, i) => {
+    const detail = String(o.detail).trim();
+    const category = categoryForHeading(o.heading);
+
+    // Ten to-dos out of Alyssa & Brett's plan became ten notes nobody could
+    // tick off. The checklist is right there.
+    const applyOp = looksLikeTask(o.heading)
+      ? {
+          type: 'insert',
+          table: 'planning_checklist',
+          // Columns checked against the real table: is_completed, not
+          // is_complete, and there is no notes column to put the provenance in.
+          row: {
+            task_text: detail.slice(0, 500),
+            category: 'Other',
+            is_completed: false,
+            is_custom: true,
+          },
+        }
+      : {
+          type: 'insert',
+          table: 'planning_notes',
+          row: {
+            category,
+            content: `${o.heading ? `${o.heading}: ` : ''}${detail}`.slice(0, 1000),
+            source_message: 'From an uploaded planning document.',
+            status: 'pending',
+          },
+        };
+
+    return makeEntry({
+      id: `doc:other:${norm(o.heading) || 'note'}:${i}`,
+      section: o.heading ? `Other — ${o.heading}` : 'Other',
+      field: o.heading || 'Note',
+      sheetValue: o.detail,
+      portalValue: null,
+      status: 'missing',
+      notes: looksLikeTask(o.heading)
+        ? 'Files as a to-do on the checklist.'
+        : (category !== 'note' ? `Files as a ${category.replace(/_/g, ' ')} note.` : undefined),
+      applyOp,
+    });
+  });
 }
 
 const BUILDERS = {
