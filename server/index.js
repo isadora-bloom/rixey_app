@@ -241,6 +241,23 @@ app.use('/api', (req, res, next) => {
 // CORS failure, which sends you looking at CORS instead of at the restart.
 const BOOTED_AT = new Date().toISOString();
 
+// Node 20 is the floor because pdfjs-dist 5.4, which pdf-parse 2 wraps, does not
+// support anything older. Deploys are pinned to 22. This is not a hard exit: the
+// server does a great deal besides read PDFs, and killing the portal on a
+// wedding morning to protect a document upload is the wrong trade. It shouts
+// instead, and /api/health carries the same verdict for anyone looking later.
+const MIN_NODE_MAJOR = 20;
+const NODE_MAJOR = Number(process.versions.node.split('.')[0]);
+if (NODE_MAJOR < MIN_NODE_MAJOR) {
+  console.error(
+    `[boot] Node ${process.version} is below the minimum ${MIN_NODE_MAJOR}. ` +
+    `PDF document upload will fail with "DOMMatrix is not defined". ` +
+    `Railway needs a rebuild to pick up the engines pin.`
+  );
+} else {
+  console.log(`[boot] Node ${process.version}`);
+}
+
 /**
  * Close off any sync that was still running when the process last stopped.
  *
@@ -282,11 +299,18 @@ app.get('/api/health', (req, res) => {
     bootedAt: BOOTED_AT,
     uptimeSecs: Math.round(process.uptime()),
     commit: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) || null,
-    // Nothing pins the Node version for deploys, so the server can be running a
-    // different one from any laptop. A PDF that extracts fine locally and dies
-    // on the server with "DOMMatrix is not defined" is exactly the shape of bug
-    // that causes, and it took a while to think of looking.
+    // The deploy is pinned to Node 22 in package.json engines and .nvmrc, but a
+    // pin is a request, not a guarantee: Railway only honours it on a rebuild,
+    // and a stale image goes on running whatever it was built with. Railway sat
+    // on v18.20.5 for months, which is EOL and below the Node 20 that pdfjs 5
+    // needs, and a PDF that extracts fine locally and dies on the server with
+    // "DOMMatrix is not defined" is exactly the shape of bug that causes.
+    //
+    // So report the verdict, not just the number. Reading "v18.20.5" and
+    // knowing it is the problem takes knowledge nobody has at 11pm.
     node: process.version,
+    nodeOk: NODE_MAJOR >= MIN_NODE_MAJOR,
+    nodeWanted: `>=${MIN_NODE_MAJOR}`,
     // Recording a meeting is worth nothing if the transcription key never made
     // it into the environment, and the only way to find that out used to be to
     // record a real ninety-minute walkthrough and get silence back.
