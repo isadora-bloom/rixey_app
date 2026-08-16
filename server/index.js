@@ -3376,6 +3376,33 @@ app.post('/api/gmail/disconnect', async (req, res) => {
 const QUO_API_KEY = process.env.QUO_API_KEY;
 const QUO_API_BASE = 'https://api.openphone.com/v1';
 
+/**
+ * Which way a message went, in one vocabulary.
+ *
+ * OpenPhone says "incoming" and "outgoing". Every test against this value in
+ * here said "inbound" and "outbound", so not one of them has ever matched. The
+ * damage was silent and total:
+ *
+ *   - all 827 SMS planning notes are labelled "[SMS from Rixey]", including
+ *     every word the couples themselves wrote. 466 of them are the couple's.
+ *   - the auto-reply filter checks for "outbound", so it never fired, and
+ *     "Thanks for texting! We will text you back ASAP!" is in the notes again
+ *     despite the work done to keep it out.
+ *   - AI extraction is gated on "inbound", so no text a couple has ever sent
+ *     has been read for planning detail. That is the whole point of the sync.
+ *   - the dashboard counts filter on "inbound" and have always returned zero.
+ *
+ * Normalising at the boundary rather than fixing each comparison, because the
+ * next place that compares will get it wrong too. Anything unrecognised is
+ * treated as inbound: over-reading a message the venue sent is recoverable,
+ * ignoring one a couple sent is not.
+ */
+function normaliseDirection(raw) {
+  const v = String(raw || '').toLowerCase();
+  if (v === 'outgoing' || v === 'outbound' || v === 'sent') return 'outbound';
+  return 'inbound';
+}
+
 // Helper to normalize phone numbers for matching
 // Handles formats like: (540) 388-8912, +1 540-388-8912, 5403888912, +15403888912
 function normalizePhone(phone) {
@@ -3647,7 +3674,7 @@ async function runQuoSync(body, { bump }) {
           // Log raw message structure for debugging
 
           const messageBody = msg.body || msg.text || msg.content || '';
-          const direction = msg.direction || 'inbound';
+          const direction = normaliseDirection(msg.direction);
 
 
           // Save to processed messages
@@ -3769,7 +3796,7 @@ async function runQuoSync(body, { bump }) {
             const transcript = await fetchCallTranscript(call, callTranscriptState);
             if (!transcript) { callsSkipped++; continue; }
 
-            const direction = call.direction || 'inbound';
+            const direction = normaliseDirection(call.direction);
 
             // Save to processed
             const { error: insertError } = await supabaseAdmin.from('processed_quo_messages').insert({
