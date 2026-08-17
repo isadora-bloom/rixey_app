@@ -32,6 +32,9 @@ export default function DocumentSyncPanel({ weddingId }) {
   const [busy, setBusy] = useState('')
   const [showAgreeing, setShowAgreeing] = useState(false)
   const [choices, setChoices] = useState({})   // entryId -> true when ticked
+  // The outcome of the last import, kept so the panel can say what happened.
+  // Without it, a successful import left the screen identical to before.
+  const [lastImport, setLastImport] = useState(null)
   const fileRef = useRef(null)
 
   useEffect(() => { if (weddingId) load() }, [weddingId])
@@ -114,7 +117,18 @@ export default function DocumentSyncPanel({ weddingId }) {
         method: 'POST', body: JSON.stringify({ decisions }),
       })
       const failed = (res.results || []).filter(r => !r.ok)
-      toastSuccess(`Imported ${res.appliedCount}${failed.length ? `, ${failed.length} failed` : ''}.`)
+      const skipped = (res.results || []).filter(r => r.ok && r.skipped).length
+      if (failed.length) {
+        toastError(`Imported ${res.appliedCount}, but ${failed.length} failed: ${failed[0].error || 'no reason given'}`)
+      } else {
+        toastSuccess(
+          `Imported ${res.appliedCount}${skipped ? `, ${skipped} already there` : ''}. ` +
+          'They are in the planning notes and checklist now.'
+        )
+      }
+      // What was just imported, so the panel can say so rather than going back
+      // to looking exactly as it did before the button was pressed.
+      setLastImport({ count: res.appliedCount, skipped, failed: failed.length, at: Date.now() })
       await openDiff(active)
     } catch (err) { toastError(`Import failed: ${err.message}`) }
     setBusy('')
@@ -225,10 +239,40 @@ export default function DocumentSyncPanel({ weddingId }) {
                 disabled={!tickedCount || busy === 'apply'}
                 className="text-sm px-4 py-2 rounded-lg bg-sage-700 text-white hover:bg-sage-800 transition disabled:opacity-40"
               >
-                {busy === 'apply' ? 'Importing…' : `Import ${tickedCount} ticked`}
+                {busy === 'apply'
+                  ? 'Importing…'
+                  : tickedCount
+                    ? `Import ${tickedCount} ticked`
+                    : 'Nothing left to import'}
               </button>
             </div>
           </div>
+
+          {/*
+            Say what the import did.
+
+            The old panel toasted a count and then re-rendered identically,
+            because everything it had just written still read as missing and got
+            re-ticked. So it looked like the button had done nothing and inviting
+            another press, which inserted the lot again.
+          */}
+          {lastImport && (
+            <div className={`rounded-xl px-4 py-3 border ${
+              lastImport.failed ? 'bg-red-50 border-red-200' : 'bg-sage-50 border-sage-200'
+            }`}>
+              <p className="text-sm font-medium text-sage-800">
+                {lastImport.count > 0
+                  ? `${lastImport.count} item${lastImport.count === 1 ? '' : 's'} imported.`
+                  : 'Nothing new to import.'}
+                {lastImport.skipped > 0 && ` ${lastImport.skipped} were already there.`}
+                {lastImport.failed > 0 && ` ${lastImport.failed} failed.`}
+              </p>
+              <p className="text-xs text-sage-500 mt-0.5">
+                They are in Planning Notes and the Checklist now, waiting for review.
+                Anything shown as already imported below will not be sent twice.
+              </p>
+            </div>
+          )}
 
           {/* What the planner changed since their last version. A different
               question from what differs from the portal, so kept separate. */}

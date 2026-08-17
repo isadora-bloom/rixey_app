@@ -10619,6 +10619,31 @@ app.get('/api/admin/documents/:id/diff', requireAdmin, async (req, res) => {
     if (!doc.sections) return res.status(400).json({ error: 'Not read yet — parse it first', needsParse: true });
 
     const portal = await buildPortalSnapshot(supabaseAdmin, doc.wedding_id);
+
+    // planning_notes and planning_checklist are not in the shared snapshot,
+    // which is why every "Other" and "Question" row was reported as missing for
+    // ever: the two builders that write there had nothing to compare against.
+    // Fetched here rather than added to buildPortalSnapshot so the sheet-sync
+    // diff is not quietly given two large new tables it never asked for.
+    //
+    // Paged. A wedding with more than 1000 notes would otherwise silently
+    // compare against the first thousand, and re-importing the rest is exactly
+    // the bug this is fixing.
+    for (const [key, table, columns] of [
+      ['planning_notes', 'planning_notes', 'id, content'],
+      ['planning_checklist', 'planning_checklist', 'id, task_text'],
+    ]) {
+      const rows = [];
+      for (let from = 0; ; from += 1000) {
+        const { data, error } = await supabaseAdmin
+          .from(table).select(columns).eq('wedding_id', doc.wedding_id).range(from, from + 999);
+        if (error) { console.error(`[doc-sync] could not read ${table}:`, error.message); break; }
+        rows.push(...data);
+        if (data.length < 1000) break;
+      }
+      portal[key] = rows;
+    }
+
     const { entries, counts } = buildDocumentDiff({ sections: doc.sections, portal });
 
     let sinceLast = null;

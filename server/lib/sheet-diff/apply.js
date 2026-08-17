@@ -129,6 +129,26 @@ async function executeOp(supabase, op, weddingId) {
     case 'insert': {
       const row = { ...op.row };
       if (!row.wedding_id) row.wedding_id = weddingId;
+
+      // Second line of defence against a double press.
+      //
+      // The diff now reports an already-imported row as agreeing, so it will not
+      // be offered again. But that check lives in another file and depends on a
+      // snapshot being complete, and when the equivalent check was missing
+      // entirely this table gained 212 duplicate notes, some of them three deep.
+      // A row identical to one already there is never new information.
+      const DEDUP_ON = { planning_notes: 'content', planning_checklist: 'task_text' };
+      const field = DEDUP_ON[op.table];
+      if (field && row[field] != null) {
+        const { data: prior, error: checkErr } = await supabase
+          .from(op.table).select('id')
+          .eq('wedding_id', row.wedding_id)
+          .eq(field, row[field])
+          .limit(1);
+        if (checkErr) throw new Error(checkErr.message);
+        if (prior && prior.length) return { skipped: true, reason: 'already there' };
+      }
+
       const { error } = await supabase.from(op.table).insert(row);
       if (error) throw new Error(error.message);
       return {};

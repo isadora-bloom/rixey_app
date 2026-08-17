@@ -252,29 +252,58 @@ function decorEntries(docRows, portal) {
 }
 
 /**
- * Open questions get their own treatment: they are never already in the portal,
- * they are the thing most likely to be forgotten, and they are aimed at the
- * venue rather than describing it. Filed as planning notes.
+ * Has this exact thing already been imported?
+ *
+ * Everything that files into planning_notes or planning_checklist used to be
+ * reported as `missing` unconditionally, because those two tables were not in
+ * the portal snapshot and so there was nothing to compare against. That is not
+ * a cosmetic gap. The panel pre-ticks whatever is missing, so after a successful
+ * import the same rows came back missing, got re-ticked, and the button offered
+ * the same count again as though nothing had happened. Pressing it a second time
+ * inserted the lot a second time: 396 document notes in the database, 184
+ * distinct, 212 of them surplus, several imported three times over.
+ *
+ * Compared on the exact content the applyOp would write, so the check and the
+ * write cannot disagree about what "the same" means.
  */
-function questionEntries(docRows) {
-  return (docRows || []).filter(q => present(q.question)).map((q, i) => makeEntry({
-    id: `doc:question:${i}`,
-    section: 'Questions for the venue',
-    field: q.topic || 'Question',
-    sheetValue: q.question,
-    portalValue: null,
-    status: 'missing',
-    applyOp: {
-      type: 'insert',
-      table: 'planning_notes',
-      row: {
-        category: 'follow_up',
-        content: String(q.question).trim().slice(0, 1000),
-        source_message: 'Open question from an uploaded planning document.',
-        status: 'pending',
+function alreadyThere(portal, table, value) {
+  const rows = portal?.[table];
+  if (!Array.isArray(rows) || !rows.length) return false;
+  const field = table === 'planning_checklist' ? 'task_text' : 'content';
+  const target = String(value ?? '').trim();
+  if (!target) return false;
+  return rows.some(r => String(r?.[field] ?? '').trim() === target);
+}
+
+/**
+ * Open questions get their own treatment: they are the thing most likely to be
+ * forgotten, and they are aimed at the venue rather than describing it. Filed as
+ * planning notes.
+ */
+function questionEntries(docRows, portal) {
+  return (docRows || []).filter(q => present(q.question)).map((q, i) => {
+    const content = String(q.question).trim().slice(0, 1000);
+    const imported = alreadyThere(portal, 'planning_notes', content);
+    return makeEntry({
+      id: `doc:question:${i}`,
+      section: 'Questions for the venue',
+      field: q.topic || 'Question',
+      sheetValue: q.question,
+      portalValue: imported ? content : null,
+      status: imported ? 'agree' : 'missing',
+      notes: imported ? 'Already imported.' : undefined,
+      applyOp: imported ? { type: 'noop' } : {
+        type: 'insert',
+        table: 'planning_notes',
+        row: {
+          category: 'follow_up',
+          content,
+          source_message: 'Open question from an uploaded planning document.',
+          status: 'pending',
+        },
       },
-    },
-  }));
+    });
+  });
 }
 
 /**
@@ -452,21 +481,28 @@ function looksLikeTask(heading) {
   return /to.?do|action item|task|homework|outstanding/i.test(String(heading || ''));
 }
 
-function otherEntries(docRows) {
+function otherEntries(docRows, portal) {
   return (docRows || []).filter(o => present(o.detail)).map((o, i) => {
     const detail = String(o.detail).trim();
     const category = categoryForHeading(o.heading);
+    const isTask = looksLikeTask(o.heading);
 
     // Ten to-dos out of Alyssa & Brett's plan became ten notes nobody could
     // tick off. The checklist is right there.
-    const applyOp = looksLikeTask(o.heading)
+    const table = isTask ? 'planning_checklist' : 'planning_notes';
+    const value = isTask
+      ? detail.slice(0, 500)
+      : `${o.heading ? `${o.heading}: ` : ''}${detail}`.slice(0, 1000);
+    const imported = alreadyThere(portal, table, value);
+
+    const applyOp = imported ? { type: 'noop' } : isTask
       ? {
           type: 'insert',
           table: 'planning_checklist',
           // Columns checked against the real table: is_completed, not
           // is_complete, and there is no notes column to put the provenance in.
           row: {
-            task_text: detail.slice(0, 500),
+            task_text: value,
             category: 'Other',
             is_completed: false,
             is_custom: true,
@@ -477,7 +513,7 @@ function otherEntries(docRows) {
           table: 'planning_notes',
           row: {
             category,
-            content: `${o.heading ? `${o.heading}: ` : ''}${detail}`.slice(0, 1000),
+            content: value,
             source_message: 'From an uploaded planning document.',
             status: 'pending',
           },
@@ -488,11 +524,13 @@ function otherEntries(docRows) {
       section: o.heading ? `Other — ${o.heading}` : 'Other',
       field: o.heading || 'Note',
       sheetValue: o.detail,
-      portalValue: null,
-      status: 'missing',
-      notes: looksLikeTask(o.heading)
-        ? 'Files as a to-do on the checklist.'
-        : (category !== 'note' ? `Files as a ${category.replace(/_/g, ' ')} note.` : undefined),
+      portalValue: imported ? value : null,
+      status: imported ? 'agree' : 'missing',
+      notes: imported
+        ? (isTask ? 'Already on the checklist.' : 'Already imported.')
+        : isTask
+          ? 'Files as a to-do on the checklist.'
+          : (category !== 'note' ? `Files as a ${category.replace(/_/g, ' ')} note.` : undefined),
       applyOp,
     });
   });
