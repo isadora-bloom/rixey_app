@@ -4300,8 +4300,13 @@ async function runQuoSync(body, { jobId, bump }) {
           ? callTranscriptState.reason
           : callTranscriptState.giveUps
             ? `${callTranscriptState.giveUps} call(s) still rate-limited after retrying. Run it again to pick them up.`
-            : (totalCallsFound && !callsProcessed
-                ? `Found ${totalCallsFound} calls and none had a transcript.`
+            // "Nothing new" is not "nothing worked". A second run finds all 68
+            // calls already imported and processes none, and this reported
+            // "found 68 calls and none had a transcript", which is alarming and
+            // untrue. Only say that when this run actually asked and got
+            // nothing back.
+            : (totalCallsFound && !callsProcessed && callTranscriptState.checked
+                ? `Asked about ${callTranscriptState.checked} call(s) and none had a transcript.`
                 : 'ok'),
         // Why each skipped call was skipped. "22 skipped" on its own reads like
         // 22 failures; almost all of them are missed calls and voicemails that
