@@ -3458,7 +3458,7 @@ app.post('/api/quo/clear-processed', async (req, res) => {
  * `state.reason` carries that reason up to the job row so it can be read
  * rather than guessed at.
  */
-async function fetchCallTranscript(call, state) {
+async function fetchCallTranscript(call, state, attempt = 0) {
   // Occasionally a voicemail does carry its own transcript.
   const inline = call.transcript || call.transcription || call.voicemail?.transcript;
   if (inline) return String(inline);
@@ -3480,6 +3480,24 @@ async function fetchCallTranscript(call, state) {
     // 404 means this particular call has no transcript (too short, missed, not
     // recorded). Normal, and not a reason to stop asking about the others.
     if (res.status === 404) return '';
+
+    // Rate limiting is not a verdict, it is a queue.
+    //
+    // 429 used to be handled as a permanent reason, which stops the run asking
+    // about any remaining call. On 17 August that turned into 40 calls imported
+    // and 28 abandoned, with the job reporting "Quo returned 429" as though
+    // transcripts were unavailable rather than merely delayed. Wait and ask
+    // again; only give up on a call after several goes.
+    if (res.status === 429) {
+      state.throttled = (state.throttled || 0) + 1;
+      const wait = Math.min(30000, 2000 * state.throttled);
+      const retryAfter = Number(res.headers.get('retry-after')) * 1000;
+      await new Promise(r => setTimeout(r, Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : wait));
+      if (attempt < 4) return fetchCallTranscript(call, state, attempt + 1);
+      state.giveUps = (state.giveUps || 0) + 1;
+      return '';
+    }
+
     if (!res.ok) {
       state.reason = `Quo returned ${res.status} when asked for a call transcript.`;
       return '';
@@ -3718,11 +3736,27 @@ async function runQuoSync(body, { bump }) {
       console.log(`Recognised ${templateBodies.size} outbound SMS template(s) to skip`);
     }
 
-    // Get already processed message IDs (use admin to bypass RLS)
-    const { data: processed } = await supabaseAdmin
-      .from('processed_quo_messages')
-      .select('quo_message_id');
-    const processedIds = new Set((processed || []).map(p => p.quo_message_id));
+    // Everything already imported, and it has to be ALL of it.
+    //
+    // This was one unpaginated select. PostgREST stops at 1000 rows, the table
+    // holds 1,448, so 448 already-imported messages looked new on every run. The
+    // marker insert is protected by a unique index and failed harmlessly, but
+    // the planning note insert below is not, so one run on 17 August re-created
+    // 216 notes couples can read. Nothing reported it, because the marker's
+    // error was logged and stepped over.
+    const processedIds = new Set();
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin
+        .from('processed_quo_messages')
+        .select('quo_message_id')
+        .range(from, from + 999);
+      // Not a warning. A short read here means re-importing, and re-importing
+      // means duplicates in front of a couple, so stop instead.
+      if (error) throw new Error(`Could not read what has already been imported: ${error.message}`);
+      for (const p of data) processedIds.add(p.quo_message_id);
+      if (data.length < 1000) break;
+    }
+    console.log(`[quo] ${processedIds.size} message(s) already imported`);
 
     let newlyProcessed = 0;
     let notesExtracted = 0;
@@ -3752,7 +3786,14 @@ async function runQuoSync(body, { bump }) {
 
     // Without this the panel reads "289/0", which looks like a fault rather
     // than a run that imported 289 messages across every registered number.
-    await bump({ total: registeredPhonesE164.length });
+    // Twice the client list, because the run walks it once for texts and again
+    // for calls. Counting one pass would stall the bar at halfway and counting
+    // the list once while bumping twice would show 104/52.
+    await bump({ total: registeredPhonesE164.length * 2 });
+
+    // Counted against `total` above, so the panel can show how far through the
+    // run is rather than only whether it has finished.
+    let clientsDone = 0;
 
     // For each Quo phone number AND each registered client, fetch their conversation
     for (const quoPhone of quoPhoneNumbers) {
@@ -3814,8 +3855,14 @@ async function runQuoSync(body, { bump }) {
             body_text: messageBody.substring(0, 5000)
           });
 
+          // The marker is what stops this message being imported again. If it
+          // did not save, carry on and the next run treats the message as new
+          // and writes the notes below a second time. So skip the item instead:
+          // a message imported one run late is recoverable, a duplicate note in
+          // front of a couple is not.
           if (insertError) {
-            console.error(`Error saving to processed_quo_messages:`, insertError);
+            console.error(`[quo] marker failed for ${msg.id}, skipping it: ${insertError.message}`);
+            continue;
           }
 
           // Skip outbound auto-reply templates — real personal responses should
@@ -3843,6 +3890,23 @@ async function runQuoSync(body, { bump }) {
           // Also save message as a planning note so Sage can search it
           if (messageBody && !isAutoReply) {
             const label = direction === 'inbound' ? 'SMS from client' : 'SMS from Rixey';
+            const noteContent = `[${label}] ${messageBody}`;
+
+            // Second line of defence, the same one savePlanningNotes has and
+            // this insert never did. The marker above is the real guard; this
+            // is what stops a gap in it reaching a couple. Matched on the exact
+            // content for this wedding, so two genuinely identical texts sent
+            // months apart still only produce one note, which is the right
+            // trade against re-creating 216 of them.
+            const { data: priorNote } = await supabaseAdmin
+              .from('planning_notes')
+              .select('id')
+              .eq('wedding_id', weddingId)
+              .eq('category', 'sms_message')
+              .eq('content', noteContent)
+              .limit(1);
+            if (priorNote?.length) { processedIds.add(msg.id); continue; }
+
             const { data: savedNote, error: noteError } = await supabaseAdmin.from('planning_notes').insert({
               wedding_id: weddingId,
               user_id: userId,
@@ -3873,6 +3937,13 @@ async function runQuoSync(body, { bump }) {
           newlyProcessed++;
           processedIds.add(msg.id);
         }
+
+        // Progress after every client, the way Gmail and Zoom already do it.
+        // Without this the panel sits on "0/52" for the whole run, which reads
+        // as a sync that never started. A fifteen-minute job that reports
+        // nothing is indistinguishable from a stuck one.
+        clientsDone++;
+        await bump({ processed: clientsDone, matched: newlyProcessed, last_item: clientPhoneE164 });
       }
     }
 
@@ -3972,6 +4043,16 @@ async function runQuoSync(body, { bump }) {
         } catch (callErr) {
           console.error(`Error fetching calls for ${clientPhoneE164}:`, callErr);
         }
+
+        // The calls pass walks the same client list again, so progress carries
+        // on from where the messages pass left off rather than resetting to
+        // zero and looking like a second stalled run.
+        clientsDone++;
+        await bump({
+          processed: clientsDone,
+          matched: newlyProcessed + callsProcessed,
+          last_item: `calls: ${clientPhoneE164}`,
+        });
       }
     }
 
@@ -3979,9 +4060,13 @@ async function runQuoSync(body, { bump }) {
 
     const registeredPhones = Object.keys(phoneToWedding);
     return {
-      processed: newlyProcessed,
-      matched: newlyProcessed,
+      // Counted in clients, the same unit as `total`. Reporting a message count
+      // against a client total produced "316/52", which is not a fraction.
+      // The message and call counts are in detail, where they belong.
+      processed: clientsDone,
+      matched: newlyProcessed + callsProcessed,
       detail: {
+        messagesImported: newlyProcessed,
         callsProcessed,
         callsFound: totalCallsFound,
         callsSkipped,
@@ -3990,9 +4075,12 @@ async function runQuoSync(body, { bump }) {
         // totalCallsFound: 67 and left you to notice.
         callTranscripts: callTranscriptState.reason
           ? callTranscriptState.reason
-          : (totalCallsFound && !callsProcessed
-              ? `Found ${totalCallsFound} calls and none had a transcript.`
-              : 'ok'),
+          : callTranscriptState.giveUps
+            ? `${callTranscriptState.giveUps} call(s) still rate-limited after retrying. Run it again to pick them up.`
+            : (totalCallsFound && !callsProcessed
+                ? `Found ${totalCallsFound} calls and none had a transcript.`
+                : 'ok'),
+        rateLimitWaits: callTranscriptState.throttled || 0,
         planningNotesSaved,
         notesExtracted,
         profileCount: profiles.length,
