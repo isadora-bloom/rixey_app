@@ -1,6 +1,33 @@
 import { supabase } from '../../lib/supabase'
 import NotificationBell from '../../components/NotificationBell'
 
+/**
+ * The top-level admin views, once.
+ *
+ * The phone dropdown and the desktop tabs were two hand-kept lists, and Manor
+ * Downloads only ever existed in one of them. On a phone the tab was
+ * unreachable, and because the select's value had no matching option whenever
+ * that view was open, the dropdown also went blank and looked broken.
+ */
+function views({ stats, unreadMessages, unansweredCount, tourCount }) {
+  return [
+    { id: 'weddings', label: 'Weddings', count: stats.active },
+    { id: 'messages', label: 'Messages', count: unreadMessages, alert: unreadMessages > 0 },
+    { id: 'sage-help', label: 'Sage Help', count: unansweredCount, alert: unansweredCount > 0 },
+    { id: 'vendors', label: 'Vendors' },
+    { id: 'meetings', label: 'Meetings' },
+    // Tours sit next to Meetings on purpose: same diary, but these are the
+    // people who have not booked, who had nowhere in the portal at all.
+    { id: 'tours', label: 'Tours', count: tourCount, alert: false },
+    { id: 'borrow-catalog', label: 'Borrow Catalog' },
+    { id: 'picks', label: 'Picks' },
+    { id: 'manor-downloads', label: 'Manor Downloads' },
+    { id: 'knowledge-base', label: 'Knowledge Base' },
+    { id: 'venue-settings', label: 'Venue Settings' },
+    { id: 'usage', label: 'Usage' },
+  ]
+}
+
 export default function AdminHeader({
   navigate,
   mainView,
@@ -15,8 +42,14 @@ export default function AdminHeader({
   setActiveTab,
   tourCount = 0,
 }) {
+  const VIEWS = views({ stats, unreadMessages, unansweredCount, tourCount })
+
   return (
-    <header className="bg-white border-b border-cream-200 sticky top-0 z-40">
+    <header
+      className="bg-white border-b border-cream-200 sticky z-40"
+      // Sticks below the recording bar when there is one. See RecordingBar.
+      style={{ top: 'var(--recording-bar-h, 0px)' }}
+    >
       <div className="max-w-7xl mx-auto px-3 sm:px-4">
         <div className="flex items-center justify-between py-3">
           <button onClick={() => { setViewingWedding(null); setActiveTab('overview'); }} className="inline-block">
@@ -60,38 +93,17 @@ export default function AdminHeader({
               onChange={e => { setMainView(e.target.value); if (e.target.value === 'messages') setTimeout(fetchUnreadMessages, 2000) }}
               className="w-full px-3 py-2 border border-cream-200 rounded-lg bg-white text-sage-700 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-sage-300"
             >
-              <option value="weddings">Weddings {stats.active > 0 ? `(${stats.active})` : ''}</option>
-              <option value="messages">Messages {unreadMessages > 0 ? `(${unreadMessages} unread)` : ''}</option>
-              <option value="sage-help">Sage Help {unansweredCount > 0 ? `(${unansweredCount})` : ''}</option>
-              <option value="vendors">Vendors</option>
-              <option value="meetings">Meetings</option>
-              <option value="tours">Tours {tourCount > 0 ? `(${tourCount})` : ''}</option>
-              <option value="borrow-catalog">Borrow Catalog</option>
-              <option value="picks">Picks</option>
-              <option value="knowledge-base">Knowledge Base</option>
-              <option value="venue-settings">Venue Settings</option>
-              <option value="usage">Usage</option>
+              {VIEWS.map(v => (
+                <option key={v.id} value={v.id}>
+                  {v.label}{v.count > 0 ? ` (${v.count})` : ''}
+                </option>
+              ))}
             </select>
           </div>
         </div>
         {/* Desktop tabs */}
         <div className="hidden sm:flex gap-1 -mb-px overflow-x-auto scrollbar-hide">
-          {[
-            { id: 'weddings', label: 'Weddings', count: stats.active },
-            { id: 'messages', label: 'Messages', count: unreadMessages, alert: unreadMessages > 0 },
-            { id: 'sage-help', label: 'Sage Help', count: unansweredCount, alert: unansweredCount > 0 },
-            { id: 'vendors', label: 'Vendors' },
-            { id: 'meetings', label: 'Meetings' },
-            // Tours sit next to Meetings on purpose: same diary, but these are
-            // the people who have not booked, who had nowhere in the portal at all.
-            { id: 'tours', label: 'Tours', count: tourCount, alert: false },
-            { id: 'borrow-catalog', label: 'Borrow Catalog' },
-            { id: 'picks', label: 'Picks' },
-            { id: 'manor-downloads', label: 'Manor Downloads' },
-            { id: 'knowledge-base', label: 'Knowledge Base' },
-            { id: 'venue-settings', label: 'Venue Settings' },
-            { id: 'usage', label: 'Usage' },
-          ].map(tab => (
+          {VIEWS.map(tab => (
             <button
               key={tab.id}
               onClick={() => { setMainView(tab.id); if (tab.id === 'messages') setTimeout(fetchUnreadMessages, 2000) }}

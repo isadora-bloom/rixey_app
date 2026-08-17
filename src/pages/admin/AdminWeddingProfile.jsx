@@ -37,6 +37,7 @@ import WalkthroughNotes from '../../components/WalkthroughNotes'
 import AdminWorksheets from '../../components/admin/AdminWorksheets'
 import DocumentSyncPanel from '../../components/DocumentSyncPanel'
 import { ESCALATION_KEYWORDS, getLastActivity, getCategoryIcon, getCategoryLabel } from './adminUtils'
+import { weddingTabs } from './weddingTabs'
 
 export default function AdminWeddingProfile({
   viewingWedding,
@@ -133,6 +134,10 @@ export default function AdminWeddingProfile({
   setMainView,
   // Guest care (not used as prop, component is self-contained)
 }) {
+  // One list for the sidebar and the phone dropdown both. See weddingTabs.js
+  // for what went missing on phones while these were two lists.
+  const TABS = weddingTabs({ planningNotes, uncertainQuestions, viewingWedding, borrowSelections, activities })
+
   const [guestListKey, setGuestListKey] = useState(0)
   const [editingName, setEditingName] = useState(false)
   const [nameDraft, setNameDraft] = useState('')
@@ -180,7 +185,11 @@ export default function AdminWeddingProfile({
 
   return (
     <div className="min-h-screen min-h-[100dvh] bg-cream-50">
-      <header className="bg-white border-b border-cream-200 sticky top-0 z-40">
+      <header
+        className="bg-white border-b border-cream-200 sticky z-40"
+        // Sticks below the recording bar when there is one. See RecordingBar.
+        style={{ top: 'var(--recording-bar-h, 0px)' }}
+      >
         {/* Breadcrumb */}
         <div className="max-w-6xl mx-auto px-3 sm:px-4 pt-2 pb-0">
           <nav className="flex items-center gap-1.5 text-xs text-sage-400">
@@ -404,70 +413,15 @@ export default function AdminWeddingProfile({
         <div className="grid lg:grid-cols-[220px_1fr] gap-4 sm:gap-8">
           {/* Compact Nav Sidebar */}
           <div className="order-2 lg:order-1">
-            <div className="bg-white rounded-2xl shadow-sm border border-cream-200 overflow-hidden lg:sticky lg:top-24">
+            <div
+              className="bg-white rounded-2xl shadow-sm border border-cream-200 overflow-hidden lg:sticky"
+              style={{ top: 'calc(6rem + var(--recording-bar-h, 0px))' }}
+            >
               <div className="px-4 pt-5 pb-3 flex justify-center border-b border-cream-200">
                 <img src="/rixey-manor-logo-optimized.png" alt="Rixey Manor" className="h-16 w-auto" />
               </div>
               <nav className="p-2">
-                {[
-                  { tab: 'overview', label: 'Overview', icon: '/icons/overview.svg' },
-                  { section: 'Planning' },
-                  { tab: 'completeness', label: 'File Completeness', icon: '/icons/checklist.svg' },
-                  { tab: 'notes', label: 'Planning Notes', icon: '/icons/planning-notes.svg', badge: planningNotes.filter(n => n.status === 'pending').length },
-                  { tab: 'walkthrough', label: 'Meetings & Walkthroughs', icon: '/icons/planning-notes.svg' },
-                  // Badged so a filled-in worksheet announces itself. The whole
-                  // problem was that answering one produced no signal at all on
-                  // this side, so the tab alone would just be a quieter version
-                  // of the same thing. The columns arrive with the wedding, so
-                  // this costs no extra request.
-                  {
-                    tab: 'worksheets',
-                    label: 'Their Worksheets',
-                    icon: '/icons/checklist.svg',
-                    badge: ['worksheet_priorities', 'worksheet_guest_rules', 'worksheet_budget_alignment']
-                      .filter(k => viewingWedding?.[k] && Object.keys(viewingWedding[k]).length > 0).length,
-                  },
-                  { tab: 'documents', label: 'Planning Documents', icon: '/icons/upload-contract.svg' },
-                  { tab: 'wedding-details', label: 'Wedding Details', icon: '/icons/overview.svg' },
-                  { tab: 'allergies', label: 'Allergy Registry', icon: '/icons/guest-care.svg' },
-                  { tab: 'ceremony-order', label: 'Ceremony Order', icon: '/icons/timeline.svg' },
-                  { tab: 'ceremony-chairs', label: 'Ceremony Chairs', icon: '/icons/tables.svg' },
-                  { tab: 'decor', label: 'Decor Inventory', icon: '/icons/inspiration.svg' },
-                  { tab: 'makeup', label: 'Hair & Makeup', icon: '/icons/upload-photo-of-you-two.svg' },
-                  { tab: 'shuttle', label: 'Shuttle Schedule', icon: '/icons/book-a-meeting.svg' },
-                  { tab: 'rehearsal', label: 'Rehearsal Dinner', icon: '/icons/meetings.svg' },
-                  { tab: 'bedrooms', label: 'Bedroom Assignments', icon: '/icons/direct-messages.svg' },
-                  { tab: 'vendors', label: 'Vendors', icon: '/icons/vendors.svg' },
-                  { tab: 'inspo', label: 'Inspiration', icon: '/icons/inspiration.svg' },
-                  { tab: 'checklist', label: 'Checklist', icon: '/icons/checklist.svg' },
-                  { section: 'Conversations' },
-                  { tab: 'messages', label: 'Conversations', icon: '/icons/conversations.svg' },
-                  { tab: 'uncertain', label: "Uncertain Q's", icon: '/icons/uncertain-questions.svg', badge: uncertainQuestions.filter(q => q.wedding_id === viewingWedding.id).length },
-                  { tab: 'meetings', label: 'Meetings', icon: '/icons/meetings.svg' },
-                  { tab: 'direct-messages', label: 'Direct Messages', icon: '/icons/direct-messages.svg' },
-                  { section: 'Tools' },
-                  { tab: 'table-map', label: 'Table Map', icon: '/icons/tables.svg' },
-                  { tab: 'timeline', label: 'Timeline', icon: '/icons/timeline.svg' },
-                  { tab: 'tables', label: 'Tables', icon: '/icons/tables.svg' },
-                  { tab: 'staffing', label: 'Staffing Guide', icon: '/icons/staffing-guide.svg' },
-                  { tab: 'bar', label: 'Bar Planner', icon: '/icons/staffing-guide.svg' },
-                  { tab: 'budget', label: 'Budget', icon: '/icons/budget.svg' },
-                  { tab: 'guests', label: 'Guest List', icon: '/icons/guest-care.svg' },
-                  { tab: 'borrow', label: 'Borrow Brochure', icon: '/icons/borrow-brochure.svg', badge: borrowSelections.length },
-                  { tab: 'guest-care', label: 'Guest Care', icon: '/icons/guest-care.svg' },
-                  { section: 'Website' },
-                  { tab: 'website-builder', label: 'Website Builder', icon: '/icons/overview.svg' },
-                  { tab: 'photo-library', label: 'Photo Library', icon: '/icons/inspiration.svg' },
-                  { tab: 'wedding-party', label: 'Wedding Party', icon: '/icons/guest-care.svg' },
-                  { section: 'After the Day' },
-                  { tab: 'day-of-memories', label: 'Day-of Memories', icon: '/icons/inspiration.svg' },
-                  { tab: 'activity', label: 'Recent Activity', icon: '/icons/recent-activity.svg', badge: activities.length },
-                  { section: 'Admin' },
-                  { tab: 'sheet-sync', label: 'Sync from Sheet', icon: '/icons/upload-contract.svg' },
-                  { tab: 'contract-upload', label: 'Upload Contract', icon: '/icons/upload-contract.svg' },
-                  { tab: 'ask', label: 'Ask About Wedding', icon: '/icons/ask-about-wedding.svg' },
-                  { tab: 'api-usage', label: 'API Usage', icon: '/icons/api-usage.svg' },
-                ].map((item, idx) => {
+                {TABS.map((item, idx) => {
                   if (item.section) {
                     return (
                       <p key={idx} className="text-xs font-semibold text-sage-400 uppercase tracking-wide px-3 pt-3 pb-1">
@@ -517,41 +471,30 @@ export default function AdminWeddingProfile({
                   }}
                   className="w-full p-3 border border-cream-200 rounded-lg bg-cream-50 text-sage-700 font-medium focus:outline-none focus:ring-2 focus:ring-sage-300"
                 >
-                  <option value="overview">Overview</option>
-                  <option value="completeness">File Completeness</option>
-                  <option value="notes">
-                    Planning Notes {planningNotes.filter(n => n.status === 'pending').length > 0 ? `(${planningNotes.filter(n => n.status === 'pending').length})` : ''}
-                  </option>
-                  <option value="vendors">Vendors & Contracts</option>
-                  <option value="inspo">Inspiration</option>
-                  <option value="checklist">Checklist</option>
-                  <option value="messages">All Conversations</option>
-                  <option value="uncertain">
-                    Uncertain Q's {uncertainQuestions.filter(q => q.wedding_id === viewingWedding.id).length > 0 ? `(${uncertainQuestions.filter(q => q.wedding_id === viewingWedding.id).length})` : ''}
-                  </option>
-                  <option value="meetings">Meetings</option>
-                  <option value="direct-messages">Direct Messages</option>
-                  <option value="table-map">Table Map</option>
-                  <option value="ceremony-chairs">Ceremony Chairs</option>
-                  <option value="timeline">Timeline</option>
-                  <option value="tables">Tables</option>
-                  <option value="staffing">Staffing Guide</option>
-                  <option value="bar">Bar Planner</option>
-                  <option value="budget">Budget</option>
-                  <option value="guests">Guest List</option>
-                  <option value="borrow">Borrow Brochure</option>
-                  <option value="guest-care">Guest Care</option>
-                  <option value="website-builder">Website Builder</option>
-                  <option value="photo-library">Photo Library</option>
-                  <option value="wedding-party">Wedding Party</option>
-                  <option value="day-of-memories">Day-of Memories</option>
-                  <option value="activity">
-                    Recent Activity {activities.length > 0 ? `(${activities.length})` : ''}
-                  </option>
-                  <option value="sheet-sync">Sync from Sheet</option>
-                  <option value="contract-upload">Upload Contract</option>
-                  <option value="ask">Ask About Wedding</option>
-                  <option value="api-usage">API Usage</option>
+                  {TABS.reduce((groups, item) => {
+                    // Sections become optgroups, so the phone gets the same
+                    // grouping the sidebar has rather than one flat list of 40.
+                    if (item.section) groups.push({ label: item.section, items: [] })
+                    else if (groups.length) groups[groups.length - 1].items.push(item)
+                    else groups.push({ label: null, items: [item] })
+                    return groups
+                  }, []).map((group, gi) => (
+                    group.label
+                      ? (
+                        <optgroup key={gi} label={group.label}>
+                          {group.items.map(item => (
+                            <option key={item.tab} value={item.tab}>
+                              {item.label}{item.badge > 0 ? ` (${item.badge})` : ''}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )
+                      : group.items.map(item => (
+                        <option key={item.tab} value={item.tab}>
+                          {item.label}{item.badge > 0 ? ` (${item.badge})` : ''}
+                        </option>
+                      ))
+                  ))}
                 </select>
               </div>
 
