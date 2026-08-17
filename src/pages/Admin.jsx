@@ -1720,16 +1720,24 @@ export default function Admin() {
         {reviewItems.length > 0 && (
           <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 sm:p-6 mb-6">
             <h3 className="font-serif text-lg text-amber-900">
-              {reviewItems.length === 1 ? 'One meeting I can’t place' : `${reviewItems.length} meetings I can’t place`}
+              {reviewItems.length === 1 ? 'One thing I can’t place' : `${reviewItems.length} things I can’t place`}
             </h3>
             <p className="text-amber-800 text-sm mt-1 mb-4">
-              I only file a meeting when I’m sure: a first and last name, both partners, or a name with the
-              wedding date. These didn’t reach that, so I’ve left them for you rather than guessing.
+              I only file something when I’m sure: a first and last name, both partners, or a name with the
+              wedding date. An email has to actually be from the couple, or have their address in it. These
+              didn’t reach that, so I’ve left them for you rather than guessing.
             </p>
             <div className="space-y-3">
               {reviewItems.map(item => (
                 <div key={item.id} className="bg-white rounded-xl border border-amber-200 p-3 sm:p-4">
-                  <div className="font-medium text-sage-700">{item.title || 'Untitled meeting'}</div>
+                  <div className="font-medium text-sage-700">
+                    {/* Emails and meetings share this list, so say which. It
+                        used to read "Untitled meeting" whatever it was. */}
+                    {item.source === 'gmail' && (
+                      <span className="mr-2 text-xs uppercase tracking-wide text-amber-700 bg-amber-100 rounded px-1.5 py-0.5">Email</span>
+                    )}
+                    {item.title || (item.source === 'gmail' ? 'No subject' : 'Untitled meeting')}
+                  </div>
                   <div className="text-xs text-sage-500 mt-0.5">
                     {item.occurred_at ? new Date(item.occurred_at).toLocaleString() : 'no date'}
                     {item.reason ? ` · ${item.reason}` : ''}
@@ -1743,7 +1751,7 @@ export default function Admin() {
                       onChange={e => setReviewChoice(prev => ({ ...prev, [item.id]: e.target.value }))}
                       className="flex-1 min-w-[200px] border border-cream-300 rounded-lg px-3 py-2 text-sm"
                     >
-                      <option value="">Whose meeting is this?</option>
+                      <option value="">Whose is this?</option>
                       {weddings.map(w => (
                         <option key={w.id} value={w.id}>
                           {w.couple_names}{w.wedding_date ? ` — ${w.wedding_date}` : ''}

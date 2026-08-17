@@ -3236,14 +3236,32 @@ async function runGmailSync(body, { bump }) {
 
     console.log(`Searching for emails from/about ${clientEmails.length} registered client addresses`);
 
-    // Get already processed message IDs
-    const { data: processed } = await supabaseAdmin
-      .from('processed_emails')
-      .select('gmail_message_id');
-    const processedIds = new Set((processed || []).map(p => p.gmail_message_id));
+    // Every email already imported, and it has to be ALL of them.
+    //
+    // This was one unpaginated select. PostgREST stops at 1000 rows and the
+    // table holds 1,270, so 270 already-imported emails looked new on every
+    // run. gmail_message_id is unique so the marker insert failed harmlessly,
+    // but the planning note insert below is not guarded, and 992 of the 1,979
+    // email notes are now copies. Identical to the Quo bug, in a different file.
+    const processedIds = new Set();
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin
+        .from('processed_emails')
+        .select('gmail_message_id')
+        .range(from, from + 999);
+      // A short read here means re-importing, and re-importing means duplicate
+      // notes in front of a couple. Stop rather than carry on half-informed.
+      if (error) throw new Error(`Could not read what has already been imported: ${error.message}`);
+      for (const p of data) processedIds.add(p.gmail_message_id);
+      if (data.length < 1000) break;
+    }
+    console.log(`[gmail] ${processedIds.size} email(s) already imported`);
 
     let newlyProcessed = 0;
     let notesExtracted = 0;
+    // Emails the search turned up that could not be tied to anyone. They go to
+    // ingest_review rather than onto whichever wedding was being searched for.
+    let unattributed = 0;
 
     // Search for emails from each client AND emails containing their email (form submissions)
     await bump({ total: clientEmails.length });
@@ -3324,10 +3342,68 @@ async function runGmailSync(body, { bump }) {
             }
           }
 
-          const weddingId = emailToWedding[fromEmail] || emailToWedding[clientEmail];
+          // Whose email is this, and can we actually tell?
+          //
+          // This used to be `emailToWedding[fromEmail] || emailToWedding[clientEmail]`,
+          // and that fallback is the whole bug. The second search is a full-text
+          // query for the client's address, and Gmail's quoted search matches on
+          // tokens rather than the literal string, so it returns things that have
+          // nothing to do with the client. Every one of those was then filed
+          // against whoever the search happened to be for.
+          //
+          // What that cost: 33 WeddingWire emails filed against a test wedding
+          // that has no people on it at all, burying ten real prospects —
+          // Addison e Montgomery, Karsyn Newton, Aidan Henry, Stefanie Short,
+          // Emily mayle, Natalie Terlitsky, Rachael Fine, Nicole, Kellie Phillis
+          // and Gloria Valeri. Kellie asked what a 50-60 guest wedding would
+          // cost and nobody saw it.
+          //
+          // Same root as the Zoom bug: verify the hit before attributing it.
+          // shared/meeting-match.js does this for meetings.
+          const toHeader = headers.find(h => h.name === 'To')?.value || '';
+          const ccHeader = headers.find(h => h.name === 'Cc')?.value || '';
+          const haystack = `${bodyText} ${toHeader} ${ccHeader}`.toLowerCase();
+
+          let weddingId = emailToWedding[fromEmail] || null;
+          let attribution = weddingId ? 'sender is a registered client' : null;
+
+          if (!weddingId && haystack.includes(clientEmail.toLowerCase())) {
+            // The address really is in this email, not merely matched by Gmail.
+            weddingId = emailToWedding[clientEmail];
+            attribution = 'client address appears in the message';
+          }
+
+          if (!weddingId) {
+            // Not attributable. It goes somewhere a human will see rather than
+            // onto whichever wedding was being searched for, and rather than
+            // being dropped, which is the same thing as losing it.
+            processedIds.add(msg.id);
+            await supabaseAdmin.from('processed_emails').insert({
+              gmail_message_id: msg.id,
+              wedding_id: null,
+              from_email: fromEmail,
+              subject,
+              body_text: bodyText.substring(0, 10000),
+            });
+            const { error: reviewErr } = await supabaseAdmin.from('ingest_review').upsert({
+              source: 'gmail',
+              external_id: msg.id,
+              title: subject || '(no subject)',
+              occurred_at: dateHeader ? new Date(dateHeader).toISOString() : null,
+              excerpt: bodyText.replace(/\s+/g, ' ').slice(0, 600),
+              suggested_wedding_id: null,
+              confidence: 0,
+              reason: `Found while searching for ${clientEmail}, but that address is not in the message and the sender is not a registered client.`,
+              status: 'open',
+            }, { onConflict: 'source,external_id' });
+            if (reviewErr) console.error('[gmail] could not queue for review:', reviewErr.message);
+            newlyProcessed++;
+            unattributed++;
+            continue;
+          }
 
           // Save to processed_emails
-          await supabaseAdmin.from('processed_emails').insert({
+          const { error: markerErr } = await supabaseAdmin.from('processed_emails').insert({
             gmail_message_id: msg.id,
             wedding_id: weddingId,
             from_email: fromEmail,
@@ -3335,13 +3411,35 @@ async function runGmailSync(body, { bump }) {
             body_text: bodyText.substring(0, 10000)
           });
 
+          // The marker is what stops this email being imported again. If it did
+          // not save, the next run treats the email as new and writes the note
+          // below a second time. Skip instead.
+          if (markerErr) {
+            console.error(`[gmail] marker failed for ${msg.id}, skipping it: ${markerErr.message}`);
+            continue;
+          }
+
           // Save full email as a planning note so Sage can search it
           if (weddingId && bodyText) {
-            const { error: noteError } = await supabaseAdmin.from('planning_notes').insert({
+            const noteContent = `[Email: ${subject}]\nFrom: ${fromEmail}\n\n${bodyText.substring(0, 5000)}`;
+
+            // Second line of defence, the same one savePlanningNotes has and
+            // this insert never did. The marker above is the real guard; this
+            // is what stops a gap in it reaching a couple, and a gap in it is
+            // exactly how 992 of these became copies.
+            const { data: priorNote } = await supabaseAdmin
+              .from('planning_notes')
+              .select('id')
+              .eq('wedding_id', weddingId)
+              .eq('category', 'email')
+              .eq('content', noteContent)
+              .limit(1);
+
+            const { error: noteError } = priorNote?.length ? {} : await supabaseAdmin.from('planning_notes').insert({
               wedding_id: weddingId,
               user_id: null,
               category: 'email',
-              content: `[Email: ${subject}]\nFrom: ${fromEmail}\n\n${bodyText.substring(0, 5000)}`,
+              content: noteContent,
               source_message: `From email on ${dateHeader}`,
               status: 'confirmed'
             });
@@ -3371,11 +3469,23 @@ async function runGmailSync(body, { bump }) {
       await bump({ processed: newlyProcessed, last_item: clientEmail });
     } // end clientEmails loop
 
-    console.log(`Processed ${newlyProcessed} new emails, extracted ${notesExtracted} planning notes`);
+    console.log(`Processed ${newlyProcessed} new emails (${unattributed} unattributed), extracted ${notesExtracted} planning notes`);
     return {
       processed: newlyProcessed,
-      matched: newlyProcessed,
-      detail: { notesExtracted, clientsSearched: clientEmails.length },
+      matched: newlyProcessed - unattributed,
+      needsReview: unattributed,
+      detail: {
+        notesExtracted,
+        clientsSearched: clientEmails.length,
+        attributed: newlyProcessed - unattributed,
+        // Said out loud rather than left as a gap between two numbers. These
+        // used to be filed against whoever the search was for, which is how ten
+        // WeddingWire prospects ended up on a test wedding.
+        unattributed,
+        unattributedNote: unattributed
+          ? `${unattributed} email(s) could not be tied to a couple and are waiting in the review list.`
+          : 'ok',
+      },
     };
   }
 }
