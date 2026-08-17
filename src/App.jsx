@@ -1,6 +1,8 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import { ToastProvider } from './components/ui/Toast'
+import { RecorderProvider } from './context/RecorderContext'
+import RecordingBar from './components/RecordingBar'
 import ErrorBoundary from './components/ErrorBoundary'
 import ProtectedRoute from './components/ProtectedRoute'
 import AdminRoute from './components/AdminRoute'
@@ -25,6 +27,12 @@ function App() {
       <ToastProvider>
         <BrowserRouter>
           <AuthProvider>
+            {/*
+              The recorder sits outside Routes on purpose. Inside, changing
+              screen unmounts it and the meeting stops without saying so.
+            */}
+            <RecorderProvider>
+            <RecordingBar />
             <Routes>
               {/* Public routes — no auth */}
               <Route path="/preview" element={<Preview />} />
@@ -101,6 +109,7 @@ function App() {
               {/* Catch-all 404 */}
               <Route path="*" element={<NotFound />} />
             </Routes>
+            </RecorderProvider>
           </AuthProvider>
         </BrowserRouter>
       </ToastProvider>
