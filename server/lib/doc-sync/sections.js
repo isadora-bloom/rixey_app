@@ -31,8 +31,8 @@ export const DOC_SECTIONS = [
     key: 'vendors',
     label: 'Vendors',
     table: 'vendor_checklist',
-    fields: 'vendor_type (Caterer, Florist, Photographer, DJ, Officiant, Cake, Rentals, Hair + Makeup, Transportation, Venue, Other), vendor_name (the company), vendor_contact (person, email, phone — all of it in one string), notes',
-    hint: 'Usually a table headed "Vendors and Contractors". The venue itself (Rixey Manor) counts as a vendor row too. If a vendor is named with no contact details, still return it.',
+    fields: 'vendor_type (Caterer, Florist, Photographer, DJ, Officiant, Cake, Rentals, Hair + Makeup, Transportation, Venue, Other), vendor_name (the company or the person trading as themselves — never a job title), vendor_contact (person, email, phone — all of it in one string), notes',
+    hint: 'Usually a table headed "Vendors and Contractors". The venue itself (Rixey Manor) counts as a vendor row too. If a vendor is named with no contact details, still return it. Where the first column of the table is the service rather than a business ("Hair", "Makeup", "Coordinator"), that word is the vendor_type, not the vendor_name: put the person named alongside it in vendor_name, and if nobody is named leave vendor_name out rather than repeating the service.',
   },
   {
     key: 'bedrooms',
@@ -150,6 +150,11 @@ Rules that matter more than completeness:
 - Never invent a field. If the document does not give a phone number, a severity or a quantity, leave that field out. A half-filled entry is fine and a person will finish it.
 - Copy names exactly as written, including how they are punctuated. Do not reorder "Ashby, Brooke" into "Brooke Ashby" and do not split a name you are unsure about.
 - A person listed with two allergies is one entry with both, not two entries.
+- A vendor_name is who somebody is, not what they do. "Hair", "Makeup",
+  "Coordinator", "Day of Planner" are services; the business or person doing it
+  goes in vendor_name and the service goes in vendor_type. If the document names
+  no business, leave vendor_name out — "Hair" as a company name is worse than a
+  blank, because it looks answered.
 - Skip anything that is only a heading, a page number, or a running header.
 - If this part of the document contains nothing of the kinds listed, return {}.
 ${total > 1 ? `\nThis is part ${part} of ${total}. Other parts are handled separately — extract only what is in front of you, and ignore fragments cut off at either end.` : ''}
@@ -158,20 +163,65 @@ Document:
 ${chunk}`;
 }
 
+/**
+ * What makes two rows the same thing, per section.
+ *
+ * The whole-row fingerprint below catches an identical repeat, which is what a
+ * chunk overlap usually produces. It does not catch the same vendor described
+ * twice: Serendipity Catering came out of one document twice with the same
+ * name, the same contact and different notes, because the caterer is mentioned
+ * in two places and each chunk wrote its own note.
+ *
+ * A vendor is the same vendor if the business is the same. Same for a guest's
+ * dietary entry, which is keyed on the person.
+ */
+const IDENTITY = {
+  vendors: row => `${row.vendor_type || ''}|${row.vendor_name || ''}`,
+  dietary: row => String(row.guest_name || ''),
+  hair_makeup: row => `${row.person || ''}|${row.service || ''}`,
+};
+
+/** Keep whichever description says more, rather than whichever came first. */
+function richer(a, b) {
+  const weight = r => Object.values(r || {}).join(' ').trim().length;
+  return weight(b) > weight(a) ? b : a;
+}
+
 /** Merge per-chunk results and drop near-duplicates a split can produce. */
 export function mergeSections(results) {
   const merged = {};
   for (const key of SECTION_KEYS) {
     const rows = results.flatMap(r => Array.isArray(r?.[key]) ? r[key] : []);
     if (!rows.length) continue;
+
+    const identity = IDENTITY[key];
     const seen = new Set();
-    merged[key] = rows.filter(row => {
-      if (!row || typeof row !== 'object') return false;
+    const byIdentity = new Map();
+    const out = [];
+
+    for (const row of rows) {
+      if (!row || typeof row !== 'object') continue;
+
       const fingerprint = JSON.stringify(row).toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 160);
-      if (!fingerprint || seen.has(fingerprint)) return false;
+      if (!fingerprint || seen.has(fingerprint)) continue;
       seen.add(fingerprint);
-      return true;
-    });
+
+      // Sections with a real identity collapse onto it. Everything else keeps
+      // the old behaviour, because there is no safe key for a free-text note
+      // and merging two of those would lose one.
+      const id = identity ? identity(row).toLowerCase().replace(/[^a-z0-9]/g, '') : null;
+      if (!id) { out.push(row); continue; }
+
+      if (byIdentity.has(id)) {
+        const at = byIdentity.get(id);
+        out[at] = richer(out[at], row);
+        continue;
+      }
+      byIdentity.set(id, out.length);
+      out.push(row);
+    }
+
+    merged[key] = out;
   }
   return merged;
 }

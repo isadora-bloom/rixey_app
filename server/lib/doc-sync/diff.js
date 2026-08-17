@@ -467,6 +467,12 @@ const HEADING_CATEGORIES = [
   [/rental|supplies|equipment|hire/i, 'rentals'],
   [/photo|video|shot list|first look/i, 'photography'],
   [/family|parent|mother|father|grandparent/i, 'family'],
+  // Added after backfilling the older documents, where these two headings were
+  // the only ones with enough notes behind them to be worth a rule of their
+  // own. "Event Details", "Key Locations" and "Other Notes" are left alone: a
+  // general heading should stay a general note rather than be forced somewhere.
+  [/seating|table plan|table layout|top table|sweetheart/i, 'seating'],
+  [/colou?r|palette|hex code|swatch/i, 'colors'],
 ];
 
 export function categoryForHeading(heading) {

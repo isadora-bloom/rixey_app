@@ -130,6 +130,17 @@ export function getCategoryLabel(category) {
     case 'zoom_transcript': return 'Zoom'
     case 'email': return 'Email'
     case 'borrow_selection': return 'Borrow Selection'
+    // Emitted by the document importer's heading categoriser. They were
+    // reaching the default below and title-casing acceptably, which is how
+    // nobody noticed they were missing; a curated label reads better and
+    // "Wedding Party" beats "Wedding_party" if the default ever changes.
+    case 'contact': return 'Contact Info'
+    case 'contract': return 'Contract'
+    case 'wedding_party': return 'Wedding Party'
+    case 'music': return 'Music'
+    case 'rentals': return 'Rentals'
+    case 'photography': return 'Photography'
+    case 'seating': return 'Seating & Tables'
     default: return category.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
   }
 }
