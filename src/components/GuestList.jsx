@@ -115,6 +115,7 @@ function GuestModal({ guest, weddingId, tagOptions, mealOptions, platedMeal, tab
   })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [showPlusOneHelp, setShowPlusOneHelp] = useState(false)
 
   const toggleTag = (label) => {
     setForm(prev => {
@@ -334,6 +335,56 @@ function GuestModal({ guest, weddingId, tagOptions, mealOptions, platedMeal, tab
               />
               <span className="text-sm text-sage-700">Has a plus one</span>
             </label>
+            {/*
+              The three states are a real distinction and the app relies on it,
+              so it is worth saying plainly at the point of the decision rather
+              than in a help page. Left blank, ticked-and-unnamed, and named are
+              three different answers, and couples have used all three
+              deliberately: one wedding marks 15 guests "X", names 11 and leaves
+              96 blank.
+            */}
+            <button
+              type="button"
+              onClick={() => setShowPlusOneHelp(v => !v)}
+              className="text-xs text-sage-500 underline mt-1.5"
+            >
+              {showPlusOneHelp ? 'Hide' : 'What is a plus one, and when should I use one?'}
+            </button>
+            {showPlusOneHelp && (
+              <div className="mt-2 bg-sage-50 border border-sage-200 rounded-xl p-3 text-xs text-sage-700 space-y-2">
+                <p>
+                  A plus one is a seat you are giving this guest to bring somebody, when you are not
+                  inviting that person by name. Use it when you are happy for them to bring a partner
+                  or a friend and you do not know, or do not mind, who it turns out to be.
+                </p>
+                <p>
+                  <span className="font-medium">If you already know who is coming, add them as their own guest instead.</span>{' '}
+                  They get their own place card, their own meal and their own dietary note, and they
+                  can be seated apart from whoever invited them.
+                </p>
+                <p className="font-medium text-sage-800">There are three answers here, and they mean different things:</p>
+                <ul className="space-y-1 pl-1">
+                  <li>
+                    <span className="font-medium">Leave this unticked</span> — no plus one. Nobody is added
+                    and nothing is held for them.
+                  </li>
+                  <li>
+                    <span className="font-medium">Tick it and leave the name blank</span> — a seat you have
+                    promised, for somebody not yet named. They count in your numbers and in the catering,
+                    and they show up as “Guest” until you or your guest fills the name in.
+                  </li>
+                  <li>
+                    <span className="font-medium">Tick it and write a name</span> — that person, by name,
+                    everywhere.
+                  </li>
+                </ul>
+                <p>
+                  A first name on its own is fine. They will show with{' '}
+                  {form.last_name?.trim() ? `the surname ${form.last_name.trim()}` : 'this guest’s surname'},
+                  which you can change any time by writing their full name here.
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Plus one fields */}
@@ -344,8 +395,15 @@ function GuestModal({ guest, weddingId, tagOptions, mealOptions, platedMeal, tab
                 className="w-full border border-cream-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300"
                 value={form.plus_one_name}
                 onChange={e => setForm({ ...form, plus_one_name: e.target.value })}
-                placeholder="Name (optional — can fill in later)"
+                placeholder="Name, or leave blank if you don’t know yet"
               />
+              <p className="text-xs text-sage-500">
+                {form.plus_one_name.trim()
+                  ? (isNamedPerson(form.plus_one_name)
+                      ? `Will show as ${plusOneFullName(form.plus_one_name, form.last_name)}.`
+                      : 'That reads as a placeholder rather than a name, so they will show as “Guest”. They still count.')
+                  : 'A seat is held and counted. They will show as “Guest” until somebody names them.'}
+              </p>
               <select
                 className="w-full border border-cream-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 bg-white"
                 value={form.plus_one_rsvp}

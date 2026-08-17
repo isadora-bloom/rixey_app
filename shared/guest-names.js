@@ -130,9 +130,72 @@ export function partyMembers(guest) {
   return people;
 }
 
+/**
+ * Has migration 025 run and been backfilled?
+ *
+ * Both shapes have to work, because the schema change and the code deploy
+ * cannot land at the same instant, and because a plus one that exists as its
+ * own row AND as plus_one_name on its host would be counted twice — which is
+ * the exact bug this whole model change is meant to end.
+ *
+ * Detected from the data rather than a flag: an is_plus_one row is proof the
+ * backfill has run for this wedding. A wedding whose guests all have party_id
+ * but no plus-one rows is simply a wedding where nobody has one.
+ */
+export function usesPersonModel(guests) {
+  return (guests || []).some(g => g && g.is_plus_one === true);
+}
+
+/**
+ * Group person-rows into parties.
+ *
+ * Only meaningful after 025. The head is the row that is not a plus one; the
+ * members are everyone sharing its party_id.
+ */
+export function toParties(guests) {
+  const byParty = new Map();
+  for (const g of guests || []) {
+    const key = g.party_id || g.id;
+    if (!byParty.has(key)) byParty.set(key, []);
+    byParty.get(key).push(g);
+  }
+  return [...byParty.values()].map(rows => {
+    const head = rows.find(r => !r.is_plus_one) || rows[0];
+    return { head, members: rows };
+  });
+}
+
+/**
+ * What to call a person-row, inheriting the host's surname when they have none.
+ *
+ * The rule does not change with the model: a surname that was never given is
+ * derived on read and never written, so fixing the host fixes them and nothing
+ * downstream inherits a guess it can no longer question.
+ */
+function personName(row, head) {
+  const own = guestFullName(row);
+  if (!row.is_plus_one) return own;
+  if (!own) return 'Guest';                       // granted, not yet named
+  if (!isNamedPerson(own)) return 'Guest';
+  if (row.last_name) return own;                  // they gave a surname, take it
+  return head?.last_name ? `${own} ${String(head.last_name).trim()}` : own;
+}
+
 /** Every person on a guest list, hosts and plus ones alike. */
 export function allPeople(guests) {
-  return (guests || []).flatMap(partyMembers);
+  if (!usesPersonModel(guests)) return (guests || []).flatMap(partyMembers);
+
+  return toParties(guests).flatMap(({ head, members }) =>
+    members.map(row => ({
+      id: `${row.id}`,
+      name: personName(row, head),
+      rsvp: row.rsvp || 'pending',
+      mealChoice: row.meal_choice || null,
+      dietary: row.dietary_restrictions || null,
+      isPlusOne: !!row.is_plus_one,
+      host: row.is_plus_one ? guestFullName(head) : null,
+    }))
+  );
 }
 
 /**
@@ -146,6 +209,24 @@ export function allPeople(guests) {
  * drift.
  */
 export function dietaryNotes(guests) {
+  // After 025 a plus one's dietary note is on their own row, so walking rows
+  // and reading plus_one_dietary would miss it. An allergy going unseen is the
+  // one failure here that reaches a plate, so both shapes are handled.
+  if (usesPersonModel(guests)) {
+    return toParties(guests).flatMap(({ head, members }) =>
+      members
+        .map(row => ({ row, note: String(row.dietary_restrictions || '').trim() }))
+        .filter(x => x.note)
+        .map(({ row, note }) => ({
+          name: personName(row, head),
+          note,
+          isPlusOne: !!row.is_plus_one,
+          host: row.is_plus_one ? guestFullName(head) : null,
+          guestId: row.id,
+        }))
+    );
+  }
+
   const out = [];
   for (const g of guests || []) {
     const own = String(g?.dietary_restrictions || '').trim();
