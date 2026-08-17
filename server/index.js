@@ -3515,6 +3515,120 @@ async function fetchCallTranscript(call, state) {
 
 app.post('/api/quo/sync', backgroundSync('quo', runQuoSync));
 
+/**
+ * Read the couples' old texts, which have never been read.
+ *
+ * AI extraction in runQuoSync is gated on `direction === 'inbound'`, and until
+ * 17 August the column held OpenPhone's "incoming", so it never fired. 649
+ * inbound texts are stored and not one has been through extraction.
+ *
+ * A normal sync will not fix that: it skips anything already in
+ * processed_quo_messages, so only new messages get read. And forceReprocess
+ * would fix it by deleting that table and re-importing, which re-inserts every
+ * raw "[SMS from client] ..." note as a duplicate, because that insert has no
+ * dedup of its own. So this walks what is already stored instead, and touches
+ * neither processed_quo_messages nor the raw notes.
+ *
+ * Resumable by design. Extraction writes source_message as "SMS: <first 120
+ * chars>", so a message already represented in planning_notes is skipped, and
+ * running this twice costs almost nothing. A message that legitimately produced
+ * no notes will be retried on a later run, which is the cheap side to be wrong
+ * on: these go to Haiku, not Sonnet.
+ *
+ * Body: { limit } to trial a handful before spending on all of them.
+ */
+async function runQuoBackfillExtraction(body, { bump }) {
+  const limit = Number(body?.limit) > 0 ? Number(body.limit) : null;
+
+  // Paged: PostgREST stops at 1000 and there are more than that.
+  const msgs = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabaseAdmin
+      .from('processed_quo_messages')
+      .select('id, wedding_id, body_text, processed_at')
+      .eq('direction', 'inbound')
+      .not('wedding_id', 'is', null)
+      .order('processed_at', { ascending: true })
+      .range(from, from + 999);
+    if (error) throw error;
+    msgs.push(...data);
+    if (data.length < 1000) break;
+  }
+
+  const weddingIds = [...new Set(msgs.map(m => m.wedding_id))];
+
+  // What has already been extracted from a text, by source label.
+  const alreadyDone = new Set();
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabaseAdmin
+      .from('planning_notes')
+      .select('source_message')
+      .like('source_message', 'SMS: %')
+      .range(from, from + 999);
+    if (error) throw error;
+    for (const r of data) alreadyDone.add(r.source_message);
+    if (data.length < 1000) break;
+  }
+
+  const todo = msgs.filter(m => {
+    const text = String(m.body_text || '');
+    // Mirrors extractPlanningNotesAI, which returns [] under 20 characters.
+    if (text.trim().length < 20) return false;
+    return !alreadyDone.has(`SMS: ${text.substring(0, 120)}`);
+  });
+
+  const queue = limit ? todo.slice(0, limit) : todo;
+
+  await bump({
+    total: queue.length,
+    detail: {
+      inboundStored: msgs.length,
+      weddings: weddingIds.length,
+      alreadyExtracted: msgs.length - todo.length,
+      tooShortOrDone: msgs.length - todo.length,
+      queued: queue.length,
+      note: 'Reading texts the couples sent. Nothing is re-imported and no raw notes are rewritten.',
+    },
+  });
+
+  let processed = 0, notesMade = 0, failed = 0;
+
+  for (const m of queue) {
+    const text = String(m.body_text || '');
+    try {
+      const notes = await extractPlanningNotesAI(text, m.wedding_id, `SMS: ${text.substring(0, 120)}`, 'sms');
+      if (notes.length) {
+        await savePlanningNotes(notes);
+        notesMade += notes.length;
+      }
+    } catch (err) {
+      failed++;
+      console.error(`[quo-backfill] ${m.id}: ${err.message}`);
+    }
+    processed++;
+    if (processed % 20 === 0 || processed === queue.length) {
+      await bump({ processed, matched: notesMade, failed });
+    }
+  }
+
+  return {
+    processed,
+    matched: notesMade,
+    failed,
+    detail: {
+      inboundStored: msgs.length,
+      queued: queue.length,
+      notesProposed: notesMade,
+      failed,
+      note: notesMade
+        ? `${notesMade} note(s) proposed from ${processed} text(s), all status "pending" so nothing is filed without review.`
+        : `Read ${processed} text(s) and found nothing worth proposing.`,
+    },
+  };
+}
+
+app.post('/api/quo/backfill-extraction', backgroundSync('quo-backfill', runQuoBackfillExtraction));
+
 async function runQuoSync(body, { bump }) {
   {
     if (!QUO_API_KEY) {
@@ -3562,11 +3676,25 @@ async function runQuoSync(body, { bump }) {
     // more than one couple is never a personal reply. Built once per sync.
     const templateBodies = new Set();
     {
-      const { data: outboundNotes } = await supabaseAdmin
-        .from('planning_notes')
-        .select('wedding_id, content')
-        .eq('category', 'sms_message')
-        .like('content', '[SMS from Rixey]%');
+      // Paged, because PostgREST caps a select at 1000 rows whether you ask it
+      // to or not. There are ~2,600 of these, so template learning has been
+      // working from the first 1000 and calling that the client base. A
+      // template that happened to fall outside the window was not a template.
+      const outboundNotes = [];
+      for (let from = 0; ; from += 1000) {
+        const { data, error } = await supabaseAdmin
+          .from('planning_notes')
+          .select('wedding_id, content')
+          .eq('category', 'sms_message')
+          .like('content', '[SMS from Rixey]%')
+          .range(from, from + 999);
+        if (error) {
+          console.error('Could not read outbound notes for template learning:', error.message);
+          break;
+        }
+        outboundNotes.push(...data);
+        if (data.length < 1000) break;
+      }
 
       // Two couples alone is not enough: "Sounds good!" is a real reply that
       // happens to be identical. A machine sends the same text to several

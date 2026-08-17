@@ -39,3 +39,6 @@ test-results/
 playwright-report/
 
 .vercel
+
+# Data pulled out of production for a one-off repair. Never commit.
+backups/
