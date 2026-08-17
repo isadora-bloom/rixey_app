@@ -54,7 +54,8 @@ if (signInError) {
 const token = session.session.access_token;
 
 async function showJob(id) {
-  const { data } = await admin.from('sync_jobs').select('*').eq('id', id).single();
+  const { data, error } = await admin.from('sync_jobs').select('*').eq('id', id).single();
+  if (error) { console.log(`  (could not read the job row: ${error.message})`); return null; }
   if (!data) return null;
   const pct = data.total ? ` (${data.processed}/${data.total})` : '';
   console.log(`  ${data.status}${pct}  matched=${data.matched}  failed=${data.failed}`);
@@ -63,9 +64,10 @@ async function showJob(id) {
 }
 
 if (watchOnly) {
-  const { data } = await admin.from('sync_jobs').select('*')
+  const { data, error } = await admin.from('sync_jobs').select('*')
     .order('started_at', { ascending: false }).limit(10);
-  for (const j of data || []) {
+  if (error) { console.error(`Could not read the job list: ${error.message}`); process.exit(1); }
+  for (const j of data) {
     console.log(`${j.started_at}  ${j.kind.padEnd(14)} ${j.status.padEnd(9)} ${j.processed}/${j.total} matched=${j.matched} failed=${j.failed}`);
     if (j.detail && Object.keys(j.detail).length) console.log(`  ${JSON.stringify(j.detail)}`);
     if (j.last_error) console.log(`  error: ${j.last_error}`);

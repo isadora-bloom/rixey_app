@@ -13,7 +13,11 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "playwright test",
-    "import-kb": "node scripts/import-knowledge.js"
+    "import-kb": "node scripts/import-knowledge.js",
+    "audit": "npm run audit:errors && npm run audit:nav && npm run audit:unsurfaced",
+    "audit:errors": "node scripts/audit-unchecked-errors.mjs --max 69",
+    "audit:nav": "node scripts/audit-nav-parity.mjs",
+    "audit:unsurfaced": "node scripts/audit-unsurfaced.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.72.1",

@@ -1300,13 +1300,31 @@ async function savePlanningNotes(notes) {
     const existing = new Set();
 
     if (weddingIds.length) {
-      const { data: prior } = await supabaseAdmin
-        .from('planning_notes')
-        .select('wedding_id, category, content')
-        .in('wedding_id', weddingIds);
-
-      for (const p of (prior || [])) {
-        existing.add(`${p.wedding_id}|${p.category}|${p.content}`);
+      // Paged and checked, because this read is the dedup.
+      //
+      // It was one unchecked select. planning_notes holds 16,849 rows and
+      // PostgREST caps a select at 1000, so a busy wedding, or a batch covering
+      // several, silently compares against part of the set and writes the rest
+      // again. And a failed read produced an empty `existing`, which does not
+      // mean "nothing is there", it means "I could not tell" — and the code
+      // then treated every note as new.
+      //
+      // So on failure it throws. A note saved a minute later is recoverable; a
+      // duplicate in front of a couple is what this whole function exists to
+      // prevent.
+      for (let from = 0; ; from += 1000) {
+        const { data: prior, error: priorErr } = await supabaseAdmin
+          .from('planning_notes')
+          .select('wedding_id, category, content')
+          .in('wedding_id', weddingIds)
+          .range(from, from + 999);
+        if (priorErr) {
+          throw new Error(`Could not read existing notes to dedup against: ${priorErr.message}`);
+        }
+        for (const p of prior) {
+          existing.add(`${p.wedding_id}|${p.category}|${p.content}`);
+        }
+        if (prior.length < 1000) break;
       }
     }
 
@@ -1945,13 +1963,20 @@ app.post('/api/chat', async (req, res) => {
     // real glass during the reception?" is sitting on the queue three times.
     let alreadyOpen = false;
     if (flagAsUncertain && weddingId) {
-      const { data: openOnes } = await supabaseAdmin
+      const { data: openOnes, error: openErr } = await supabaseAdmin
         .from('uncertain_questions')
         .select('id, question')
         .eq('wedding_id', weddingId)
         .is('admin_answer', null);
       const tidy = s => String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
-      alreadyOpen = (openOnes || []).some(o => tidy(o.question) === tidy(message));
+      // Cannot tell is not the same as not there. Treating a failed read as
+      // "nothing open" is how the same question lands on the queue three times.
+      if (openErr) {
+        console.error('Could not check for an open duplicate question:', openErr.message);
+        alreadyOpen = true;
+      } else {
+        alreadyOpen = openOnes.some(o => tidy(o.question) === tidy(message));
+      }
     }
 
     if (flagAsUncertain && !alreadyOpen && weddingId) {
@@ -2522,14 +2547,19 @@ app.post('/api/chat-with-file', upload.single('file'), async (req, res) => {
           const vendorType = vendorTypeResponse.content[0].text.toLowerCase().trim();
 
           // Check if this vendor type already exists
-          const { data: existingVendor } = await supabaseAdmin
+          // maybeSingle, not single: single() treats zero rows as an error, so
+          // the old code could only work by ignoring errors, and a genuine
+          // failure was indistinguishable from "no such vendor yet".
+          const { data: existingVendor, error: existingVendorErr } = await supabaseAdmin
             .from('vendor_checklist')
             .select('id')
             .eq('wedding_id', weddingId)
             .eq('vendor_type', vendorType)
-            .single();
+            .maybeSingle();
 
-          if (!existingVendor && vendorType !== 'other') {
+          if (existingVendorErr) {
+            console.error('Could not check for an existing vendor, not adding one:', existingVendorErr.message);
+          } else if (!existingVendor && vendorType !== 'other') {
             // Upload contract to storage
             const contractFileName = `${weddingId}/${Date.now()}_${file.originalname}`;
             const { error: uploadError } = await supabaseAdmin.storage
@@ -3209,9 +3239,13 @@ async function runGmailSync(body, { bump }) {
 
     // Get all weddings with profiles (registered client emails)
     // Use supabaseAdmin to bypass RLS
-    const { data: weddings } = await supabaseAdmin
+    const { data: weddings, error: weddingsErr } = await supabaseAdmin
       .from('weddings')
       .select('id, couple_names, profiles(email)');
+
+    // "No weddings found" and "could not ask" are different answers, and only
+    // one of them means the sync had nothing to do.
+    if (weddingsErr) throw new Error(`Could not read the client list: ${weddingsErr.message}`);
 
     if (!weddings || weddings.length === 0) {
       return { processed: 0, detail: { message: 'No weddings with registered clients found.' } };
@@ -3427,13 +3461,21 @@ async function runGmailSync(body, { bump }) {
             // this insert never did. The marker above is the real guard; this
             // is what stops a gap in it reaching a couple, and a gap in it is
             // exactly how 992 of these became copies.
-            const { data: priorNote } = await supabaseAdmin
+            const { data: priorNote, error: priorErr } = await supabaseAdmin
               .from('planning_notes')
               .select('id')
               .eq('wedding_id', weddingId)
               .eq('category', 'email')
               .eq('content', noteContent)
               .limit(1);
+
+            // A guard that cannot answer is not a guard. If the check itself
+            // failed we do not know whether this note is already there, and
+            // writing anyway is how the duplicates happened in the first place.
+            if (priorErr) {
+              console.error(`[gmail] could not check for a duplicate note, skipping ${msg.id}: ${priorErr.message}`);
+              continue;
+            }
 
             const { error: noteError } = priorNote?.length ? {} : await supabaseAdmin.from('planning_notes').insert({
               wedding_id: weddingId,
@@ -3837,10 +3879,14 @@ async function runQuoSync(body, { jobId, bump }) {
     }
 
     // Get all profiles with phone numbers (use admin to bypass RLS)
-    const { data: profiles } = await supabaseAdmin
+    const { data: profiles, error: profilesErr } = await supabaseAdmin
       .from('profiles')
       .select('id, phone, wedding_id')
       .not('phone', 'is', null);
+
+    // A failed read used to report "no client phone numbers registered", which
+    // reads as a setup problem and sends you to the wrong place entirely.
+    if (profilesErr) throw new Error(`Could not read client phone numbers: ${profilesErr.message}`);
 
     if (!profiles || profiles.length === 0) {
       return { processed: 0, detail: { message: 'No client phone numbers registered. Add phone numbers to client profiles first.' } };
@@ -4070,13 +4116,18 @@ async function runQuoSync(body, { jobId, bump }) {
             // content for this wedding, so two genuinely identical texts sent
             // months apart still only produce one note, which is the right
             // trade against re-creating 216 of them.
-            const { data: priorNote } = await supabaseAdmin
+            const { data: priorNote, error: priorErr } = await supabaseAdmin
               .from('planning_notes')
               .select('id')
               .eq('wedding_id', weddingId)
               .eq('category', 'sms_message')
               .eq('content', noteContent)
               .limit(1);
+            // A guard that cannot answer is not a guard.
+            if (priorErr) {
+              console.error(`[quo] could not check for a duplicate note, skipping ${msg.id}: ${priorErr.message}`);
+              continue;
+            }
             if (priorNote?.length) { processedIds.add(msg.id); continue; }
 
             const { data: savedNote, error: noteError } = await supabaseAdmin.from('planning_notes').insert({
@@ -4575,11 +4626,19 @@ async function runZoomSync({ jobId, sinceDays, reprocess }) {
 
     console.log(`Searching Zoom for meetings, scoring against ${directory.length} weddings`);
 
-    // Get processed meeting IDs
-    const { data: processed } = await supabaseAdmin
-      .from('processed_zoom_meetings')
-      .select('zoom_meeting_id');
-    const processedIds = new Set((processed || []).map(p => p.zoom_meeting_id));
+    // Everything already imported. Paged and checked for the same reason as
+    // Gmail and Quo: a short or failed read here means re-importing, and this
+    // table is small today but that is luck, not design.
+    const processedIds = new Set();
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin
+        .from('processed_zoom_meetings')
+        .select('zoom_meeting_id')
+        .range(from, from + 999);
+      if (error) throw new Error(`Could not read which meetings are already imported: ${error.message}`);
+      for (const p of data) processedIds.add(p.zoom_meeting_id);
+      if (data.length < 1000) break;
+    }
 
     // Zoom's recordings endpoint only honours a 30-day span per request, and
     // this used to make exactly one call for the last 30 days. Any meeting that
@@ -4804,13 +4863,17 @@ async function fileZoomMeeting({ weddingId, topic, startTime, transcriptText }) 
   // Don't re-file a transcript we already hold for this meeting. If the copy on
   // file is shorter, though, it was written under the old 40,000 character cap
   // and the full one is worth having, so replace it.
-  const { data: priorTranscript } = await supabaseAdmin
+  const { data: priorTranscript, error: priorTranscriptErr } = await supabaseAdmin
     .from('planning_notes')
     .select('id, content')
     .eq('wedding_id', weddingId)
     .eq('category', 'zoom_transcript')
     .eq('source_message', transcriptSource)
     .limit(1);
+  // Unanswerable means do nothing, not write a second copy of a transcript.
+  if (priorTranscriptErr) {
+    throw new Error(`Could not check for an existing transcript: ${priorTranscriptErr.message}`);
+  }
 
   if (priorTranscript?.length) {
     const existing = priorTranscript[0];
@@ -5014,10 +5077,11 @@ app.post('/api/admin/ingest-review/:id/ignore', async (req, res) => {
 // Debug: inspect stored Zoom transcripts
 app.get('/api/zoom/transcripts', async (req, res) => {
   try {
-    const { data: meetings } = await supabaseAdmin
+    const { data: meetings, error: meetingsErr } = await supabaseAdmin
       .from('processed_zoom_meetings')
       .select('zoom_meeting_id, meeting_topic, wedding_id, processed_at, transcript_text')
       .order('processed_at', { ascending: false });
+    if (meetingsErr) throw meetingsErr;
 
     // Also check planning_notes for zoom_transcript entries
     const { data: transcriptNotes } = await supabaseAdmin
@@ -5061,11 +5125,12 @@ app.post('/api/zoom/reextract', async (req, res) => {
     let sources = [];
 
     // Primary: processed_zoom_meetings table
-    const { data: meetings } = await supabaseAdmin
+    const { data: meetings, error: meetingsErr } = await supabaseAdmin
       .from('processed_zoom_meetings')
       .select('*')
       .not('transcript_text', 'is', null)
       .not('wedding_id', 'is', null);
+    if (meetingsErr) throw meetingsErr;
 
     if (meetings && meetings.length > 0) {
       sources = meetings.map(m => ({
@@ -5960,12 +6025,20 @@ app.post('/api/couple-photo', upload.single('photo'), async (req, res) => {
       return res.status(400).json({ error: 'File and wedding ID required' });
     }
 
-    // Check if photo already exists
-    const { data: existing } = await supabaseAdmin
+    // Check if photo already exists.
+    //
+    // maybeSingle, not single: single() reports zero rows as an error, so this
+    // could only ever work by ignoring errors. And `existing` decides both
+    // whether the old file is deleted and whether the row is updated or
+    // inserted, so a swallowed failure leaves an orphaned image in storage and
+    // a second row for the same wedding.
+    const { data: existing, error: existingErr } = await supabaseAdmin
       .from('couple_photos')
       .select('id, image_url')
       .eq('wedding_id', weddingId)
-      .single();
+      .maybeSingle();
+
+    if (existingErr) throw new Error(`Could not check for an existing photo: ${existingErr.message}`);
 
     // Delete old image from storage if exists
     if (existing?.image_url) {
@@ -6137,11 +6210,17 @@ app.post('/api/checklist/initialize/:weddingId', async (req, res) => {
   try {
     const { weddingId } = req.params;
 
-    // Check if already initialized
-    const { count } = await supabaseAdmin
+    // Check if already initialized.
+    //
+    // A failed count is undefined, `undefined > 0` is false, and the whole
+    // default checklist gets written a second time. "I could not tell" has to
+    // stop the write, not wave it through.
+    const { count, error: countErr } = await supabaseAdmin
       .from('planning_checklist')
       .select('*', { count: 'exact', head: true })
       .eq('wedding_id', weddingId);
+
+    if (countErr) throw new Error(`Could not check whether the checklist already exists: ${countErr.message}`);
 
     if (count > 0) {
       return res.json({ message: 'Checklist already initialized', initialized: false });
@@ -6961,12 +7040,17 @@ app.post('/api/admin/enquiries/sync', requireAdmin, async (req, res) => {
     if (!evRes.ok) throw new Error(`Could not read the Calendly diary (${evRes.status})`);
     const events = (await evRes.json()).collection || [];
 
-    const { data: profiles } = await supabaseAdmin
+    // Both of these decide whether a Calendly booking is a couple we already
+    // know. Empty means "everyone is new", so a failed read quietly turns every
+    // returning couple into a fresh enquiry with no link to their wedding.
+    const { data: profiles, error: profilesErr } = await supabaseAdmin
       .from('profiles').select('email, phone, wedding_id').not('wedding_id', 'is', null);
+    if (profilesErr) throw new Error(`Could not read profiles to match bookings against: ${profilesErr.message}`);
 
     // For the near-misses. Loaded once rather than per booking.
-    const { data: weddings } = await supabaseAdmin
+    const { data: weddings, error: weddingsErr } = await supabaseAdmin
       .from('weddings').select('id, couple_names, partner1_name, partner2_name, profiles(name, email)');
+    if (weddingsErr) throw new Error(`Could not read weddings to match bookings against: ${weddingsErr.message}`);
 
     let created = 0, updated = 0, existingCouples = 0, skipped = 0, suggested = 0;
 
@@ -7002,8 +7086,17 @@ app.post('/api/admin/enquiries/sync', requireAdmin, async (req, res) => {
       // Upsert on the Calendly event, so re-syncing updates rather than piling
       // up. Anything the venue has typed since — status, notes, outcome — is
       // deliberately not in this row and survives.
-      const { data: prior } = await supabaseAdmin
+      const { data: prior, error: priorErr } = await supabaseAdmin
         .from('enquiries').select('id').eq('calendly_event_uri', built.row.calendly_event_uri).maybeSingle();
+
+      // Not knowing whether this booking is already here means not writing it.
+      // Guessing "new" turns an update into an insert, and the unique index
+      // then rejects it, so the booking is lost either way — but silently.
+      if (priorErr) {
+        console.error('[enquiries] could not check for an existing booking:', priorErr.message);
+        skipped++;
+        continue;
+      }
 
       if (prior) {
         const { error } = await supabaseAdmin.from('enquiries')
@@ -7144,12 +7237,15 @@ app.get('/api/admin/enquiries/:id/brief', requireAdmin, async (req, res) => {
 
     let texts = [];
     if (phone) {
-      const { data } = await supabaseAdmin
+      const { data, error: textsErr } = await supabaseAdmin
         .from('processed_quo_messages')
         .select('phone_number, direction, body_text, processed_at')
         .ilike('phone_number', `%${phone}%`)
         .order('processed_at', { ascending: false })
         .limit(25);
+      // "No texts" and "could not fetch the texts" look identical on a brief
+      // somebody is about to walk into a tour holding.
+      if (textsErr) throw new Error(`Could not read their texts: ${textsErr.message}`);
       texts = data || [];
     }
 
@@ -7175,17 +7271,28 @@ app.get('/api/admin/enquiries/:id/brief', requireAdmin, async (req, res) => {
       // would read as "checked, and it is free".
       dateVerdict = `They wrote “${e.preferred_date}”, which is not a specific enough date to check.`;
     } else {
-      const { data: clash } = await supabaseAdmin
+      const { data: clash, error: clashErr } = await supabaseAdmin
         .from('weddings').select('id, couple_names, wedding_date, archived')
         .eq('wedding_date', statedDate);
-      // An archived wedding is one that has already happened, so it does not
-      // hold a future date against anybody.
-      const live = (clash || []).filter(w => !w.archived);
-      if (live.length) {
-        dateTakenBy = live.map(w => ({ id: w.id, coupleNames: w.couple_names }));
-        dateVerdict = `${statedDate} is already booked.`;
+
+      // A failed lookup must never read as "free".
+      //
+      // `const { data: clash }` with no error meant a broken query produced
+      // null, an empty `live`, and a brief that said the date was available.
+      // Somebody walks into a tour and offers a date that is already sold. Say
+      // "could not check" instead, which is the only honest answer.
+      if (clashErr) {
+        dateVerdict = `Could not check whether ${statedDate} is free: ${clashErr.message}. Check the calendar before promising it.`;
       } else {
-        dateVerdict = `${statedDate} is free.`;
+        // An archived wedding is one that has already happened, so it does not
+        // hold a future date against anybody.
+        const live = (clash || []).filter(w => !w.archived);
+        if (live.length) {
+          dateTakenBy = live.map(w => ({ id: w.id, coupleNames: w.couple_names }));
+          dateVerdict = `${statedDate} is already booked.`;
+        } else {
+          dateVerdict = `${statedDate} is free.`;
+        }
       }
     }
 
@@ -7873,8 +7980,9 @@ app.get('/api/communication-pulse/:weddingId', async (req, res) => {
     if (wErr || !wedding) return res.status(404).json({ error: 'Wedding not found' });
 
     // Get profile IDs for this wedding (to count Sage messages by user_id)
-    const { data: wProfiles } = await supabaseAdmin.from('profiles').select('id').eq('wedding_id', weddingId).eq('is_admin', false);
-    const profileIds = (wProfiles || []).map(p => p.id);
+    const { data: wProfiles, error: wProfilesErr } = await supabaseAdmin.from('profiles').select('id').eq('wedding_id', weddingId).eq('is_admin', false);
+    if (wProfilesErr) throw new Error(`Could not read the couple's profiles: ${wProfilesErr.message}`);
+    const profileIds = wProfiles.map(p => p.id);
 
     // Count all inbound communication channels in parallel — each query isolated so one bad table doesn't fail all
     const safeCount = async (fn) => { try { const r = await fn(); return r.count || 0; } catch { return 0; } };
@@ -9582,11 +9690,14 @@ app.post('/api/guests/bulk', async (req, res) => {
     // Auto-create any tag options that don't exist yet
     const allTags = [...new Set(rows.flatMap(r => r.tags))].filter(Boolean);
     if (allTags.length > 0) {
-      const { data: existingTags } = await supabaseAdmin
+      const { data: existingTags, error: tagsErr } = await supabaseAdmin
         .from('guest_tag_options')
         .select('label')
         .eq('wedding_id', weddingId);
-      const existingLabels = new Set((existingTags || []).map(t => t.label));
+      // An empty set here means "create all of them", so a failed read creates
+      // a second copy of every tag the wedding already has.
+      if (tagsErr) throw new Error(`Could not read existing guest tags: ${tagsErr.message}`);
+      const existingLabels = new Set(existingTags.map(t => t.label));
       const newTags = allTags.filter(t => !existingLabels.has(t));
       if (newTags.length > 0) {
         await supabaseAdmin.from('guest_tag_options').insert(
@@ -9601,12 +9712,16 @@ app.post('/api/guests/bulk', async (req, res) => {
     // doubled it, and with no unique constraint on the table nothing stopped
     // it. Rather than change that behaviour and risk dropping a genuine second
     // guest with the same name, the import now says what it is about to do.
-    const { data: already } = await supabaseAdmin
+    const { data: already, error: alreadyErr } = await supabaseAdmin
       .from('wedding_guests')
       .select('first_name, last_name')
       .eq('wedding_id', weddingId);
+    // The whole point of this read is to warn about duplicates before writing.
+    // A failed read reports "no duplicates", which is the one answer that is
+    // worse than not asking.
+    if (alreadyErr) throw new Error(`Could not check the existing guest list: ${alreadyErr.message}`);
     const key = (f, l) => `${String(f || '').trim().toLowerCase()}|${String(l || '').trim().toLowerCase()}`;
-    const existingNames = new Set((already || []).map(g => key(g.first_name, g.last_name)));
+    const existingNames = new Set(already.map(g => key(g.first_name, g.last_name)));
     const duplicates = rows
       .filter(r => existingNames.has(key(r.first_name, r.last_name)))
       .map(r => [r.first_name, r.last_name].filter(Boolean).join(' '));
@@ -10215,11 +10330,15 @@ app.get('/api/wedding-website/:weddingId', async (req, res) => {
 
 app.put('/api/wedding-website/:weddingId', async (req, res) => {
   try {
-    const { data: existing } = await supabaseAdmin
+    // maybeSingle, because single() calls zero rows an error and this only
+    // worked by ignoring errors. `existing` picks insert or update, so a
+    // swallowed failure writes a second settings row for the same wedding.
+    const { data: existing, error: existingErr } = await supabaseAdmin
       .from('wedding_website_settings')
       .select('id')
       .eq('wedding_id', req.params.weddingId)
-      .single();
+      .maybeSingle();
+    if (existingErr) throw existingErr;
 
     // Whitelist known columns to prevent errors from unknown fields
     const ALLOWED = [
@@ -10293,12 +10412,13 @@ app.get('/api/venue-settings', async (req, res) => {
 
 app.put('/api/venue-settings', async (req, res) => {
   try {
-    const { data: existing } = await supabaseAdmin
+    const { data: existing, error: existingErr } = await supabaseAdmin
       .from('venue_settings')
       .select('id')
       .order('created_at')
       .limit(1)
-      .single();
+      .maybeSingle();
+    if (existingErr) throw existingErr;
 
     const payload = { ...req.body, updated_at: new Date().toISOString() };
     delete payload.id;
@@ -10683,23 +10803,29 @@ app.post('/api/admin/documents/:weddingId/upload', requireAdmin, documentUpload.
 
     // Same content as something already here means a re-upload of an unchanged
     // file. Say so rather than making a second version nobody asked for.
-    const { data: existing } = await supabaseAdmin
+    const { data: existing, error: existingErr } = await supabaseAdmin
       .from('wedding_documents')
       .select('id, filename, created_at')
       .eq('wedding_id', req.params.weddingId)
       .eq('text_hash', textHash)
       .maybeSingle();
+    // Not knowing whether this is a re-upload means not deciding. Guessing
+    // "new" makes a second version of an unchanged file and re-parses it.
+    if (existingErr) throw new Error(`Could not check whether this document is already here: ${existingErr.message}`);
     if (existing) {
       return res.json({ duplicateOf: existing, message: `Identical to "${existing.filename}" uploaded ${String(existing.created_at).slice(0, 10)}. Nothing new to read.` });
     }
 
     // Version within this wedding, so "v3 of their plan" means something.
-    const { data: prior } = await supabaseAdmin
+    const { data: prior, error: priorErr } = await supabaseAdmin
       .from('wedding_documents')
       .select('id, version')
       .eq('wedding_id', req.params.weddingId)
       .order('version', { ascending: false })
       .limit(1);
+    // A failed read here restarts the numbering, so "v3 of their plan" stops
+    // meaning anything.
+    if (priorErr) throw new Error(`Could not work out the next version number: ${priorErr.message}`);
     const previous = prior?.[0] || null;
 
     let storagePath = null;
@@ -10765,9 +10891,12 @@ async function fileOpenQuestions(doc, sections) {
   const questions = (sections?.questions || []).filter(q => q && String(q.question || '').trim());
   if (!questions.length) return 0;
 
-  const { data: existing } = await supabaseAdmin
+  const { data: existing, error: existingErr } = await supabaseAdmin
     .from('uncertain_questions').select('question').eq('wedding_id', doc.wedding_id);
-  const seen = new Set((existing || []).map(r => String(r.question || '').trim().toLowerCase()));
+  // Empty means "none of these are here yet", so a failed read queues the lot
+  // again.
+  if (existingErr) throw new Error(`Could not read existing questions: ${existingErr.message}`);
+  const seen = new Set(existing.map(r => String(r.question || '').trim().toLowerCase()));
 
   const rows = [];
   for (const q of questions) {
@@ -11559,9 +11688,16 @@ cron.schedule('20 * * * *', async () => {
   try {
     // Don't stack runs. A long import is normal; two at once means duplicate
     // Claude extractions and a race on the processed-marker rows.
-    const { data: running } = await supabaseAdmin
+    const { data: running, error: runningErr } = await supabaseAdmin
       .from('sync_jobs').select('id, heartbeat_at').eq('kind', 'zoom').eq('status', 'running');
-    const live = (running || []).filter(j => Date.now() - new Date(j.heartbeat_at).getTime() < 15 * 60 * 1000);
+    // This guard exists to stop two runs overlapping, and it failed open: a
+    // broken read produced an empty list, which reads as "nothing running", so
+    // it would start a second one. Skipping an hour costs nothing.
+    if (runningErr) {
+      console.error('[Zoom cron] could not check for a running sync, skipping this hour:', runningErr.message);
+      return;
+    }
+    const live = running.filter(j => Date.now() - new Date(j.heartbeat_at).getTime() < 15 * 60 * 1000);
     if (live.length) {
       console.log('[Zoom cron] a sync is already running, skipping this hour');
       return;
@@ -11741,10 +11877,11 @@ async function commitSeatingToGuests(weddingId, tables, replaceExisting) {
       .eq('wedding_id', weddingId);
   }
 
-  const { data: existingGuests } = await supabaseAdmin
+  const { data: existingGuests, error: existingGuestsErr } = await supabaseAdmin
     .from('wedding_guests')
     .select('id, first_name, last_name, plus_one_name')
     .eq('wedding_id', weddingId);
+  if (existingGuestsErr) throw new Error(`Could not read the guest list: ${existingGuestsErr.message}`);
 
   const norm = s => (s || '').toLowerCase().trim().replace(/\s+/g, ' ');
   const nameKey = full => norm(full);

@@ -33,8 +33,11 @@ const ASSET_META = {
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 async function ensureBucket() {
-  const { data: buckets } = await supabase.storage.listBuckets()
-  const exists = buckets?.some(b => b.name === BUCKET)
+  // A failed listing looks like "no buckets", which sends this on to create one
+  // that already exists and fail there instead, blaming the wrong thing.
+  const { data: buckets, error: listErr } = await supabase.storage.listBuckets()
+  if (listErr) throw new Error(`Could not list buckets: ${listErr.message}`)
+  const exists = buckets.some(b => b.name === BUCKET)
   if (!exists) {
     const { error } = await supabase.storage.createBucket(BUCKET, { public: true })
     if (error) throw error

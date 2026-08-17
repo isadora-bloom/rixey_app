@@ -102,15 +102,24 @@ they got upset talking about her dad, be gentle on the day`,
   const { data: done } = await sb.from('walkthrough_items').select('*').eq('walkthrough_id', wt.id)
   console.log('\n5. receipts:')
   for (const d of done.filter(x => x.status === 'applied')) {
-    const { data: row } = await sb.from(d.applied_table).select('*').eq('id', d.applied_row_id).maybeSingle()
+    // A read that failed would print DANGLING and read as a real finding. A
+    // check that cannot tell must say so rather than pick a verdict.
+    const { data: row, error: rowErr } = await sb.from(d.applied_table).select('*').eq('id', d.applied_row_id).maybeSingle()
+    if (rowErr) {
+      console.log(`   COULD NOT CHECK ${d.applied_table.padEnd(16)} ${rowErr.message}`)
+      continue
+    }
     console.log(`   ${row ? 'OK  ' : 'DANGLING'} ${d.applied_table.padEnd(20)} ${JSON.stringify(row).slice(0, 110)}`)
   }
 
   // ---- 6. re-organise must not disturb applied items ----------------------
   const before = done.filter(x => x.status === 'applied').length
   await sb.from('walkthrough_items').delete().eq('walkthrough_id', wt.id).eq('status', 'proposed')
-  const { count: after } = await sb.from('walkthrough_items')
+  // undefined === before is false, so a failed count used to report "(LOST!)"
+  // and send somebody hunting a bug that was in the test.
+  const { count: after, error: afterErr } = await sb.from('walkthrough_items')
     .select('id', { count: 'exact', head: true }).eq('walkthrough_id', wt.id).eq('status', 'applied')
+  if (afterErr) throw new Error(`Could not count applied items afterwards: ${afterErr.message}`)
   console.log(`\n6. re-organise: applied items before ${before}, after ${after} ${before === after ? '(preserved)' : '(LOST!)'}`)
 
   // ---- 7. couple-facing view leaks nothing --------------------------------
