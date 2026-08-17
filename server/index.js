@@ -3251,17 +3251,41 @@ async function runGmailSync(body, { bump }) {
       return { processed: 0, detail: { message: 'No weddings with registered clients found.' } };
     }
 
-    // Build email-to-wedding lookup
+    // Build email-to-wedding lookup.
+    //
+    // The venue's own addresses are never a client, whatever a profile says.
+    //
+    // Two of them were registered as couples: isadora@rixeymanor.com as the
+    // groom on "Adam and Soup", and grace@rixeymanor.com as the bride on
+    // "Grace & Joseph". So the sync searched the venue's own inboxes and filed
+    // everything it found onto those two weddings — furnace repair videos, tent
+    // quotes, forwarded packages, other couples' proposals. 222 emails and
+    // 1,564 planning notes, all of it the venue talking to itself.
+    //
+    // Skipping by domain rather than by name, because the next one will be a
+    // different mailbox. If a member of staff genuinely marries here, their
+    // profile wants a personal address on it: otherwise their whole working
+    // inbox lands in their own wedding, which is the same bug wearing a hat.
+    const venueDomain = String(process.env.ADMIN_EMAIL || 'info@rixeymanor.com').split('@')[1]?.toLowerCase();
+
     const emailToWedding = {};
     const clientEmails = [];
+    const skippedVenueAddresses = [];
     for (const wedding of weddings) {
       for (const profile of (wedding.profiles || [])) {
-        if (profile.email) {
-          const email = profile.email.toLowerCase().trim();
-          emailToWedding[email] = wedding.id;
-          clientEmails.push(email);
+        if (!profile.email) continue;
+        const email = profile.email.toLowerCase().trim();
+        if (venueDomain && email.endsWith(`@${venueDomain}`)) {
+          skippedVenueAddresses.push(`${email} (on ${wedding.couple_names})`);
+          continue;
         }
+        emailToWedding[email] = wedding.id;
+        clientEmails.push(email);
       }
+    }
+
+    if (skippedVenueAddresses.length) {
+      console.log(`[gmail] not searching ${skippedVenueAddresses.length} venue address(es) registered as clients: ${skippedVenueAddresses.join(', ')}`);
     }
 
     if (clientEmails.length === 0) {
@@ -3519,6 +3543,9 @@ async function runGmailSync(body, { bump }) {
       detail: {
         notesExtracted,
         clientsSearched: clientEmails.length,
+        // Named rather than counted, because a venue address on a couple's
+        // profile is a data problem somebody has to go and fix.
+        venueAddressesSkipped: skippedVenueAddresses,
         attributed: newlyProcessed - unattributed,
         // Said out loud rather than left as a gap between two numbers. These
         // used to be filed against whoever the search was for, which is how ten
