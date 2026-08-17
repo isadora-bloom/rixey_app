@@ -3479,7 +3479,10 @@ async function fetchCallTranscript(call, state, attempt = 0) {
     }
     // 404 means this particular call has no transcript (too short, missed, not
     // recorded). Normal, and not a reason to stop asking about the others.
-    if (res.status === 404) return '';
+    // Counted, because "22 skipped" with no breakdown made a perfectly
+    // ordinary run look like it had half failed, and the only way to tell the
+    // difference was to go and read this function.
+    if (res.status === 404) { state.noTranscript = (state.noTranscript || 0) + 1; return ''; }
 
     // Rate limiting is not a verdict, it is a queue.
     //
@@ -3505,7 +3508,10 @@ async function fetchCallTranscript(call, state, attempt = 0) {
 
     const body = await res.json();
     const d = body.data || body;
-    if (d.status && d.status !== 'completed' && !d.dialogue) return '';
+    if (d.status && d.status !== 'completed' && !d.dialogue) {
+      state.notReady = (state.notReady || 0) + 1;
+      return '';
+    }
 
     // A dialogue is speaker turns. Keep who said what: a call where only one
     // side is legible is worth much less.
@@ -3519,11 +3525,13 @@ async function fetchCallTranscript(call, state, attempt = 0) {
         .filter(Boolean)
         .join('\n');
       if (text) { state.got++; return text; }
+      state.empty = (state.empty || 0) + 1;
       return '';
     }
 
     const flat = d.transcript || d.text || '';
     if (flat) { state.got++; return String(flat); }
+    state.empty = (state.empty || 0) + 1;
     return '';
   } catch (err) {
     state.reason = `Could not reach Quo for call transcripts: ${err.message}`;
@@ -4080,6 +4088,16 @@ async function runQuoSync(body, { bump }) {
             : (totalCallsFound && !callsProcessed
                 ? `Found ${totalCallsFound} calls and none had a transcript.`
                 : 'ok'),
+        // Why each skipped call was skipped. "22 skipped" on its own reads like
+        // 22 failures; almost all of them are missed calls and voicemails that
+        // were never transcribed, which is nothing to act on. Only stillWaiting
+        // and rate limits are worth running again for.
+        skippedBecause: {
+          noTranscript: callTranscriptState.noTranscript || 0,
+          stillWaiting: callTranscriptState.notReady || 0,
+          transcribedButEmpty: callTranscriptState.empty || 0,
+          rateLimited: callTranscriptState.giveUps || 0,
+        },
         rateLimitWaits: callTranscriptState.throttled || 0,
         planningNotesSaved,
         notesExtracted,
