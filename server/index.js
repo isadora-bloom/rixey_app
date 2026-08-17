@@ -1193,6 +1193,13 @@ async function extractPlanningNotesAI(text, weddingId, source, sourceType = 'mes
   if (!cleanText || cleanText.length < 20) return [];
 
   const isTranscript = sourceType === 'transcript' || sourceType === 'email';
+  // A text message is not a small meeting. It is one turn of a conversation,
+  // read without the turns either side of it, and the prompt below is written
+  // for a transcript where being thorough is the whole point. Applied to a text
+  // it invents work: "It says we'll be there around 9:30" produced four notes,
+  // one of which asked for the full day-of timeline including send-off. 855
+  // notes came out of 341 texts.
+  const isShortMessage = sourceType === 'sms' || sourceType === 'message';
 
   // Short messages stay on Haiku — they are one or two sentences and there are
   // a lot of them. Meetings and emails get Sonnet, because that is where the
@@ -1202,7 +1209,17 @@ async function extractPlanningNotesAI(text, weddingId, source, sourceType = 'mes
 
   const instruction = isTranscript
     ? `Read this ${sourceType} as a thoughtful wedding coordinator would. Extract every logistics decision AND every emotional signal — stress, grief, family tension, financial worry, what this day means to them. This may be the only written record of the conversation, so be thorough.`
-    : `Read this message as a thoughtful wedding coordinator. Capture any logistics decisions AND any emotional signals — worry, stress, something personally significant, or anything that suggests they need extra care.`;
+    : `Read this text message as a wedding coordinator and record only what it actually tells you.
+
+This is one message out of an ongoing conversation. You cannot see what came before or after it, so most texts are chatter, thanks, or scheduling and are worth nothing on their own. Returning [] is the normal, correct answer.
+
+Write a note only for something stated in this message: a number, a date, a name, a decision, a request, or a genuine sign of worry.
+
+Do not write reminders to check in, lists of things to confirm, suggestions for what to ask next, or guesses about what they might have meant. Somebody reads these notes; a note that only says "follow up to clarify" costs them time and tells them nothing.
+
+Do not assume what a number refers to. A headcount in a text is usually for a tasting, a tour or a walkthrough, not the wedding.
+
+At most two notes, and one is usually too many. Keep each under about two lines.`;
 
   const collected = [];
 
@@ -1211,7 +1228,9 @@ async function extractPlanningNotesAI(text, weddingId, source, sourceType = 'mes
     try {
       const response = await anthropic.messages.create({
         model,
-        max_tokens: isTranscript ? 4000 : 800,
+        // A tight ceiling is part of the instruction, not just a cost control:
+        // there is no room to pad a two-line text into five notes.
+        max_tokens: isTranscript ? 4000 : isShortMessage ? 400 : 800,
         messages: [{
           role: 'user',
           content: `${RIXEY_EXTRACTION_CONTEXT}
@@ -3563,7 +3582,38 @@ app.post('/api/quo/sync', backgroundSync('quo', runQuoSync));
  *
  * Body: { limit } to trial a handful before spending on all of them.
  */
-async function runQuoBackfillExtraction(body, { bump }) {
+/**
+ * Refuse to run alongside a job that reads the same messages.
+ *
+ * On 17 August the backfill and a normal quo sync overlapped, and both ran
+ * extraction over the same texts. savePlanningNotes dedups on exact content,
+ * which catches a repeat but not a paraphrase, and the model does not word it
+ * the same way twice. So 341 texts produced 855 notes, roughly half of them the
+ * same observation written twice.
+ */
+async function assertNoOverlappingJob(kinds, ownJobId) {
+  const { data, error } = await supabaseAdmin
+    .from('sync_jobs')
+    .select('id, kind, started_at')
+    .in('kind', kinds)
+    .eq('status', 'running');
+  if (error) throw new Error(`Could not check for a running job: ${error.message}`);
+  // backgroundSync opens this job's own row before calling the runner, so it is
+  // always in the result. Excluding it by id rather than by kind, because two
+  // runs of the same kind overlapping is exactly as bad as two different ones.
+  const others = (data || []).filter(j => j.id !== ownJobId);
+  if (others.length) {
+    const j = others[0];
+    throw new Error(
+      `A ${j.kind} job started at ${j.started_at} is still running. ` +
+      `Running both over the same messages writes the same note twice in different words. ` +
+      `Wait for it to finish, or mark it failed if it died.`
+    );
+  }
+}
+
+async function runQuoBackfillExtraction(body, { jobId, bump }) {
+  await assertNoOverlappingJob(['quo', 'quo-backfill'], jobId);
   const limit = Number(body?.limit) > 0 ? Number(body.limit) : null;
 
   // Paged: PostgREST stops at 1000 and there are more than that.
@@ -3655,8 +3705,12 @@ async function runQuoBackfillExtraction(body, { bump }) {
 
 app.post('/api/quo/backfill-extraction', backgroundSync('quo-backfill', runQuoBackfillExtraction));
 
-async function runQuoSync(body, { bump }) {
+async function runQuoSync(body, { jobId, bump }) {
   {
+    // Same reason as the backfill: two jobs reading the same texts both run
+    // extraction, and the same observation lands twice in different words.
+    await assertNoOverlappingJob(['quo', 'quo-backfill'], jobId);
+
     if (!QUO_API_KEY) {
       throw new Error('Quo API key is not configured');
     }
