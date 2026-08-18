@@ -13,7 +13,8 @@
  *
  *   "Sarah Whitfield"  → first_name Sarah, last_name Whitfield
  *   "Sarah"            → first_name Sarah, last_name NULL
- *   "+1", "X", "Hubby" → first_name NULL,  last_name NULL
+ *   "+1", "X", "Hubby" → first_name kept as written, last_name NULL,
+ *                         and shown as "Guest" because it is not a name
  *
  * The single-name case leaves last_name NULL on purpose. The house rule is that
  * a plus one shares their host's surname unless a different one was recorded,
@@ -22,9 +23,12 @@
  * inherited one would print a wrong name on a place card with nothing left to
  * say it was ever a guess.
  *
- * The placeholder case keeps the person and drops the label. "+1" and "Hubby"
- * are not names; the row still exists because that is a real person who counts,
- * and they display as "Guest".
+ * The placeholder case keeps both the person and the label. "+1" and "Hubby"
+ * are not names, so they render as "Guest", but they are stored as typed:
+ * first_name is NOT NULL and, more to the point, "Hubby" is the only thing
+ * anybody ever recorded about that person and throwing it away would help
+ * nobody. The placeholder rules do their work on read, where they can be
+ * corrected.
  *
  * rsvp, meal_choice and dietary come across from the plus_one_* columns. The
  * old columns are NOT cleared: until every read surface has moved over, the
@@ -40,7 +44,7 @@ import { createClient } from '@supabase/supabase-js';
 import { writeFileSync, mkdirSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { isNamedPerson, hasPlusOne, guestFullName, allPeople, headcount } from '../shared/guest-names.js';
+import { isNamedPerson, hasPlusOne, guestFullName, headcount, UNNAMED_PLUS_ONE } from '../shared/guest-names.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const db = createClient(process.env.VITE_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
@@ -81,11 +85,21 @@ if (UNDO) {
   process.exit(0);
 }
 
-/** Split a written name into first and last, without inventing either. */
+/**
+ * Split a written name into first and last, without inventing either.
+ *
+ * A placeholder keeps whatever the couple typed. first_name is NOT NULL, so it
+ * cannot be emptied, and storing the original is better than a blank anyway:
+ * "Hubby" says the plus one is a husband, and losing that to store nothing
+ * would be throwing away the only thing anybody recorded. It is still not a
+ * name, so plusOneDisplayName and personName both render it as "Guest" — the
+ * placeholder rules do that job on read, where they can be corrected.
+ */
 function splitName(raw) {
-  const s = String(raw || '').replace(/^[*.\s]+/, '').replace(/[*.\s]+$/, '').trim();
-  if (!s) return { first: null, last: null };
-  if (!isNamedPerson(s)) return { first: null, last: null };   // placeholder: a person, not a name
+  const original = String(raw || '').trim();
+  const s = original.replace(/^[*.\s]+/, '').replace(/[*.\s]+$/, '').trim();
+  // Placeholder: a person, not a name. Kept as written, shown as "Guest".
+  if (!s || !isNamedPerson(s)) return { first: original || UNNAMED_PLUS_ONE, last: null };
   const parts = s.split(/\s+/);
   if (parts.length === 1) return { first: parts[0], last: null }; // surname derived on read
   return { first: parts.slice(0, -1).join(' '), last: parts[parts.length - 1] };
@@ -122,8 +136,8 @@ console.log(`hosts with a plus one: ${hosts.filter(hasPlusOne).length}`);
 console.log(`person rows to create: ${toCreate.length}`);
 
 const named = toCreate.filter(r => r.first_name && r.last_name).length;
-const firstOnly = toCreate.filter(r => r.first_name && !r.last_name).length;
-const unnamed = toCreate.filter(r => !r.first_name).length;
+const firstOnly = toCreate.filter(r => isNamedPerson(r.first_name) && !r.last_name).length;
+const unnamed = toCreate.filter(r => !isNamedPerson(r.first_name)).length;
 console.log(`  full name as written:            ${named}`);
 console.log(`  first name only, surname derived: ${firstOnly}`);
 console.log(`  granted but never named:          ${unnamed}  (display as "Guest")`);

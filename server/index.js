@@ -14,7 +14,7 @@ import { validateBody } from './middleware/validate.js';
 import { coerceBody } from './middleware/coerce.js';
 import { fetchAllTabs, SheetFetchError } from './lib/sheet-fetcher.js';
 import { buildDiff, applyChoices } from './lib/sheet-diff/index.js';
-import { guestFullName, plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, headcount, parsePlusOneCell } from '../shared/guest-names.js';
+import { guestFullName, plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, headcount, parsePlusOneCell, usesPersonModel, personDisplayName, toParties } from '../shared/guest-names.js';
 import { sendsConfirmation } from '../shared/rsvp-fields.js';
 import { rsvpConfirmationHtml } from './lib/rsvp-confirmation.js';
 import { WALKTHROUGH_TARGETS, TARGET_KEYS, buildNote, organisePrompt, parseItems } from './lib/walkthrough.js';
@@ -2748,7 +2748,11 @@ async function buildWeddingContext(weddingId, { noteLimit = 400 } = {}) {
       supabaseAdmin.from('weddings').select('*').eq('id', weddingId).maybeSingle(),
       // Rows, not people. Pulled in full so plus ones can be counted: a head
       // count of rows told couples half the truth about who is coming.
-      supabaseAdmin.from('wedding_guests').select('id, first_name, last_name, rsvp, plus_one_name, plus_one_rsvp').eq('wedding_id', weddingId),
+      // is_plus_one and party_id are selected because headcount() decides which
+      // model it is looking at from the rows themselves. Leave them out and it
+      // falls back to the old shape, counts the new plus-one rows as guests AND
+      // expands plus_one_name off the hosts, and reports everybody twice.
+      supabaseAdmin.from('wedding_guests').select('id, first_name, last_name, rsvp, plus_one_name, plus_one_rsvp, party_id, is_plus_one, plus_one_of').eq('wedding_id', weddingId),
     ]);
 
     // Build comprehensive context
@@ -2771,7 +2775,10 @@ async function buildWeddingContext(weddingId, { noteLimit = 400 } = {}) {
       // People, including plus ones, since that is what Sage gets asked about.
       const heads = headcount(guestRows || []);
       if (heads.total) {
-        fullContext += `Guest list: ${heads.total} people across ${(guestRows || []).length} invitations, `
+        // Invitations are parties, which stopped being the same as rows the
+        // moment a plus one got a row of their own.
+        const invitations = toParties(guestRows || []).length;
+        fullContext += `Guest list: ${heads.total} people across ${invitations} invitations, `
           + `${heads.attending} RSVP'd yes, ${heads.declined} no, ${heads.pending + heads.maybe} still to reply\n`;
       }
       if (wedding.plated_meal) fullContext += `Service style: plated meal\n`;
@@ -9626,6 +9633,81 @@ app.put('/api/guest-settings/:weddingId', async (req, res) => {
   }
 });
 
+/**
+ * Keep a guest's plus-one row in step with the plus_one_* columns.
+ *
+ * Migration 025 gave a plus one a row of their own, and the admin guest form
+ * still speaks in plus_one_name. Both are written, deliberately: the columns
+ * are what the couple typed and are still read by the CSV export and by any
+ * surface not yet moved over, and the row is where the plus one now lives.
+ * Writing one without the other is how they drift, so it happens in one place.
+ *
+ * shared/guest-names.js ignores the columns as soon as a plus-one row exists,
+ * so nobody is counted twice while both are in use.
+ *
+ * Never throws: a guest edit that saved must not fail because the mirror did.
+ * It shouts instead.
+ */
+async function syncPlusOneRow(host) {
+  if (!host?.id) return;
+  // Only meaningful after 025. Before it, the columns are all there is.
+  if (!Object.prototype.hasOwnProperty.call(host, 'is_plus_one')) return;
+  if (host.is_plus_one) return;   // a plus one does not have a plus one
+
+  try {
+    const { data: existing, error: readErr } = await supabaseAdmin
+      .from('wedding_guests').select('*').eq('plus_one_of', host.id).maybeSingle();
+    if (readErr) throw readErr;
+
+    const wanted = String(host.plus_one_name || '').trim();
+
+    // The couple took the plus one away.
+    if (!wanted) {
+      if (existing) {
+        const { error } = await supabaseAdmin.from('wedding_guests').delete().eq('id', existing.id);
+        if (error) throw error;
+      }
+      return;
+    }
+
+    // A placeholder is kept as written and shown as "Guest"; a single name
+    // leaves last_name null so the host's surname stays inherited on read.
+    const tidied = wanted.replace(/^[*.\s]+/, '').replace(/[*.\s]+$/, '').trim();
+    let first = wanted, last = null;
+    if (tidied && isNamedPerson(tidied)) {
+      const parts = tidied.split(/\s+/);
+      first = parts.length === 1 ? parts[0] : parts.slice(0, -1).join(' ');
+      last = parts.length === 1 ? null : parts[parts.length - 1];
+    }
+
+    const row = {
+      wedding_id: host.wedding_id,
+      party_id: host.party_id || host.id,
+      is_plus_one: true,
+      plus_one_of: host.id,
+      first_name: first,
+      last_name: last,
+      rsvp: host.plus_one_rsvp || 'pending',
+      meal_choice: host.plus_one_meal_choice || null,
+      dietary_restrictions: host.plus_one_dietary || null,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (existing) {
+      // table_assignment, email, phone and tags are the plus one's own from
+      // here on, so a host's edit does not overwrite them.
+      const { error } = await supabaseAdmin.from('wedding_guests').update(row).eq('id', existing.id);
+      if (error) throw error;
+    } else {
+      const { error } = await supabaseAdmin.from('wedding_guests')
+        .insert({ ...row, table_assignment: host.table_assignment || null });
+      if (error) throw error;
+    }
+  } catch (err) {
+    console.error(`[guests] could not sync the plus-one row for ${host.id}:`, err.message);
+  }
+}
+
 // POST create guest
 app.post('/api/guests', async (req, res) => {
   try {
@@ -9649,6 +9731,7 @@ app.post('/api/guests', async (req, res) => {
       })
       .select().single();
     if (error) throw error;
+    await syncPlusOneRow(data);
     res.json({ guest: data });
   } catch (err) {
     console.error('Create guest error:', err);
@@ -9677,6 +9760,7 @@ app.put('/api/guests/:id', async (req, res) => {
       .eq('id', req.params.id)
       .select().single();
     if (error) throw error;
+    await syncPlusOneRow(data);
     res.json({ guest: data });
   } catch (err) {
     console.error('Update guest error:', err);
@@ -10652,42 +10736,75 @@ app.get('/api/rsvp/:slug/search', rsvpSearchLimiter, async (req, res) => {
     // the low hundreds, so the whole list is cheap to pull.
     const { data: guests, error: ge } = await supabaseAdmin
       .from('wedding_guests')
-      .select('id, first_name, last_name, plus_one_name')
+      .select('id, first_name, last_name, plus_one_name, party_id, is_plus_one, plus_one_of')
       .eq('wedding_id', settings.wedding_id);
     if (ge) throw ge;
 
     const needle = q.toLowerCase();
     const results = [];
 
-    for (const g of guests || []) {
-      const hostName = guestFullName(g);
-      if (hostName.toLowerCase().includes(needle)) {
+    if (usesPersonModel(guests)) {
+      // Since migration 025 a plus one has a row of their own, so searching is
+      // just searching people. Expanding plus_one_name off the host as well
+      // would return everybody twice, which on the one published site would be
+      // 59 people seeing themselves listed two ways.
+      const byId = new Map(guests.map(g => [g.id, g]));
+      const plusOneOf = new Map();
+      for (const g of guests) if (g.is_plus_one && g.plus_one_of) plusOneOf.set(g.plus_one_of, g);
+
+      for (const g of guests) {
+        const head = g.is_plus_one ? byId.get(g.plus_one_of) : g;
+        const name = personDisplayName(g, head);
+        // "Guest" is not something anybody types into a search box, and a plus
+        // one nobody has named should not be findable as a person yet.
+        if (!name || name === 'Guest') continue;
+        if (!name.toLowerCase().includes(needle)) continue;
+
+        const theirPlusOne = g.is_plus_one ? null : plusOneOf.get(g.id);
         results.push({
           id: g.id,
-          name: hostName,
-          host_name: hostName,
-          plus_one_name: g.plus_one_name || null,
+          name,
+          host_name: g.is_plus_one ? guestFullName(head) : name,
+          plus_one_name: theirPlusOne ? guestFullName(theirPlusOne) || null : null,
           // What to call them, and whether we have a name at all. The form
           // uses the second to decide whether to ask who they're bringing.
-          plus_one_display: hasPlusOne(g) ? plusOneDisplayName(g) : null,
-          plus_one_named: isNamedPerson(g.plus_one_name),
-          is_plus_one: false,
+          plus_one_display: theirPlusOne ? personDisplayName(theirPlusOne, g) : null,
+          plus_one_named: theirPlusOne ? isNamedPerson(guestFullName(theirPlusOne)) : false,
+          plus_one_id: theirPlusOne ? theirPlusOne.id : null,
+          is_plus_one: !!g.is_plus_one,
         });
       }
-      // A plus one has no row, so they are only findable through their host.
-      // plusOneFullName gives them the host's surname when none was recorded.
-      if (isNamedPerson(g.plus_one_name)) {
-        const p1Name = plusOneFullName(g.plus_one_name, g.last_name);
-        if (p1Name.toLowerCase().includes(needle)) {
+    } else {
+      for (const g of guests || []) {
+        const hostName = guestFullName(g);
+        if (hostName.toLowerCase().includes(needle)) {
           results.push({
             id: g.id,
-            name: p1Name,
+            name: hostName,
             host_name: hostName,
-            plus_one_name: g.plus_one_name,
-            plus_one_display: plusOneDisplayName(g),
-            plus_one_named: true,
-            is_plus_one: true,
+            plus_one_name: g.plus_one_name || null,
+            plus_one_display: hasPlusOne(g) ? plusOneDisplayName(g) : null,
+            plus_one_named: isNamedPerson(g.plus_one_name),
+            plus_one_id: null,
+            is_plus_one: false,
           });
+        }
+        // Before 025 a plus one had no row, so they were only findable through
+        // their host. plusOneFullName gave them the host's surname.
+        if (isNamedPerson(g.plus_one_name)) {
+          const p1Name = plusOneFullName(g.plus_one_name, g.last_name);
+          if (p1Name.toLowerCase().includes(needle)) {
+            results.push({
+              id: g.id,
+              name: p1Name,
+              host_name: hostName,
+              plus_one_name: g.plus_one_name,
+              plus_one_display: plusOneDisplayName(g),
+              plus_one_named: true,
+              plus_one_id: null,
+              is_plus_one: true,
+            });
+          }
         }
       }
     }
@@ -10722,11 +10839,26 @@ app.post('/api/rsvp/:slug', async (req, res) => {
 
     const { data: guest, error: ge } = await supabaseAdmin
       .from('wedding_guests')
-      .select('id, wedding_id, first_name, last_name, email, plus_one_name')
+      .select('*')
       .eq('id', guest_id)
       .eq('wedding_id', settings.wedding_id)
       .single();
     if (ge || !guest) return res.status(404).json({ error: 'Guest not found' });
+
+    // Since migration 025 a plus one is a row, so their answers belong on it.
+    // Writing them to the host's plus_one_* columns instead would leave the
+    // person row saying "pending" for ever while the guest list reads that row.
+    const personModel = Object.prototype.hasOwnProperty.call(guest, 'is_plus_one');
+    let plusOneRow = null;
+    if (personModel && !guest.is_plus_one) {
+      const { data: po, error: poErr } = await supabaseAdmin
+        .from('wedding_guests')
+        .select('*')
+        .eq('plus_one_of', guest.id)
+        .maybeSingle();
+      if (poErr) throw poErr;
+      plusOneRow = po;
+    }
 
     const update = {
       rsvp,
@@ -10734,10 +10866,13 @@ app.post('/api/rsvp/:slug', async (req, res) => {
       updated_at: new Date().toISOString(),
     };
     if (meal_choice !== undefined) update.meal_choice = meal_choice;
-    if (plus_one_rsvp !== undefined) update.plus_one_rsvp = plus_one_rsvp;
-    if (plus_one_meal_choice !== undefined) update.plus_one_meal_choice = plus_one_meal_choice;
-    if (plus_one_dietary !== undefined) update.plus_one_dietary = plus_one_dietary;
     if (rsvp_extras) update.rsvp_extras = rsvp_extras;
+
+    // What the plus one answered, ready for whichever place it has to go.
+    const plusOneUpdate = {};
+    if (plus_one_rsvp !== undefined) plusOneUpdate.rsvp = plus_one_rsvp;
+    if (plus_one_meal_choice !== undefined) plusOneUpdate.meal_choice = plus_one_meal_choice;
+    if (plus_one_dietary !== undefined) plusOneUpdate.dietary_restrictions = plus_one_dietary;
 
     // A guest may name the plus one they were given. They may not award
     // themselves one, and they may not rename one the couple already named.
@@ -10746,11 +10881,27 @@ app.post('/api/rsvp/:slug', async (req, res) => {
     // rather than anything the form sent.
     if (typeof plus_one_name === 'string') {
       const proposed = plus_one_name.trim().replace(/\s+/g, ' ').slice(0, 80);
-      const wasGranted = hasPlusOne(guest);
-      const stillUnnamed = !isNamedPerson(guest.plus_one_name);
+      const current = plusOneRow ? guestFullName(plusOneRow) : guest.plus_one_name;
+      const wasGranted = plusOneRow ? true : hasPlusOne(guest);
+      const stillUnnamed = !isNamedPerson(current);
       if (wasGranted && stillUnnamed && isNamedPerson(proposed)) {
-        update.plus_one_name = proposed;
+        if (plusOneRow) {
+          // Split the way the backfill did, and leave the surname off when they
+          // gave only one name so it stays inherited rather than written down.
+          const parts = proposed.split(/\s+/);
+          plusOneUpdate.first_name = parts.length === 1 ? parts[0] : parts.slice(0, -1).join(' ');
+          plusOneUpdate.last_name = parts.length === 1 ? null : parts[parts.length - 1];
+        } else {
+          update.plus_one_name = proposed;
+        }
       }
+    }
+
+    // Before 025 the plus one's answers lived on the host's row.
+    if (!plusOneRow) {
+      if (plus_one_rsvp !== undefined) update.plus_one_rsvp = plus_one_rsvp;
+      if (plus_one_meal_choice !== undefined) update.plus_one_meal_choice = plus_one_meal_choice;
+      if (plus_one_dietary !== undefined) update.plus_one_dietary = plus_one_dietary;
     }
 
     const { error: ue } = await supabaseAdmin
@@ -10758,6 +10909,17 @@ app.post('/api/rsvp/:slug', async (req, res) => {
       .update(update)
       .eq('id', guest_id);
     if (ue) throw ue;
+
+    if (plusOneRow && Object.keys(plusOneUpdate).length) {
+      plusOneUpdate.updated_at = new Date().toISOString();
+      const { error: pue } = await supabaseAdmin
+        .from('wedding_guests')
+        .update(plusOneUpdate)
+        .eq('id', plusOneRow.id);
+      // The guest's own answer is already saved. Losing the plus one's is worth
+      // shouting about, but not worth telling the guest their RSVP failed.
+      if (pue) console.error(`[RSVP] plus-one row ${plusOneRow.id} did not save:`, pue.message);
+    }
 
     // Confirmation email. Best effort and strictly after the save: the RSVP is
     // already recorded, so nothing here is allowed to fail the request. Sends
@@ -10769,18 +10931,30 @@ app.post('/api/rsvp/:slug', async (req, res) => {
       if (to && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to) && sendsConfirmation(settings.rsvp_config)) {
         const { data: wedding } = await supabaseAdmin
           .from('weddings').select('couple_names, wedding_date').eq('id', settings.wedding_id).maybeSingle();
-        const finalName = update.plus_one_name || guest.plus_one_name;
         const party = [
           { who: guestFullName(guest), status: rsvp, meal: update.meal_choice },
-          ...(finalName ? [{
-            who: plusOneDisplayName({ ...guest, plus_one_name: finalName }),
-            status: update.plus_one_rsvp,
-            meal: update.plus_one_meal_choice,
-          }] : []),
-        ].filter(p => p.status);
+        ];
+        if (plusOneRow) {
+          const merged = { ...plusOneRow, ...plusOneUpdate };
+          party.push({
+            who: personDisplayName(merged, guest),
+            status: plusOneUpdate.rsvp,
+            meal: plusOneUpdate.meal_choice,
+          });
+        } else {
+          const finalName = update.plus_one_name || guest.plus_one_name;
+          if (finalName) {
+            party.push({
+              who: plusOneDisplayName({ ...guest, plus_one_name: finalName }),
+              status: update.plus_one_rsvp,
+              meal: update.plus_one_meal_choice,
+            });
+          }
+        }
+        const confirmParty = party.filter(p => p.status);
         const couple = wedding?.couple_names || 'the couple';
         const sent = await sendEmail(to, `Your RSVP for ${couple}`, rsvpConfirmationHtml({
-          couple, weddingDate: wedding?.wedding_date, party, deadline: settings.rsvp_deadline,
+          couple, weddingDate: wedding?.wedding_date, party: confirmParty, deadline: settings.rsvp_deadline,
         }));
         if (sent) confirmationSentTo = to;
       }

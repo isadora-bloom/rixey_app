@@ -172,7 +172,7 @@ export function toParties(guests) {
  * derived on read and never written, so fixing the host fixes them and nothing
  * downstream inherits a guess it can no longer question.
  */
-function personName(row, head) {
+export function personDisplayName(row, head) {
   const own = guestFullName(row);
   if (!row.is_plus_one) return own;
   if (!own) return 'Guest';                       // granted, not yet named
@@ -188,7 +188,7 @@ export function allPeople(guests) {
   return toParties(guests).flatMap(({ head, members }) =>
     members.map(row => ({
       id: `${row.id}`,
-      name: personName(row, head),
+      name: personDisplayName(row, head),
       rsvp: row.rsvp || 'pending',
       mealChoice: row.meal_choice || null,
       dietary: row.dietary_restrictions || null,
@@ -218,7 +218,7 @@ export function dietaryNotes(guests) {
         .map(row => ({ row, note: String(row.dietary_restrictions || '').trim() }))
         .filter(x => x.note)
         .map(({ row, note }) => ({
-          name: personName(row, head),
+          name: personDisplayName(row, head),
           note,
           isPlusOne: !!row.is_plus_one,
           host: row.is_plus_one ? guestFullName(head) : null,
