@@ -98,5 +98,20 @@ const DURING = [
 check('two people, not three', headcount(DURING).total, 2);
 check('one dietary note, not two', dietaryNotes(DURING).length, 1);
 
+
+console.log('\neach person carries their own row, so seating can read their table:');
+// PrintView seats one person at a time from p.row.table_assignment. Before 025
+// a plus one shares their host's row and therefore their table; after it they
+// have their own and can be moved without moving whoever invited them.
+const seatedParty = allPeople(PARTY_MODEL.map(g => ({ ...g, table_assignment: 'Table 1' })));
+check('party model: a plus one sits at their host table',
+  seatedParty.filter(p => p.row?.table_assignment === 'Table 1').length, 7);
+
+const seatedPerson = allPeople(PERSON_MODEL.map(g => ({ ...g, table_assignment: g.is_plus_one ? 'Table 2' : 'Table 1' })));
+check('person model: a plus one can be seated apart from their host',
+  seatedPerson.filter(p => p.row?.table_assignment === 'Table 2').map(p => p.name).sort(),
+  ['Cole Ashby', 'Guest', 'Tom Whitfield']);
+check('nobody is seated twice', seatedPerson.length, 7);
+
 console.log(failures ? `\n${failures} failed` : '\nAll good.');
 process.exit(failures ? 1 : 0);

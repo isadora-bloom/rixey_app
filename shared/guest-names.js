@@ -115,6 +115,9 @@ export function partyMembers(guest) {
     dietary: guest?.dietary_restrictions || null,
     isPlusOne: false,
     host: null,
+    // The row this person came out of. Before 025 a plus one shares their
+    // host's row, so anything read off it — a table, a tag — is the party's.
+    row: guest,
   }];
   if (hasPlusOne(guest)) {
     people.push({
@@ -125,6 +128,7 @@ export function partyMembers(guest) {
       dietary: guest.plus_one_dietary || null,
       isPlusOne: true,
       host: guestFullName(guest),
+      row: guest,
     });
   }
   return people;
@@ -194,6 +198,9 @@ export function allPeople(guests) {
       dietary: row.dietary_restrictions || null,
       isPlusOne: !!row.is_plus_one,
       host: row.is_plus_one ? guestFullName(head) : null,
+      // After 025 this is the person's own row, so their table, tags and
+      // contact details are theirs rather than their host's.
+      row,
     }))
   );
 }

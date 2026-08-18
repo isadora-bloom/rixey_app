@@ -10897,11 +10897,18 @@ app.post('/api/rsvp/:slug', async (req, res) => {
       }
     }
 
-    // Before 025 the plus one's answers lived on the host's row.
-    if (!plusOneRow) {
-      if (plus_one_rsvp !== undefined) update.plus_one_rsvp = plus_one_rsvp;
-      if (plus_one_meal_choice !== undefined) update.plus_one_meal_choice = plus_one_meal_choice;
-      if (plus_one_dietary !== undefined) update.plus_one_dietary = plus_one_dietary;
+    // The plus_one_* columns are still written either way.
+    //
+    // Before 025 they were the only place the answer could live. After it they
+    // are a mirror: the person row is the truth, but the guest list, the CSV
+    // export and the print pack still read these, and a mirror that stops being
+    // updated is worse than no mirror. Both are written here, in one handler,
+    // so they cannot disagree.
+    if (plus_one_rsvp !== undefined) update.plus_one_rsvp = plus_one_rsvp;
+    if (plus_one_meal_choice !== undefined) update.plus_one_meal_choice = plus_one_meal_choice;
+    if (plus_one_dietary !== undefined) update.plus_one_dietary = plus_one_dietary;
+    if (plusOneRow && plusOneUpdate.first_name) {
+      update.plus_one_name = [plusOneUpdate.first_name, plusOneUpdate.last_name].filter(Boolean).join(' ');
     }
 
     const { error: ue } = await supabaseAdmin

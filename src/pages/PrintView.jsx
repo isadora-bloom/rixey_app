@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { API_URL } from '../config/api'
 import { authHeaders } from '../utils/api'
 import { formatDateOnly } from '../utils/dates'
-import { partyMembers, dietaryNotInRegistry } from '../../shared/guest-names'
+import { allPeople, dietaryNotInRegistry } from '../../shared/guest-names'
 import { partnerLabels, fillLabel } from '../../shared/partner-labels'
 
 
@@ -1272,15 +1272,19 @@ export default function PrintView() {
               // A table seats people, not rows. Plus ones used to be dropped
               // here entirely, so a table of two printed one name and "(1
               // guest)" on the document the venue works from.
+              // Seated one person at a time, from each person's own row.
+              // Expanding every row into a party would seat a plus one twice
+              // since migration 025 gave them a row of their own, and the
+              // printed pack is the thing the venue actually works from.
               const byTable = {}
               const unassigned = []
-              guests.forEach(g => {
-                const seats = partyMembers(g)
-                if (g.table_assignment) {
-                  if (!byTable[g.table_assignment]) byTable[g.table_assignment] = []
-                  byTable[g.table_assignment].push(...seats)
+              allPeople(guests).forEach(p => {
+                const table = p.row?.table_assignment
+                if (table) {
+                  if (!byTable[table]) byTable[table] = []
+                  byTable[table].push(p)
                 } else {
-                  unassigned.push(...seats)
+                  unassigned.push(p)
                 }
               })
               const Person = ({ p }) => (

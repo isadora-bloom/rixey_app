@@ -908,6 +908,19 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions, sitePassword 
                 <p className={`text-sm font-medium ${t.accent}`}>
                   {plusOneKnown ? `And ${plusOneLabel}?` : 'And your guest?'}
                 </p>
+                {/*
+                  A guest arriving here has been given a plus one and has no way
+                  of knowing what that means. Two things are not obvious and both
+                  cost the couple a headcount: that somebody decided they could
+                  bring a person, and that saying "Not attending" here is how you
+                  say you are coming on your own. Left unexplained, people either
+                  skip it or answer for themselves twice.
+                */}
+                <p className={`text-xs ${t.body}`}>
+                  {plusOneKnown
+                    ? `${plusOneLabel} was invited along with you. Let us know whether they can make it.`
+                    : 'You are welcome to bring someone with you. If you would rather come on your own, choose “Not attending” below and that is absolutely fine.'}
+                </p>
                 <div className="grid grid-cols-2 gap-3">
                   {['yes', 'no'].map(val => (
                     <button

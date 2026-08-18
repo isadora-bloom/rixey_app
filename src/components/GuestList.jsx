@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, Fragment } from 'react'
 import { API_URL } from '../config/api'
 import { authHeaders, apiFetch } from '../utils/api'
 import { describeExtras } from '../../shared/rsvp-fields'
-import { plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, partyMembers, allPeople, headcount } from '../../shared/guest-names'
+import { plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, partyMembers, allPeople, headcount, usesPersonModel } from '../../shared/guest-names'
 import { useToast } from './ui/Toast'
 
 
@@ -1020,7 +1020,7 @@ export default function GuestList({ weddingId, userId }) {
   }
 
   // Filtering
-  const filtered = guests.filter(g => {
+  const filtered = parties.filter(g => {
     if (searchTerm) {
       const haystack = `${g.first_name} ${g.last_name || ''} ${g.plus_one_name || ''} ${g.email || ''} ${g.dietary_restrictions || ''}`.toLowerCase()
       if (!haystack.includes(searchTerm.toLowerCase())) return false
@@ -1082,7 +1082,14 @@ export default function GuestList({ weddingId, userId }) {
   }
 
   // Seat usage per table: a party takes a seat per person, not per row.
-  const tableCounts = guests.reduce((acc, g) => {
+  // Since migration 025 a plus one has a row of their own. This screen shows a
+  // party per line, with the plus one inside their host's line, so the plus-one
+  // rows must not also appear on their own or every one of them is on screen
+  // twice. Headcounts still run over the full set: headcount() knows which
+  // model it is looking at, and it is people it is counting, not lines.
+  const parties = usesPersonModel(guests) ? guests.filter(g => !g.is_plus_one) : guests
+
+  const tableCounts = parties.reduce((acc, g) => {
     if (g.table_assignment) {
       acc[g.table_assignment] = (acc[g.table_assignment] || 0) + partyMembers(g).length
     }
@@ -1092,7 +1099,9 @@ export default function GuestList({ weddingId, userId }) {
   // Summary stats. Every figure here is a headcount of people. They used to be
   // a mix: total and confirmed counted people while declined, pending and
   // maybe counted parties, so the buckets never added up to the total.
-  const plusOneCount = guests.filter(hasPlusOne).length
+  const plusOneCount = usesPersonModel(guests)
+    ? guests.filter(g => g.is_plus_one).length
+    : guests.filter(hasPlusOne).length
   const { total: totalPeople, attending: confirmed, declined, pending, maybe } = headcount(guests)
 
   // Meal counts (if plated). Anyone who has declined is left out: their choice
@@ -1193,7 +1202,7 @@ export default function GuestList({ weddingId, userId }) {
             // person and an invitation, which is what used to be muddled.
             {
               label: 'Total People', value: totalPeople, color: 'text-sage-700',
-              sub: plusOneCount > 0 ? `${guests.length} invitations, ${plusOneCount} with a plus one` : `${guests.length} invitations`,
+              sub: plusOneCount > 0 ? `${parties.length} invitations, ${plusOneCount} with a plus one` : `${parties.length} invitations`,
             },
             { label: 'Confirmed', value: confirmed, color: 'text-green-600' },
             { label: 'Declined', value: declined, color: 'text-red-500' },
