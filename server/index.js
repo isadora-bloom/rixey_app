@@ -9830,9 +9830,17 @@ app.post('/api/guests', async (req, res) => {
       table_assignment,
     } = req.body;
     if (!weddingId || !first_name) return res.status(400).json({ error: 'weddingId and first_name required' });
+    const newGuestId = crypto.randomUUID();
     const { data, error } = await supabaseAdmin
       .from('wedding_guests')
       .insert({
+        // A new guest is the head of their own party. party_id is NOT NULL
+        // since migration 025 and has no default it could take, so the id is
+        // generated here and used for both — otherwise every attempt to add a
+        // guest fails with a not-null violation, which is exactly what
+        // happened until 19 August.
+        id: newGuestId,
+        party_id: newGuestId,
         wedding_id: weddingId, first_name, last_name, rsvp: rsvp || 'pending',
         dietary_restrictions, meal_choice, tags: tags || [],
         notes, email, phone, address,
@@ -9954,9 +9962,16 @@ app.post('/api/guests/bulk', async (req, res) => {
       .filter(r => existingNames.has(key(r.first_name, r.last_name)))
       .map(r => [r.first_name, r.last_name].filter(Boolean).join(' '));
 
+    // Every imported guest heads their own party, for the same reason as
+    // above. Without this the whole import fails on the first row.
+    const rowsWithParty = rows.map(r => {
+      const id = crypto.randomUUID();
+      return { ...r, id, party_id: id };
+    });
+
     const { data, error } = await supabaseAdmin
       .from('wedding_guests')
-      .insert(rows)
+      .insert(rowsWithParty)
       .select();
     if (error) throw error;
     res.json({
