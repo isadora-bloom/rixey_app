@@ -8,6 +8,10 @@ import { createClient } from '@supabase/supabase-js';
 import multer from 'multer';
 import { google } from 'googleapis';
 import rateLimit from 'express-rate-limit';
+// node:crypto, not the global. globalThis.crypto is Web Crypto and has no
+// createHash, so the fingerprint would throw inside the one handler whose
+// whole job is to not throw.
+import crypto from 'node:crypto';
 import { requireAuth, requireAdmin } from './middleware/auth.js';
 import { createWeddingAccess } from './middleware/weddingAccess.js';
 import { validateBody } from './middleware/validate.js';
@@ -3575,6 +3579,114 @@ app.post('/api/gmail/disconnect', async (req, res) => {
     res.status(500).json({ error: 'Failed to disconnect' });
   }
 });
+
+
+// ============ CLIENT ERRORS ============
+//
+// A crash in a browser reaches the venue, instead of only the person it
+// happened to. The guest list was broken for twenty hours in August because
+// ErrorBoundary called console.error and stopped there, and the way anybody
+// found out was a client ringing up.
+//
+// No auth: a crash on the sign-in page has no session, and the point is to hear
+// about it. Kept cheap and unfailable — whatever reports here is already in a
+// bad state and must not be handed a second error.
+
+/** message + first frame. One row per distinct fault, however often it fires. */
+function errorFingerprint(message, stack) {
+  const firstFrame = String(stack || '')
+    .split('\n')
+    .map(l => l.trim())
+    .find(l => l.startsWith('at ')) || '';
+  return crypto.createHash('sha1')
+    .update(`${String(message || '').slice(0, 300)}|${firstFrame.slice(0, 200)}`)
+    .digest('hex');
+}
+
+// One browser having a bad day must not be able to fill the table.
+const clientErrorSeen = new Map();
+function tooChatty(fingerprint) {
+  const now = Date.now();
+  const last = clientErrorSeen.get(fingerprint) || 0;
+  if (now - last < 10000) return true;
+  clientErrorSeen.set(fingerprint, now);
+  if (clientErrorSeen.size > 500) clientErrorSeen.clear();
+  return false;
+}
+
+app.post('/api/client-errors', express.json({ limit: '64kb' }), async (req, res) => {
+  // Answered before anything else is attempted. The browser is not waiting to
+  // find out whether we filed it, and a failure here must never become a second
+  // error on a page that is already broken.
+  res.json({ ok: true });
+
+  try {
+    const { message, stack, component, url, weddingId, userEmail, release } = req.body || {};
+    if (!message) return;
+
+    const fingerprint = errorFingerprint(message, stack);
+    if (tooChatty(fingerprint)) return;
+
+    const now = new Date().toISOString();
+    const { data: existing, error: readErr } = await supabaseAdmin
+      .from('client_errors').select('id, seen_count').eq('fingerprint', fingerprint).maybeSingle();
+
+    // The table may not exist yet. Say so in the log rather than silently
+    // dropping the one signal this whole thing is for.
+    if (readErr) {
+      console.error(`[client-error] could not record (run migration 026?): ${readErr.message}`);
+      console.error(`[client-error] ${message} @ ${url}`);
+      return;
+    }
+
+    if (existing) {
+      await supabaseAdmin.from('client_errors')
+        .update({ seen_count: existing.seen_count + 1, last_seen_at: now, status: 'open' })
+        .eq('id', existing.id);
+    } else {
+      await supabaseAdmin.from('client_errors').insert({
+        message: String(message).slice(0, 2000),
+        fingerprint,
+        stack: stack ? String(stack).slice(0, 8000) : null,
+        component: component ? String(component).slice(0, 8000) : null,
+        url: url ? String(url).slice(0, 500) : null,
+        user_agent: String(req.headers['user-agent'] || '').slice(0, 500),
+        wedding_id: weddingId || null,
+        user_email: userEmail ? String(userEmail).slice(0, 200) : null,
+        release: release ? String(release).slice(0, 60) : null,
+        first_seen_at: now,
+        last_seen_at: now,
+      });
+      // New faults are worth a line in the server log too, so they show up in
+      // Railway even if nobody opens the admin panel.
+      console.error(`[client-error] NEW: ${message} @ ${url}`);
+    }
+  } catch (err) {
+    console.error('[client-error] handler failed:', err.message);
+  }
+});
+
+app.get('/api/admin/client-errors', requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('client_errors').select('*')
+      .order('last_seen_at', { ascending: false })
+      .limit(50);
+    if (error) throw error;
+    res.json(data || []);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/admin/client-errors/:id/resolve', requireAdmin, async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin
+      .from('client_errors').update({ status: 'done', notes: req.body?.notes || null })
+      .eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 
 // ============ QUO (OPENPHONE) INTEGRATION ============
 

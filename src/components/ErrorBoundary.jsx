@@ -1,4 +1,5 @@
 import { Component } from 'react'
+import { reportError } from '../utils/reportError'
 
 export default class ErrorBoundary extends Component {
   constructor(props) {
@@ -12,6 +13,10 @@ export default class ErrorBoundary extends Component {
 
   componentDidCatch(error, errorInfo) {
     console.error('ErrorBoundary caught:', error, errorInfo)
+    // And tell somebody. This caught the guest list crash for twenty hours in
+    // August and the only place it said so was a console at the far end of
+    // somebody else's laptop.
+    reportError(error, { component: errorInfo?.componentStack })
   }
 
   handleRetry = () => {
@@ -34,7 +39,8 @@ export default class ErrorBoundary extends Component {
             </div>
             <h2 className="text-xl font-serif text-sage-800 mb-2">Something went wrong</h2>
             <p className="text-sage-600 text-sm mb-6">
-              An unexpected error occurred. You can try again or reload the page.
+              Something on this page stopped working. Rixey has been told automatically,
+              so you do not need to report it. You can try again or reload the page.
             </p>
             <div className="flex gap-3 justify-center">
               <button
