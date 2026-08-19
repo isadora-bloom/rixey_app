@@ -1,4 +1,4 @@
-import { supabase } from '../lib/supabase'
+import { supabase, getSessionOnce } from '../lib/supabase'
 
 /**
  * The current access token, cached.
@@ -36,7 +36,9 @@ async function getAuthToken() {
   // Several callers arriving at once share one lookup rather than one each,
   // which is what caused the pile-up in the first place.
   if (!inFlight) {
-    inFlight = supabase.auth.getSession()
+    // Shared with AuthContext, so the two of them are one lock acquisition at
+    // page load rather than two fighting over it.
+    inFlight = getSessionOnce()
       .then(({ data: { session } }) => {
         cachedToken = session?.access_token || null
         cachedExpiry = session?.expires_at || 0

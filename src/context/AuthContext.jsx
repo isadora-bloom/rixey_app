@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react'
-import { supabase } from '../lib/supabase'
+import { supabase, getSessionOnce } from '../lib/supabase'
 
 const AuthContext = createContext({})
 
@@ -46,7 +46,7 @@ export function AuthProvider({ children }) {
       return
     }
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    getSessionOnce().then(({ data: { session } }) => {
       setUser(session?.user ?? null)
       if (session?.user) {
         loadProfile(session.user.id).then(() => setLoading(false))
