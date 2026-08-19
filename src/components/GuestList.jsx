@@ -1019,6 +1019,25 @@ export default function GuestList({ weddingId, userId }) {
     w.print()
   }
 
+  // Since migration 025 a plus one has a row of their own. This screen shows a
+  // party per line, with the plus one inside their host's line, so the plus-one
+  // rows must not also appear on their own or every one of them is on screen
+  // twice. Headcounts still run over the full set: headcount() knows which
+  // model it is looking at, and it is people it is counting, not lines.
+  const parties = usesPersonModel(guests) ? guests.filter(g => !g.is_plus_one) : guests
+
+  // The plus one's own row, by the host it belongs to.
+  //
+  // Their answers live there now. The host's plus_one_* columns are kept as a
+  // mirror so the CSV export and the print pack keep working, but a mirror can
+  // be a deploy behind the truth, and this screen should show what the plus one
+  // actually said rather than what was last copied.
+  const plusOneRowFor = new Map()
+  for (const g of guests) if (g.is_plus_one && g.plus_one_of) plusOneRowFor.set(g.plus_one_of, g)
+  const plusOneRsvpOf = g => plusOneRowFor.get(g.id)?.rsvp ?? g.plus_one_rsvp
+  const plusOneDietaryOf = g => plusOneRowFor.get(g.id)?.dietary_restrictions ?? g.plus_one_dietary
+  const plusOneMealOf = g => plusOneRowFor.get(g.id)?.meal_choice ?? g.plus_one_meal_choice
+
   // Filtering
   const filtered = parties.filter(g => {
     if (searchTerm) {
@@ -1082,24 +1101,6 @@ export default function GuestList({ weddingId, userId }) {
   }
 
   // Seat usage per table: a party takes a seat per person, not per row.
-  // Since migration 025 a plus one has a row of their own. This screen shows a
-  // party per line, with the plus one inside their host's line, so the plus-one
-  // rows must not also appear on their own or every one of them is on screen
-  // twice. Headcounts still run over the full set: headcount() knows which
-  // model it is looking at, and it is people it is counting, not lines.
-  const parties = usesPersonModel(guests) ? guests.filter(g => !g.is_plus_one) : guests
-
-  // The plus one's own row, by the host it belongs to.
-  //
-  // Their answers live there now. The host's plus_one_* columns are kept as a
-  // mirror so the CSV export and the print pack keep working, but a mirror can
-  // be a deploy behind the truth, and this screen should show what the plus one
-  // actually said rather than what was last copied.
-  const plusOneRowFor = new Map()
-  for (const g of guests) if (g.is_plus_one && g.plus_one_of) plusOneRowFor.set(g.plus_one_of, g)
-  const plusOneRsvpOf = g => plusOneRowFor.get(g.id)?.rsvp ?? g.plus_one_rsvp
-  const plusOneDietaryOf = g => plusOneRowFor.get(g.id)?.dietary_restrictions ?? g.plus_one_dietary
-  const plusOneMealOf = g => plusOneRowFor.get(g.id)?.meal_choice ?? g.plus_one_meal_choice
 
   const tableCounts = parties.reduce((acc, g) => {
     if (g.table_assignment) {
