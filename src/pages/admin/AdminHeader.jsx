@@ -9,7 +9,7 @@ import NotificationBell from '../../components/NotificationBell'
  * unreachable, and because the select's value had no matching option whenever
  * that view was open, the dropdown also went blank and looked broken.
  */
-function views({ stats, unreadMessages, unansweredCount, tourCount }) {
+function views({ stats, unreadMessages, unansweredCount, tourCount, crashCount }) {
   return [
     { id: 'weddings', label: 'Weddings', count: stats.active },
     { id: 'messages', label: 'Messages', count: unreadMessages, alert: unreadMessages > 0 },
@@ -25,6 +25,9 @@ function views({ stats, unreadMessages, unansweredCount, tourCount }) {
     { id: 'knowledge-base', label: 'Knowledge Base' },
     { id: 'venue-settings', label: 'Venue Settings' },
     { id: 'usage', label: 'Usage' },
+    // Badged red on purpose. The whole point is that a crash is noticed
+    // without anybody going looking for it.
+    { id: 'errors', label: 'Errors', count: crashCount, alert: crashCount > 0 },
   ]
 }
 
@@ -41,8 +44,9 @@ export default function AdminHeader({
   setViewingWedding,
   setActiveTab,
   tourCount = 0,
+  crashCount = 0,
 }) {
-  const VIEWS = views({ stats, unreadMessages, unansweredCount, tourCount })
+  const VIEWS = views({ stats, unreadMessages, unansweredCount, tourCount, crashCount })
 
   return (
     <header

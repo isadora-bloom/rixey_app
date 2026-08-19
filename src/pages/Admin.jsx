@@ -19,6 +19,7 @@ import { parseDateOnly } from '../utils/dates'
 
 // Extracted sub-components
 import AdminHeader from './admin/AdminHeader'
+import CrashReports from '../components/CrashReports'
 import AdminWeddingList from './admin/AdminWeddingList'
 import AdminWeddingProfile from './admin/AdminWeddingProfile'
 import { detectEscalation } from './admin/adminUtils'
@@ -90,6 +91,7 @@ export default function Admin() {
   const [tourCount, setTourCount] = useState(0)
   // Meetings the matcher would not guess at, and the wedding you picked for each.
   const [reviewItems, setReviewItems] = useState([])
+  const [crashCount, setCrashCount] = useState(0)
   const [reviewChoice, setReviewChoice] = useState({})
   const [reviewBusy, setReviewBusy] = useState(null)
   const [notesHighlights, setNotesHighlights] = useState('')
@@ -177,6 +179,7 @@ export default function Admin() {
   useEffect(() => {
     loadData()
     loadReviewItems()
+    loadCrashCount()
     loadTourCount()
     checkGmailStatus()
     checkQuoStatus()
@@ -320,6 +323,18 @@ export default function Admin() {
 
   // Meetings the matcher would not file on a guess. Loaded on the way in so
   // they are sitting there waiting, rather than needing to be gone looking for.
+  // How many crashes are waiting. Loaded on the way in, like the review items,
+  // so a broken page announces itself rather than waiting to be found.
+  const loadCrashCount = async () => {
+    try {
+      const data = await apiFetch(`${API_URL}/api/admin/client-errors`)
+      setCrashCount((data || []).filter(r => r.status !== 'done').length)
+    } catch {
+      // Usually migration 026 has not been run. The Errors screen says so
+      // properly; the badge just stays quiet rather than crying wolf.
+    }
+  }
+
   const loadReviewItems = async () => {
     try {
       const data = await apiFetch(`${API_URL}/api/admin/ingest-review`)
@@ -1478,6 +1493,7 @@ export default function Admin() {
         setViewingWedding={setViewingWedding}
         setActiveTab={setActiveTab}
         tourCount={tourCount}
+        crashCount={crashCount}
       />
 
       <main className="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
@@ -1676,6 +1692,10 @@ export default function Admin() {
         )}
 
         {/* Usage Stats View */}
+        {mainView === 'errors' && (
+          <CrashReports />
+        )}
+
         {mainView === 'usage' && (
           <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
             <UsageStats weddings={weddings} />
