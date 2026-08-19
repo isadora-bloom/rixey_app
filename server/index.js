@@ -9974,9 +9974,60 @@ app.post('/api/guests/bulk', async (req, res) => {
       .insert(rowsWithParty)
       .select();
     if (error) throw error;
+
+    // Give the imported plus ones rows of their own.
+    //
+    // Adding one guest goes through syncPlusOneRow; this path did not, so a
+    // CSV import produced hosts carrying plus_one_name and no person row
+    // behind it. Since 025 the counting walks rows, so those plus ones were
+    // not merely inconsistent, they were invisible: imported, paid for,
+    // catered for, and absent from every headcount.
+    //
+    // Built in one insert rather than a sync call per row, because these are
+    // new and there is nothing to reconcile against.
+    const plusOneRows = [];
+    for (const g of data) {
+      const name = String(g.plus_one_name || '').trim();
+      if (!name) continue;
+      const tidied = name.replace(/^[*.\s]+/, '').replace(/[*.\s]+$/, '').trim();
+      let first = name, last = null;
+      if (tidied && isNamedPerson(tidied)) {
+        const parts = tidied.split(/\s+/);
+        first = parts.length === 1 ? parts[0] : parts.slice(0, -1).join(' ');
+        last = parts.length === 1 ? null : parts[parts.length - 1];
+      }
+      plusOneRows.push({
+        wedding_id: g.wedding_id,
+        party_id: g.party_id,
+        is_plus_one: true,
+        plus_one_of: g.id,
+        first_name: first,
+        last_name: last,
+        rsvp: g.plus_one_rsvp || 'pending',
+        meal_choice: g.plus_one_meal_choice || null,
+        dietary_restrictions: g.plus_one_dietary || null,
+        table_assignment: g.table_assignment || null,
+      });
+    }
+    if (plusOneRows.length) {
+      const { error: poErr } = await supabaseAdmin.from('wedding_guests').insert(plusOneRows);
+      // The guests are already in. Say loudly that their plus ones are not,
+      // rather than reporting a clean import that quietly lost people.
+      if (poErr) {
+        console.error('[guests] imported guests but not their plus ones:', poErr.message);
+        return res.json({
+          guests: data,
+          imported: data.length,
+          duplicates,
+          duplicateWarning: `Imported ${data.length} guests, but their plus ones could not be added: ${poErr.message}. Check the list before relying on the numbers.`,
+        });
+      }
+    }
+
     res.json({
       guests: data,
       imported: data.length,
+      plusOnesCreated: plusOneRows.length,
       duplicates,
       // Two people can genuinely share a name, so this reports rather than
       // decides. The couple knows which it is; the server does not.
