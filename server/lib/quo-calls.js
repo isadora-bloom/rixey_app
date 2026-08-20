@@ -174,7 +174,10 @@ export async function loadContactIndex(supabaseAdmin) {
   for (let from = 0; ; from += 1000) {
     const { data, error } = await supabaseAdmin
       .from('wedding_contacts')
-      .select('id, wedding_id, name, relationship, phone, phone_digits, email, ingest_calls, ingest_email')
+      // Everything, rather than a column list. A half-applied migration means a
+      // column that does not exist yet, and a named select turns that into a
+      // thrown sync rather than a feature that is simply not on yet.
+      .select('*')
       .range(from, from + 999);
     if (error) {
       // The table not existing is a migration that has not been run, which is
@@ -182,7 +185,12 @@ export async function loadContactIndex(supabaseAdmin) {
       // else is a real read failure and must not be mistaken for "no contacts",
       // because that silently reverts to the behaviour this whole file exists
       // to fix.
-      if (error.code === '42P01') return { contacts: [], byDigits: new Map(), missing: true };
+      // 42P01 no such table, 42703 no such column: both mean migration 028 has
+      // not been run here yet, which is "not on" rather than "broken".
+      if (error.code === '42P01' || error.code === '42703') {
+        console.log(`[contacts] wedding_contacts is not ready yet (${error.message}) — run migration 028`);
+        return { contacts: [], byDigits: new Map(), byEmail: new Map(), missing: true };
+      }
       throw new Error(`Could not read wedding contacts: ${error.message}`);
     }
     contacts.push(...data);
@@ -244,7 +252,7 @@ export async function loadImportedCallIds(supabaseAdmin) {
       .select('external_id')
       .range(from, from + 999);
     if (error) {
-      if (error.code === '42P01') return { ids, missing: true };
+      if (error.code === '42P01' || error.code === '42703') return { ids, missing: true };
       throw new Error(`Could not read which calls are already imported: ${error.message}`);
     }
     for (const row of data) ids.add(row.external_id);

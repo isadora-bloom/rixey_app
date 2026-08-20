@@ -5336,7 +5336,10 @@ app.get('/api/admin/sync-jobs', async (req, res) => {
 // Mounted under /api/admin, so requireAdmin already applies (see line ~343).
 // Everything here is venue-side: a couple has no route to any of it.
 
-const contactsMissing = err => err?.code === '42P01';
+// 42P01 is no such table, 42703 no such column. Both mean migration 028 has
+// not been run here, which is a sentence somebody can act on rather than a
+// Postgres code in a 500.
+const contactsMissing = err => err?.code === '42P01' || err?.code === '42703';
 
 app.get('/api/admin/wedding-contacts/:weddingId', async (req, res) => {
   try {
@@ -5380,7 +5383,7 @@ app.post('/api/admin/wedding-contacts/:weddingId', async (req, res) => {
     const { data, error } = await supabaseAdmin
       .from('wedding_contacts').insert(row).select().single();
     if (error) {
-      if (contactsMissing(error)) return res.status(503).json({ error: 'Migration 028 has not been run yet, so contacts cannot be saved' });
+      if (contactsMissing(error)) return res.status(503).json({ error: 'Migration 028 has not been run on this database yet, so contacts cannot be saved' });
       // The unique constraints are per wedding, so this is a duplicate person.
       if (error.code === '23505') return res.status(409).json({ error: 'Somebody on this wedding already has that number or address' });
       throw error;
