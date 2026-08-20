@@ -5077,16 +5077,25 @@ async function runZoomSync({ jobId, sinceDays, reprocess }) {
 
     await bump({ total: meetings.length });
 
+    // Why each meeting was passed over. Both of these used to be a bare
+    // `continue`, so a run that found ten recordings and imported none reported
+    // "0 of 10" and nothing else — identical output whether every one was
+    // already on file or every one was missing its transcript. One of those is
+    // a healthy sync and the other is a broken one, and on 20 August the only
+    // way to tell them apart was to go and query Zoom by hand.
+    let alreadyImported = 0;
+    let noTranscript = 0;
+
     for (const meeting of meetings) {
       const meetingId = meeting.uuid;
-      if (processedIds.has(meetingId)) continue;
+      if (processedIds.has(meetingId)) { alreadyImported++; continue; }
 
       // Find transcript file
       const transcriptFile = meeting.recording_files?.find(f =>
         f.file_type === 'TRANSCRIPT' || f.recording_type === 'audio_transcript'
       );
 
-      if (!transcriptFile) continue;
+      if (!transcriptFile) { noTranscript++; continue; }
 
       // Download transcript
       let transcriptText = '';
@@ -5183,7 +5192,19 @@ async function runZoomSync({ jobId, sinceDays, reprocess }) {
       });
     }
 
-    console.log(`Zoom sync: processed ${newlyProcessed} meetings, ${matched} matched, ${needsReview} need review, ${notesExtracted} notes extracted, ${skipped} skipped`);
+    console.log(`Zoom sync: processed ${newlyProcessed} meetings, ${matched} matched, ${needsReview} need review, ${notesExtracted} notes extracted, ${skipped} skipped, ${alreadyImported} already on file, ${noTranscript} with no transcript`);
+
+    // Say which kind of nothing this was.
+    const message = newlyProcessed
+      ? `${newlyProcessed} new meeting(s) imported, ${matched} filed to a couple.`
+      : meetings.length === 0
+        ? `No recordings at all in the last ${lookbackDays} days.`
+        : alreadyImported === meetings.length
+          ? `Nothing new — all ${meetings.length} recording(s) in the last ${lookbackDays} days are already on file.`
+          : noTranscript
+            ? `${noTranscript} of ${meetings.length} recording(s) have no transcript yet, so there was nothing to read. Zoom writes them a few minutes after the call.`
+            : `${meetings.length} recording(s) found and none could be imported.`;
+
     await bump({
       status: 'finished',
       finished_at: new Date().toISOString(),
@@ -5191,7 +5212,15 @@ async function runZoomSync({ jobId, sinceDays, reprocess }) {
       matched,
       needs_review: needsReview,
       failed: skipped,
-      detail: { notesExtracted, lookbackDays, windows: windows.length },
+      detail: {
+        message,
+        notesExtracted,
+        lookbackDays,
+        windows: windows.length,
+        recordingsFound: meetings.length,
+        alreadyImported,
+        noTranscript,
+      },
     });
   }
 }

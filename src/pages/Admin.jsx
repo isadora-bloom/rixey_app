@@ -439,10 +439,14 @@ export default function Admin() {
         setZoomStatus(`Failed after ${job.processed}${seen}: ${job.last_error || 'unknown error'}`)
         return
       }
+      // "0 of 10 meetings, 0 filed to couples" is what a run reports when
+      // every recording is already on file — which is a healthy sync, and
+      // reads exactly like a broken one. The server now says which kind of
+      // nothing it was, so lead with that.
       setZoomStatus(
-        `Done. ${job.processed}${seen} meetings, ${job.matched} filed to couples`
-        + (job.needs_review ? `, ${job.needs_review} need you to say whose they are` : '')
-        + (job.failed ? `, ${job.failed} skipped` : '')
+        `Done. ${job.detail?.message || `${job.processed}${seen} meetings, ${job.matched} filed to couples`}`
+        + (job.needs_review ? ` ${job.needs_review} need you to say whose they are.` : '')
+        + (job.failed ? ` ${job.failed} skipped.` : '')
       )
       return
     }
