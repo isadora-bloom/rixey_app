@@ -32,6 +32,7 @@ import { normalizePhone, toE164 } from '../shared/phone.js';
 import {
   fetchCallTranscript, newTranscriptState, loadContactIndex, loadImportedCallIds,
   importCallsForContact, importTextsForContact, sweepUnknownCallers, fileQueuedCaller,
+  isAutoReply,
 } from './lib/quo-calls.js';
 import { guestCareContext } from '../shared/guest-care.js';
 import { buildDirectory, matchMeeting } from '../shared/meeting-match.js';
@@ -4373,22 +4374,12 @@ async function runQuoSync(body, { jobId, bump }) {
           // the next template, so templateBodies does the real work: any
           // outbound body we have already sent to a different couple, verbatim,
           // is a template by definition. That needs no maintenance.
-          const autoReplyPatterns = [
-            /^thank you for (reaching out|contacting|calling|your (message|inquiry|interest))/i,
-            /^thanks for (reaching out|calling|texting|your (message|inquiry|interest))/i,
-            /^we('ve| have) received your/i,
-            /^we('ll| will) (get back|be in touch|respond)/i,
-            /^this is an automated/i,
-            /^you('ve| have) reached rixey manor/i,
-            /^hi,? (we('re| are) currently|our team is)/i,
-          ];
-          const isAutoReply = direction === 'outbound' && (
-            autoReplyPatterns.some(p => p.test(messageBody.trim())) ||
-            templateBodies.has(messageBody.trim())
-          );
+          // The patterns and the learned-template set both live in
+          // lib/quo-calls.js now, so the family pass cannot drift from this one.
+          const autoReply = isAutoReply(messageBody, direction, templateBodies);
 
           // Also save message as a planning note so Sage can search it
-          if (messageBody && !isAutoReply) {
+          if (messageBody && !autoReply) {
             const label = direction === 'inbound' ? 'SMS from client' : 'SMS from Rixey';
             const noteContent = `[${label}] ${messageBody}`;
 

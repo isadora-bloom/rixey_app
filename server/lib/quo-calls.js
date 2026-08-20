@@ -155,6 +155,37 @@ function callDuration(call) {
   return Number.isFinite(Number(secs)) ? Math.round(Number(secs)) : null;
 }
 
+/**
+ * Is this the machine talking rather than a person?
+ *
+ * Lifted out of server/index.js so the couple path and the contacts path share
+ * one definition. They did not, and the difference showed immediately: the
+ * contacts pass had only the learned-template half, so "Thanks for texting! We
+ * will text you back ASAP!" landed in a mother's history on the first run —
+ * the exact string this repo has already chased out of the planning notes once.
+ *
+ * Two halves, and both are needed. The patterns catch a template the first time
+ * it is ever sent; templateBodies catches the next one nobody wrote a pattern
+ * for, because an outbound body already sent verbatim to a different couple is
+ * a template by definition.
+ */
+const AUTO_REPLY_PATTERNS = [
+  /^thank you for (reaching out|contacting|calling|your (message|inquiry|interest))/i,
+  /^thanks for (reaching out|calling|texting|your (message|inquiry|interest))/i,
+  /^we('ve| have) received your/i,
+  /^we('ll| will) (get back|be in touch|respond)/i,
+  /^this is an automated/i,
+  /^you('ve| have) reached rixey manor/i,
+  /^hi,? (we('re| are) currently|our team is)/i,
+];
+
+export function isAutoReply(body, direction, templateBodies = new Set()) {
+  if (direction !== 'outbound') return false;
+  const text = String(body || '').trim();
+  if (!text) return false;
+  return AUTO_REPLY_PATTERNS.some(p => p.test(text)) || templateBodies.has(text);
+}
+
 /** OpenPhone says incoming/outgoing. One vocabulary in the database. */
 function callDirection(call) {
   const v = String(call.direction || '').toLowerCase();
@@ -372,7 +403,7 @@ export async function importTextsForContact({
     if (!body) { out.skipped++; continue; }
 
     const direction = callDirection(msg);
-    if (direction === 'outbound' && skipBodies.has(body)) { out.skipped++; continue; }
+    if (isAutoReply(body, direction, skipBodies)) { out.skipped++; continue; }
 
     // Most texts are a sentence long, and summarise returns null below 200
     // characters, so this costs nothing on the ordinary ones.
