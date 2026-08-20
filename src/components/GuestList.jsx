@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, Fragment } from 'react'
 import { API_URL } from '../config/api'
 import { authHeaders, apiFetch } from '../utils/api'
 import { describeExtras } from '../../shared/rsvp-fields'
-import { plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, partyMembers, allPeople, headcount, usesPersonModel } from '../../shared/guest-names'
+import { plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, allPeople, headcount, usesPersonModel } from '../../shared/guest-names'
 import { useToast } from './ui/Toast'
 
 
@@ -954,37 +954,33 @@ export default function GuestList({ weddingId, userId }) {
   }
 
   const printByTable = () => {
-    // Group assigned guests by table, sorted by table label
+    // Seated one person at a time.
+    //
+    // This walked the rows and, for each one, also emitted a plus one from
+    // plus_one_name. Since 025 the plus one has a row of their own, so every
+    // one of them was seated twice: printed twice on the chart and counted
+    // twice against the table's capacity. Isabella and Angelina's Table 6
+    // showed ten people for nine, with Emma listed on it twice.
+    const people = allPeople(guests)
     const groups = {}
     tableOptions.forEach(t => { groups[t.label] = [] })
-    guests.forEach(g => {
-      if (g.table_assignment && groups[g.table_assignment] !== undefined) {
-        groups[g.table_assignment].push(g)
-      } else if (g.table_assignment) {
-        if (!groups[g.table_assignment]) groups[g.table_assignment] = []
-        groups[g.table_assignment].push(g)
-      }
+    people.forEach(person => {
+      const table = person.row?.table_assignment
+      if (!table) return
+      if (!groups[table]) groups[table] = []
+      groups[table].push(person)
     })
-    const unassigned = guests.filter(g => !g.table_assignment)
+    const unassigned = people.filter(person => !person.row?.table_assignment)
 
-    // The plus one is a row of their own, a sibling of their host's. It used to
-    // be emitted inside the host's <tr>, which is not valid table markup and
-    // left the browser to guess where the row ended.
-    const tableRows = (guestList) => guestList.map(g => {
-      const host = `
+    // A plus one is a row of its own, a sibling of its host's, never nested
+    // inside it: that was not valid table markup and left the browser to guess
+    // where the row ended.
+    const tableRows = (peopleAtTable) => peopleAtTable.map(person => `
       <tr>
-        <td style="padding:4px 8px">${h(g.first_name)} ${h(g.last_name)}</td>
-        <td style="padding:4px 8px">${h(g.dietary_restrictions)}</td>
-        ${platedMeal ? `<td style="padding:4px 8px">${h(g.meal_choice)}</td>` : ''}
-      </tr>`
-      if (!g.plus_one_name) return host
-      return host + `
-      <tr>
-        <td style="padding:4px 8px 4px 24px;color:#666">${h(plusOneFullName(g.plus_one_name, g.last_name))} (+1)</td>
-        <td style="padding:4px 8px;color:#666">${h(g.plus_one_dietary)}</td>
-        ${platedMeal ? `<td style="padding:4px 8px;color:#666">${h(g.plus_one_meal_choice)}</td>` : ''}
-      </tr>`
-    }).join('')
+        <td style="padding:4px 8px${person.isPlusOne ? ' 4px 24px;color:#666' : ''}">${h(person.name)}${person.isPlusOne ? ' (+1)' : ''}</td>
+        <td style="padding:4px 8px${person.isPlusOne ? ';color:#666' : ''}">${h(person.dietary)}</td>
+        ${platedMeal ? `<td style="padding:4px 8px${person.isPlusOne ? ';color:#666' : ''}">${h(person.mealChoice)}</td>` : ''}
+      </tr>`).join('')
 
     const html = `<!DOCTYPE html><html><head><title>Seating by Table</title>
       <style>body{font-family:sans-serif;padding:20px;font-size:13px}
@@ -999,11 +995,9 @@ export default function GuestList({ weddingId, userId }) {
       <h1>Seating Chart</h1>
       ${Object.entries(groups).map(([label, guestList]) => {
         const cap = tableOptions.find(t => t.label === label)?.capacity || 0
-        // Same seat maths as tableCounts. This used to open-code it as
-        // `1 + (g.plus_one_name ? 1 : 0)`, which is subtly different: it counts
-        // a whitespace-only plus_one_name as a person where hasPlusOne does not,
-        // so the printed seat count and the on-screen one could disagree.
-        const used = guestList.reduce((n, g) => n + partyMembers(g).length, 0)
+        // One seat per person, which is the same maths tableCounts now does,
+        // so the printed chart and the screen cannot disagree.
+        const used = guestList.length
         return `<h2>${label}<span class="capacity">${used}/${cap} seats</span></h2>
         <table><thead><tr><th>Guest</th><th>Dietary</th>${platedMeal ? '<th>Meal</th>' : ''}</tr></thead>
         <tbody>${tableRows(guestList)}</tbody></table>`
@@ -1102,10 +1096,16 @@ export default function GuestList({ weddingId, userId }) {
 
   // Seat usage per table: a party takes a seat per person, not per row.
 
-  const tableCounts = parties.reduce((acc, g) => {
-    if (g.table_assignment) {
-      acc[g.table_assignment] = (acc[g.table_assignment] || 0) + partyMembers(g).length
-    }
+  // Counted one person at a time, from the row that person sits on.
+  //
+  // This used to walk the party heads and add partyMembers(host).length, which
+  // seats a plus one wherever their host is. Since 025 they have a row and a
+  // table of their own and can be moved apart, so the only honest count is per
+  // person. Before 025 a plus one shares their host's row, so the same code
+  // gives the same answer.
+  const tableCounts = allPeople(guests).reduce((acc, person) => {
+    const table = person.row?.table_assignment
+    if (table) acc[table] = (acc[table] || 0) + 1
     return acc
   }, {})
 
