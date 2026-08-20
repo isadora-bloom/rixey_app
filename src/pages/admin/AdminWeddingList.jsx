@@ -52,6 +52,7 @@ export default function AdminWeddingList({
   quoSyncing,
   quoStatus,
   syncQuo,
+  sweepCallers,
   zoomConnected,
   zoomSyncing,
   zoomStatus,
@@ -550,6 +551,16 @@ export default function AdminWeddingList({
                     {quoSyncing ? 'Syncing...' : 'Force Resync'}
                   </button>
                 </div>
+                {/* Family numbers are pulled in by the sync above once they are
+                    on a wedding. This finds the ones nobody has added yet. */}
+                <button
+                  onClick={sweepCallers}
+                  disabled={quoSyncing}
+                  className="w-full px-4 py-2 border border-cream-300 text-sage-600 rounded-lg text-sm hover:bg-cream-50 disabled:opacity-50"
+                  title="Every number that has called Rixey and is not a client or a saved contact goes to the review queue with its transcript"
+                >
+                  Find callers nobody has accounted for
+                </button>
                 {quoStatus && (
                   <pre className="text-sage-600 text-xs bg-cream-50 p-2 rounded whitespace-pre-wrap font-sans">{quoStatus}</pre>
                 )}

@@ -28,6 +28,11 @@ import { buildDocumentDiff, diffSections } from './lib/doc-sync/diff.js';
 import { transcribeAudio, transcriptionConfigured } from './lib/transcribe.js';
 import { enquiryFromEvent, isTour, suggestWedding, parseStatedDate, platformSearchTerms, describeEmailMatch, parseCalculatorEmail, isCalculatorEmail } from './lib/enquiries.js';
 import { venueToday, venueDate, venueDateTime, VENUE_TZ } from '../shared/venue-time.js';
+import { normalizePhone, toE164 } from '../shared/phone.js';
+import {
+  fetchCallTranscript, newTranscriptState, loadContactIndex, loadImportedCallIds,
+  importCallsForContact, sweepUnknownCallers, fileQueuedCaller,
+} from './lib/quo-calls.js';
 import { guestCareContext } from '../shared/guest-care.js';
 import { buildDirectory, matchMeeting } from '../shared/meeting-match.js';
 import { buildPortalSnapshot } from './lib/sheet-diff/portal-snapshot.js';
@@ -2922,6 +2927,34 @@ async function buildWeddingContext(weddingId, { noteLimit = 400 } = {}) {
       fullContext += `INTERNAL COORDINATOR NOTES:\n${internalNotes.map(n => `- ${n.category ? `[${n.category}] ` : ''}${n.content}`).join('\n')}\n\n`;
     }
 
+    // Calls and emails with family and other contacts.
+    //
+    // This builder feeds /api/ask-contracts and /api/notes-highlights, both of
+    // which are venue-side, which is the only reason these can be here at all.
+    // The couple's Sage builds its own context in /api/chat and must never be
+    // given this: the point of migration 028 is that a mother-in-law's call is
+    // not something the couple can ask about.
+    {
+      const { data: contactMessages, error: cmErr } = await supabaseAdmin
+        .from('contact_messages')
+        .select('kind, contact_name, direction, occurred_at, subject, summary, body')
+        .eq('wedding_id', weddingId)
+        .order('occurred_at', { ascending: false })
+        .limit(40);
+      // A missing table is migration 028 not being run yet, not an empty file.
+      if (cmErr && cmErr.code !== '42P01') {
+        console.error('[context] could not read contact messages:', cmErr.message);
+      } else if (contactMessages?.length) {
+        fullContext += `CALLS AND EMAILS WITH FAMILY AND OTHER CONTACTS (venue-side only, the couple cannot see these):\n${
+          contactMessages.map(m => {
+            const when = m.occurred_at ? String(m.occurred_at).slice(0, 10) : 'undated';
+            const what = m.summary || String(m.body || '').replace(/\s+/g, ' ').slice(0, 400);
+            return `- ${when} ${m.kind} ${m.direction === 'outbound' ? 'to' : 'with'} ${m.contact_name || 'an unnamed contact'}${m.subject ? ` — "${m.subject}"` : ''}: ${what}`;
+          }).join('\n')
+        }\n\n`;
+      }
+    }
+
   return {
     context: fullContext,
     wedding,
@@ -3299,6 +3332,31 @@ async function runGmailSync(body, { bump }) {
       console.log(`[gmail] not searching ${skippedVenueAddresses.length} venue address(es) registered as clients: ${skippedVenueAddresses.join(', ')}`);
     }
 
+    // Family addresses, on the same terms as family numbers.
+    //
+    // A mother-in-law emailing about the seating is the same information as a
+    // mother-in-law phoning about it, and until now neither reached the file.
+    // These are searched like any client address; what changes is where the
+    // result lands — contact_messages, venue-side, never planning_notes. See
+    // migration 028.
+    const contactIndex = await loadContactIndex(supabaseAdmin);
+    const contactByEmail = new Map();
+    if (!contactIndex.missing) {
+      for (const [email, c] of contactIndex.byEmail) {
+        if (!c.ingestEmail) continue;
+        if (venueDomain && email.endsWith(`@${venueDomain}`)) continue;
+        // Already a registered client address: leave it filing the way it does.
+        if (emailToWedding[email]) continue;
+        if (c.ambiguous) {
+          console.log(`[gmail] ${email} is on more than one wedding, so its emails are left alone`);
+          continue;
+        }
+        contactByEmail.set(email, c);
+        clientEmails.push(email);
+      }
+      console.log(`[gmail] ${contactByEmail.size} family/other contact address(es) to search`);
+    }
+
     if (clientEmails.length === 0) {
       return { processed: 0, detail: { message: 'No client email addresses registered yet.' } };
     }
@@ -3331,6 +3389,9 @@ async function runGmailSync(body, { bump }) {
     // Emails the search turned up that could not be tied to anyone. They go to
     // ingest_review rather than onto whichever wedding was being searched for.
     let unattributed = 0;
+    // Emails from family and other contacts, filed venue-side rather than into
+    // planning_notes. Counted separately so a run can say so.
+    let contactEmailsImported = 0;
 
     // Search for emails from each client AND emails containing their email (form submissions)
     await bump({ total: clientEmails.length });
@@ -3440,6 +3501,65 @@ async function runGmailSync(body, { bump }) {
             // The address really is in this email, not merely matched by Gmail.
             weddingId = emailToWedding[clientEmail];
             attribution = 'client address appears in the message';
+          }
+
+          // A family address, checked before the unattributable branch below.
+          //
+          // A mother's email is not from a registered client and does not
+          // contain one either, so without this it would go to the review queue
+          // every single time — a queue that asks the same answered question
+          // once a week stops being read.
+          //
+          // Inbound is her writing in. Outbound is the venue writing to her:
+          // the sender is Rixey, but the address being searched for is hers and
+          // it is in the headers, which is the same conversation from the other
+          // end and worth keeping.
+          const searchedAddress = clientEmail.toLowerCase();
+          const inboundContact = contactByEmail.get(fromEmail) || null;
+          const outboundContact = !inboundContact
+            && contactByEmail.get(searchedAddress)
+            && `${toHeader} ${ccHeader}`.toLowerCase().includes(searchedAddress)
+            ? contactByEmail.get(searchedAddress)
+            : null;
+          const contact = inboundContact || outboundContact;
+
+          if (contact) {
+            processedIds.add(msg.id);
+            const { error: markerErr } = await supabaseAdmin.from('processed_emails').insert({
+              gmail_message_id: msg.id,
+              wedding_id: contact.weddingId,
+              from_email: fromEmail,
+              subject,
+              body_text: bodyText.substring(0, 10000),
+            });
+            // Same rule as everywhere else in this file: if the marker did not
+            // save, skip the item rather than importing it again next run.
+            if (markerErr && markerErr.code !== '23505') {
+              console.error(`[gmail] marker failed for ${msg.id}, skipping it: ${markerErr.message}`);
+              continue;
+            }
+
+            const summary = await summariseForVenue(bodyText, contact.name, contact.relationship);
+            const { error: cmErr } = await supabaseAdmin.from('contact_messages').insert({
+              wedding_id: contact.weddingId,
+              contact_id: contact.contactId,
+              kind: 'email',
+              external_id: msg.id,
+              email_address: inboundContact ? fromEmail : searchedAddress,
+              contact_name: contact.name,
+              direction: inboundContact ? 'inbound' : 'outbound',
+              occurred_at: dateHeader ? new Date(dateHeader).toISOString() : null,
+              subject: subject || null,
+              body: bodyText.substring(0, 20000),
+              summary,
+            });
+            if (cmErr && cmErr.code !== '23505') {
+              console.error(`[gmail] could not file ${contact.name}'s email:`, cmErr.message);
+            } else if (!cmErr) {
+              contactEmailsImported++;
+            }
+            newlyProcessed++;
+            continue;
           }
 
           if (!weddingId) {
@@ -3557,6 +3677,11 @@ async function runGmailSync(body, { bump }) {
         // Named rather than counted, because a venue address on a couple's
         // profile is a data problem somebody has to go and fix.
         venueAddressesSkipped: skippedVenueAddresses,
+        // Family and other non-couple addresses. Zero when nobody has been
+        // added yet, which is a different thing from broken and should read
+        // that way on the panel.
+        contactAddressesSearched: contactByEmail.size,
+        contactEmailsImported,
         attributed: newlyProcessed - unattributed,
         // Said out loud rather than left as a gap between two numbers. These
         // used to be filed against whoever the search was for, which is how ten
@@ -3688,6 +3813,38 @@ app.post('/api/admin/client-errors/:id/resolve', requireAdmin, async (req, res) 
 });
 
 
+/**
+ * A few lines on what a call or an email was about, for the venue's eyes.
+ *
+ * Fourteen calls from a mother-in-law is a list nobody reads if every row is a
+ * timestamp. Haiku, not Sonnet: this is a caption, and it runs once per
+ * message. A failure returns null, which means "not summarised" — the message
+ * itself is always kept, and losing the caption is not worth losing the call.
+ */
+async function summariseForVenue(text, who, relationship) {
+  if (!text || text.length < 200) return null;
+  try {
+    const response = await anthropic.messages.create({
+      model: MODEL_HAIKU,
+      max_tokens: 300,
+      messages: [{
+        role: 'user',
+        content: `This is a ${who ? `conversation with ${who}` : 'conversation'}${relationship ? ` (${relationship})` : ''} about a wedding at Rixey Manor.
+
+Write two or three sentences on what it was about and anything the venue needs to act on. Plain words, no preamble, no bullet points. If somebody sounded worried or upset, say so plainly. Do not invent anything that is not in the text.
+
+---
+${String(text).slice(0, 12000)}`,
+      }],
+    });
+    await logUsage(null, null, 'contact-message-summary', response, MODEL_HAIKU);
+    return response.content[0].text.trim() || null;
+  } catch (err) {
+    console.error('[contacts] could not summarise:', err.message);
+    return null;
+  }
+}
+
 // ============ QUO (OPENPHONE) INTEGRATION ============
 
 const QUO_API_KEY = process.env.QUO_API_KEY;
@@ -3720,23 +3877,9 @@ function normaliseDirection(raw) {
   return 'inbound';
 }
 
-// Helper to normalize phone numbers for matching
-// Handles formats like: (540) 388-8912, +1 540-388-8912, 5403888912, +15403888912
-function normalizePhone(phone) {
-  if (!phone) return null;
-  // Remove all non-digits
-  const digits = phone.replace(/\D/g, '');
-  // If starts with 1 and has 11 digits, remove the leading 1 (US country code)
-  if (digits.length === 11 && digits.startsWith('1')) {
-    return digits.slice(1);
-  }
-  // If 10 digits, return as-is
-  if (digits.length === 10) {
-    return digits;
-  }
-  // Otherwise return last 10 digits
-  return digits.slice(-10);
-}
+// normalizePhone moved to shared/phone.js when wedding_contacts started
+// matching on numbers too. Two definitions of "the same number" is how a
+// mother's call ends up filed under nobody.
 
 // Check Quo connection status
 app.get('/api/quo/status', (req, res) => {
@@ -3759,104 +3902,76 @@ app.post('/api/quo/clear-processed', async (req, res) => {
   }
 });
 
-// Sync messages from Quo
-/**
- * The transcript of a phone call, which does not come with the call.
- *
- * OpenPhone's /calls list returns metadata only. The old code read
- * `call.transcript` off that list, found nothing every time, and skipped the
- * call. Result: 67 calls found, 0 imported, no error, ever. Every phone
- * conversation the venue has had with a couple has been absent from their
- * record while the sync reported success.
- *
- * The transcript lives at /call-transcripts/{callId} and comes back as a
- * dialogue: one entry per speaker turn. Transcription is also a paid feature
- * and can be off, in which case this returns nothing for a real reason, and
- * `state.reason` carries that reason up to the job row so it can be read
- * rather than guessed at.
- */
-async function fetchCallTranscript(call, state, attempt = 0) {
-  // Occasionally a voicemail does carry its own transcript.
-  const inline = call.transcript || call.transcription || call.voicemail?.transcript;
-  if (inline) return String(inline);
-
-  // Once the account tells us transcription is unavailable, stop asking: it
-  // will be unavailable for all 67 of them.
-  if (state.reason) return '';
-
-  state.checked++;
-  try {
-    const res = await fetch(`${QUO_API_BASE}/call-transcripts/${call.id}`, {
-      headers: { Authorization: QUO_API_KEY },
-    });
-
-    if (res.status === 402 || res.status === 403) {
-      state.reason = 'Quo has not enabled call transcription on this account, so calls cannot be imported. Texts are unaffected.';
-      return '';
-    }
-    // 404 means this particular call has no transcript (too short, missed, not
-    // recorded). Normal, and not a reason to stop asking about the others.
-    // Counted, because "22 skipped" with no breakdown made a perfectly
-    // ordinary run look like it had half failed, and the only way to tell the
-    // difference was to go and read this function.
-    if (res.status === 404) { state.noTranscript = (state.noTranscript || 0) + 1; return ''; }
-
-    // Rate limiting is not a verdict, it is a queue.
-    //
-    // 429 used to be handled as a permanent reason, which stops the run asking
-    // about any remaining call. On 17 August that turned into 40 calls imported
-    // and 28 abandoned, with the job reporting "Quo returned 429" as though
-    // transcripts were unavailable rather than merely delayed. Wait and ask
-    // again; only give up on a call after several goes.
-    if (res.status === 429) {
-      state.throttled = (state.throttled || 0) + 1;
-      const wait = Math.min(30000, 2000 * state.throttled);
-      const retryAfter = Number(res.headers.get('retry-after')) * 1000;
-      await new Promise(r => setTimeout(r, Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : wait));
-      if (attempt < 4) return fetchCallTranscript(call, state, attempt + 1);
-      state.giveUps = (state.giveUps || 0) + 1;
-      return '';
-    }
-
-    if (!res.ok) {
-      state.reason = `Quo returned ${res.status} when asked for a call transcript.`;
-      return '';
-    }
-
-    const body = await res.json();
-    const d = body.data || body;
-    if (d.status && d.status !== 'completed' && !d.dialogue) {
-      state.notReady = (state.notReady || 0) + 1;
-      return '';
-    }
-
-    // A dialogue is speaker turns. Keep who said what: a call where only one
-    // side is legible is worth much less.
-    if (Array.isArray(d.dialogue) && d.dialogue.length) {
-      const text = d.dialogue
-        .map(turn => {
-          const who = turn.identifier || turn.userId || 'Speaker';
-          const said = String(turn.content || '').trim();
-          return said ? `${who}: ${said}` : '';
-        })
-        .filter(Boolean)
-        .join('\n');
-      if (text) { state.got++; return text; }
-      state.empty = (state.empty || 0) + 1;
-      return '';
-    }
-
-    const flat = d.transcript || d.text || '';
-    if (flat) { state.got++; return String(flat); }
-    state.empty = (state.empty || 0) + 1;
-    return '';
-  } catch (err) {
-    state.reason = `Could not reach Quo for call transcripts: ${err.message}`;
-    return '';
-  }
-}
+// Sync messages from Quo.
+//
+// fetchCallTranscript moved to lib/quo-calls.js, where the contact sweep can
+// reach it too. Its retry behaviour was hard won and there should be one of it.
 
 app.post('/api/quo/sync', backgroundSync('quo', runQuoSync));
+
+/**
+ * Everyone who has called the Rixey line and is not accounted for.
+ *
+ * The contacts list only catches people somebody thought to add. This walks the
+ * conversations OpenPhone actually has, and anything that is neither a client
+ * nor a saved contact goes to the review queue with its transcript attached —
+ * so an unrecognised number is a question on a screen rather than nothing at
+ * all. Numbers already answered for, either filed or dismissed, are not asked
+ * about again.
+ *
+ * Body: { sinceDays = 90, maxCallers = 40 }.
+ */
+async function runCallerSweep(body, { jobId, bump }) {
+  await assertNoOverlappingJob(['quo', 'quo-backfill', 'quo-callers'], jobId);
+  if (!QUO_API_KEY) throw new Error('Quo API key is not configured');
+
+  const contactIndex = await loadContactIndex(supabaseAdmin);
+  if (contactIndex.missing) throw new Error('Migration 028 has not been run, so there is nowhere to file a contact');
+
+  // Known means "we already know whose this is": a client, or a saved contact.
+  const knownDigits = new Set();
+  {
+    const { data: profiles, error } = await supabaseAdmin
+      .from('profiles').select('phone').not('phone', 'is', null);
+    if (error) throw new Error(`Could not read client phone numbers: ${error.message}`);
+    for (const p of profiles || []) {
+      const d = normalizePhone(p.phone);
+      if (d) knownDigits.add(d);
+    }
+  }
+  for (const digits of contactIndex.byDigits.keys()) knownDigits.add(digits);
+
+  const { data: weddings, error: wErr } = await supabaseAdmin
+    .from('weddings').select('id, couple_names, wedding_date').eq('archived', false);
+  if (wErr) throw new Error(`Could not read the wedding list: ${wErr.message}`);
+
+  const out = await sweepUnknownCallers({
+    supabaseAdmin,
+    knownDigits,
+    weddings: weddings || [],
+    sinceDays: Number(body?.sinceDays) || 90,
+    maxCallers: Number(body?.maxCallers) || 40,
+    transcriptState: newTranscriptState(),
+    summarise: summariseForVenue,
+    bump,
+  });
+
+  return {
+    processed: out.callersChecked,
+    matched: out.callersQueued,
+    needs_review: out.callersQueued,
+    detail: {
+      ...out,
+      // Never a silent cap. If the run stopped short, the number left is on
+      // the job row rather than in a log nobody reads.
+      message: out.callersLeft
+        ? `${out.callersQueued} caller(s) queued for review. ${out.callersLeft} unknown number(s) not looked at this run — run it again to continue.`
+        : `${out.callersQueued} caller(s) queued for review.`,
+    },
+  };
+}
+
+app.post('/api/quo/sweep-callers', backgroundSync('quo-callers', runCallerSweep));
 
 /**
  * Read the couples' old texts, which have never been read.
@@ -3911,7 +4026,7 @@ async function assertNoOverlappingJob(kinds, ownJobId) {
 }
 
 async function runQuoBackfillExtraction(body, { jobId, bump }) {
-  await assertNoOverlappingJob(['quo', 'quo-backfill'], jobId);
+  await assertNoOverlappingJob(['quo', 'quo-backfill', 'quo-callers'], jobId);
   const limit = Number(body?.limit) > 0 ? Number(body.limit) : null;
 
   // Paged: PostgREST stops at 1000 and there are more than that.
@@ -4007,7 +4122,7 @@ async function runQuoSync(body, { jobId, bump }) {
   {
     // Same reason as the backfill: two jobs reading the same texts both run
     // extraction, and the same observation lands twice in different words.
-    await assertNoOverlappingJob(['quo', 'quo-backfill'], jobId);
+    await assertNoOverlappingJob(['quo', 'quo-backfill', 'quo-callers'], jobId);
 
     if (!QUO_API_KEY) {
       throw new Error('Quo API key is not configured');
@@ -4053,6 +4168,27 @@ async function runQuoSync(body, { jobId, bump }) {
     }
 
     console.log(`Searching Quo for messages from ${Object.keys(phoneToWedding).length} registered phone numbers`);
+
+    // The people who are not the couple.
+    //
+    // Mothers, mothers-in-law, planners: no login, so no profile, so no number
+    // in the map above and nothing ever asked OpenPhone about them. Their calls
+    // are fetched the same way but filed venue-side, never into planning_notes.
+    // See migration 028.
+    const contactIndex = await loadContactIndex(supabaseAdmin);
+    const contactTargets = [];
+    for (const [digits, c] of contactIndex.byDigits) {
+      if (!c.ingestCalls) continue;
+      // A number on two weddings is a question, not a coin toss. Left out here
+      // and picked up by the unknown-caller sweep, which asks.
+      if (c.ambiguous) {
+        console.log(`[quo] ${digits} is on more than one wedding, so its calls are left for review`);
+        continue;
+      }
+      contactTargets.push({ digits, phoneE164: toE164(digits), ...c });
+    }
+    const importedCallIds = await loadImportedCallIds(supabaseAdmin);
+    console.log(`[quo] ${contactTargets.length} family/other contact number(s) to check`);
 
     // Learn which outbound bodies are templates: the same text sent verbatim to
     // more than one couple is never a personal reply. Built once per sync.
@@ -4425,7 +4561,44 @@ async function runQuoSync(body, { jobId, bump }) {
       }
     }
 
-    console.log(`Quo sync: processed ${newlyProcessed} messages + ${callsProcessed} calls, saved ${planningNotesSaved} planning notes, extracted ${notesExtracted} additional notes`);
+    // The family pass. Same fetch, different destination: a contact's call goes
+    // to contact_messages, which the couple's Sage does not read, and produces
+    // no planning notes unless somebody shares it by hand.
+    let contactCallsImported = 0;
+    let contactCallsSkipped = 0;
+    const contactCallErrors = [];
+    if (contactIndex.missing) {
+      console.log('[quo] wedding_contacts does not exist yet — run migration 028 to import family calls');
+    } else if (importedCallIds.missing) {
+      console.log('[quo] contact_messages does not exist yet — run migration 028 to import family calls');
+    } else {
+      for (const quoPhone of quoPhoneNumbers) {
+        for (const target of contactTargets) {
+          const out = await importCallsForContact({
+            supabaseAdmin,
+            phoneNumberId: quoPhone.id,
+            phoneE164: target.phoneE164,
+            target: {
+              weddingId: target.weddingId,
+              contactId: target.contactId,
+              name: target.name,
+              relationship: target.relationship,
+            },
+            transcriptState: callTranscriptState,
+            importedIds: importedCallIds.ids,
+            summarise: summariseForVenue,
+          });
+          contactCallsImported += out.imported;
+          contactCallsSkipped += out.skipped;
+          contactCallErrors.push(...out.errors);
+          if (out.imported) {
+            console.log(`[quo] ${out.imported} call(s) with ${target.name} filed against their wedding`);
+          }
+        }
+      }
+    }
+
+    console.log(`Quo sync: processed ${newlyProcessed} messages + ${callsProcessed} calls + ${contactCallsImported} family call(s), saved ${planningNotesSaved} planning notes, extracted ${notesExtracted} additional notes`);
 
     const registeredPhones = Object.keys(phoneToWedding);
     return {
@@ -4439,6 +4612,13 @@ async function runQuoSync(body, { jobId, bump }) {
         callsProcessed,
         callsFound: totalCallsFound,
         callsSkipped,
+        // Said out loud, because a family pass that imported nothing because
+        // nobody has been added yet looks exactly like one that is broken.
+        contactNumbersChecked: contactTargets.length,
+        contactCallsImported,
+        contactCallsSkipped,
+        contactCallErrors: contactCallErrors.slice(0, 5),
+        contactsTableMissing: contactIndex.missing || importedCallIds.missing || undefined,
         // Says out loud when calls were found and none could be read. The
         // previous version of this reported callsProcessed: 0 beside
         // totalCallsFound: 67 and left you to notice.
@@ -5151,6 +5331,185 @@ app.get('/api/admin/sync-jobs', async (req, res) => {
   }
 });
 
+// ============ WEDDING CONTACTS (family, planners, anyone without a login) ====
+//
+// Mounted under /api/admin, so requireAdmin already applies (see line ~343).
+// Everything here is venue-side: a couple has no route to any of it.
+
+const contactsMissing = err => err?.code === '42P01';
+
+app.get('/api/admin/wedding-contacts/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('wedding_contacts')
+      .select('*')
+      .eq('wedding_id', req.params.weddingId)
+      .order('created_at');
+    if (error) {
+      // A migration that has not been run is a sentence, not a Postgres code.
+      if (contactsMissing(error)) return res.json({ contacts: [], needsMigration: true });
+      throw error;
+    }
+    res.json({ contacts: data || [] });
+  } catch (error) {
+    console.error('wedding-contacts read error:', error);
+    res.status(500).json({ error: 'Could not load the contacts for this wedding' });
+  }
+});
+
+app.post('/api/admin/wedding-contacts/:weddingId', async (req, res) => {
+  try {
+    const { name, relationship, phone, email, notes, ingest_calls, ingest_email } = req.body || {};
+    if (!String(name || '').trim()) return res.status(400).json({ error: 'A name is needed' });
+
+    // Blank fields arrive as "", which is not null and is not a phone number.
+    const clean = v => (String(v ?? '').trim() || null);
+    const row = {
+      wedding_id: req.params.weddingId,
+      name: String(name).trim(),
+      relationship: clean(relationship),
+      phone: clean(phone),
+      phone_digits: normalizePhone(clean(phone)),
+      email: clean(email)?.toLowerCase() || null,
+      notes: clean(notes),
+      ingest_calls: ingest_calls !== false,
+      ingest_email: ingest_email !== false,
+      created_by: req.userId || null,
+    };
+
+    const { data, error } = await supabaseAdmin
+      .from('wedding_contacts').insert(row).select().single();
+    if (error) {
+      if (contactsMissing(error)) return res.status(503).json({ error: 'Migration 028 has not been run yet, so contacts cannot be saved' });
+      // The unique constraints are per wedding, so this is a duplicate person.
+      if (error.code === '23505') return res.status(409).json({ error: 'Somebody on this wedding already has that number or address' });
+      throw error;
+    }
+    res.json(data);
+  } catch (error) {
+    console.error('wedding-contacts create error:', error);
+    res.status(500).json({ error: 'Could not save that contact: ' + error.message });
+  }
+});
+
+app.patch('/api/admin/wedding-contacts/:id', async (req, res) => {
+  try {
+    const clean = v => (String(v ?? '').trim() || null);
+    const patch = { updated_at: new Date().toISOString() };
+    if ('name' in req.body) patch.name = String(req.body.name || '').trim();
+    if ('relationship' in req.body) patch.relationship = clean(req.body.relationship);
+    if ('notes' in req.body) patch.notes = clean(req.body.notes);
+    if ('email' in req.body) patch.email = clean(req.body.email)?.toLowerCase() || null;
+    if ('ingest_calls' in req.body) patch.ingest_calls = !!req.body.ingest_calls;
+    if ('ingest_email' in req.body) patch.ingest_email = !!req.body.ingest_email;
+    // phone and phone_digits move together, always. Two definitions of the same
+    // number is how a mother's calls end up filed under nobody.
+    if ('phone' in req.body) {
+      patch.phone = clean(req.body.phone);
+      patch.phone_digits = normalizePhone(patch.phone);
+    }
+    if (!patch.name && 'name' in req.body) return res.status(400).json({ error: 'A name is needed' });
+
+    const { data, error } = await supabaseAdmin
+      .from('wedding_contacts').update(patch).eq('id', req.params.id).select().single();
+    if (error) {
+      if (error.code === '23505') return res.status(409).json({ error: 'Somebody on this wedding already has that number or address' });
+      throw error;
+    }
+    res.json(data);
+  } catch (error) {
+    console.error('wedding-contacts update error:', error);
+    res.status(500).json({ error: 'Could not save that change: ' + error.message });
+  }
+});
+
+app.delete('/api/admin/wedding-contacts/:id', async (req, res) => {
+  try {
+    // Their calls and emails stay. contact_id goes null on delete, so removing
+    // a person from the list does not delete what they said.
+    const { error } = await supabaseAdmin.from('wedding_contacts').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('wedding-contacts delete error:', error);
+    res.status(500).json({ error: 'Could not remove that contact' });
+  }
+});
+
+// What they said. Venue-side; the couple has no route to this.
+app.get('/api/admin/contact-messages/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('contact_messages')
+      .select('*')
+      .eq('wedding_id', req.params.weddingId)
+      .order('occurred_at', { ascending: false, nullsFirst: false })
+      .limit(300);
+    if (error) {
+      if (contactsMissing(error)) return res.json({ messages: [], needsMigration: true });
+      throw error;
+    }
+    res.json({ messages: data || [] });
+  } catch (error) {
+    console.error('contact-messages read error:', error);
+    res.status(500).json({ error: 'Could not load those calls and emails' });
+  }
+});
+
+/**
+ * Share one with the couple, or take it back.
+ *
+ * Sharing writes a planning note, which is the only thing the couple's Sage
+ * reads. The note's id is kept on the row so unsharing deletes that exact note
+ * rather than matching on content and hoping.
+ */
+app.post('/api/admin/contact-messages/:id/share', async (req, res) => {
+  try {
+    const share = req.body?.share !== false;
+    const { data: msg, error: readErr } = await supabaseAdmin
+      .from('contact_messages').select('*').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!msg) return res.status(404).json({ error: 'Not found' });
+
+    if (!share) {
+      if (msg.shared_note_id) {
+        const { error: delErr } = await supabaseAdmin
+          .from('planning_notes').delete().eq('id', msg.shared_note_id);
+        // If the note cannot be removed, do not mark this unshared: the couple
+        // would still be able to read it while the screen said they could not.
+        if (delErr) throw new Error(`Could not remove the note the couple can see: ${delErr.message}`);
+      }
+      const { data, error } = await supabaseAdmin.from('contact_messages')
+        .update({ shared_with_couple: false, shared_at: null, shared_note_id: null })
+        .eq('id', msg.id).select().single();
+      if (error) throw error;
+      return res.json(data);
+    }
+
+    const who = [msg.contact_name, 'about your wedding'].filter(Boolean).join(' ');
+    const label = msg.kind === 'email' ? 'Email' : 'Call';
+    const { data: note, error: noteErr } = await supabaseAdmin.from('planning_notes').insert({
+      wedding_id: msg.wedding_id,
+      category: msg.kind === 'email' ? 'email_message' : 'call_transcript',
+      // Shared deliberately, so it carries a name: a note appearing in a
+      // couple's portal with no idea who said it is worse than no note.
+      content: `[${label} with ${msg.contact_name || 'a family contact'}] ${msg.summary || String(msg.body).slice(0, 2000)}`,
+      source_message: `Shared by Rixey from a ${msg.kind} with ${who}`,
+      status: 'confirmed',
+    }).select('id').single();
+    if (noteErr) throw noteErr;
+
+    const { data, error } = await supabaseAdmin.from('contact_messages')
+      .update({ shared_with_couple: true, shared_at: new Date().toISOString(), shared_note_id: note.id })
+      .eq('id', msg.id).select().single();
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error('contact-message share error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Meetings the matcher would not guess at.
 app.get('/api/admin/ingest-review', async (req, res) => {
   try {
@@ -5177,6 +5536,55 @@ app.post('/api/admin/ingest-review/:id/assign', async (req, res) => {
       .from('ingest_review').select('*').eq('id', req.params.id).maybeSingle();
     if (itemErr) throw itemErr;
     if (!item) return res.status(404).json({ error: 'Not found' });
+
+    // A caller nobody could place. Files every transcript stored against that
+    // number, and optionally remembers the number so it never asks again.
+    if (item.source === 'quo_call') {
+      const { imported, contactId } = await fileQueuedCaller({
+        supabaseAdmin,
+        item,
+        weddingId,
+        contact: req.body?.contact?.name ? req.body.contact : null,
+      });
+      await supabaseAdmin.from('ingest_review').update({
+        status: 'resolved',
+        resolved_wedding_id: weddingId,
+        resolved_by: req.userId || null,
+        resolved_at: new Date().toISOString(),
+      }).eq('id', item.id);
+      return res.json({ ok: true, callsFiled: imported, remembered: !!contactId, notesExtracted: 0 });
+    }
+
+    // An email the matcher would not guess at. This function only ever knew
+    // about Zoom, so every queued email answered here came back "the transcript
+    // for this meeting is no longer on file" and could not be filed at all —
+    // the queue could ask the question but not accept the answer.
+    if (item.source === 'gmail') {
+      const { data: email, error: emErr } = await supabaseAdmin
+        .from('processed_emails').select('*').eq('gmail_message_id', item.external_id).maybeSingle();
+      if (emErr) throw emErr;
+      if (!email) return res.status(404).json({ error: 'That email is no longer on file' });
+
+      const { error: updErr } = await supabaseAdmin.from('processed_emails')
+        .update({ wedding_id: weddingId }).eq('gmail_message_id', item.external_id);
+      if (updErr) throw updErr;
+
+      const notes = await extractPlanningNotesAI(
+        email.body_text || '',
+        weddingId,
+        `Email: ${email.subject || '(no subject)'}`,
+        'email',
+      );
+      if (notes.length) await savePlanningNotes(notes);
+
+      await supabaseAdmin.from('ingest_review').update({
+        status: 'resolved',
+        resolved_wedding_id: weddingId,
+        resolved_by: req.userId || null,
+        resolved_at: new Date().toISOString(),
+      }).eq('id', item.id);
+      return res.json({ ok: true, notesExtracted: notes.length });
+    }
 
     const { data: meeting, error: mErr } = await supabaseAdmin
       .from('processed_zoom_meetings').select('*').eq('zoom_meeting_id', item.external_id).maybeSingle();
@@ -5769,8 +6177,16 @@ app.post('/api/vendors/:id/contract', upload.single('contract'), async (req, res
       return res.status(404).json({ error: 'Vendor not found' });
     }
 
-    // Upload to Supabase Storage
-    const fileName = `${vendor.wedding_id}/${id}_${Date.now()}_${file.originalname}`;
+    // Upload to Supabase Storage.
+    //
+    // The name goes into the object key, so it is reduced to characters a key
+    // can hold. The original name is kept on the contracts row and in the
+    // activity log, which is where anyone actually reads it.
+    const safeName = file.originalname
+      .replace(/[^a-zA-Z0-9._-]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(-120) || 'contract';
+    const fileName = `${vendor.wedding_id}/${id}_${Date.now()}_${safeName}`;
     const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
       .from('vendor-contracts')
       .upload(fileName, file.buffer, {
@@ -5779,8 +6195,21 @@ app.post('/api/vendors/:id/contract', upload.single('contract'), async (req, res
       });
 
     if (uploadError) {
-      console.error('Upload error:', uploadError);
-      return res.status(500).json({ error: 'Failed to upload file' });
+      // This said "Failed to upload file" whatever went wrong, and on 20 August
+      // that hid a size limit: the bucket capped files at 10MB while this
+      // endpoint accepts 50MB, so every contract over 10MB was refused by
+      // storage and reported to Isadora as an unexplained server error. The
+      // bucket limit is now 50MB, but a generic message would hide the next
+      // one just as well, so say what storage actually said.
+      console.error('Vendor contract storage upload failed:', uploadError);
+      const sizeMb = (file.size / 1024 / 1024).toFixed(1);
+      const tooBig = String(uploadError.statusCode) === '413'
+        || /exceeded the maximum allowed size/i.test(uploadError.message || '');
+      return res.status(tooBig ? 413 : 500).json({
+        error: tooBig
+          ? `That file is ${sizeMb}MB, which is larger than contract storage will take. Compress it or upload a smaller scan.`
+          : `Could not store that file: ${uploadError.message}`,
+      });
     }
 
     // Generate signed URL (expires in 1 year)
@@ -12425,6 +12854,18 @@ app.post('/api/seating/import', spreadsheetUpload.single('file'), async (req, re
 app.use((err, req, res, next) => {
   console.error('Unhandled Express error:', err.message || err);
   if (res.headersSent) return next(err);
+
+  // A file rejected by multer never reaches its route, so the route's own
+  // careful error message never runs. "File too large" with a 500 beside it
+  // reads as a crash rather than as a file that needs compressing, and the one
+  // thing it does not say is how large is too large.
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({ error: 'That file is too large to upload. Compress it, or send a smaller scan.' });
+  }
+  if (/^File type not allowed:/.test(err.message || '')) {
+    return res.status(415).json({ error: `${err.message}. PDFs and images are accepted.` });
+  }
+
   res.status(err.status || err.statusCode || 500).json({ error: err.message || 'Internal server error' });
 });
 

@@ -35,6 +35,7 @@ import ContractPanel from './ContractPanel'
 import WeddingCompleteness from './WeddingCompleteness'
 import WalkthroughNotes from '../../components/WalkthroughNotes'
 import AdminWorksheets from '../../components/admin/AdminWorksheets'
+import WeddingContacts from '../../components/admin/WeddingContacts'
 import DocumentSyncPanel from '../../components/DocumentSyncPanel'
 import { ESCALATION_KEYWORDS, getLastActivity, getCategoryIcon, getCategoryLabel } from './adminUtils'
 import { weddingTabs } from './weddingTabs'
@@ -1211,6 +1212,13 @@ export default function AdminWeddingProfile({
 
               {activeTab === 'walkthrough' && (
                 <WalkthroughNotes weddingId={viewingWedding.id} />
+              )}
+
+              {/* The people with no login. Their calls and emails reached
+                  nothing at all before this: both syncs look people up by
+                  profile, and a profile is a login. */}
+              {activeTab === 'contacts' && (
+                <WeddingContacts weddingId={viewingWedding.id} />
               )}
 
               {/* The alignment worksheets, which until now only the couple could

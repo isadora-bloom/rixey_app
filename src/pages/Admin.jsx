@@ -91,6 +91,9 @@ export default function Admin() {
   const [tourCount, setTourCount] = useState(0)
   // Meetings the matcher would not guess at, and the wedding you picked for each.
   const [reviewItems, setReviewItems] = useState([])
+  // Name and relationship typed against a queued caller, so filing them also
+  // saves the number and the queue stops asking.
+  const [reviewContact, setReviewContact] = useState({})
   const [crashCount, setCrashCount] = useState(0)
   const [reviewChoice, setReviewChoice] = useState({})
   const [reviewBusy, setReviewBusy] = useState(null)
@@ -295,6 +298,27 @@ export default function Admin() {
     setQuoSyncing(false)
   }
 
+  /**
+   * Everyone who has rung the Rixey line and is not a client or a saved
+   * contact. Fills the review queue rather than filing anything.
+   */
+  const sweepCallers = async () => {
+    setQuoSyncing(true)
+    setQuoStatus('Looking for numbers nobody has accounted for...')
+    try {
+      const data = await apiFetch(`${API_URL}/api/quo/sweep-callers`, {
+        method: 'POST',
+        body: JSON.stringify({ sinceDays: 90 }),
+      })
+      setQuoStatus(data.message || 'Sweep started. It runs in the background.')
+      loadReviewItems()
+    } catch (err) {
+      setQuoStatus('Could not sweep for callers: ' + err.message)
+      toastError(`Could not sweep for callers: ${err.message}`)
+    }
+    setQuoSyncing(false)
+  }
+
   const checkZoomStatus = async () => {
     try {
       const response = await fetch(`${API_URL}/api/zoom/status`, {
@@ -345,19 +369,29 @@ export default function Admin() {
   }
 
   const assignReviewItem = async (item) => {
-    const weddingId = reviewChoice[item.id]
+    const weddingId = reviewChoice[item.id] || item.suggested_wedding_id
     if (!weddingId) return
     setReviewBusy(item.id)
     try {
+      // Naming the caller does two things: it files these calls, and it stops
+      // the queue asking about that number ever again.
+      const contact = reviewContact[item.id]
       const data = await apiFetch(`${API_URL}/api/admin/ingest-review/${item.id}/assign`, {
         method: 'POST',
-        body: JSON.stringify({ weddingId }),
+        body: JSON.stringify({
+          weddingId,
+          contact: contact?.name?.trim() ? contact : undefined,
+        }),
       })
       setReviewItems(prev => prev.filter(i => i.id !== item.id))
-      toastSuccess(`Filed, and pulled ${data.notesExtracted} planning notes out of it`)
+      toastSuccess(
+        data.callsFiled
+          ? `${data.callsFiled} call${data.callsFiled === 1 ? '' : 's'} filed${data.remembered ? ', and that number is saved to the wedding' : ''}`
+          : `Filed, and pulled ${data.notesExtracted} planning notes out of it`
+      )
       loadData()
     } catch (err) {
-      toastError(`Could not file that meeting: ${err.message}`)
+      toastError(`Could not file that: ${err.message}`)
     }
     setReviewBusy(null)
   }
@@ -1776,7 +1810,10 @@ export default function Admin() {
                     {item.source === 'gmail' && (
                       <span className="mr-2 text-xs uppercase tracking-wide text-amber-700 bg-amber-100 rounded px-1.5 py-0.5">Email</span>
                     )}
-                    {item.title || (item.source === 'gmail' ? 'No subject' : 'Untitled meeting')}
+                    {item.source === 'quo_call' && (
+                      <span className="mr-2 text-xs uppercase tracking-wide text-amber-700 bg-amber-100 rounded px-1.5 py-0.5">Call</span>
+                    )}
+                    {item.title || (item.source === 'gmail' ? 'No subject' : item.source === 'quo_call' ? 'Calls from an unknown number' : 'Untitled meeting')}
                   </div>
                   <div className="text-xs text-sage-500 mt-0.5">
                     {item.occurred_at ? new Date(item.occurred_at).toLocaleString() : 'no date'}
@@ -1785,6 +1822,26 @@ export default function Admin() {
                   {item.excerpt && (
                     <p className="text-sm text-sage-600 mt-2 line-clamp-3 italic">“{item.excerpt.slice(0, 240)}…”</p>
                   )}
+                  {/* A number filed once should file itself next time, so the
+                      answer to "whose is this?" can also save them to the
+                      wedding. Left blank, the calls are still filed. */}
+                  {item.source === 'quo_call' && (
+                    <div className="grid gap-2 sm:grid-cols-2 mt-3">
+                      <input
+                        value={reviewContact[item.id]?.name || item.payload?.callerName || ''}
+                        onChange={e => setReviewContact(prev => ({ ...prev, [item.id]: { ...prev[item.id], name: e.target.value } }))}
+                        placeholder="Who is this? e.g. Susan Miller"
+                        className="border border-cream-300 rounded-lg px-3 py-2 text-sm"
+                      />
+                      <input
+                        value={reviewContact[item.id]?.relationship || ''}
+                        onChange={e => setReviewContact(prev => ({ ...prev, [item.id]: { ...prev[item.id], relationship: e.target.value } }))}
+                        placeholder="Bride's mother"
+                        className="border border-cream-300 rounded-lg px-3 py-2 text-sm"
+                      />
+                    </div>
+                  )}
+
                   <div className="flex flex-wrap gap-2 mt-3">
                     <select
                       value={reviewChoice[item.id] || item.suggested_wedding_id || ''}
@@ -1810,7 +1867,7 @@ export default function Admin() {
                       disabled={reviewBusy === item.id}
                       className="px-4 py-2 rounded-lg text-sm border border-cream-300 text-sage-600"
                     >
-                      Not a client meeting
+                      {item.source === 'quo_call' ? 'Not a client — stop asking' : 'Not a client meeting'}
                     </button>
                   </div>
                 </div>
@@ -1875,6 +1932,7 @@ export default function Admin() {
             quoSyncing={quoSyncing}
             quoStatus={quoStatus}
             syncQuo={syncQuo}
+            sweepCallers={sweepCallers}
             zoomConnected={zoomConnected}
             zoomSyncing={zoomSyncing}
             zoomStatus={zoomStatus}

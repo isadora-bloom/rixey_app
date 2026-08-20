@@ -22,6 +22,7 @@ export function weddingTabs({
   viewingWedding = null,
   borrowSelections = [],
   activities = [],
+  contactMessageCount = 0,
 } = {}) {
   const pendingNotes = planningNotes.filter(n => n.status === 'pending').length
   const uncertainForThis = viewingWedding
@@ -58,6 +59,9 @@ export function weddingTabs({
 
     { section: 'Conversations' },
     { tab: 'messages', label: 'Conversations', icon: '/icons/conversations.svg' },
+    // The people with no login: mothers, mothers-in-law, planners. Their calls
+    // and emails were invisible to the portal until this existed.
+    { tab: 'contacts', label: 'Family & Contacts', icon: '/icons/guest-care.svg', badge: contactMessageCount },
     { tab: 'uncertain', label: "Uncertain Q's", icon: '/icons/uncertain-questions.svg', badge: uncertainForThis },
     { tab: 'meetings', label: 'Meetings', icon: '/icons/meetings.svg' },
     { tab: 'direct-messages', label: 'Direct Messages', icon: '/icons/direct-messages.svg' },
