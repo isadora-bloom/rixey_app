@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { API_URL } from '../../config/api'
 import { apiFetch } from '../../utils/api'
 import { useToast } from '../ui/Toast'
@@ -101,7 +101,7 @@ function ContactForm({ initial, onSave, onCancel, busy }) {
       <div className="flex flex-wrap gap-4 text-sm text-sage-600">
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={form.ingest_calls !== false} onChange={e => set('ingest_calls', e.target.checked)} />
-          Pull in their calls
+          Pull in their calls and texts
         </label>
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={form.ingest_email !== false} onChange={e => set('ingest_email', e.target.checked)} />
@@ -125,18 +125,23 @@ function ContactForm({ initial, onSave, onCancel, busy }) {
   )
 }
 
+const KIND_ICON = { email: '✉️', sms: '💬', call: '📞' }
+
 function MessageRow({ message, onShare, busy }) {
   const [open, setOpen] = useState(false)
   const isEmail = message.kind === 'email'
+  const isText = message.kind === 'sms'
 
   return (
     <div className="border border-cream-200 rounded-xl p-3 bg-white">
       <div className="flex flex-wrap items-center gap-2 text-sm">
-        <span className="text-base">{isEmail ? '✉️' : '📞'}</span>
+        <span className="text-base">{KIND_ICON[message.kind] || '📞'}</span>
         <span className="font-medium text-sage-700">{message.contact_name || message.phone_number || message.email_address}</span>
         <span className="text-sage-400 text-xs">
           {when(message.occurred_at)}
-          {message.direction === 'outbound' ? ' · Rixey rang them' : ' · they got in touch'}
+          {message.direction === 'outbound'
+            ? (isText ? ' · Rixey texted them' : isEmail ? ' · Rixey wrote to them' : ' · Rixey rang them')
+            : ' · they got in touch'}
           {message.duration_secs ? ` · ${mmss(message.duration_secs)}` : ''}
         </span>
         {message.shared_with_couple && (
@@ -148,6 +153,12 @@ function MessageRow({ message, onShare, busy }) {
 
       {message.summary && <p className="text-sm text-sage-600 mt-2">{message.summary}</p>}
 
+      {/* A text is usually one line. Hiding it behind "read the text" would be
+          a click to reveal less than the click itself took up. */}
+      {isText && !message.summary && (
+        <p className="text-sm text-sage-700 mt-2">{message.body}</p>
+      )}
+
       {open && (
         <pre className="whitespace-pre-wrap font-sans text-sm text-sage-700 bg-cream-50 rounded-lg p-3 mt-3 max-h-96 overflow-y-auto">
           {message.body}
@@ -155,9 +166,11 @@ function MessageRow({ message, onShare, busy }) {
       )}
 
       <div className="flex flex-wrap gap-2 mt-3">
+        {!(isText && !message.summary) && (
         <button onClick={() => setOpen(o => !o)} className="text-xs text-sage-600 underline">
-          {open ? 'Hide the full text' : isEmail ? 'Read the email' : 'Read the transcript'}
+          {open ? 'Hide the full text' : isEmail ? 'Read the email' : isText ? 'Read the text' : 'Read the transcript'}
         </button>
+        )}
         <button
           onClick={() => onShare(message, !message.shared_with_couple)}
           disabled={busy}
@@ -172,6 +185,13 @@ function MessageRow({ message, onShare, busy }) {
 
 export default function WeddingContacts({ weddingId }) {
   const { error: toastError, success: toastSuccess } = useToast()
+  // The toast helpers are new objects on every render, so a useCallback that
+  // depends on them is new on every render too, and an effect keyed to it
+  // re-runs for ever. That is exactly what happened: opening this tab fired the
+  // same two requests dozens of times a second. Held in a ref so `load` depends
+  // on the wedding and nothing else.
+  const toastRef = useRef(null)
+  toastRef.current = toastError
   const [contacts, setContacts] = useState([])
   const [messages, setMessages] = useState([])
   const [loading, setLoading] = useState(true)
@@ -192,10 +212,10 @@ export default function WeddingContacts({ weddingId }) {
       setMessages(m.messages || [])
       setNeedsMigration(!!c.needsMigration || !!m.needsMigration)
     } catch (err) {
-      toastError(`Could not load the contacts: ${err.message}`)
+      toastRef.current?.(`Could not load the contacts: ${err.message}`)
     }
     setLoading(false)
-  }, [weddingId, toastError])
+  }, [weddingId])
 
   useEffect(() => { load() }, [load])
 
@@ -256,8 +276,8 @@ export default function WeddingContacts({ weddingId }) {
         <h3 className="font-serif text-xl text-sage-700">Family &amp; other contacts</h3>
         <p className="text-sm text-sage-500 mt-1 max-w-2xl">
           The people who ring and email about this wedding but have no login: mothers, mothers-in-law,
-          planners. Add their number and address here and their calls and emails are pulled in from the
-          next sync onwards. Nothing here is visible to the couple unless you share it.
+          planners. Add their number and address here and their calls, texts and emails are pulled in
+          from the next sync onwards. Nothing here is visible to the couple unless you share it.
         </p>
       </div>
 
@@ -320,7 +340,7 @@ export default function WeddingContacts({ weddingId }) {
           </div>
         ) : (
           <p className="text-sm text-sage-500">
-            Nothing yet. Calls and emails appear here after the next Phone &amp; SMS or Gmail sync.
+            Nothing yet. Calls, texts and emails appear here after the next Phone &amp; SMS or Gmail sync.
           </p>
         )}
       </div>

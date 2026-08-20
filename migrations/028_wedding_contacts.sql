@@ -109,7 +109,7 @@ CREATE TABLE IF NOT EXISTS public.contact_messages (
   -- Null when it was filed by hand from the review queue and nobody chose to
   -- remember the number. The transcript is still worth keeping.
   contact_id      uuid REFERENCES public.wedding_contacts(id) ON DELETE SET NULL,
-  kind            text NOT NULL DEFAULT 'call',   -- call | email
+  kind            text NOT NULL DEFAULT 'call',   -- call | email | sms
   -- OpenPhone's call id or Gmail's message id. Unique, and it is the whole
   -- dedup story for this table: run a sync twice and the second run inserts
   -- nothing.
@@ -134,9 +134,16 @@ CREATE TABLE IF NOT EXISTS public.contact_messages (
   -- instead of guessing by content.
   shared_note_id  uuid,
   created_at      timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT contact_messages_kind_check CHECK (kind IN ('call', 'email')),
+  CONSTRAINT contact_messages_kind_check CHECK (kind IN ('call', 'email', 'sms')),
   CONSTRAINT contact_messages_direction_check CHECK (direction IN ('inbound', 'outbound'))
 );
+
+-- Texts were added after the first draft of this file, so a database that ran
+-- the earlier version has a constraint that rejects them. Replaced rather than
+-- added, so re-running lands on the same definition either way.
+ALTER TABLE public.contact_messages DROP CONSTRAINT IF EXISTS contact_messages_kind_check;
+ALTER TABLE public.contact_messages
+  ADD CONSTRAINT contact_messages_kind_check CHECK (kind IN ('call', 'email', 'sms'));
 
 CREATE INDEX IF NOT EXISTS contact_messages_wedding_idx
   ON public.contact_messages (wedding_id, occurred_at DESC);

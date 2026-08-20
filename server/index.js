@@ -31,7 +31,7 @@ import { venueToday, venueDate, venueDateTime, VENUE_TZ } from '../shared/venue-
 import { normalizePhone, toE164 } from '../shared/phone.js';
 import {
   fetchCallTranscript, newTranscriptState, loadContactIndex, loadImportedCallIds,
-  importCallsForContact, sweepUnknownCallers, fileQueuedCaller,
+  importCallsForContact, importTextsForContact, sweepUnknownCallers, fileQueuedCaller,
 } from './lib/quo-calls.js';
 import { guestCareContext } from '../shared/guest-care.js';
 import { buildDirectory, matchMeeting } from '../shared/meeting-match.js';
@@ -4566,6 +4566,7 @@ async function runQuoSync(body, { jobId, bump }) {
     // no planning notes unless somebody shares it by hand.
     let contactCallsImported = 0;
     let contactCallsSkipped = 0;
+    let contactTextsImported = 0;
     const contactCallErrors = [];
     if (contactIndex.missing) {
       console.log('[quo] wedding_contacts does not exist yet — run migration 028 to import family calls');
@@ -4591,14 +4592,34 @@ async function runQuoSync(body, { jobId, bump }) {
           contactCallsImported += out.imported;
           contactCallsSkipped += out.skipped;
           contactCallErrors.push(...out.errors);
-          if (out.imported) {
-            console.log(`[quo] ${out.imported} call(s) with ${target.name} filed against their wedding`);
+
+          // Texts on the same terms. A mother who texts about the chair count
+          // is telling the venue the same thing as a mother who rings about it.
+          const texts = await importTextsForContact({
+            supabaseAdmin,
+            phoneNumberId: quoPhone.id,
+            phoneE164: target.phoneE164,
+            target: {
+              weddingId: target.weddingId,
+              contactId: target.contactId,
+              name: target.name,
+              relationship: target.relationship,
+            },
+            importedIds: importedCallIds.ids,
+            summarise: summariseForVenue,
+            skipBodies: templateBodies,
+          });
+          contactTextsImported += texts.imported;
+          contactCallErrors.push(...texts.errors);
+
+          if (out.imported || texts.imported) {
+            console.log(`[quo] ${out.imported} call(s) and ${texts.imported} text(s) with ${target.name} filed against their wedding`);
           }
         }
       }
     }
 
-    console.log(`Quo sync: processed ${newlyProcessed} messages + ${callsProcessed} calls + ${contactCallsImported} family call(s), saved ${planningNotesSaved} planning notes, extracted ${notesExtracted} additional notes`);
+    console.log(`Quo sync: processed ${newlyProcessed} messages + ${callsProcessed} calls + ${contactCallsImported} family call(s) + ${contactTextsImported} family text(s), saved ${planningNotesSaved} planning notes, extracted ${notesExtracted} additional notes`);
 
     const registeredPhones = Object.keys(phoneToWedding);
     return {
@@ -4617,6 +4638,7 @@ async function runQuoSync(body, { jobId, bump }) {
         contactNumbersChecked: contactTargets.length,
         contactCallsImported,
         contactCallsSkipped,
+        contactTextsImported,
         contactCallErrors: contactCallErrors.slice(0, 5),
         contactsTableMissing: contactIndex.missing || importedCallIds.missing || undefined,
         // Says out loud when calls were found and none could be read. The
@@ -5336,10 +5358,22 @@ app.get('/api/admin/sync-jobs', async (req, res) => {
 // Mounted under /api/admin, so requireAdmin already applies (see line ~343).
 // Everything here is venue-side: a couple has no route to any of it.
 
-// 42P01 is no such table, 42703 no such column. Both mean migration 028 has
-// not been run here, which is a sentence somebody can act on rather than a
-// Postgres code in a 500.
-const contactsMissing = err => err?.code === '42P01' || err?.code === '42703';
+// "Migration 028 has not been run here" arrives under four different codes,
+// which is how the first version of this missed it and returned a 500 on a
+// screen whose entire job is to say what to do next:
+//
+//   42P01   Postgres: no such table (direct SQL)
+//   42703   Postgres: no such column (a half-applied migration)
+//   PGRST205 PostgREST: the table is not in its schema cache — this is the one
+//            you actually get from supabase-js for a missing table
+//   PGRST204 PostgREST: the column is not in its schema cache
+//
+// Checked by code, with the message as a backstop, because the two PGRST codes
+// are cache-shaped rather than truth-shaped and the wording has changed before.
+const CONTACTS_MISSING_CODES = new Set(['42P01', '42703', 'PGRST205', 'PGRST204']);
+const contactsMissing = err =>
+  CONTACTS_MISSING_CODES.has(err?.code) ||
+  /could not find the (table|column)|does not exist/i.test(err?.message || '');
 
 app.get('/api/admin/wedding-contacts/:weddingId', async (req, res) => {
   try {
@@ -5490,10 +5524,14 @@ app.post('/api/admin/contact-messages/:id/share', async (req, res) => {
     }
 
     const who = [msg.contact_name, 'about your wedding'].filter(Boolean).join(' ');
-    const label = msg.kind === 'email' ? 'Email' : 'Call';
+    // The categories the rest of the portal already uses, so a shared message
+    // sorts and badges beside the couple's own notes rather than as a stranger.
+    const CATEGORY = { email: 'email_message', sms: 'sms_message', call: 'call_transcript' };
+    const LABEL = { email: 'Email', sms: 'Text', call: 'Call' };
+    const label = LABEL[msg.kind] || 'Call';
     const { data: note, error: noteErr } = await supabaseAdmin.from('planning_notes').insert({
       wedding_id: msg.wedding_id,
-      category: msg.kind === 'email' ? 'email_message' : 'call_transcript',
+      category: CATEGORY[msg.kind] || 'call_transcript',
       // Shared deliberately, so it carries a name: a note appearing in a
       // couple's portal with no idea who said it is worse than no note.
       content: `[${label} with ${msg.contact_name || 'a family contact'}] ${msg.summary || String(msg.body).slice(0, 2000)}`,

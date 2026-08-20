@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react'
+import { createContext, useContext, useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 
 const ToastContext = createContext(null)
@@ -38,13 +38,23 @@ export function ToastProvider({ children }) {
     return () => { if (externalDispatch === push) externalDispatch = null }
   }, [push])
 
-  const value = {
+  // Memoised, because this object used to be rebuilt on every render of the
+  // provider — and the provider re-renders every time a toast appears. So
+  // `success` and `error` were new functions after each toast, and any
+  // component holding `useCallback(..., [toastError])` behind an effect got a
+  // new callback and re-ran.
+  //
+  // On 20 August that turned one failing request into a loop that fed itself:
+  // request 500s -> toast -> provider re-renders -> new error fn -> callback
+  // changes -> effect re-runs -> request 500s. Dozens a second, from a single
+  // missing table.
+  const value = useMemo(() => ({
     toast: push,
     success: (m, o) => push(m, { ...o, variant: 'success' }),
     error: (m, o) => push(m, { ...o, variant: 'error' }),
     info: (m, o) => push(m, { ...o, variant: 'info' }),
     dismiss,
-  }
+  }), [push, dismiss])
 
   return (
     <ToastContext.Provider value={value}>

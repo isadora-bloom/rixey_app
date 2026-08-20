@@ -187,7 +187,7 @@ export async function loadContactIndex(supabaseAdmin) {
       // to fix.
       // 42P01 no such table, 42703 no such column: both mean migration 028 has
       // not been run here yet, which is "not on" rather than "broken".
-      if (error.code === '42P01' || error.code === '42703') {
+      if (['42P01', '42703', 'PGRST205', 'PGRST204'].includes(error.code)) {
         console.log(`[contacts] wedding_contacts is not ready yet (${error.message}) — run migration 028`);
         return { contacts: [], byDigits: new Map(), byEmail: new Map(), missing: true };
       }
@@ -252,7 +252,7 @@ export async function loadImportedCallIds(supabaseAdmin) {
       .select('external_id')
       .range(from, from + 999);
     if (error) {
-      if (error.code === '42P01' || error.code === '42703') return { ids, missing: true };
+      if (['42P01', '42703', 'PGRST205', 'PGRST204'].includes(error.code)) return { ids, missing: true };
       throw new Error(`Could not read which calls are already imported: ${error.message}`);
     }
     for (const row of data) ids.add(row.external_id);
@@ -325,6 +325,79 @@ export async function importCallsForContact({
     }
 
     importedIds.add(call.id);
+    out.imported++;
+  }
+
+  return out;
+}
+
+/**
+ * Import the texts for one known contact.
+ *
+ * The same shape as the calls above and for the same reason: a mother who texts
+ * "can we do 40 chairs not 36" is telling the venue something, and until now
+ * nothing asked OpenPhone about her number at all. Filed venue-side, never into
+ * planning_notes.
+ *
+ * `skipBodies` is the template set the sync has already learned — the venue's
+ * own machine replies ("Thanks for texting! We will text you back ASAP!") are
+ * not a conversation with anybody and should not fill a family's history.
+ */
+export async function importTextsForContact({
+  supabaseAdmin,
+  phoneNumberId,
+  phoneE164,
+  target,
+  importedIds,
+  summarise,
+  skipBodies = new Set(),
+}) {
+  const out = { found: 0, imported: 0, skipped: 0, errors: [] };
+
+  const res = await quoGet(
+    `/messages?phoneNumberId=${phoneNumberId}&participants=${encodeURIComponent(phoneE164)}&maxResults=100`
+  );
+  if (!res.ok) {
+    out.errors.push(`Quo returned ${res.status} for texts with ${phoneE164}`);
+    return out;
+  }
+
+  const messages = res.json?.data || res.json?.messages || [];
+  out.found = Array.isArray(messages) ? messages.length : 0;
+
+  for (const msg of (Array.isArray(messages) ? messages : [])) {
+    if (importedIds.has(msg.id)) continue;
+
+    const body = String(msg.body || msg.text || msg.content || '').trim();
+    if (!body) { out.skipped++; continue; }
+
+    const direction = callDirection(msg);
+    if (direction === 'outbound' && skipBodies.has(body)) { out.skipped++; continue; }
+
+    // Most texts are a sentence long, and summarise returns null below 200
+    // characters, so this costs nothing on the ordinary ones.
+    const summary = await summarise(body, target.name, target.relationship);
+
+    const { error: insErr } = await supabaseAdmin.from('contact_messages').insert({
+      wedding_id: target.weddingId,
+      contact_id: target.contactId || null,
+      kind: 'sms',
+      external_id: msg.id,
+      phone_number: phoneE164,
+      contact_name: target.name,
+      direction,
+      occurred_at: msg.createdAt || msg.sentAt || null,
+      body,
+      summary,
+    });
+
+    if (insErr) {
+      if (insErr.code === '23505') { importedIds.add(msg.id); continue; }
+      out.errors.push(`${msg.id}: ${insErr.message}`);
+      continue;
+    }
+
+    importedIds.add(msg.id);
     out.imported++;
   }
 
