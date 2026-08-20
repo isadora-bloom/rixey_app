@@ -12,6 +12,7 @@
 import {
   allPeople, headcount, dietaryNotes, usesPersonModel, toParties,
 } from '../shared/guest-names.js';
+import { shuttleRequests } from '../shared/rsvp-fields.js';
 
 let failures = 0;
 function check(label, actual, expected) {
@@ -112,6 +113,40 @@ check('person model: a plus one can be seated apart from their host',
   seatedPerson.filter(p => p.row?.table_assignment === 'Table 2').map(p => p.name).sort(),
   ['Cole Ashby', 'Guest', 'Tom Whitfield']);
 check('nobody is seated twice', seatedPerson.length, 7);
+
+
+console.log('\na shuttle seat per person, counted once:');
+// A shuttle is a real minibus with real seats, and this is the fourth place
+// the same shape has bitten: walk the rows AND expand each host's plus_one_*
+// and every plus one is counted twice. Their answer still arrives on the
+// host's extras, under plus_one_shuttle, because one RSVP covers the party.
+const SHUTTLE_PARTY = [
+  { id: 'h1', first_name: 'Sarah', last_name: 'Alexander', rsvp: 'yes',
+    plus_one_name: 'Tom Whitfield', plus_one_rsvp: 'yes',
+    rsvp_extras: { shuttle: 'Yes', plus_one_shuttle: 'Yes' } },
+  { id: 'h2', first_name: 'Grace', last_name: 'Teeters', rsvp: 'yes',
+    rsvp_extras: { shuttle: 'No' } },
+];
+const SHUTTLE_PERSON = [
+  { id: 'h1', party_id: 'h1', is_plus_one: false, first_name: 'Sarah', last_name: 'Alexander', rsvp: 'yes',
+    rsvp_extras: { shuttle: 'Yes', plus_one_shuttle: 'Yes' } },
+  { id: 'p1', party_id: 'h1', is_plus_one: true, plus_one_of: 'h1', first_name: 'Tom', last_name: 'Whitfield', rsvp: 'yes',
+    rsvp_extras: {} },
+  { id: 'h2', party_id: 'h2', is_plus_one: false, first_name: 'Grace', last_name: 'Teeters', rsvp: 'yes',
+    rsvp_extras: { shuttle: 'No' } },
+];
+check('party model: two seats', shuttleRequests(SHUTTLE_PARTY).map(r => r.name).sort(),
+  ['Sarah Alexander', 'Tom Whitfield']);
+check('person model: the same two, not four', shuttleRequests(SHUTTLE_PERSON).map(r => r.name).sort(),
+  ['Sarah Alexander', 'Tom Whitfield']);
+check('the plus one is still marked as one',
+  shuttleRequests(SHUTTLE_PERSON).find(r => r.name === 'Tom Whitfield')?.isPlusOne, true);
+check('and knows whose',
+  shuttleRequests(SHUTTLE_PERSON).find(r => r.name === 'Tom Whitfield')?.host, 'Sarah Alexander');
+
+// A declined plus one does not need a seat.
+const SHUTTLE_DECLINED = SHUTTLE_PERSON.map(g => g.is_plus_one ? { ...g, rsvp: 'no' } : g);
+check('a plus one who declined takes no seat', shuttleRequests(SHUTTLE_DECLINED).map(r => r.name), ['Sarah Alexander']);
 
 console.log(failures ? `\n${failures} failed` : '\nAll good.');
 process.exit(failures ? 1 : 0);

@@ -18,7 +18,7 @@ import { validateBody } from './middleware/validate.js';
 import { coerceBody } from './middleware/coerce.js';
 import { fetchAllTabs, SheetFetchError } from './lib/sheet-fetcher.js';
 import { buildDiff, applyChoices } from './lib/sheet-diff/index.js';
-import { guestFullName, plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, headcount, parsePlusOneCell, usesPersonModel, personDisplayName, toParties } from '../shared/guest-names.js';
+import { guestFullName, plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, headcount, parsePlusOneCell, usesPersonModel, personDisplayName, toParties, allPeople } from '../shared/guest-names.js';
 import { sendsConfirmation } from '../shared/rsvp-fields.js';
 import { rsvpConfirmationHtml } from './lib/rsvp-confirmation.js';
 import { WALKTHROUGH_TARGETS, TARGET_KEYS, buildNote, organisePrompt, parseItems } from './lib/walkthrough.js';
@@ -10938,17 +10938,30 @@ app.get('/api/rsvp/:slug/search', rsvpSearchLimiter, async (req, res) => {
         if (!name || name === 'Guest') continue;
         if (!name.toLowerCase().includes(needle)) continue;
 
-        const theirPlusOne = g.is_plus_one ? null : plusOneOf.get(g.id);
+        // Whose plus one this row is, if it is one, so a result found by the
+        // plus one's name still carries the party's details.
+        const theirPlusOne = g.is_plus_one ? plusOneOf.get(head.id) : plusOneOf.get(g.id);
+
         results.push({
-          id: g.id,
+          // The PARTY's id, always, even when the match was the plus one.
+          //
+          // One RSVP covers the whole party: a plus one who finds herself gets
+          // the party's form and answers for both, and the form submits this
+          // id. Returning her own row id instead wrote the host's answer onto
+          // her row and dropped the plus one's answer entirely, because the
+          // server then had a plus one where it expected a party head.
+          //
+          // She is still findable by her own name, which is the point of
+          // searching people. It is only who the form then acts on that has to
+          // stay the party.
+          id: head.id,
           name,
-          host_name: g.is_plus_one ? guestFullName(head) : name,
+          host_name: guestFullName(head),
           plus_one_name: theirPlusOne ? guestFullName(theirPlusOne) || null : null,
           // What to call them, and whether we have a name at all. The form
           // uses the second to decide whether to ask who they're bringing.
-          plus_one_display: theirPlusOne ? personDisplayName(theirPlusOne, g) : null,
+          plus_one_display: theirPlusOne ? personDisplayName(theirPlusOne, head) : null,
           plus_one_named: theirPlusOne ? isNamedPerson(guestFullName(theirPlusOne)) : false,
-          plus_one_id: theirPlusOne ? theirPlusOne.id : null,
           is_plus_one: !!g.is_plus_one,
         });
       }
@@ -12277,45 +12290,63 @@ async function commitSeatingToGuests(weddingId, tables, replaceExisting) {
   const norm = s => (s || '').toLowerCase().trim().replace(/\s+/g, ' ');
   const nameKey = full => norm(full);
 
-  // Two indexes. Seating charts list every person by name, including plus
-  // ones, who have no row of their own. Matching on host names alone meant a
-  // charted plus one was never found and got inserted as a duplicate guest,
-  // sitting alongside the same person's name on their host's row.
-  const hostIndex = new Map();
-  const plusOneIndex = new Map();
+  // One index of people, by the name each of them shows under.
+  //
+  // A seating chart lists people, so matching it wants people. This used to be
+  // two indexes — hosts, and plus ones pointing at their host's row — because a
+  // plus one had no row to seat. Since 025 they do, and the two-index version
+  // then went wrong in a way worth spelling out: a plus one recorded as "Cole"
+  // displays as "Cole Ashby" with the surname inherited, so a chart saying
+  // "Cole Ashby" missed the person index, fell through to the plus-one index,
+  // and moved Brooke instead. Cole's own row kept no table at all.
+  //
+  // p.row is the row that carries that person's table: their host's before 025,
+  // their own after it. So the same code seats the right thing in both.
+  const personIndex = new Map();
+  const isPlusOneRow = new Set();
+  for (const person of allPeople(existingGuests || [])) {
+    const rowId = person.row?.id;
+    if (!rowId || !person.name) continue;
+    personIndex.set(nameKey(person.name), rowId);
+    if (person.isPlusOne) isPlusOneRow.add(rowId);
+  }
+  // A chart may also use the bare name the couple typed, without the inherited
+  // surname. Added second so a real guest of that name always wins.
   for (const g of existingGuests || []) {
-    hostIndex.set(nameKey(guestFullName(g)), g.id);
     if (hasPlusOne(g) && isNamedPerson(g.plus_one_name)) {
-      plusOneIndex.set(nameKey(plusOneFullName(g.plus_one_name, g.last_name)), g.id);
-      plusOneIndex.set(nameKey(g.plus_one_name), g.id);
+      const bare = nameKey(g.plus_one_name);
+      if (!personIndex.has(bare)) {
+        const own = (existingGuests || []).find(x => x.is_plus_one && x.plus_one_of === g.id);
+        personIndex.set(bare, own ? own.id : g.id);
+        if (own) isPlusOneRow.add(own.id);
+      }
     }
   }
 
   let created = 0, updated = 0, seatedAsPlusOne = 0;
   const warnings = [];
-  const assignedTable = new Map(); // host row id -> table we have already set
+  const assignedTable = new Map(); // row id -> table we have already set
 
   for (const table of tables) {
     for (const guest of table.guests) {
       const full = [guest.first_name, guest.last_name].filter(Boolean).join(' ');
       const key = nameKey(full);
-      const existingId = hostIndex.get(key);
+      const existingId = personIndex.get(key);
 
-      // Matched a plus one rather than a guest row. Seat their host: a party
-      // shares a row, so that is what puts both of them at the table. Never
-      // create a row for them, and never silently move a host who is already
-      // seated somewhere else.
-      if (!existingId && plusOneIndex.has(key)) {
-        const hostId = plusOneIndex.get(key);
-        const already = assignedTable.get(hostId);
+      // Somebody whose table lives on a row shared with their host. Only
+      // possible before 025; after it they have their own row and can be seated
+      // wherever the chart says. Never create a row for them, and never
+      // silently move a host who is already seated somewhere else.
+      if (existingId && isPlusOneRow.has(existingId)) {
+        const already = assignedTable.get(existingId);
         if (already && already !== guest.table_assignment) {
-          warnings.push(`${full} is charted at ${guest.table_assignment} but is a plus one of someone already seated at ${already}. Left as ${already}.`);
+          warnings.push(`${full} is charted at ${guest.table_assignment} but shares a row with someone already seated at ${already}. Left as ${already}.`);
         } else {
           await supabaseAdmin
             .from('wedding_guests')
             .update({ table_assignment: guest.table_assignment, updated_at: new Date().toISOString() })
-            .eq('id', hostId);
-          assignedTable.set(hostId, guest.table_assignment);
+            .eq('id', existingId);
+          assignedTable.set(existingId, guest.table_assignment);
           seatedAsPlusOne++;
         }
         continue;
@@ -12338,13 +12369,17 @@ async function commitSeatingToGuests(weddingId, tables, replaceExisting) {
       } else {
         // A name on the chart that matches nobody. Inserted as a guest in their
         // own right, with no plus one, because nothing here says they have one.
+        // Head of their own party. Migration 027's trigger would fill this in
+        // too, but a path that only works because of a trigger is a path that
+        // breaks on any database where the trigger has not been run.
+        const newId = crypto.randomUUID();
         const { data: newGuest } = await supabaseAdmin
           .from('wedding_guests')
-          .insert({ wedding_id: weddingId, ...payload })
+          .insert({ id: newId, party_id: newId, wedding_id: weddingId, ...payload })
           .select('id')
           .single();
         if (newGuest) {
-          hostIndex.set(key, newGuest.id);
+          personIndex.set(key, newGuest.id);
           assignedTable.set(newGuest.id, guest.table_assignment);
         }
         created++;

@@ -1,4 +1,4 @@
-import { guestFullName, plusOneDisplayName, hasPlusOne } from './guest-names.js';
+import { guestFullName, plusOneDisplayName, hasPlusOne, usesPersonModel, toParties, personDisplayName } from './guest-names.js';
 
 /**
  * The extra questions a couple can add to their RSVP form.
@@ -71,10 +71,47 @@ export function sendsConfirmation(rsvpConfig) {
  */
 export function shuttleRequests(guests) {
   const yes = v => typeof v === 'string' && /^(yes|y|true|1)$/i.test(v.trim());
+  const extrasOf = g => (g && typeof g.rsvp_extras === 'object' && g.rsvp_extras) || {};
+  const taggedShuttle = g => Array.isArray(g?.tags) && g.tags.some(t => String(t).toLowerCase() === 'shuttle');
   const out = [];
+
+  // Since migration 025 a plus one has a row of their own, so walking the rows
+  // and ALSO expanding each host's plus_one_* counts them twice. It does not
+  // today only because the backfill left their rsvp_extras empty, which is luck
+  // rather than design: the moment a plus one answers anything on their own row
+  // the seat count doubles, and a shuttle is a real minibus with real seats.
+  //
+  // Their answers still arrive on the host's extras, under plus_one_shuttle,
+  // because one RSVP covers the party. So the person is the plus-one row and
+  // the answer is the host's, which is exactly what toParties gives us.
+  if (usesPersonModel(guests)) {
+    for (const { head, members } of toParties(guests)) {
+      const hostExtras = extrasOf(head);
+      for (const row of members) {
+        if (row.rsvp === 'no') continue;
+        const isPlusOne = !!row.is_plus_one;
+        // A plus one's own answer wins if they ever have one; otherwise it is
+        // the plus_one_shuttle their host was asked on their behalf.
+        const own = extrasOf(row);
+        const answered = isPlusOne
+          ? (yes(own.shuttle) || yes(hostExtras[plusOneExtraKey('shuttle')]))
+          : yes(own.shuttle);
+        const tagged = taggedShuttle(row);
+        if (!answered && !tagged) continue;
+        out.push({
+          name: personDisplayName(row, head),
+          isPlusOne,
+          host: isPlusOne ? guestFullName(head) : null,
+          viaTag: !answered && tagged,
+        });
+      }
+    }
+    return out;
+  }
+
   for (const g of guests || []) {
-    const x = (g && typeof g.rsvp_extras === 'object' && g.rsvp_extras) || {};
-    const tagged = Array.isArray(g?.tags) && g.tags.some(t => String(t).toLowerCase() === 'shuttle');
+    const x = extrasOf(g);
+    const tagged = taggedShuttle(g);
     if ((yes(x.shuttle) || tagged) && g?.rsvp !== 'no') {
       out.push({ name: guestFullName(g), isPlusOne: false, host: null, viaTag: !yes(x.shuttle) && tagged });
     }
