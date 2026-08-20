@@ -619,7 +619,10 @@ export default function PrintView() {
 
       {/* Screen-only controls */}
       <div className="screen-controls">
-        <button className="btn-back" onClick={() => navigate('/admin')}>← Admin</button>
+        {/* Back to the wedding you came from, not the list of all of them.
+            The pack opens in its own tab, so landing on the list meant hunting
+            for the couple again to carry on where you left off. */}
+        <button className="btn-back" onClick={() => navigate(`/admin?wedding=${weddingId}`)}>← Back to profile</button>
         <h2>Print / Export — {wedding?.couple_names || 'Wedding'}</h2>
         <button className="btn-print" onClick={() => window.print()}>🖨️ Print / Save PDF</button>
       </div>

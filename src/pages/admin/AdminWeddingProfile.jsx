@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { formatDateOnly } from '../../utils/dates'
 import VendorChecklist from '../../components/VendorChecklist'
 import InspoGallery from '../../components/InspoGallery'
@@ -134,6 +134,23 @@ export default function AdminWeddingProfile({
   setMainView,
   // Guest care (not used as prop, component is self-contained)
 }) {
+  // A conversation opens where the conversation is: at the bottom.
+  //
+  // Grace's words: can the chat load at the most recent chat, not the first
+  // one, so we do not have to scroll. Messages render oldest first inside a
+  // fixed-height box, so opening a thread with two hundred messages in it put
+  // her at the oldest one and left her scrolling to find out what was said
+  // this morning.
+  //
+  // scrollTop rather than scrollIntoView, so only the panel moves and the page
+  // stays where it is. Set without animation: you want to start at the bottom,
+  // not watch it travel there.
+  const chatScrollRef = useRef(null)
+  useEffect(() => {
+    const el = chatScrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [selectedChatUser, weddingMessages])
+
   // One list for the sidebar and the phone dropdown both. See weddingTabs.js
   // for what went missing on phones while these were two lists.
   const TABS = weddingTabs({ planningNotes, uncertainQuestions, viewingWedding, borrowSelections, activities })
@@ -987,7 +1004,7 @@ export default function AdminWeddingProfile({
                           </div>
 
                           {/* Chat bubbles */}
-                          <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
+                          <div ref={chatScrollRef} className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
                             {chronological.map((msg, idx) => {
                               const isUser = msg.sender === 'user'
                               const isEscalation = isUser && ESCALATION_KEYWORDS.some(kw =>

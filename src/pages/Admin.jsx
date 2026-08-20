@@ -827,6 +827,7 @@ export default function Admin() {
     }
   }
 
+
   const viewWeddingProfile = async (wedding, opts = {}) => {
     const { focusUserId } = opts
     setViewingWedding(wedding)
@@ -960,6 +961,25 @@ export default function Admin() {
 
     setLoadingMessages(false)
   }
+
+  // ?wedding=<id> opens straight into that profile.
+  //
+  // There is no route for a single wedding — the profile is state on this page
+  // — so anything that leaves and comes back used to land on the list. The
+  // print pack opens in its own tab, and its way back was "← Admin", which is
+  // a different place from where you were.
+  //
+  // Runs once weddings have loaded, since it needs the row, and clears the
+  // parameter afterwards so a refresh does not keep reopening it.
+  useEffect(() => {
+    if (!weddings.length || viewingWedding) return
+    const wanted = new URLSearchParams(window.location.search).get('wedding')
+    if (!wanted) return
+    const found = weddings.find(w => w.id === wanted)
+    if (found) viewWeddingProfile(found)
+    window.history.replaceState({}, '', '/admin')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weddings])
 
   const updateNoteStatus = async (noteId, newStatus) => {
     const snapshot = planningNotes
