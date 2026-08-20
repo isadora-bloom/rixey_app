@@ -10324,8 +10324,12 @@ app.post('/api/guests', async (req, res) => {
     await syncPlusOneRow(data);
     res.json({ guest: data });
   } catch (err) {
+    // The reason, not just the fact. "Failed to create guest" was reported to
+    // Isadora as a bare 500 on 20 August and told nobody anything: the insert
+    // is provably fine against blank fields and nulls, so whatever this is, it
+    // needs to name itself the next time rather than be guessed at again.
     console.error('Create guest error:', err);
-    res.status(500).json({ error: 'Failed to create guest' });
+    res.status(500).json({ error: `Could not add that guest: ${err.message}` });
   }
 });
 
@@ -10354,7 +10358,7 @@ app.put('/api/guests/:id', async (req, res) => {
     res.json({ guest: data });
   } catch (err) {
     console.error('Update guest error:', err);
-    res.status(500).json({ error: 'Failed to update guest' });
+    res.status(500).json({ error: `Could not save that guest: ${err.message}` });
   }
 });
 
