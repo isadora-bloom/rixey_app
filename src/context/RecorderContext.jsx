@@ -79,9 +79,11 @@ export function RecorderProvider({ children }) {
   const uploadStored = useCallback(async (rec) => {
     setBusyId(rec.id)
     let ok = false
+    let blobSize = 0
     try {
       const blob = await getRecordingBlob(rec.id)
       if (!blob) throw new Error('The audio for that recording is no longer on this device.')
+      blobSize = blob.size
       const form = new FormData()
       form.append('file', new File([blob], `voice-note.${extensionFor(rec.mimeType)}`, { type: rec.mimeType }))
       if (rec.durationSecs) form.append('duration_secs', String(rec.durationSecs))
@@ -98,9 +100,16 @@ export function RecorderProvider({ children }) {
       toast.success('Recording saved. Transcribing now.')
       ok = true
     } catch (err) {
-      // Kept, not dropped. This is the branch that used to lose a meeting.
-      await noteUploadError(rec.id, err.message)
-      toast.error(`That recording is safe on this device but did not upload: ${err.message}`)
+      // "The object exceeded the maximum allowed size" is storage's wording and
+      // it tells you nothing you can act on: not how big, not how big is
+      // allowed, not whether the audio still exists. Say all three.
+      const tooBig = /exceeded the maximum allowed size/i.test(err.message || '')
+      const sizeMb = blobSize ? (blobSize / 1024 / 1024).toFixed(0) : null
+      const message = tooBig
+        ? `it is ${sizeMb ? `${sizeMb}MB, over the ` : 'over the '}50MB limit for a single upload. The audio is still here, and recordings made from now on are far smaller.`
+        : err.message
+      await noteUploadError(rec.id, message)
+      toast.error(`That recording is safe on this device but did not upload: ${message}`)
     }
     setBusyId(null)
     await refreshPending()
@@ -117,7 +126,18 @@ export function RecorderProvider({ children }) {
       streamRef.current = stream
       // Let the browser pick its own container. Chrome gives webm, Safari mp4,
       // and forcing one of them is how this breaks on half the machines.
-      const rec = new MediaRecorder(stream)
+      //
+      // The bitrate is ours to set, though, and leaving it to the browser cost
+      // a 108-minute planning meeting on 20 August. Chrome's default came out
+      // at 188 kbps — 81 MB an hour — against a 50 MB ceiling on storage, so
+      // anything past about thirty-seven minutes could not be saved at all. The
+      // phone defaulted to 130 kbps and died at around fifty-four.
+      //
+      // 32 kbps Opus is speech, which is all this ever records and all Deepgram
+      // needs; music would be a different question and this is never music. It
+      // is 14 MB an hour, so the ceiling moves out past three hours, and every
+      // upload from a phone on venue wifi gets six times quicker as well.
+      const rec = new MediaRecorder(stream, { audioBitsPerSecond: 32000 })
       const id = await beginRecording({ walkthroughId, mimeType: rec.mimeType, label })
 
       rec.ondataavailable = async e => {
