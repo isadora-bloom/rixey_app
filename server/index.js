@@ -12186,7 +12186,14 @@ app.get('/api/admin/walkthroughs/:id/items', requireAdmin, async (req, res) => {
       .eq('walkthrough_id', req.params.id)
       .order('created_at');
     if (error) throw error;
-    res.json(data || []);
+
+    // The walkthrough's own status rides along, because organising a long
+    // meeting now runs in the background and the screen has to be able to ask
+    // whether it is still going. This returned a bare array before; all three
+    // callers read .items now.
+    const { data: wt } = await supabaseAdmin
+      .from('walkthroughs').select('status').eq('id', req.params.id).maybeSingle();
+    res.json({ items: data || [], status: wt?.status || null });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -12233,46 +12240,88 @@ app.post('/api/admin/walkthroughs/:id/organise', requireAdmin, aiLimiter, async 
       knownNames.length ? `\nNames already on their guest list, useful for matching a first name to a person: ${knownNames.join(', ')}` : '',
     ].join('\n');
 
-    const prompt = organisePrompt({
-      rawNotes: String(wt.raw_notes).slice(0, 20000),
-      context,
-      kindLabel: (wt.kind || 'walkthrough').replace(/_/g, ' '),
-      occurredOn: wt.occurred_on,
-    });
+    // Read all of it, not the first fifth.
+    //
+    // This used to be `String(wt.raw_notes).slice(0, 20000)`, one call, one
+    // model, and the truncation was silent. On 20 August a 108-minute planning
+    // meeting transcribed to 98,120 characters, so 80% of the meeting was
+    // dropped before the model saw a word of it — and the walkthrough was still
+    // marked "organised", which is the part that makes it dangerous. Nobody was
+    // told the back eighty-six minutes had not been read.
+    //
+    // Chunked the same way planning documents already are, and for the same
+    // reason. See /api/admin/documents/:id/parse.
+    const chunks = chunkDocument(String(wt.raw_notes));
 
-    let response;
-    try {
-      response = await anthropic.messages.create({
-        model: MODEL_SONNET, max_tokens: 4000, temperature: 0.2,
-        messages: [{ role: 'user', content: prompt }],
-      });
-    } catch (err) {
-      const overloaded = err.status === 529 || err.status === 503 || err.status === 429;
-      if (!overloaded) throw err;
-      response = await anthropic.messages.create({
-        model: MODEL_HAIKU, max_tokens: 4000, temperature: 0.2,
-        messages: [{ role: 'user', content: prompt }],
-      });
-    }
-    await logUsage(wt.wedding_id, null, 'walkthrough_organise', response);
-
-    const items = parseItems(response.content[0].text);
-    if (items.length) {
-      const { error: ie } = await supabaseAdmin.from('walkthrough_items').insert(
-        items.map(i => ({ ...i, walkthrough_id: wt.id, wedding_id: wt.wedding_id }))
-      );
-      if (ie) throw ie;
-    }
+    // Answer now, read after. Five chunks through Sonnet is minutes of work,
+    // far past any proxy timeout, and a timeout here looked to Isadora like the
+    // organise had failed when in fact it had run and found nothing.
     await supabaseAdmin.from('walkthroughs')
-      .update({ status: 'organised', organised_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-      .eq('id', wt.id);
+      .update({ status: 'organising', updated_at: new Date().toISOString() }).eq('id', wt.id);
+    res.json({ ok: true, started: true, chunks: chunks.length });
 
-    const { data: saved } = await supabaseAdmin
-      .from('walkthrough_items').select('*').eq('walkthrough_id', wt.id).order('created_at');
-    res.json({ ok: true, items: saved || [], parsed: items.length });
+    (async () => {
+      let parsed = 0;
+      let failedChunks = 0;
+      try {
+        for (let i = 0; i < chunks.length; i++) {
+          const prompt = organisePrompt({
+            rawNotes: chunks[i],
+            context: chunks.length > 1
+              ? `${context}
+
+This is part ${i + 1} of ${chunks.length} of one long meeting. Only pull out what is in this part; the rest is being read separately.`
+              : context,
+            kindLabel: (wt.kind || 'walkthrough').replace(/_/g, ' '),
+            occurredOn: wt.occurred_on,
+          });
+
+          let response;
+          try {
+            response = await anthropic.messages.create({
+              model: MODEL_SONNET, max_tokens: 4000, temperature: 0.2,
+              messages: [{ role: 'user', content: prompt }],
+            });
+          } catch (err) {
+            const overloaded = err.status === 529 || err.status === 503 || err.status === 429;
+            if (!overloaded) throw err;
+            response = await anthropic.messages.create({
+              model: MODEL_HAIKU, max_tokens: 4000, temperature: 0.2,
+              messages: [{ role: 'user', content: prompt }],
+            });
+          }
+          await logUsage(wt.wedding_id, null, 'walkthrough_organise', response);
+
+          const items = parseItems(response.content[0].text);
+          if (items.length) {
+            // Written per chunk, so a failure at part four keeps parts one to
+            // three rather than losing the lot.
+            const { error: ie } = await supabaseAdmin.from('walkthrough_items').insert(
+              items.map(x => ({ ...x, walkthrough_id: wt.id, wedding_id: wt.wedding_id }))
+            );
+            if (ie) { failedChunks++; console.error(`[organise] ${wt.id} part ${i + 1}: ${ie.message}`); }
+            else parsed += items.length;
+          }
+          console.log(`[organise] ${wt.id}: part ${i + 1}/${chunks.length}, ${parsed} item(s) so far`);
+        }
+
+        await supabaseAdmin.from('walkthroughs').update({
+          status: 'organised',
+          organised_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }).eq('id', wt.id);
+        console.log(`[organise] ${wt.id}: done, ${parsed} item(s) from ${chunks.length} part(s), ${failedChunks} part(s) failed to save`);
+      } catch (err) {
+        console.error(`[organise] ${wt.id} failed:`, err.message);
+        // Back to draft rather than left saying "organised" over an empty list.
+        // Whatever earlier parts produced is already saved and still there.
+        await supabaseAdmin.from('walkthroughs')
+          .update({ status: 'draft', updated_at: new Date().toISOString() }).eq('id', wt.id);
+      }
+    })();
   } catch (e) {
     console.error('Walkthrough organise error:', e);
-    res.status(500).json({ error: e.message });
+    if (!res.headersSent) res.status(500).json({ error: e.message });
   }
 });
 

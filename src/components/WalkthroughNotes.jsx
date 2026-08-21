@@ -303,7 +303,7 @@ export default function WalkthroughNotes({ weddingId, enquiryId }) {
     setActive(w)
     setNotes(w.raw_notes || '')
     loadedFor.current = w.id
-    try { setItems(await apiFetch(`${API_URL}/api/admin/walkthroughs/${w.id}/items`) || []) }
+    try { setItems((await apiFetch(`${API_URL}/api/admin/walkthroughs/${w.id}/items`))?.items || []) }
     catch { setItems([]) }
     try { setMedia(await apiFetch(`${API_URL}/api/admin/walkthroughs/${w.id}/media`) || []) }
     catch { setMedia([]) }
@@ -372,14 +372,45 @@ export default function WalkthroughNotes({ weddingId, enquiryId }) {
     setBusy('')
   }
 
+  /**
+   * Reading a long meeting takes minutes, so the server answers straight away
+   * and works behind it. A 108-minute transcript is five passes through the
+   * model; holding the request open for that timed out in the browser and made
+   * a run that was working look like one that had died.
+   *
+   * Items appear as each part is read, so a long meeting fills in rather than
+   * sitting blank until the end.
+   */
   const organise = async () => {
     if (!active) return
     setBusy('organise')
     try {
       await flushSave()
       const res = await apiFetch(`${API_URL}/api/admin/walkthroughs/${active.id}/organise`, { method: 'POST' })
-      setItems(res.items || [])
-      toastSuccess(`Sorted into ${res.parsed} item${res.parsed === 1 ? '' : 's'}. Nothing filed yet.`)
+      const parts = res.chunks || 1
+      if (parts > 1) toastSuccess(`Reading this in ${parts} parts. Items will appear as they come.`)
+
+      // Poll until the walkthrough says it has finished. Generous, because the
+      // whole point is that this outlasts a request.
+      for (let i = 0; i < 120; i++) {
+        await new Promise(r => setTimeout(r, 5000))
+        let state
+        try {
+          state = await apiFetch(`${API_URL}/api/admin/walkthroughs/${active.id}/items`)
+        } catch { continue }   // a blip in polling is not a failed run
+        setItems(state.items || [])
+        if (state.status !== 'organising') {
+          const n = (state.items || []).length
+          if (state.status === 'draft') {
+            toastError(`That stopped partway through. ${n} item${n === 1 ? '' : 's'} were saved before it did — press Organise again to finish the rest.`)
+          } else if (n === 0) {
+            toastSuccess('Read the whole thing and found nothing worth filing. The notes are untouched.')
+          } else {
+            toastSuccess(`Sorted into ${n} item${n === 1 ? '' : 's'}. Nothing filed yet.`)
+          }
+          break
+        }
+      }
     } catch (err) { toastError(`Could not organise these notes: ${err.message}`) }
     setBusy('')
   }
@@ -401,7 +432,7 @@ export default function WalkthroughNotes({ weddingId, enquiryId }) {
     setBusy('apply')
     try {
       const res = await apiFetch(`${API_URL}/api/admin/walkthroughs/${active.id}/apply`, { method: 'POST' })
-      setItems(await apiFetch(`${API_URL}/api/admin/walkthroughs/${active.id}/items`) || [])
+      setItems((await apiFetch(`${API_URL}/api/admin/walkthroughs/${active.id}/items`))?.items || [])
       toastSuccess(`Filed ${res.applied} item${res.applied === 1 ? '' : 's'}${res.failed ? `, ${res.failed} failed` : ''}.`)
     } catch (err) { toastError(`Could not file these: ${err.message}`) }
     setBusy('')
