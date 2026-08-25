@@ -14,7 +14,7 @@ import { useRecorder } from '../context/RecorderContext'
  * dealt with it. Being quietly tidy about that is how you end up with none.
  */
 export default function RecordingBar() {
-  const { active, elapsed, pending, busyId, stop, uploadStored, download, discard } = useRecorder()
+  const { active, elapsed, pending, busyId, silentFor, stop, uploadStored, download, discard } = useRecorder()
   const barRef = useRef(null)
   const showing = !!active || pending.length > 0
 
@@ -77,6 +77,20 @@ export default function RecordingBar() {
             >
               ■ Stop and save
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Christiane and Jarred's final walkthrough recorded 111 minutes at -91 dB
+          — silence, the whole way through, and nobody could have known until it
+          was over. Fifteen seconds of no input is worth interrupting for: it is
+          nearly always a muted mic or a headset that dropped, and both are
+          fixable in the moment and unfixable afterwards. */}
+      {active && silentFor >= 15 && (
+        <div className="bg-red-600 text-white">
+          <div className="max-w-7xl mx-auto px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium">
+            No sound is reaching the microphone{silentFor >= 60 ? ` — nothing for ${Math.floor(silentFor / 60)} minute${silentFor >= 120 ? 's' : ''}` : ''}.
+            Check the mic is not muted and that the browser is using the right input. This is still recording, but it will be silent.
           </div>
         </div>
       )}

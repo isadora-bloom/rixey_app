@@ -42,6 +42,10 @@ export function RecorderProvider({ children }) {
   const [elapsed, setElapsed] = useState(0)
   const [pending, setPending] = useState([])
   const [busyId, setBusyId] = useState(null)
+  // Seconds of continuous silence on the microphone, or 0 when sound is
+  // arriving. See watchLevel: a recorder that hears nothing has to say so while
+  // the meeting is still happening.
+  const [silentFor, setSilentFor] = useState(0)
   // Bumped whenever a recording is filed, so an open panel can refetch without
   // the provider needing to know anything about panels.
   const [lastSaved, setLastSaved] = useState(null)
@@ -50,6 +54,8 @@ export function RecorderProvider({ children }) {
   const streamRef = useRef(null)
   const wakeLockRef = useRef(null)
   const startedAtRef = useRef(0)
+  const levelRef = useRef(null)     // { ctx, timer } while watching the input
+  const heardRef = useRef(false)    // did any sound arrive at all this recording
 
   const refreshPending = useCallback(async () => {
     if (!recordingStoreAvailable()) return
@@ -67,6 +73,65 @@ export function RecorderProvider({ children }) {
    * back. Not supported everywhere, and a missing lock is not a reason to
    * refuse to record.
    */
+  /**
+   * Is anything actually reaching the microphone?
+   *
+   * Christiane and Jarred's final walkthrough was recorded on 24 August and
+   * came out as 111 minutes at -91 dB: digital silence, start to finish. The
+   * file was perfect — right length, valid container, 1,322 chunks — and
+   * completely empty. The mic was delivering nothing, and nobody could have
+   * known until the meeting was over and the transcript came back blank. Two
+   * hours of a final walkthrough, gone, and no way to get it back.
+   *
+   * A browser will hand out a silent stream without complaint: a muted input,
+   * a headset that dropped, another app holding the mic. So the level is
+   * watched while recording, and silence is reported at the time, when someone
+   * can still pick the phone up and fix it.
+   *
+   * Deliberately crude. -70 dBFS is far below speech and far above a true
+   * digital floor, so a quiet room reads as sound and a dead input does not.
+   */
+  const watchLevel = useCallback((stream) => {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext
+      if (!AC) return
+      const ctx = new AC()
+      const analyser = ctx.createAnalyser()
+      analyser.fftSize = 2048
+      ctx.createMediaStreamSource(stream).connect(analyser)
+      const buf = new Float32Array(analyser.fftSize)
+      let quietSince = Date.now()
+
+      const timer = setInterval(() => {
+        analyser.getFloatTimeDomainData(buf)
+        let peak = 0
+        for (let i = 0; i < buf.length; i++) {
+          const v = Math.abs(buf[i])
+          if (v > peak) peak = v
+        }
+        const dbfs = peak > 0 ? 20 * Math.log10(peak) : -Infinity
+        if (dbfs > -70) {
+          heardRef.current = true
+          quietSince = Date.now()
+          setSilentFor(0)
+        } else {
+          setSilentFor(Math.round((Date.now() - quietSince) / 1000))
+        }
+      }, 1000)
+
+      levelRef.current = { ctx, timer }
+    } catch {
+      // No meter is not a reason to refuse to record.
+    }
+  }, [])
+
+  const stopWatchingLevel = useCallback(() => {
+    try { clearInterval(levelRef.current?.timer) } catch { /* fine */ }
+    try { levelRef.current?.ctx?.close() } catch { /* fine */ }
+    levelRef.current = null
+    setSilentFor(0)
+  }, [])
+
   const holdScreenAwake = useCallback(async () => {
     try { wakeLockRef.current = await navigator.wakeLock?.request('screen') } catch { /* fine */ }
   }, [])
@@ -124,6 +189,8 @@ export function RecorderProvider({ children }) {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       streamRef.current = stream
+      heardRef.current = false
+      watchLevel(stream)
       // Let the browser pick its own container. Chrome gives webm, Safari mp4,
       // and forcing one of them is how this breaks on half the machines.
       //
@@ -154,11 +221,19 @@ export function RecorderProvider({ children }) {
       rec.onstop = async () => {
         streamRef.current?.getTracks().forEach(t => t.stop())
         streamRef.current = null
+        const heardAnything = heardRef.current
+        stopWatchingLevel()
         releaseScreen()
         const secs = Math.round((Date.now() - startedAtRef.current) / 1000)
         await finishRecording(id, { durationSecs: secs })
         setActive(null)
         await refreshPending()
+        // Said before the upload, not after a transcript comes back empty an
+        // hour later. It still uploads: the file is the evidence of what the
+        // microphone was doing, and deleting it is not ours to decide.
+        if (!heardAnything && secs > 20) {
+          toast.error('No sound reached the microphone for that entire recording. Check which input the browser is using before recording again.')
+        }
         await uploadStored({ id, walkthroughId, mimeType: rec.mimeType, durationSecs: secs })
       }
 
@@ -225,7 +300,7 @@ export function RecorderProvider({ children }) {
   }, [active])
 
   const value = {
-    active, elapsed, pending, busyId, lastSaved,
+    active, elapsed, pending, busyId, lastSaved, silentFor,
     start, stop, uploadStored, download, discard, refreshPending,
     available: recordingStoreAvailable()
       && typeof window !== 'undefined'
