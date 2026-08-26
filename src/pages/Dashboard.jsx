@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { supabase } from '../lib/supabase'
 import CouplePhoto from '../components/CouplePhoto'
@@ -43,7 +43,7 @@ import { apiFetch, authHeaders } from '../utils/api'
 import { useToast } from '../components/ui/Toast'
 import DashboardChat from './dashboard/DashboardChat'
 import FloatingSage from '../components/FloatingSage'
-import DashboardNav, { FINALISABLE } from './dashboard/DashboardNav'
+import DashboardNav, { FINALISABLE, NAV_ITEMS } from './dashboard/DashboardNav'
 import DashboardHeader from './dashboard/DashboardHeader'
 import { shrinkImageForUpload } from '../utils/image'
 
@@ -140,7 +140,13 @@ export default function Dashboard() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [selectedFile, setSelectedFile] = useState(null)
   const [uploadingFile, setUploadingFile] = useState(false)
-  const [activeSection, setActiveSection] = useState('chat')
+  // ?section= opens a section directly, so a link in an email or the old
+  // /vendors URL lands on the right panel instead of the chat.
+  const [searchParams] = useSearchParams()
+  const [activeSection, setActiveSection] = useState(() => {
+    const wanted = searchParams.get('section')
+    return NAV_ITEMS.some(i => i.key === wanted) ? wanted : 'chat'
+  })
   // Sage's "want me to put that in your Guest List?" offers, for the most
   // recent reply only. { messageId, actions: [{ section, label, detail }] }
   const [portalActions, setPortalActions] = useState(null)
@@ -717,7 +723,7 @@ export default function Dashboard() {
   }
 
   const resourceLinks = [
-    { name: 'Vendor Directory', href: '/vendors' },
+    { name: 'Vendor Directory', section: 'preferred-vendors' },
     { name: 'Accommodations', href: '/accommodations' },
   ]
 
@@ -1112,11 +1118,18 @@ export default function Dashboard() {
                       <p className="text-amber-600 text-xs font-medium">FREE with code: RIXEYFAMILY</p>
                     </div>
                   </a>
-                  {[
-                    { name: 'Vendor Directory', href: '/vendors' },
-                    { name: 'Accommodations', href: '/accommodations' },
-                  ].map((link) => (
-                    link.href.startsWith('/') ? (
+                  {resourceLinks.map((link) => (
+                    link.section ? (
+                      <button key={link.name} onClick={() => setActiveSection(link.section)}
+                        className="w-full flex items-center gap-3 p-4 bg-white rounded-xl border border-cream-200 hover:border-sage-300 hover:shadow-sm transition text-left">
+                        <div className="w-10 h-10 bg-cream-100 rounded-lg flex items-center justify-center">
+                          <svg className="w-5 h-5 text-sage-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                          </svg>
+                        </div>
+                        <p className="font-medium text-sage-800 text-sm">{link.name}</p>
+                      </button>
+                    ) : link.href.startsWith('/') ? (
                       <button key={link.name} onClick={() => navigate(link.href)}
                         className="w-full flex items-center gap-3 p-4 bg-white rounded-xl border border-cream-200 hover:border-sage-300 hover:shadow-sm transition text-left">
                         <div className="w-10 h-10 bg-cream-100 rounded-lg flex items-center justify-center">

@@ -18,7 +18,10 @@ const NAV_ITEMS = [
   { key: 'budget', label: 'Budget', icon: '/icons/budget.svg', dotKey: 'budget' },
   { key: 'guests', label: 'Guest List', icon: '/icons/guest-care.svg' },
   { key: 'vendor', label: 'Vendors', icon: '/icons/vendors.svg' },
-  { key: 'preferred-vendors', label: 'Vendor Directory', icon: '/icons/vendors.svg', href: '/vendors' },
+  // No href. It used to have one, pointing at a separate /vendors page, and
+  // because href wins over key below, the directory section on this very
+  // dashboard was unreachable for as long as both existed.
+  { key: 'preferred-vendors', label: 'Vendor Directory', icon: '/icons/vendors.svg' },
   { key: 'timeline', label: 'Timeline', icon: '/icons/timeline.svg', dotKey: 'timeline' },
   { key: 'tables', label: 'Tables', icon: '/icons/tables.svg', dotKey: 'tables' },
   { section: 'Day Of' },

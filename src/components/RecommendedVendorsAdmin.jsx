@@ -103,11 +103,14 @@ export default function RecommendedVendorsAdmin() {
     setShowForm(true)
   }
 
+  // Three states, not two. null means nobody has decided and the vendor has
+  // written nothing; true is live; false is hidden on purpose and survives
+  // their next save. Clicking always flips to the opposite of "live".
   const togglePublish = async (vendor) => {
     try {
       await apiFetch(`${API_URL}/api/recommended-vendors/${vendor.id}/publish`, {
         method: 'PUT',
-        body: JSON.stringify({ is_published: !vendor.is_published }),
+        body: JSON.stringify({ is_published: vendor.is_published !== true }),
       })
       await loadVendors()
     } catch (err) {
@@ -149,6 +152,9 @@ export default function RecommendedVendorsAdmin() {
     )
   })
 
+  const liveCount = vendors.filter(v => v.is_published === true).length
+  const hiddenCount = vendors.filter(v => v.is_published === false).length
+
   // Group vendors by category
   const groupedVendors = filteredVendors.reduce((acc, vendor) => {
     const cat = vendor.category || 'Other'
@@ -167,7 +173,11 @@ export default function RecommendedVendorsAdmin() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
         <div>
           <h2 className="font-serif text-xl text-sage-700">Recommended Vendors</h2>
-          <p className="text-sage-500 text-sm">{vendors.length} vendors across {categories.length} categories</p>
+          <p className="text-sage-500 text-sm">
+            {vendors.length} vendors across {categories.length} categories
+            {liveCount > 0 && <> · {liveCount} with a profile they wrote themselves</>}
+            {hiddenCount > 0 && <> · {hiddenCount} hidden</>}
+          </p>
         </div>
         <button
           onClick={() => {
@@ -297,13 +307,22 @@ export default function RecommendedVendorsAdmin() {
                           )}
                           <button
                             onClick={() => togglePublish(vendor)}
+                            title={
+                              vendor.is_published === true
+                                ? 'Their own photos and words are showing to couples. Click to hide them.'
+                                : vendor.is_published === false
+                                  ? 'Hidden on purpose. Stays hidden even when they save again. Click to show.'
+                                  : 'They have not written anything yet. They are still listed in the directory with your note.'
+                            }
                             className={`text-xs px-3 py-1 rounded-lg border transition ${
-                              vendor.is_published
+                              vendor.is_published === true
                                 ? 'bg-green-50 text-green-700 border-green-200 hover:bg-green-100'
-                                : 'text-sage-500 border-sage-200 hover:border-sage-300'
+                                : vendor.is_published === false
+                                  ? 'bg-cream-100 text-sage-600 border-cream-300 hover:border-sage-300'
+                                  : 'text-sage-400 border-sage-200 hover:border-sage-300'
                             }`}
                           >
-                            {vendor.is_published ? '● Live' : 'Publish'}
+                            {vendor.is_published === true ? '● Live' : vendor.is_published === false ? 'Hidden' : 'No profile'}
                           </button>
                           <button
                             onClick={() => handleEdit(vendor)}

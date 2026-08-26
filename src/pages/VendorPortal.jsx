@@ -70,6 +70,9 @@ export default function VendorPortal() {
     try {
       const data = await apiFetch(`${API_URL}/api/vendor-portal/${token}/photos`, { method: 'POST', body: fd })
       setPhotos(data.photos)
+      // Uploading can be the thing that puts them live, so the badge in the
+      // header has to hear about it.
+      if (data.is_published !== undefined) setVendor(v => ({ ...v, is_published: data.is_published }))
     } catch (err) {
       toastError(`Photo upload failed: ${err.message}`)
     }
@@ -126,8 +129,11 @@ export default function VendorPortal() {
             <img src="/rixey-manor-logo-optimized.png" alt="Rixey Manor" className="h-10 w-auto mb-1" />
             <p className="text-sage-400 text-xs">Vendor Partner Portal</p>
           </div>
-          {vendor.is_published && (
+          {vendor.is_published === true && (
             <span className="text-xs bg-green-100 text-green-700 px-3 py-1 rounded-full font-medium">Live to couples</span>
+          )}
+          {vendor.is_published === false && (
+            <span className="text-xs bg-cream-200 text-sage-600 px-3 py-1 rounded-full font-medium">Not showing</span>
           )}
         </div>
       </header>
@@ -305,7 +311,9 @@ export default function VendorPortal() {
             {saving ? 'Saving…' : saved ? '✓ Profile saved' : 'Save Profile'}
           </button>
           <p className="text-xs text-sage-400 text-center mt-3">
-            Your profile goes live to Rixey couples once approved by the Rixey team.
+            {vendor.is_published === false
+              ? 'Your profile is not currently showing in the couples’ directory. Get in touch with us if that is a surprise.'
+              : 'Whatever you save here goes straight into the directory Rixey couples browse.'}
           </p>
         </div>
       </main>

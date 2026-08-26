@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import { ToastProvider } from './components/ui/Toast'
 import { RecorderProvider } from './context/RecorderContext'
@@ -10,7 +10,6 @@ import Login from './pages/Login'
 import AdminLogin from './pages/AdminLogin'
 import ResetPassword from './pages/ResetPassword'
 import Dashboard from './pages/Dashboard'
-import Vendors from './pages/Vendors'
 import Accommodations from './pages/Accommodations'
 import Admin from './pages/Admin'
 import GmailCallback from './pages/GmailCallback'
@@ -55,14 +54,10 @@ function App() {
                   </ProtectedRoute>
                 }
               />
-              <Route
-                path="/vendors"
-                element={
-                  <ProtectedRoute>
-                    <Vendors />
-                  </ProtectedRoute>
-                }
-              />
+              {/* The vendor directory used to be its own page, showing the
+                  same table without the photos or bios. It is a dashboard
+                  section now; this keeps old links and bookmarks working. */}
+              <Route path="/vendors" element={<Navigate to="/dashboard?section=preferred-vendors" replace />} />
               <Route
                 path="/accommodations"
                 element={

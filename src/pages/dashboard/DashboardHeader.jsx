@@ -136,7 +136,15 @@ export default function DashboardHeader({
             Planning Course <span className="text-amber-500 text-xs">(FREE: RIXEYFAMILY)</span>
           </a>
           {resourceLinks.map((link) => (
-            link.href.startsWith('/') ? (
+            link.section ? (
+              <button
+                key={link.name}
+                onClick={() => { setActiveSection(link.section); setMobileMenuOpen(false) }}
+                className="block w-full text-left px-3 py-2 rounded-lg text-sage-600 hover:bg-sage-50"
+              >
+                {link.name}
+              </button>
+            ) : link.href.startsWith('/') ? (
               <button
                 key={link.name}
                 onClick={() => { navigate(link.href); setMobileMenuOpen(false) }}

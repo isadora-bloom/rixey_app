@@ -7410,22 +7410,66 @@ app.delete('/api/recommended-vendors/:id', async (req, res) => {
 
 // ── Vendor Portal (token-based, no auth required) ─────────────────────────────
 
-// GET published vendor list for client-facing directory
+// GET the client-facing directory: every vendor Rixey recommends, with the
+// self-written profile attached where there is one.
+//
+// This used to return only is_published rows, which meant nothing at all, and
+// the couple-facing page beside it read the table raw and showed all 110 with
+// no photos. One list now. Being in the directory is Isadora's call and never
+// changes; being published only governs whether the vendor's own words, photos
+// and offer are shown on top of her note.
 app.get('/api/vendor-directory', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
       .from('vendors')
-      .select('id, category, name, bio, photos, website, contact, instagram, facebook, pricing_info, special_offer, special_expiry, availability_note, is_budget_friendly, is_local, has_multiple_events, serves_indian, serves_chinese')
-      .eq('is_published', true)
-      .order('category').order('name');
+      .select('id, category, name, notes, bio, photos, website, contact, instagram, facebook, pricing_info, special_offer, special_expiry, availability_note, is_published, is_budget_friendly, is_local, has_multiple_events, serves_indian, serves_chinese')
+      .order('category').order('name')
+      .range(0, 4999);
     if (error) throw error;
-    const categories = [...new Set((data || []).map(v => v.category))].sort();
-    res.json({ vendors: data || [], categories });
+
+    const today = new Date().toISOString().slice(0, 10);
+    const vendors = (data || []).map(v => {
+      const live = v.is_published === true;
+      // An offer with a date on it stops being an offer after that date.
+      // Otherwise "10% off for 2026 couples" sits there into 2028.
+      const offer = live && (!v.special_expiry || v.special_expiry >= today)
+        ? v.special_offer
+        : null;
+      const photos = live ? (v.photos || []) : [];
+      return {
+        ...v,
+        photos,
+        bio: live ? v.bio : null,
+        instagram: live ? v.instagram : null,
+        facebook: live ? v.facebook : null,
+        special_offer: offer,
+        special_expiry: offer ? v.special_expiry : null,
+        availability_note: live ? v.availability_note : null,
+        has_profile: live && Boolean(v.bio || photos.length || offer || v.availability_note),
+      };
+    });
+
+    const categories = [...new Set(vendors.map(v => v.category).filter(Boolean))].sort();
+    res.json({ vendors, categories });
   } catch (err) {
     console.error('Vendor directory error:', err);
     res.status(500).json({ error: 'Failed to load vendor directory' });
   }
 });
+
+// Saving is what puts a vendor live. is_published is three-valued: NULL means
+// nobody has decided, TRUE live, FALSE hidden by Rixey on purpose. Only the
+// NULL case is ours to answer, so hiding someone survives their next save.
+// See migrations/029_vendor_publish_tristate.sql.
+async function goLiveOnSave(token) {
+  const { data, error } = await supabaseAdmin
+    .from('vendors')
+    .select('is_published')
+    .eq('edit_token', token)
+    .single();
+  if (error || !data) return {};
+  return data.is_published == null ? { is_published: true } : {};
+}
 
 // GET vendor by token (vendor self-edit portal)
 app.get('/api/vendor-portal/:token', async (req, res) => {
@@ -7449,6 +7493,7 @@ app.put('/api/vendor-portal/:token', async (req, res) => {
     const updates = {};
     allowed.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f] || null; });
     updates.last_vendor_update = new Date().toISOString();
+    Object.assign(updates, await goLiveOnSave(req.params.token));
     const { data, error } = await supabaseAdmin
       .from('vendors')
       .update(updates)
@@ -7467,7 +7512,7 @@ app.post('/api/vendor-portal/:token/photos', upload.single('photo'), async (req,
   try {
     const { data: vendor, error: vErr } = await supabaseAdmin
       .from('vendors')
-      .select('id, photos')
+      .select('id, photos, is_published')
       .eq('edit_token', req.params.token)
       .single();
     if (vErr || !vendor) return res.status(404).json({ error: 'Vendor not found' });
@@ -7489,12 +7534,18 @@ app.post('/api/vendor-portal/:token/photos', upload.single('photo'), async (req,
 
     const { data, error } = await supabaseAdmin
       .from('vendors')
-      .update({ photos: newPhotos, last_vendor_update: new Date().toISOString() })
+      .update({
+        photos: newPhotos,
+        last_vendor_update: new Date().toISOString(),
+        // Photos on their own are a profile too. A vendor who uploads eight
+        // pictures and writes nothing should not stay invisible.
+        ...(vendor.is_published == null ? { is_published: true } : {}),
+      })
       .eq('id', vendor.id)
-      .select('photos')
+      .select('photos, is_published')
       .single();
     if (error) throw error;
-    res.json({ photos: data.photos });
+    res.json({ photos: data.photos, is_published: data.is_published });
   } catch (err) {
     console.error('Vendor photo upload error:', err);
     res.status(500).json({ error: err.message || 'Upload failed' });
@@ -7539,7 +7590,10 @@ app.put('/api/recommended-vendors/:id/publish', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
       .from('vendors')
-      .update({ is_published: req.body.is_published })
+      // Coerced on purpose. Hiding has to write a real false, because false is
+      // what outlasts the vendor's next save; an undefined would land as null
+      // and quietly re-publish them.
+      .update({ is_published: req.body.is_published === true })
       .eq('id', req.params.id)
       .select()
       .single();
