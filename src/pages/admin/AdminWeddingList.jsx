@@ -44,6 +44,7 @@ export default function AdminWeddingList({
   markAsRead,
   // Sidebar integration props
   gmailConnected,
+  gmailCanSend = true,
   gmailSyncing,
   gmailStatus,
   connectGmail,
@@ -481,8 +482,22 @@ export default function AdminWeddingList({
               <div className="space-y-2">
                 <p className="text-green-600 text-sm flex items-center gap-1">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-                  Connected
+                  Connected{gmailCanSend ? ' — reading and sending' : ''}
                 </p>
+                {/* Reading and sending are separate permissions, and this card
+                    only ever reported the first. It said Connected in green
+                    while every email the portal tried to send was refused for
+                    want of a scope nobody had asked Google for. */}
+                {!gmailCanSend && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm">
+                    <p className="text-amber-800 font-medium">Reading email, but not allowed to send it.</p>
+                    <p className="text-amber-700 text-xs mt-1">
+                      Nothing this portal emails is arriving: replies to couples, RSVP confirmations,
+                      the daily memo. Press Disconnect, connect again, and say yes to sending when
+                      Google asks.
+                    </p>
+                  </div>
+                )}
                 <div className="flex gap-2">
                   <button
                     onClick={syncEmails}

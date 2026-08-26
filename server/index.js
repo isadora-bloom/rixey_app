@@ -3495,7 +3495,17 @@ app.get('/api/gmail/status', async (req, res) => {
     try {
       await gmail.users.getProfile({ userId: 'me' });
       console.log('Gmail connection verified');
-      res.json({ connected: true });
+
+      // Connected and can send are two different things, and this endpoint
+      // only ever answered the first. Reading worked, so the panel said
+      // "Connected" in green while every email the portal tried to send was
+      // refused for want of a scope nobody had asked for.
+      const info = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(tokens.access_token)}`)
+        .then(r => r.json()).catch(() => null);
+      const scopes = String(info?.scope || '').split(' ');
+      const canSend = scopes.some(sc => /gmail\.send|gmail\.compose|gmail\.modify|mail\.google\.com/.test(sc));
+
+      res.json({ connected: true, canSend, scopes: scopes.filter(Boolean) });
     } catch (testErr) {
       console.log('Gmail test failed:', testErr.message);
       res.json({ connected: false });

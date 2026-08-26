@@ -78,6 +78,7 @@ export default function Admin() {
   const [contractAnswer, setContractAnswer] = useState('')
   const [askingQuestion, setAskingQuestion] = useState(false)
   const [gmailConnected, setGmailConnected] = useState(false)
+  const [gmailCanSend, setGmailCanSend] = useState(true)
   const [gmailSyncing, setGmailSyncing] = useState(false)
   // Set once a dry run has found bodies worth recovering, so the button can
   // change from "count them" to "file them".
@@ -206,6 +207,9 @@ export default function Admin() {
       })
       const data = await response.json()
       setGmailConnected(data.connected)
+      // Defaults to true so an older server that does not report it does not
+      // put a warning on the screen that nobody can act on.
+      setGmailCanSend(data.canSend !== false)
     } catch (err) {
       console.error('Gmail status check error:', err)
     }
@@ -1991,6 +1995,7 @@ export default function Admin() {
             unreadCount={unreadCount}
             markAsRead={markAsRead}
             gmailConnected={gmailConnected}
+            gmailCanSend={gmailCanSend}
             gmailSyncing={gmailSyncing}
             gmailStatus={gmailStatus}
             connectGmail={connectGmail}
