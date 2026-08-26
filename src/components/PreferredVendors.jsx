@@ -48,7 +48,8 @@ export default function PreferredVendors() {
   const term = search.trim().toLowerCase()
 
   const filtered = vendors.filter(v => {
-    if (filterCategory && v.category !== filterCategory) return false
+    const cats = v.categories?.length ? v.categories : [v.category].filter(Boolean)
+    if (filterCategory && !cats.includes(filterCategory)) return false
     if (activeFlags.some(f => !v[f])) return false
     if (term) {
       const haystack = [v.name, v.category, v.notes, v.bio, v.pricing_info].join(' ').toLowerCase()
@@ -57,10 +58,14 @@ export default function PreferredVendors() {
     return true
   })
 
+  // A vendor appears under every category they belong to. Carpe Donut is a
+  // food truck and a brunch, and a couple looking for brunch should find them.
   const grouped = filtered.reduce((acc, v) => {
-    const cat = v.category || 'Other'
-    if (!acc[cat]) acc[cat] = []
-    acc[cat].push(v)
+    const cats = v.categories?.length ? v.categories : [v.category || 'Other']
+    for (const cat of cats) {
+      if (!acc[cat]) acc[cat] = []
+      acc[cat].push(v)
+    }
     return acc
   }, {})
 
@@ -164,10 +169,10 @@ export default function PreferredVendors() {
               <div className="space-y-3">
                 {catVendors.map(v => (
                   <VendorCard
-                    key={v.id}
+                    key={`${cat}:${v.id}`}
                     vendor={v}
-                    expanded={expandedId === v.id}
-                    onToggle={() => setExpandedId(expandedId === v.id ? null : v.id)}
+                    expanded={expandedId === `${cat}:${v.id}`}
+                    onToggle={() => setExpandedId(expandedId === `${cat}:${v.id}` ? null : `${cat}:${v.id}`)}
                   />
                 ))}
               </div>

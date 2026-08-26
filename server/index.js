@@ -20,6 +20,7 @@ import { fetchAllTabs, SheetFetchError } from './lib/sheet-fetcher.js';
 import { buildDiff, applyChoices } from './lib/sheet-diff/index.js';
 import { guestFullName, plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, headcount, parsePlusOneCell, usesPersonModel, personDisplayName, toParties, allPeople } from '../shared/guest-names.js';
 import { sendsConfirmation } from '../shared/rsvp-fields.js';
+import { isSameVendor } from '../shared/vendor-names.js';
 import { rsvpConfirmationHtml } from './lib/rsvp-confirmation.js';
 import { WALKTHROUGH_TARGETS, TARGET_KEYS, buildNote, organisePrompt, parseItems } from './lib/walkthrough.js';
 import { extractDocument } from './lib/doc-sync/extract.js';
@@ -6288,7 +6289,10 @@ app.post('/api/vendors/:id/contract', upload.single('contract'), async (req, res
       .from('vendor_checklist')
       .update({
         contract_uploaded: true,
+        // Both. The URL is what existing screens read; the path is what
+        // survives, because the URL has a one-year token baked into it.
         contract_url: signedUrlData.signedUrl,
+        contract_path: fileName,
         contract_date: venueToday()   // the day it was signed at the venue
       })
       .eq('id', id)
@@ -6387,18 +6391,28 @@ app.delete('/api/vendors/:id/contract', async (req, res) => {
     const { id } = req.params;
 
     // Get current contract URL to delete from storage
-    const { data: vendor } = await supabaseAdmin
+    const { data: vendor, error: readErr } = await supabaseAdmin
       .from('vendor_checklist')
-      .select('contract_url')
+      .select('contract_url, contract_path')
       .eq('id', id)
       .single();
+    if (readErr) throw readErr;
 
-    if (vendor?.contract_url) {
-      // Extract path from URL and delete from storage
-      const urlParts = vendor.contract_url.split('/vendor-contracts/');
-      if (urlParts[1]) {
-        await supabaseAdmin.storage.from('vendor-contracts').remove([urlParts[1]]);
-      }
+    // The old form of this took everything after /vendor-contracts/ and handed
+    // it to storage, query string and all, so the object key never matched and
+    // the file was left behind on every delete. Take the path column when there
+    // is one, and strip the token when there is not.
+    const key = vendor?.contract_path || (() => {
+      const after = String(vendor?.contract_url || '').split('/vendor-contracts/')[1];
+      if (!after) return null;
+      try { return decodeURIComponent(after.split('?')[0]); } catch { return after.split('?')[0]; }
+    })();
+
+    if (key) {
+      const { error: rmErr } = await supabaseAdmin.storage.from('vendor-contracts').remove([key]);
+      // Not fatal: the row should still lose its contract even if the object
+      // has already gone. But it should not go unsaid.
+      if (rmErr) console.error('Contract file not removed from storage:', key, rmErr.message);
     }
 
     // Update vendor record
@@ -6407,6 +6421,7 @@ app.delete('/api/vendors/:id/contract', async (req, res) => {
       .update({
         contract_uploaded: false,
         contract_url: null,
+        contract_path: null,
         contract_date: null
       })
       .eq('id', id)
@@ -7418,13 +7433,35 @@ app.delete('/api/recommended-vendors/:id', async (req, res) => {
 // no photos. One list now. Being in the directory is Isadora's call and never
 // changes; being published only governs whether the vendor's own words, photos
 // and offer are shown on top of her note.
+// A column this code wants that the database has not been given yet. Deploys
+// and migrations do not land at the same instant, and a couple opening the
+// directory in the gap should see vendors, not an error.
+const columnMissing = err => err?.code === '42703' || /column .* does not exist/i.test(err?.message || '');
+
 app.get('/api/vendor-directory', async (req, res) => {
   try {
-    const { data, error } = await supabaseAdmin
+    const FULL = 'id, category, categories, name, notes, bio, photos, website, contact, instagram, facebook, pricing_info, special_offer, special_expiry, availability_note, is_published, is_budget_friendly, is_local, has_multiple_events, serves_indian, serves_chinese';
+    const BEFORE_030 = FULL.replace(', categories', '');
+
+    let { data, error } = await supabaseAdmin
       .from('vendors')
-      .select('id, category, name, notes, bio, photos, website, contact, instagram, facebook, pricing_info, special_offer, special_expiry, availability_note, is_published, is_budget_friendly, is_local, has_multiple_events, serves_indian, serves_chinese')
+      .select(FULL)
+      // Every vendor is a vendor; not every vendor is a recommendation.
+      .eq('is_recommended', true)
+      .is('merged_into', null)
       .order('category').order('name')
       .range(0, 4999);
+
+    if (error && columnMissing(error)) {
+      // Migration 030 has not run. Before it, every row in this table WAS a
+      // recommendation, so no filter is the right answer, not a broken page.
+      console.warn('vendor-directory: migration 030 has not run, falling back');
+      ({ data, error } = await supabaseAdmin
+        .from('vendors')
+        .select(BEFORE_030)
+        .order('category').order('name')
+        .range(0, 4999));
+    }
     if (error) throw error;
 
     const today = new Date().toISOString().slice(0, 10);
@@ -7446,10 +7483,13 @@ app.get('/api/vendor-directory', async (req, res) => {
         special_expiry: offer ? v.special_expiry : null,
         availability_note: live ? v.availability_note : null,
         has_profile: live && Boolean(v.bio || photos.length || offer || v.availability_note),
+        // A vendor can be more than one thing. Carpe Donut is a food truck and
+        // a brunch, and the directory should show them under both.
+        categories: v.categories?.length ? v.categories : [v.category].filter(Boolean),
       };
     });
 
-    const categories = [...new Set(vendors.map(v => v.category).filter(Boolean))].sort();
+    const categories = [...new Set(vendors.flatMap(v => v.categories))].sort();
     res.json({ vendors, categories });
   } catch (err) {
     console.error('Vendor directory error:', err);
@@ -7457,29 +7497,60 @@ app.get('/api/vendor-directory', async (req, res) => {
   }
 });
 
+// Which vendor a token actually means, following a merge. Every write below
+// goes through this, or a vendor holding the losing link would be editing a
+// record nothing reads.
+async function vendorIdForToken(token) {
+  let { data, error } = await supabaseAdmin
+    .from('vendors').select('id, merged_into, is_published').eq('edit_token', token).single();
+  if (error && columnMissing(error)) {
+    ({ data, error } = await supabaseAdmin
+      .from('vendors').select('id, is_published').eq('edit_token', token).single());
+  }
+  if (error || !data) return null;
+  if (!data.merged_into) return { id: data.id, is_published: data.is_published };
+  const { data: real, error: mErr } = await supabaseAdmin
+    .from('vendors').select('id, is_published').eq('id', data.merged_into).single();
+  if (mErr || !real) return null;
+  return { id: real.id, is_published: real.is_published };
+}
+
 // Saving is what puts a vendor live. is_published is three-valued: NULL means
 // nobody has decided, TRUE live, FALSE hidden by Rixey on purpose. Only the
 // NULL case is ours to answer, so hiding someone survives their next save.
 // See migrations/029_vendor_publish_tristate.sql.
-async function goLiveOnSave(token) {
-  const { data, error } = await supabaseAdmin
-    .from('vendors')
-    .select('is_published')
-    .eq('edit_token', token)
-    .single();
-  if (error || !data) return {};
-  return data.is_published == null ? { is_published: true } : {};
+function goLiveOnSave(resolved) {
+  return resolved && resolved.is_published == null ? { is_published: true } : {};
 }
 
 // GET vendor by token (vendor self-edit portal)
+const PORTAL_FIELDS = 'id, category, name, bio, photos, website, contact, pricing_info, instagram, facebook, special_offer, special_expiry, availability_note, is_published, last_vendor_update, merged_into';
+
 app.get('/api/vendor-portal/:token', async (req, res) => {
   try {
-    const { data, error } = await supabaseAdmin
+    let { data, error } = await supabaseAdmin
       .from('vendors')
-      .select('id, category, name, bio, photos, website, contact, pricing_info, instagram, facebook, special_offer, special_expiry, availability_note, is_published, last_vendor_update')
+      .select(PORTAL_FIELDS)
       .eq('edit_token', req.params.token)
       .single();
+    if (error && columnMissing(error)) {
+      ({ data, error } = await supabaseAdmin
+        .from('vendors')
+        .select(PORTAL_FIELDS.replace(', merged_into', ''))
+        .eq('edit_token', req.params.token)
+        .single());
+    }
     if (error || !data) return res.status(404).json({ error: 'Vendor not found' });
+
+    // This row turned out to be a duplicate. The vendor is holding a link
+    // built from it and has no idea, so serve them the record it merged into
+    // rather than a dead end or, worse, a second profile to keep up to date.
+    if (data.merged_into) {
+      const { data: real, error: mErr } = await supabaseAdmin
+        .from('vendors').select(PORTAL_FIELDS).eq('id', data.merged_into).single();
+      if (mErr || !real) return res.status(404).json({ error: 'Vendor not found' });
+      return res.json({ vendor: real });
+    }
     res.json({ vendor: data });
   } catch (err) {
     res.status(500).json({ error: 'Failed to load vendor' });
@@ -7493,11 +7564,13 @@ app.put('/api/vendor-portal/:token', async (req, res) => {
     const updates = {};
     allowed.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f] || null; });
     updates.last_vendor_update = new Date().toISOString();
-    Object.assign(updates, await goLiveOnSave(req.params.token));
+    const resolved = await vendorIdForToken(req.params.token);
+    if (!resolved) return res.status(404).json({ error: 'Vendor not found' });
+    Object.assign(updates, goLiveOnSave(resolved));
     const { data, error } = await supabaseAdmin
       .from('vendors')
       .update(updates)
-      .eq('edit_token', req.params.token)
+      .eq('id', resolved.id)
       .select('id, category, name, bio, photos, website, contact, pricing_info, instagram, facebook, special_offer, special_expiry, availability_note, is_published, last_vendor_update')
       .single();
     if (error || !data) return res.status(404).json({ error: 'Vendor not found' });
@@ -7513,7 +7586,7 @@ app.post('/api/vendor-portal/:token/photos', upload.single('photo'), async (req,
     const { data: vendor, error: vErr } = await supabaseAdmin
       .from('vendors')
       .select('id, photos, is_published')
-      .eq('edit_token', req.params.token)
+      .eq('id', (await vendorIdForToken(req.params.token))?.id || '00000000-0000-0000-0000-000000000000')
       .single();
     if (vErr || !vendor) return res.status(404).json({ error: 'Vendor not found' });
 
@@ -7561,7 +7634,7 @@ app.delete('/api/vendor-portal/:token/photos', async (req, res) => {
     const { data: vendor, error: vErr } = await supabaseAdmin
       .from('vendors')
       .select('id, photos')
-      .eq('edit_token', req.params.token)
+      .eq('id', (await vendorIdForToken(req.params.token))?.id || '00000000-0000-0000-0000-000000000000')
       .single();
     if (vErr || !vendor) return res.status(404).json({ error: 'Vendor not found' });
 
@@ -7601,6 +7674,474 @@ app.put('/api/recommended-vendors/:id/publish', async (req, res) => {
     res.json({ vendor: data });
   } catch (err) {
     res.status(500).json({ error: 'Failed to update publish status' });
+  }
+});
+
+// ============ VENUE-SIDE VENDOR RECORDS ============
+//
+// The directory above is what couples see. This is the vendor itself: every
+// vendor who has worked here, whether or not Rixey recommends them, with the
+// bookings and contracts that were previously scattered one wedding at a time.
+
+// Paginated read. The 1000-row cap is the recurring bug of this project.
+async function allVendorRows(table, columns, tweak = q => q) {
+  const out = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await tweak(supabaseAdmin.from(table).select(columns)).range(from, from + 999);
+    if (error) throw error;
+    out.push(...data);
+    if (data.length < 1000) return out;
+  }
+}
+
+// Contracts are signed on the way out, never stored signed. A year, which is
+// what the old baked-in links gave, so a link Isadora forwards keeps working.
+const CONTRACT_TTL = 31536000;
+async function signContract(path) {
+  if (!path) return null;
+  const { data, error } = await supabaseAdmin.storage
+    .from('vendor-contracts')
+    .createSignedUrl(path, CONTRACT_TTL);
+  if (error) {
+    console.error('Signing contract failed:', path, error.message);
+    return null;
+  }
+  return data.signedUrl;
+}
+
+// A booking's contract, however it was stored. contract_path is the durable
+// one; contract_url is the old expiring form, kept as a fallback for anything
+// the backfill could not read a path out of.
+async function contractLinkFor(row) {
+  return row.contract_path ? await signContract(row.contract_path) : row.contract_url || null;
+}
+
+// GET every vendor, with what they have actually done here
+app.get('/api/venue-vendors', async (req, res) => {
+  try {
+    const [vendors, bookings, weddings] = await Promise.all([
+      allVendorRows('vendors', '*'),
+      allVendorRows('vendor_checklist', 'id, vendor_id, wedding_id, vendor_type, contract_url, contract_path, is_booked, created_at'),
+      allVendorRows('weddings', 'id, couple_names, wedding_date'),
+    ]);
+
+    const weddingById = new Map(weddings.map(w => [w.id, w]));
+    const byVendor = new Map();
+    for (const b of bookings) {
+      if (!b.vendor_id) continue;
+      if (!byVendor.has(b.vendor_id)) byVendor.set(b.vendor_id, []);
+      byVendor.get(b.vendor_id).push(b);
+    }
+
+    const { data: openReview, error: revErr } = await supabaseAdmin
+      .from('vendor_merge_review').select('id').eq('status', 'open');
+    if (revErr) throw revErr;
+
+    const rows = vendors
+      .filter(v => !v.merged_into)   // a duplicate is not a vendor
+      .map(v => {
+        const mine = byVendor.get(v.id) || [];
+        const dates = mine
+          .map(b => weddingById.get(b.wedding_id)?.wedding_date)
+          .filter(Boolean)
+          .sort();
+        return {
+          id: v.id,
+          name: v.name,
+          category: v.category,
+          categories: v.categories?.length ? v.categories : [v.category].filter(Boolean),
+          aliases: v.aliases || [],
+          notes: v.notes,
+          internal_notes: v.internal_notes,
+          contact: v.contact,
+          website: v.website,
+          instagram: v.instagram,
+          pricing_info: v.pricing_info,
+          is_recommended: v.is_recommended === true,
+          is_published: v.is_published,
+          has_profile: Boolean(v.bio || (v.photos || []).length),
+          last_vendor_update: v.last_vendor_update,
+          edit_token: v.edit_token,
+          weddings: new Set(mine.map(b => b.wedding_id)).size,
+          bookings: mine.length,
+          contracts: mine.filter(b => b.contract_path || b.contract_url).length,
+          first_worked: dates[0] || null,
+          last_worked: dates[dates.length - 1] || null,
+        };
+      });
+
+    const categories = [...new Set(rows.flatMap(r => r.categories).filter(Boolean))].sort();
+
+    res.json({
+      vendors: rows,
+      categories,
+      openQuestions: openReview.length,
+      // Said out loud rather than left as a silent gap in the totals.
+      unlinkedBookings: bookings.filter(b => !b.vendor_id).length,
+    });
+  } catch (err) {
+    console.error('Venue vendors error:', err);
+    res.status(500).json({ error: 'Failed to load vendors' });
+  }
+});
+
+// GET one vendor: who they are, every wedding, every contract
+app.get('/api/venue-vendors/:id', async (req, res) => {
+  try {
+    const { data: vendor, error } = await supabaseAdmin
+      .from('vendors').select('*').eq('id', req.params.id).single();
+    if (error || !vendor) return res.status(404).json({ error: 'Vendor not found' });
+
+    const { data: bookings, error: bErr } = await supabaseAdmin
+      .from('vendor_checklist')
+      .select('*')
+      .eq('vendor_id', vendor.id)
+      .order('created_at', { ascending: false });
+    if (bErr) throw bErr;
+
+    const weddingIds = [...new Set(bookings.map(b => b.wedding_id).filter(Boolean))];
+    let weddings = [];
+    if (weddingIds.length) {
+      const { data, error: wErr } = await supabaseAdmin
+        .from('weddings').select('id, couple_names, wedding_date').in('id', weddingIds);
+      if (wErr) throw wErr;
+      weddings = data;
+    }
+    const weddingById = new Map(weddings.map(w => [w.id, w]));
+
+    const history = await Promise.all(bookings.map(async b => ({
+      id: b.id,
+      wedding_id: b.wedding_id,
+      couple_names: weddingById.get(b.wedding_id)?.couple_names || 'Unknown wedding',
+      wedding_date: weddingById.get(b.wedding_id)?.wedding_date || null,
+      booked_as: b.vendor_name,
+      vendor_type: b.vendor_type,
+      is_booked: b.is_booked,
+      notes: b.notes,
+      arrival_time: b.arrival_time,
+      departure_time: b.departure_time,
+      contract_url: await contractLinkFor(b),
+      contract_date: b.contract_date,
+      // Worth knowing which links are the old baked-in kind still to be fixed.
+      contract_is_legacy: Boolean(!b.contract_path && b.contract_url),
+    })));
+
+    history.sort((a, b) => String(b.wedding_date || '').localeCompare(String(a.wedding_date || '')));
+
+    // Rows that merged into this one, so their portal links can still be found.
+    const { data: mergedRows, error: mErr } = await supabaseAdmin
+      .from('vendors').select('id, name, category, edit_token').eq('merged_into', vendor.id);
+    if (mErr) throw mErr;
+
+    res.json({
+      vendor: {
+        ...vendor,
+        categories: vendor.categories?.length ? vendor.categories : [vendor.category].filter(Boolean),
+      },
+      history,
+      mergedRows: mergedRows || [],
+    });
+  } catch (err) {
+    console.error('Venue vendor error:', err);
+    res.status(500).json({ error: 'Failed to load vendor' });
+  }
+});
+
+// POST a brand-new vendor
+app.post('/api/venue-vendors', async (req, res) => {
+  try {
+    const name = String(req.body.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'A name is required' });
+
+    const categories = (Array.isArray(req.body.categories) ? req.body.categories : [])
+      .map(c => String(c).trim()).filter(Boolean);
+
+    // Typing in a vendor who is already here under another spelling is the
+    // easiest mistake to make on this screen, so look before creating.
+    const existing = await allVendorRows('vendors', 'id, name, aliases, merged_into');
+    const clash = existing.filter(v => !v.merged_into)
+      .find(v => [v.name, ...(v.aliases || [])].some(n => isSameVendor(n, name)));
+    if (clash && !req.body.force) {
+      return res.status(409).json({ error: `"${clash.name}" is already on the list. Open it rather than adding a second.`, existingId: clash.id });
+    }
+
+    const { data, error } = await supabaseAdmin.from('vendors').insert({
+      name,
+      category: categories[0] || 'Other',
+      categories: categories.length ? categories : ['Other'],
+      is_recommended: req.body.is_recommended === true,
+      is_published: null,
+      notes: req.body.notes || null,
+      internal_notes: req.body.internal_notes || null,
+      contact: req.body.contact || null,
+      website: req.body.website || null,
+    }).select().single();
+    if (error) throw error;
+    res.json({ vendor: data });
+  } catch (err) {
+    console.error('Create vendor error:', err);
+    res.status(500).json({ error: 'Failed to create vendor' });
+  }
+});
+
+// PUT the venue-side fields
+app.put('/api/venue-vendors/:id', async (req, res) => {
+  try {
+    const allowed = ['name', 'category', 'categories', 'notes', 'internal_notes', 'contact',
+      'email', 'phone', 'website', 'instagram', 'facebook', 'pricing_info', 'aliases',
+      'is_local', 'is_budget_friendly', 'has_multiple_events', 'serves_indian', 'serves_chinese'];
+    const updates = {};
+    allowed.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
+
+    // category and categories[0] are the same fact. Let them disagree once and
+    // every list that groups by one of them stops matching the other.
+    if (Array.isArray(updates.categories) && updates.categories.length) {
+      updates.categories = [...new Set(updates.categories.map(c => String(c).trim()).filter(Boolean))];
+      updates.category = updates.categories[0];
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('vendors').update(updates).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    res.json({ vendor: data });
+  } catch (err) {
+    console.error('Update venue vendor error:', err);
+    res.status(500).json({ error: 'Failed to save vendor' });
+  }
+});
+
+// PUT in or out of the couple-facing directory
+app.put('/api/venue-vendors/:id/recommend', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('vendors')
+      .update({ is_recommended: req.body.is_recommended === true })
+      .eq('id', req.params.id)
+      .select('id, name, is_recommended')
+      .single();
+    if (error) throw error;
+    res.json({ vendor: data });
+  } catch (err) {
+    console.error('Recommend toggle error:', err);
+    res.status(500).json({ error: 'Failed to update' });
+  }
+});
+
+/**
+ * Fold one vendor into another.
+ *
+ * The loser is kept, not deleted. It carries an edit_token that may be sitting
+ * in a vendor's inbox, so it stays resolvable and simply points here.
+ */
+async function mergeVendors(targetId, candidateId) {
+  if (targetId === candidateId) throw new Error('A vendor cannot merge into itself');
+
+  const { data: pair, error: pErr } = await supabaseAdmin
+    .from('vendors').select('*').in('id', [targetId, candidateId]);
+  if (pErr) throw pErr;
+  const target = pair.find(v => v.id === targetId);
+  const candidate = pair.find(v => v.id === candidateId);
+  if (!target || !candidate) throw new Error('Vendor not found');
+
+  const aliases = [...new Set([
+    ...(target.aliases || []),
+    candidate.name,
+    ...(candidate.aliases || []),
+  ])].filter(n => n !== target.name);
+
+  const catsOf = c => (c.categories?.length ? c.categories : [c.category]).filter(Boolean);
+  const categories = [...new Set([...catsOf(target), ...catsOf(candidate)])];
+
+  const patch = { aliases, categories, category: categories[0] || target.category };
+  // Contact detail on the loser is still contact detail.
+  for (const f of ['contact', 'website', 'instagram', 'facebook', 'pricing_info', 'email', 'phone', 'notes']) {
+    if (!target[f] && candidate[f]) patch[f] = candidate[f];
+  }
+
+  const { error: tErr } = await supabaseAdmin.from('vendors').update(patch).eq('id', target.id);
+  if (tErr) throw tErr;
+
+  const { error: bErr } = await supabaseAdmin
+    .from('vendor_checklist').update({ vendor_id: target.id }).eq('vendor_id', candidate.id);
+  if (bErr) throw bErr;
+
+  // Anything that had already merged into the loser follows it across.
+  const { error: chainErr } = await supabaseAdmin
+    .from('vendors').update({ merged_into: target.id }).eq('merged_into', candidate.id);
+  if (chainErr) throw chainErr;
+
+  const { error: cErr } = await supabaseAdmin
+    .from('vendors')
+    .update({ merged_into: target.id, is_recommended: false })
+    .eq('id', candidate.id);
+  if (cErr) throw cErr;
+
+  // Any question about this pair has been answered by the act of merging.
+  const { error: rErr } = await supabaseAdmin
+    .from('vendor_merge_review')
+    .update({ status: 'merged', resolved_at: new Date().toISOString() })
+    .eq('status', 'open')
+    .or(`and(vendor_id.eq.${target.id},candidate_id.eq.${candidate.id}),and(vendor_id.eq.${candidate.id},candidate_id.eq.${target.id})`);
+  if (rErr) throw rErr;
+
+  return { target: target.name, candidate: candidate.name, aliases, categories };
+}
+
+app.post('/api/venue-vendors/:id/merge', async (req, res) => {
+  try {
+    const candidateId = req.body.candidate_id;
+    if (!candidateId) return res.status(400).json({ error: 'candidate_id required' });
+    const result = await mergeVendors(req.params.id, candidateId);
+    res.json({ merged: result });
+  } catch (err) {
+    console.error('Merge vendors error:', err);
+    res.status(500).json({ error: err.message || 'Failed to merge' });
+  }
+});
+
+// GET the pairs the matcher would not decide on its own
+app.get('/api/vendor-merge-review', async (req, res) => {
+  try {
+    const { data: open, error } = await supabaseAdmin
+      .from('vendor_merge_review')
+      .select('*')
+      .eq('status', 'open')
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+
+    const ids = [...new Set(open.flatMap(q => [q.vendor_id, q.candidate_id]).filter(Boolean))];
+    let vendors = [];
+    if (ids.length) {
+      const { data, error: vErr } = await supabaseAdmin
+        .from('vendors').select('id, name, category, categories, aliases, is_recommended, merged_into').in('id', ids);
+      if (vErr) throw vErr;
+      vendors = data;
+    }
+    const byId = new Map(vendors.map(v => [v.id, v]));
+
+    // A pair where one side has since been merged elsewhere is no longer a
+    // question. Answer it quietly rather than showing a dead choice.
+    const stale = open.filter(q => byId.get(q.vendor_id)?.merged_into || byId.get(q.candidate_id)?.merged_into);
+    if (stale.length) {
+      const { error: sErr } = await supabaseAdmin
+        .from('vendor_merge_review')
+        .update({ status: 'separate', resolved_at: new Date().toISOString() })
+        .in('id', stale.map(s => s.id));
+      if (sErr) throw sErr;
+    }
+    const staleIds = new Set(stale.map(s => s.id));
+
+    res.json({
+      questions: open
+        .filter(q => !staleIds.has(q.id))
+        .map(q => ({
+          id: q.id,
+          reason: q.reason,
+          evidence: q.evidence,
+          vendor: byId.get(q.vendor_id) || null,
+          candidate: byId.get(q.candidate_id) || null,
+        }))
+        .filter(q => q.vendor && q.candidate),
+    });
+  } catch (err) {
+    console.error('Merge review error:', err);
+    res.status(500).json({ error: 'Failed to load questions' });
+  }
+});
+
+// POST an answer: same vendor, or leave them apart
+app.post('/api/vendor-merge-review/:id', async (req, res) => {
+  try {
+    const decision = req.body.decision;
+    const keepId = req.body.keep_id;
+    const { data: q, error } = await supabaseAdmin
+      .from('vendor_merge_review').select('*').eq('id', req.params.id).single();
+    if (error || !q) return res.status(404).json({ error: 'Question not found' });
+
+    if (decision === 'merged') {
+      const target = keepId === q.candidate_id ? q.candidate_id : q.vendor_id;
+      const other = target === q.vendor_id ? q.candidate_id : q.vendor_id;
+      await mergeVendors(target, other);
+      return res.json({ ok: true, decision: 'merged' });
+    }
+
+    if (decision !== 'separate') return res.status(400).json({ error: 'decision must be merged or separate' });
+
+    const { error: uErr } = await supabaseAdmin
+      .from('vendor_merge_review')
+      .update({ status: 'separate', resolved_at: new Date().toISOString() })
+      .eq('id', q.id);
+    if (uErr) throw uErr;
+    res.json({ ok: true, decision: 'separate' });
+  } catch (err) {
+    console.error('Resolve merge question error:', err);
+    res.status(500).json({ error: err.message || 'Failed to save that answer' });
+  }
+});
+
+// GET the bookings nothing could be made of, so they are not simply missing
+app.get('/api/venue-vendors-unlinked', async (req, res) => {
+  try {
+    const { data: rows, error } = await supabaseAdmin
+      .from('vendor_checklist')
+      .select('id, wedding_id, vendor_name, vendor_type, contract_path, contract_url')
+      .is('vendor_id', null)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+
+    const ids = [...new Set(rows.map(r => r.wedding_id).filter(Boolean))];
+    let weddings = [];
+    if (ids.length) {
+      const { data, error: wErr } = await supabaseAdmin
+        .from('weddings').select('id, couple_names, wedding_date').in('id', ids);
+      if (wErr) throw wErr;
+      weddings = data;
+    }
+    const byId = new Map(weddings.map(w => [w.id, w]));
+
+    res.json({
+      bookings: await Promise.all(rows.map(async r => ({
+        ...r,
+        couple_names: byId.get(r.wedding_id)?.couple_names || 'Unknown wedding',
+        wedding_date: byId.get(r.wedding_id)?.wedding_date || null,
+        contract_url: await contractLinkFor(r),
+      }))),
+    });
+  } catch (err) {
+    console.error('Unlinked bookings error:', err);
+    res.status(500).json({ error: 'Failed to load unlinked bookings' });
+  }
+});
+
+// PUT an unlinked booking onto a vendor by hand
+app.put('/api/venue-vendors-unlinked/:bookingId', async (req, res) => {
+  try {
+    const vendorId = req.body.vendor_id;
+    if (!vendorId) return res.status(400).json({ error: 'vendor_id required' });
+
+    const { data: booking, error: bErr } = await supabaseAdmin
+      .from('vendor_checklist').select('vendor_name').eq('id', req.params.bookingId).single();
+    if (bErr || !booking) return res.status(404).json({ error: 'Booking not found' });
+
+    const { data: vendor, error: vErr } = await supabaseAdmin
+      .from('vendors').select('name, aliases').eq('id', vendorId).single();
+    if (vErr || !vendor) return res.status(404).json({ error: 'Vendor not found' });
+
+    const { error: uErr } = await supabaseAdmin
+      .from('vendor_checklist').update({ vendor_id: vendorId }).eq('id', req.params.bookingId);
+    if (uErr) throw uErr;
+
+    // Remember the spelling, so the same one matches by itself next time.
+    const name = (booking.vendor_name || '').trim();
+    if (name && name !== vendor.name && !(vendor.aliases || []).includes(name)) {
+      const { error: aErr } = await supabaseAdmin
+        .from('vendors').update({ aliases: [...(vendor.aliases || []), name] }).eq('id', vendorId);
+      if (aErr) throw aErr;
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Link booking error:', err);
+    res.status(500).json({ error: 'Failed to link that booking' });
   }
 });
 

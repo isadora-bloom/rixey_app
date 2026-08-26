@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom'
 // Components still used directly in the main Admin view (not in profile)
 import KnowledgeBaseAdmin from '../components/KnowledgeBaseAdmin'
 import VenueSettings from '../components/VenueSettings'
-import RecommendedVendorsAdmin from '../components/RecommendedVendorsAdmin'
+import VendorsAdmin from '../components/VendorsAdmin'
 import UsageStats from '../components/UsageStats'
 import UpcomingMeetings from '../components/UpcomingMeetings'
 import ToursPanel from './admin/ToursPanel'
@@ -1880,10 +1880,10 @@ export default function Admin() {
           </div>
         )}
 
-        {/* Recommended Vendors View */}
+        {/* Vendors View */}
         {mainView === 'vendors' && (
           <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
-            <RecommendedVendorsAdmin />
+            <VendorsAdmin />
           </div>
         )}
 
