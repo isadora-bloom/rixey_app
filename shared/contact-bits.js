@@ -105,8 +105,12 @@ export function extractContactBits(raw, vendorName) {
   }
 
   // What is left, once the labels and punctuation go, is usually the person.
+  // The empty angle brackets matter: "Erica Hoffman <erica@x.com>" leaves
+  // "Erica Hoffman < >" once the address has been taken out, and that is a
+  // person whose name was being thrown away over two characters.
   const leftovers = rest
     .replace(LABELS, ' ')
+    .replace(/<\s*>/g, ' ')
     .split(/[,;|\n]+/)
     .map(s => s.replace(/[\s.\-—]+/g, ' ').trim())
     .filter(Boolean);
@@ -117,7 +121,7 @@ export function extractContactBits(raw, vendorName) {
   // tent" as contact people, which is worse than an empty field because it
   // reads as a fact somebody checked.
   const looksLikeName = s =>
-    /^[A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*){1,2}$/.test(s)
+    /^[A-Z][A-Za-z'’.-]{2,}(?:\s+[A-Z][A-Za-z'’.-]*){0,2}$/.test(s)
     && !s.split(/\s+/).some(w => NOT_A_PERSON.has(w.toLowerCase().replace(/[^a-z]/g, '')));
   let person = leftovers.find(looksLikeName) || null;
   // "Sammy's Rental tent" is the company written out again, not who to ask for.

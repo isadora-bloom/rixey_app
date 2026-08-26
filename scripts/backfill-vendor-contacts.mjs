@@ -254,12 +254,43 @@ for (const v of live) {
   if (Object.keys(patch).length) fills.push({ vendor: v, patch });
 }
 
+// The linking step copied the booking's whole vendor_contact string into the
+// contact-person field, because that was the only field there was. So a good
+// few vendors have a person called "nate@imthedj.net". Where that string turns
+// out to be nothing but an address or a number, and those have now been filed
+// where they belong, the field can hold the actual person instead. Only when
+// nothing is lost by the move: every part of the old value has to be evidence
+// that is being kept.
+let tidied = 0;
+for (const v of live) {
+  if (!v.contact) continue;
+  const bits = extractContactBits(v.contact, v.name);
+  if (bits.person) continue;                     // already a name, leave it
+  const stored = new Set(rows.filter(r => r.vendor_id === v.id).map(r => r.value_key));
+  const parts = [
+    ...bits.emails.map(x => keyFor('email', x)),
+    ...bits.phones.map(x => keyFor('phone', x)),
+    ...bits.websites.map(x => keyFor('website', x)),
+    ...bits.handles.map(x => keyFor('instagram', x)),
+  ];
+  if (!parts.length || bits.unparsed.length) continue;   // something else in there
+  if (!parts.every(k => stored.has(k))) continue;        // would lose something
+  const person = best(v.id, 'person');
+  if (!person) continue;
+  const existing = fills.find(f => f.vendor.id === v.id);
+  if (existing) existing.patch.contact = person.value;
+  else fills.push({ vendor: v, patch: { contact: person.value } });
+  tidied++;
+}
+
 const countField = f => fills.filter(x => x.patch[f]).length;
 console.log(`\n${fills.length} vendors gain something they did not have:`);
 console.log(`  ${countField('email')} emails · ${countField('phone')} phones · ${countField('website')} websites · ${countField('instagram')} instagram · ${countField('contact')} contact names`);
 
 const already = live.filter(v => v.email || v.phone).length;
 console.log(`(${already} already had an email or phone and are left alone)`);
+
+if (tidied) console.log(`${tidied} contact-person fields holding only an address or a number get the actual person's name, now that the address has somewhere of its own to live`);
 
 const contractOnly = rows.filter(r => !r.sources.some(src => APPLIES.has(src)));
 console.log(`${contractOnly.length} details come only from a contract. Stored and shown on the vendor, not written to the record: a contract names a wedding, not reliably a vendor.`);
