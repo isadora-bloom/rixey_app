@@ -510,13 +510,20 @@ function portalSubject(subject, { urgent = false } = {}) {
 
 // Core Gmail send — builds RFC 2822 message and uses the already-connected Gmail OAuth client
 // `subject` is used verbatim; callers going to info@ should wrap it in portalSubject().
-async function sendViaGmail(to, subject, html) {
-  if (!to) return false;
+/**
+ * The send, with the reason when it does not work.
+ *
+ * sendViaGmail below keeps its boolean contract because forty callers rely on
+ * it. But a boolean cannot say "the token is not allowed to send mail", which
+ * is what it had been not-saying since the day this was written.
+ */
+async function sendViaGmailDetailed(to, subject, html) {
+  if (!to) return { sent: false, error: 'No address to send to' };
   try {
     const tokens = await loadAndRefreshGmailTokens();
     if (!tokens) {
       console.log('[Email] Gmail not connected — skipping:', subject);
-      return false;
+      return { sent: false, error: 'Gmail is not connected' };
     }
     const fromName = process.env.EMAIL_FROM_NAME || 'Rixey Manor';
     const raw = [
@@ -531,11 +538,20 @@ async function sendViaGmail(to, subject, html) {
     const encoded = Buffer.from(raw).toString('base64url');
     await gmail.users.messages.send({ userId: 'me', requestBody: { raw: encoded } });
     console.log('[Email] Sent via Gmail:', subject, '→', to);
-    return true;
+    return { sent: true };
   } catch (err) {
-    console.error('[Email] Gmail send failed:', err.message);
-    return false;
+    const scopeProblem = /insufficient|scope|ACCESS_TOKEN_SCOPE/i.test(err.message || '');
+    const reason = scopeProblem
+      ? 'The connected Google account is not authorised to send mail. Reconnect Gmail in the admin panel to grant it.'
+      : err.message;
+    console.error('[Email] Gmail send failed:', reason);
+    return { sent: false, error: reason };
   }
+}
+
+async function sendViaGmail(to, subject, html) {
+  const { sent } = await sendViaGmailDetailed(to, subject, html);
+  return sent;
 }
 
 async function sendNotificationEmail(to, subject, bodyText, recipientType = 'admin') {
@@ -3208,14 +3224,24 @@ Answer concisely and helpfully:`
 // ============ GMAIL INTEGRATION ============
 
 // Start Gmail OAuth flow
-// Scopes: gmail.readonly (planning-note sync) + spreadsheets.readonly (Sheet Sync feature
-// on admin wedding profile). Existing tokens issued before Sheets scope was added will
-// get insufficientScope errors on Sheets API — sheet-sync helper detects and re-prompts.
+// Scopes: gmail.readonly (planning-note sync), gmail.send (everything this app
+// emails), spreadsheets.readonly (Sheet Sync on the admin wedding profile).
+//
+// gmail.send was missing until 26 August 2026, and its absence was invisible:
+// sendViaGmail caught the 403, logged one line and returned false, and every
+// caller treated false as "did not send" rather than "could not send". So 483
+// notifications were written, none was emailed, and the column recording that
+// said so the whole time. RSVP confirmations, client alerts and the daily memo
+// have never once left the building.
+//
+// Existing tokens carry the old scopes. Reconnecting Gmail in the admin panel
+// is what grants the new one.
 app.get('/api/gmail/auth', (req, res) => {
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: 'offline',
     scope: [
       'https://www.googleapis.com/auth/gmail.readonly',
+      'https://www.googleapis.com/auth/gmail.send',
       'https://www.googleapis.com/auth/spreadsheets.readonly'
     ],
     prompt: 'consent'
@@ -8468,8 +8494,8 @@ app.post('/api/venue-vendors/:id/invite', async (req, res) => {
       portalUrl: process.env.FRONTEND_URL || 'https://rixeymanor.com',
     });
 
-    const sent = await sendViaGmail(vendor.email, subject, html);
-    if (!sent) return res.status(502).json({ error: 'Gmail would not send it' });
+    const { sent, error: sendErr } = await sendViaGmailDetailed(vendor.email, subject, html);
+    if (!sent) return res.status(502).json({ error: sendErr || 'Gmail would not send it' });
 
     // Marked only once it has gone. The other way round is how a failed send
     // becomes a vendor nobody ever asks again.
@@ -8768,6 +8794,20 @@ app.get('/api/vendor-invites/ready', requireAdmin, async (req, res) => {
     if (!tokens) {
       return res.json({ ok: false, error: 'Gmail is not connected. Reconnect it in the admin panel.' });
     }
+
+    // Having a token is not the same as being allowed to send with it. This
+    // check used to stop at "there is a token", which is exactly the lie the
+    // whole email path had been telling.
+    const info = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(tokens.access_token)}`)
+      .then(r => r.json()).catch(() => null);
+    const scopes = String(info?.scope || '').split(' ');
+    const canSend = scopes.some(sc => /gmail\.send|gmail\.compose|gmail\.modify|mail\.google\.com/.test(sc));
+    if (!canSend) {
+      return res.json({
+        ok: false,
+        error: 'Gmail is connected but the account is not authorised to send mail. Reconnect Gmail in the admin panel to grant it.',
+      });
+    }
     res.json({ ok: true, from: process.env.ADMIN_EMAIL || 'the connected Gmail account' });
   } catch (err) {
     console.error('Vendor invite readiness error:', err);
@@ -8780,8 +8820,8 @@ app.post('/api/vendor-invites/send', requireAdmin, async (req, res) => {
     const { to, subject, html, vendorIds } = req.body;
     if (!to || !subject || !html) return res.status(400).json({ error: 'to, subject and html are all required' });
 
-    const sent = await sendViaGmail(to, subject, html);
-    if (!sent) return res.status(502).json({ sent: false, error: 'Gmail would not send it' });
+    const { sent, error: sendErr } = await sendViaGmailDetailed(to, subject, html);
+    if (!sent) return res.status(502).json({ sent: false, error: sendErr || 'Gmail would not send it' });
 
     // Marked only once it has actually gone. Marking first and sending after
     // is how a failed send turns into a vendor nobody ever asks again.
