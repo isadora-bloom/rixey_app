@@ -11,7 +11,10 @@ import { authHeaders } from '../utils/api'
 // recommends, and the ones who have filled in their own profile get their
 // photos, words and offer on top of Isadora's note.
 
+// The first three read a column. The fourth is a question about the vendor's
+// own profile, so it gets a test of its own rather than a fake column.
 const TOGGLES = [
+  { key: 'special_offer', label: 'Offer for Rixey couples', test: v => Boolean(v.special_offer) },
   { key: 'is_local', label: 'Local' },
   { key: 'is_budget_friendly', label: 'Budget-friendly' },
   { key: 'has_multiple_events', label: '3+ Rixey weddings' },
@@ -50,7 +53,10 @@ export default function PreferredVendors() {
   const filtered = vendors.filter(v => {
     const cats = v.categories?.length ? v.categories : [v.category].filter(Boolean)
     if (filterCategory && !cats.includes(filterCategory)) return false
-    if (activeFlags.some(f => !v[f])) return false
+    if (activeFlags.some(f => {
+      const toggle = TOGGLES.find(t => t.key === f)
+      return toggle?.test ? !toggle.test(v) : !v[f]
+    })) return false
     if (term) {
       const haystack = [v.name, v.category, v.notes, v.bio, v.pricing_info].join(' ').toLowerCase()
       if (!haystack.includes(term)) return false
@@ -117,7 +123,7 @@ export default function PreferredVendors() {
 
       {/* Toggles */}
       <div className="flex flex-wrap gap-2 mb-3">
-        {TOGGLES.map(t => (
+        {TOGGLES.filter(t => vendors.some(v => (t.test ? t.test(v) : v[t.key]))).map(t => (
           <button
             key={t.key}
             onClick={() => setFlags({ ...flags, [t.key]: !flags[t.key] })}

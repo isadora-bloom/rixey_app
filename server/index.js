@@ -8192,6 +8192,61 @@ app.put('/api/venue-vendors-unlinked/:bookingId', async (req, res) => {
   }
 });
 
+// ============ VENDOR PORTAL INVITES ============
+//
+// Sending a vendor the link to their own profile. Admin only, and separate
+// from every other send in here because this one goes to businesses rather
+// than to couples or to Rixey's own inbox.
+
+// Is there anything to send WITH? sendViaGmail logs a line and returns false
+// when Gmail is not connected, which is fine for one notification and useless
+// across fifty: the run would report success and deliver nothing.
+app.get('/api/vendor-invites/ready', requireAdmin, async (req, res) => {
+  try {
+    const tokens = await loadAndRefreshGmailTokens();
+    if (!tokens) {
+      return res.json({ ok: false, error: 'Gmail is not connected. Reconnect it in the admin panel.' });
+    }
+    res.json({ ok: true, from: process.env.ADMIN_EMAIL || 'the connected Gmail account' });
+  } catch (err) {
+    console.error('Vendor invite readiness error:', err);
+    res.json({ ok: false, error: err.message || 'Could not check the Gmail connection' });
+  }
+});
+
+app.post('/api/vendor-invites/send', requireAdmin, async (req, res) => {
+  try {
+    const { to, subject, html, vendorIds } = req.body;
+    if (!to || !subject || !html) return res.status(400).json({ error: 'to, subject and html are all required' });
+
+    const sent = await sendViaGmail(to, subject, html);
+    if (!sent) return res.status(502).json({ sent: false, error: 'Gmail would not send it' });
+
+    // Marked only once it has actually gone. Marking first and sending after
+    // is how a failed send turns into a vendor nobody ever asks again.
+    if (Array.isArray(vendorIds) && vendorIds.length) {
+      const { data: rows, error: readErr } = await supabaseAdmin
+        .from('vendors').select('id, portal_invite_count').in('id', vendorIds);
+      if (readErr) throw readErr;
+      for (const row of rows) {
+        const { error } = await supabaseAdmin
+          .from('vendors')
+          .update({
+            portal_invited_at: new Date().toISOString(),
+            portal_invite_count: (row.portal_invite_count || 0) + 1,
+          })
+          .eq('id', row.id);
+        if (error) throw error;
+      }
+    }
+
+    res.json({ sent: true });
+  } catch (err) {
+    console.error('Vendor invite send error:', err);
+    res.status(500).json({ sent: false, error: err.message || 'Failed to send' });
+  }
+});
+
 // ============ ONBOARDING PROGRESS ============
 
 // Get onboarding progress for a wedding
