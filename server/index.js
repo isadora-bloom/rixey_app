@@ -355,6 +355,16 @@ app.use('/api/quo', requireAdmin);
 app.use('/api/uncertain-questions', requireAdmin);
 app.use('/api/knowledge-base', requireAdmin);
 app.use('/api/recommended-vendors', requireAdmin);
+// The venue-side vendor records. These carry every vendor's contact details,
+// Rixey's private notes on them, and edit_token, which is the whole of the
+// security on a vendor's profile: anyone holding it can rewrite what couples
+// see. They shipped on 26 August mounted outside this list, which left them
+// readable by anyone at all, since the /api middleware above attaches a user
+// when there is one and never blocks when there is not.
+app.use('/api/venue-vendors', requireAdmin);
+app.use('/api/venue-vendors-unlinked', requireAdmin);
+app.use('/api/vendor-merge-review', requireAdmin);
+app.use('/api/vendor-invites', requireAdmin);
 app.use('/api/venue-settings', requireAdmin);
 app.use('/api/usage', requireAdmin);
 app.use('/api/storefront', (req, res, next) => {
