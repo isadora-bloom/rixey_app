@@ -266,6 +266,7 @@ export default function Admin() {
             const d = j.detail || {}
             const bits = [`${d.recovered || 0} of ${d.looked || 0} emails have a body after all`]
             if (d.notesExtracted) bits.push(`${d.notesExtracted} planning notes filed`)
+            if (d.documentsFiled) bits.push(`${d.documentsFiled} attached document${d.documentsFiled === 1 ? '' : 's'} filed as contracts`)
             if (d.stillEmpty) bits.push(`${d.stillEmpty} genuinely have no words in them`)
             if (d.gone) bits.push(`${d.gone} no longer in the mailbox`)
             if (d.failed) bits.push(`${d.failed} failed, see the server log`)

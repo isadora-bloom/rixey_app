@@ -3,8 +3,11 @@ import { API_URL } from '../../config/api'
 import { authHeaders } from '../../utils/api'
 
 export default function ContractPanel({ weddingId, uploadingContract, handleContractUpload, uploadResult }) {
-  const [contracts, setContracts] = useState([])
+  const [contractLines, setContractLines] = useState([])
+  const [versioned, setVersioned] = useState(true)
   const [vendorContracts, setVendorContracts] = useState([])
+  // Which vendor lines have had their earlier versions opened.
+  const [openHistory, setOpenHistory] = useState({})
   const [loading, setLoading] = useState(true)
   const [expandedId, setExpandedId] = useState(null)
 
@@ -19,7 +22,8 @@ export default function ContractPanel({ weddingId, uploadingContract, handleCont
       })
       if (res.ok) {
         const data = await res.json()
-        setContracts(data.contracts || [])
+        setContractLines(data.contractLines || [])
+        setVersioned(data.versioned !== false)
         setVendorContracts(data.vendorContracts || [])
       }
     } catch (err) {
@@ -33,7 +37,9 @@ export default function ContractPanel({ weddingId, uploadingContract, handleCont
     if (uploadResult?.success) loadContracts()
   }, [uploadResult])
 
-  const total = contracts.length + vendorContracts.length
+  // One line per vendor, not one per upload. Eleven rows with two of them the
+  // same contract twice was the old count.
+  const total = contractLines.length + vendorContracts.length
 
   return (
     <div className="space-y-6">
@@ -95,8 +101,15 @@ export default function ContractPanel({ weddingId, uploadingContract, handleCont
           </p>
         ) : (
           <div className="space-y-2">
-            {/* Extracted docs from contracts table */}
-            {contracts.map((c) => (
+            {!versioned && (
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                Showing every upload. Migration 033 has not been run, so earlier
+                versions of the same contract still appear as separate documents.
+              </p>
+            )}
+
+            {/* One line per vendor: the version that counts, history beneath */}
+            {contractLines.map(({ current: c, history, vendor_name: vendorName }) => (
               <div key={c.id} className="border border-cream-200 rounded-lg overflow-hidden">
                 <button
                   onClick={() => setExpandedId(expandedId === c.id ? null : c.id)}
@@ -109,7 +122,14 @@ export default function ContractPanel({ weddingId, uploadingContract, handleCont
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-sage-800 truncate">{c.filename}</p>
                       <p className="text-xs text-sage-500">
-                        {new Date(c.created_at).toLocaleDateString()} · {c.extracted_text?.length || 0} chars extracted
+                        {vendorName && <span className="text-sage-600">{vendorName} · </span>}
+                        {/* The date on the contract where one could be read.
+                            Otherwise the day it was uploaded, said as such. */}
+                        {c.document_date
+                          ? new Date(c.document_date).toLocaleDateString()
+                          : `uploaded ${new Date(c.created_at).toLocaleDateString()}`}
+                        {history.length > 0 && ` · v${c.version || history.length + 1}`}
+                        {' · '}{c.extracted_text?.length || 0} chars extracted
                       </p>
                     </div>
                   </div>
@@ -123,6 +143,35 @@ export default function ContractPanel({ weddingId, uploadingContract, handleCont
                     <pre className="whitespace-pre-wrap text-xs text-sage-700 bg-cream-50 rounded p-3 mt-3 max-h-80 overflow-y-auto font-sans leading-relaxed">
                       {c.extracted_text || 'No text extracted'}
                     </pre>
+                  </div>
+                )}
+
+                {/* Replaced versions. Kept, never deleted, but out of the way:
+                    the point of this screen is what the venue works from. */}
+                {history.length > 0 && (
+                  <div className="px-4 pb-3 border-t border-cream-100">
+                    <button
+                      onClick={() => setOpenHistory(prev => ({ ...prev, [c.id]: !prev[c.id] }))}
+                      className="text-xs text-sage-500 underline mt-2"
+                    >
+                      {openHistory[c.id]
+                        ? 'Hide earlier versions'
+                        : `${history.length} earlier version${history.length === 1 ? '' : 's'}`}
+                    </button>
+                    {openHistory[c.id] && (
+                      <ul className="mt-2 space-y-1">
+                        {history.map(h => (
+                          <li key={h.id} className="text-xs text-sage-400 flex items-center gap-2">
+                            <span className="truncate">{h.filename}</span>
+                            <span className="flex-shrink-0">
+                              {h.document_date
+                                ? new Date(h.document_date).toLocaleDateString()
+                                : `uploaded ${new Date(h.created_at).toLocaleDateString()}`}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
                 )}
               </div>

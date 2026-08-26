@@ -99,3 +99,26 @@ test('a missing payload is not a crash', () => {
   assert.equal(readMessageBody(null), '');
   assert.deepEqual(readMessageParts(undefined), { text: '', html: '', attachments: [] });
 });
+
+test('a signature logo is marked inline, a contract is not', () => {
+  const payload = { mimeType: 'multipart/mixed', parts: [
+    { mimeType: 'text/plain', body: { data: b64('see attached') } },
+    { mimeType: 'image/png', filename: 'logo.png',
+      headers: [{ name: 'Content-Disposition', value: 'inline; filename="logo.png"' },
+                { name: 'Content-ID', value: '<logo@rixey>' }],
+      body: { attachmentId: 'l' } },
+    { mimeType: 'application/pdf', filename: 'contract.pdf',
+      headers: [{ name: 'Content-Disposition', value: 'attachment; filename="contract.pdf"' }],
+      body: { attachmentId: 'c' } },
+  ]};
+  const { attachments } = readMessageParts(payload);
+  assert.equal(attachments.find(a => a.filename === 'logo.png').inline, true);
+  assert.equal(attachments.find(a => a.filename === 'contract.pdf').inline, false);
+});
+
+test('an attachment with no headers is not assumed inline', () => {
+  const payload = { mimeType: 'multipart/mixed', parts: [
+    { mimeType: 'application/pdf', filename: 'beo.pdf', body: { attachmentId: 'b' } },
+  ]};
+  assert.equal(readMessageParts(payload).attachments[0].inline, false);
+});

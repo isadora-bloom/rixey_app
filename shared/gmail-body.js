@@ -102,11 +102,23 @@ export function readMessageParts(payload) {
     // Anything with a filename is something the sender attached, not something
     // they wrote. A text/plain named notes.txt is not the body of the email.
     if (filename) {
+      // An email signature's logo is an attachment by every structural
+      // measure. What separates it from a contract is Content-Disposition
+      // inline, usually with a Content-ID the html refers to. Recorded rather
+      // than filtered here: this function reports what is on the message, and
+      // deciding what to keep belongs to whoever is filing it.
+      const headers = part.headers || [];
+      const header = (name) => headers.find(
+        h => String(h.name || '').toLowerCase() === name,
+      )?.value || '';
+      const disposition = header('content-disposition').toLowerCase();
+
       out.attachments.push({
         filename,
         mimeType: part.mimeType || 'application/octet-stream',
         attachmentId: part.body?.attachmentId || null,
         size: part.body?.size || 0,
+        inline: disposition.startsWith('inline') || Boolean(header('content-id')),
       });
       return;
     }

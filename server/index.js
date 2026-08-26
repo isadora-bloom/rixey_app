@@ -20,7 +20,7 @@ import { fetchAllTabs, SheetFetchError } from './lib/sheet-fetcher.js';
 import { buildDiff, applyChoices } from './lib/sheet-diff/index.js';
 import { guestFullName, plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, headcount, parsePlusOneCell, usesPersonModel, personDisplayName, toParties, allPeople } from '../shared/guest-names.js';
 import { sendsConfirmation } from '../shared/rsvp-fields.js';
-import { isSameVendor } from '../shared/vendor-names.js';
+import { isSameVendor, vendorKey } from '../shared/vendor-names.js';
 import { rsvpConfirmationHtml } from './lib/rsvp-confirmation.js';
 import { WALKTHROUGH_TARGETS, TARGET_KEYS, buildNote, organisePrompt, parseItems } from './lib/walkthrough.js';
 import { extractDocument } from './lib/doc-sync/extract.js';
@@ -37,7 +37,8 @@ import {
 } from './lib/quo-calls.js';
 import { guestCareContext } from '../shared/guest-care.js';
 import { buildDirectory, matchMeeting } from '../shared/meeting-match.js';
-import { readMessageBody } from '../shared/gmail-body.js';
+import { readMessageBody, readAttachments } from '../shared/gmail-body.js';
+import { placeNewContract, groupByVendor, currentAndHistory } from '../shared/contract-versions.js';
 import { buildPortalSnapshot } from './lib/sheet-diff/portal-snapshot.js';
 import cron from 'node-cron';
 import * as XLSX from 'xlsx';
@@ -1687,11 +1688,16 @@ app.post('/api/chat', async (req, res) => {
         const lowerMessage = message.toLowerCase();
         const isContractRelated = contractKeywords.some(kw => lowerMessage.includes(kw));
 
-        // Get contracts - full text if question is contract-related, summaries otherwise
+        // Get contracts - full text if question is contract-related, summaries otherwise.
+        //
+        // Only the versions that still count. A superseded catering contract
+        // and the final one used to go into the same context together, and
+        // Sage answered from whichever she reached first.
         const { data: contracts } = await supabaseAdmin
           .from('contracts')
-          .select('filename, extracted_text')
-          .eq('wedding_id', weddingId);
+          .select('filename, extracted_text, vendor_name, document_date')
+          .eq('wedding_id', weddingId)
+          .is('superseded_by', null);
 
         if (contracts && contracts.length > 0) {
           if (isContractRelated) {
@@ -2177,6 +2183,160 @@ Keep it warm but not over-the-top. 3-4 sentences max. End with an open question.
   }
 });
 
+/**
+ * Reading a contract, and putting it in its place in the chain.
+ *
+ * Three endpoints used to insert into `contracts` with the same four fields
+ * copy-pasted between them, and none of them recorded who the contract was
+ * from or what date was on it. So every upload was a new and unrelated
+ * document: Sarah and Kevan have MUA Contract.pdf twice, and Sage reads both
+ * into her context and answers from whichever she reaches first.
+ *
+ * Everything goes through here now, including attachments that arrive by
+ * email. See shared/contract-versions.js for what makes two contracts the same
+ * contract and why the date on the page beats the date it landed.
+ */
+
+/**
+ * Vendor, type and date, read off text that has already been extracted.
+ *
+ * On the text rather than the PDF on purpose: the document has been through
+ * Claude once already to get its text, and sending the file a second time to
+ * ask three short questions costs the same as sending it the first time. The
+ * chat upload path was doing exactly that, twice.
+ *
+ * The date is asked for rather than pattern-matched. A contract carries a
+ * signature date, an event date, a delivery date and a print date, and telling
+ * them apart is reading, not matching. See [[feedback_no_regex_on_user_text]].
+ */
+async function readContractFacts(text, filename) {
+  const empty = { vendorName: null, vendorType: null, documentDate: null };
+  if (!String(text || '').trim()) return empty;
+
+  try {
+    const response = await anthropic.messages.create({
+      model: MODEL_SONNET,
+      max_tokens: 300,
+      messages: [{
+        role: 'user',
+        content: `This is the text of a document sent to a wedding venue, filename "${filename}".
+
+Return ONLY a JSON object, no commentary:
+{"vendorName": "<the business that issued this, as written, or null>",
+ "vendorType": "<one of: photographer, videographer, caterer, florist, dj, band, officiant, cake, hair, makeup, coordinator, rentals, transportation, other, or null>",
+ "documentDate": "<YYYY-MM-DD, or null>"}
+
+vendorName is the company that WROTE this document, not the couple and not the venue. The venue is Rixey Manor; never return that.
+
+documentDate is the date THIS VERSION of the agreement was drawn up or signed. It is not the wedding date, not a delivery or pickup date, and not a payment due date. If the only dates on the page are event dates, return null. A wrong date here is worse than none, because it decides which contract the venue works from.
+
+Document text:
+${String(text).slice(0, 20000)}`,
+      }],
+    });
+
+    const raw = response.content[0].text.trim();
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (!match) return empty;
+    const parsed = JSON.parse(match[0]);
+
+    const clean = v => (typeof v === 'string' && v.trim() && v.trim().toLowerCase() !== 'null' ? v.trim() : null);
+    const date = clean(parsed.documentDate);
+    return {
+      vendorName: clean(parsed.vendorName),
+      vendorType: clean(parsed.vendorType),
+      // Anything that is not a plain date is not a date. A half-read
+      // "2026-08" would sort as if it were the first of the month.
+      documentDate: date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null,
+    };
+  } catch (err) {
+    // A contract with no vendor on it still gets saved. It just does not chain.
+    console.error(`[contracts] could not read the facts off ${filename}: ${err.message}`);
+    return empty;
+  }
+}
+
+/**
+ * Save one contract, chained to whatever it replaces.
+ *
+ * `text` is the already-extracted document text. `facts` can be passed in by a
+ * caller that has already worked them out; otherwise they are read here.
+ *
+ * Returns the saved row, or null if it could not be saved, which callers treat
+ * as "carry on with the rest of the upload" rather than failing the request.
+ */
+async function saveContract({
+  weddingId, filename, fileType, text,
+  source = 'upload', gmailMessageId = null, storagePath = null, facts = null,
+}) {
+  if (!weddingId) return null;
+
+  const read = facts || await readContractFacts(text, filename);
+
+  const row = {
+    wedding_id: weddingId,
+    filename,
+    file_type: fileType,
+    extracted_text: text || '',
+    vendor_name: read.vendorName,
+    vendor_key: read.vendorName ? vendorKey(read.vendorName) : null,
+    vendor_type: read.vendorType,
+    document_date: read.documentDate,
+    source,
+    gmail_message_id: gmailMessageId,
+    storage_path: storagePath,
+  };
+
+  // Everything already on file from this vendor for this wedding, so the new
+  // one can be placed among them rather than assumed to be the newest.
+  let siblings = [];
+  if (row.vendor_key) {
+    const { data, error } = await supabaseAdmin
+      .from('contracts')
+      .select('id, wedding_id, vendor_name, version, document_date, created_at')
+      .eq('wedding_id', weddingId)
+      .eq('vendor_key', row.vendor_key);
+    // Cannot tell is not the same as none. Chaining on a failed read would
+    // supersede a contract that may not be the one this replaces.
+    if (error) {
+      console.error(`[contracts] could not read earlier versions, filing ${filename} unchained: ${error.message}`);
+    } else {
+      siblings = data;
+    }
+  }
+
+  const placed = placeNewContract({ ...row, created_at: new Date().toISOString() }, siblings);
+  row.version = placed.version;
+  row.supersedes_id = placed.supersedes;
+  row.superseded_by = placed.supersededBy;
+
+  const { data: saved, error: insertErr } = await supabaseAdmin
+    .from('contracts').insert(row).select().single();
+  if (insertErr) {
+    console.error(`[contracts] could not save ${filename}: ${insertErr.message}`);
+    return null;
+  }
+
+  // Close the other end of the link. Only after the insert succeeded, so a
+  // failed save never retires a contract that is still the current one.
+  if (placed.supersedes) {
+    const { error: linkErr } = await supabaseAdmin
+      .from('contracts').update({ superseded_by: saved.id }).eq('id', placed.supersedes);
+    if (linkErr) {
+      console.error(`[contracts] ${saved.id} did not retire ${placed.supersedes}: ${linkErr.message}`);
+    }
+  }
+
+  console.log(
+    `[contracts] ${filename} v${saved.version}`
+    + (read.vendorName ? ` from ${read.vendorName}` : ' from an unnamed vendor')
+    + (read.documentDate ? ` dated ${read.documentDate}` : ' with no date on it')
+    + (placed.alreadySuperseded ? ', already out of date, filed as history' : '')
+    + (placed.supersedes ? `, replaces ${placed.supersedes}` : ''),
+  );
+  return saved;
+}
+
 // Contract upload and extraction endpoint
 app.post('/api/extract-contract', upload.single('contract'), async (req, res) => {
   try {
@@ -2225,23 +2385,14 @@ app.post('/api/extract-contract', upload.single('contract'), async (req, res) =>
       console.error('Text extraction error:', textErr);
     }
 
-    // Save the contract to database (use admin to bypass RLS)
-    const { data: savedContract, error: contractError } = await supabaseAdmin
-      .from('contracts')
-      .insert({
-        wedding_id: weddingId,
-        filename: file.originalname,
-        file_type: file.mimetype,
-        extracted_text: extractedFullText
-      })
-      .select()
-      .single();
-
-    if (contractError) {
-      console.error('Contract save error:', contractError);
-    } else {
-      console.log(`Saved contract: ${savedContract.id}`);
-    }
+    // Save the contract, chained to whatever version it replaces.
+    await saveContract({
+      weddingId,
+      filename: file.originalname,
+      fileType: file.mimetype,
+      text: extractedFullText,
+      source: 'upload',
+    });
 
     // Prepare Claude request
     const extractionPrompt = `You are analyzing a wedding vendor contract. Extract the following key details and return them as a JSON array of planning notes.
@@ -2543,30 +2694,21 @@ app.post('/api/chat-with-file', upload.single('file'), async (req, res) => {
             }]
           });
 
-          await supabaseAdmin.from('contracts').insert({
-            wedding_id: weddingId,
-            filename: file.originalname,
-            file_type: file.mimetype,
-            extracted_text: textResponse.content[0].text
-          });
-          console.log(`Saved contract from chat: ${file.originalname}`);
+          // Vendor, type and date read once off the extracted text, then reused
+          // below. This used to be a second and third upload of the same PDF.
+          const contractText = textResponse.content[0].text;
+          const contractFacts = await readContractFacts(contractText, file.originalname);
 
-          // Try to identify vendor type and add to vendor checklist if new
-          const vendorTypeResponse = await anthropic.messages.create({
-            model: MODEL_SONNET,
-            max_tokens: 100,
-            messages: [{
-              role: 'user',
-              content: isPdf ? [
-                { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64Data } },
-                { type: 'text', text: 'What type of wedding vendor is this contract for? Reply with ONLY one of: photographer, videographer, caterer, florist, dj, band, officiant, cake, hair, makeup, coordinator, rentals, transportation, other. Just the single word.' }
-              ] : [
-                { type: 'image', source: { type: 'base64', media_type: file.mimetype, data: base64Data } },
-                { type: 'text', text: 'What type of wedding vendor is this contract for? Reply with ONLY one of: photographer, videographer, caterer, florist, dj, band, officiant, cake, hair, makeup, coordinator, rentals, transportation, other. Just the single word.' }
-              ]
-            }]
+          await saveContract({
+            weddingId,
+            filename: file.originalname,
+            fileType: file.mimetype,
+            text: contractText,
+            source: 'chat',
+            facts: contractFacts,
           });
-          const vendorType = vendorTypeResponse.content[0].text.toLowerCase().trim();
+
+          const vendorType = contractFacts.vendorType || 'other';
 
           // Check if this vendor type already exists
           // maybeSingle, not single: single() treats zero rows as an error, so
@@ -2600,7 +2742,11 @@ app.post('/api/chat-with-file', upload.single('file'), async (req, res) => {
                   vendor_type: vendorType,
                   contract_uploaded: true,
                   contract_url: signedUrlData.signedUrl,
-                  contract_date: venueToday(),   // the day it was signed at the venue
+                  // Not "the day it was signed at the venue", whatever the old
+                  // comment said. This is the day somebody pressed upload, and
+                  // the vendor screen was rendering it as the contract's date.
+                  contract_date: venueToday(),
+                  contract_document_date: contractFacts.documentDate,
                   is_booked: true
                 });
                 console.log(`Created vendor checklist entry for ${vendorType} from chat upload`);
@@ -2670,17 +2816,45 @@ Return ONLY a valid JSON array like: [{"category": "vendor", "content": "Caterer
 app.get('/api/contracts/:weddingId', async (req, res) => {
   try {
     const { weddingId } = req.params;
-    const [{ data: contracts }, { data: vendors }] = await Promise.all([
-      supabaseAdmin.from('contracts')
-        .select('id, filename, file_type, extracted_text, created_at')
-        .eq('wedding_id', weddingId)
-        .order('created_at', { ascending: false }),
-      supabaseAdmin.from('vendor_checklist')
-        .select('id, vendor_type, vendor_name, contract_url, contract_date')
-        .eq('wedding_id', weddingId)
-        .eq('contract_uploaded', true),
-    ]);
-    res.json({ contracts: contracts || [], vendorContracts: vendors || [] });
+
+    // Migration 033 is a paste job, so it may not have been run yet. Asking for
+    // columns that do not exist returns 42703 and null data, which reads on
+    // screen as "no contracts uploaded yet". That is a lie about a wedding
+    // holding eleven of them. Fall back to the columns that have always been
+    // there and say so, rather than showing an empty list.
+    const BASE = 'id, wedding_id, filename, file_type, extracted_text, created_at';
+    const VERSIONED = `${BASE}, vendor_name, vendor_type, document_date, version, superseded_by, source`;
+
+    const readContracts = (columns) => supabaseAdmin.from('contracts')
+      .select(columns)
+      .eq('wedding_id', weddingId)
+      .order('created_at', { ascending: false });
+
+    let versioned = true;
+    let { data: contracts, error: cErr } = await readContracts(VERSIONED);
+    if (cErr?.code === '42703') {
+      versioned = false;
+      ({ data: contracts, error: cErr } = await readContracts(BASE));
+    }
+    if (cErr) throw cErr;
+
+    const { data: vendors, error: vErr } = await supabaseAdmin.from('vendor_checklist')
+      .select(versioned
+        ? 'id, vendor_type, vendor_name, contract_url, contract_date, contract_document_date'
+        : 'id, vendor_type, vendor_name, contract_url, contract_date')
+      .eq('wedding_id', weddingId)
+      .eq('contract_uploaded', true);
+    if (vErr) throw vErr;
+    // One line per vendor, newest version first, earlier ones kept underneath
+    // rather than listed as though they were separate agreements.
+    res.json({
+      contracts: contracts || [],
+      contractLines: groupByVendor(contracts || []),
+      vendorContracts: vendors || [],
+      // The screen needs to know it is showing every upload rather than every
+      // current version, so it does not promise something it cannot do.
+      versioned,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2749,7 +2923,7 @@ async function buildWeddingContext(weddingId, { noteLimit = 400 } = {}) {
       { data: wedding },
       { data: guestRows },
     ] = await Promise.all([
-      supabaseAdmin.from('contracts').select('filename, extracted_text').eq('wedding_id', weddingId),
+      supabaseAdmin.from('contracts').select('filename, extracted_text').eq('wedding_id', weddingId).is('superseded_by', null),
       supabaseAdmin.from('planning_notes').select('category, content, source_message, created_at').eq('wedding_id', weddingId).order('created_at', { ascending: false }),
       supabaseAdmin.from('wedding_details').select('*').eq('wedding_id', weddingId).maybeSingle(),
       supabaseAdmin.from('allergy_registry').select('*').eq('wedding_id', weddingId).order('sort_order'),
@@ -3607,6 +3781,16 @@ async function runGmailSync(body, { bump }) {
             continue;
           }
 
+          // A contract that arrives as an attachment becomes a contract.
+          //
+          // Until now nothing ever downloaded one, so "Final contract for
+          // Sarah & Kevan" imported as a subject line with an empty body and
+          // the PDF stayed in the mailbox. Filing it to the right couple moved
+          // a marker and nothing else.
+          await fileEmailAttachments({
+            messageId: msg.id, payload, weddingId, subject,
+          });
+
           // Save full email as a planning note so Sage can search it
           if (weddingId && bodyText) {
             const noteContent = `[Email: ${subject}]\nFrom: ${fromEmail}\n\n${bodyText.substring(0, 5000)}`;
@@ -3695,6 +3879,109 @@ async function runGmailSync(body, { bump }) {
 }
 
 /**
+ * Documents attached to an email, filed as documents.
+ *
+ * Only what a person actually attached. A signature logo is an attachment by
+ * every structural measure, so inline parts are skipped, and so is anything
+ * that is not a document: an image under 300KB is a badge or a headshot far
+ * more often than it is a scanned contract.
+ *
+ * Each one is read once by Claude for its text, which costs real money, so the
+ * gmail_message_id and filename together are checked first. That pair is
+ * uniquely indexed in migration 033 for the same reason.
+ */
+const DOCUMENT_TYPES = new Set(['application/pdf']);
+const SCAN_MIN_BYTES = 300 * 1024;   // below this, an image is not a contract
+const ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024;
+const ATTACHMENTS_PER_EMAIL = 5;
+
+function worthFiling(att) {
+  if (att.inline || !att.attachmentId) return false;
+  if (att.size > ATTACHMENT_MAX_BYTES) return false;
+  if (DOCUMENT_TYPES.has(att.mimeType)) return true;
+  return att.mimeType.startsWith('image/') && att.size >= SCAN_MIN_BYTES;
+}
+
+async function fileEmailAttachments({ messageId, payload, weddingId, subject }) {
+  if (!weddingId) return 0;
+
+  const candidates = readAttachments(payload).filter(worthFiling).slice(0, ATTACHMENTS_PER_EMAIL);
+  if (!candidates.length) return 0;
+
+  let filed = 0;
+  for (const att of candidates) {
+    try {
+      const { data: already, error: seenErr } = await supabaseAdmin
+        .from('contracts')
+        .select('id')
+        .eq('gmail_message_id', messageId)
+        .eq('filename', att.filename)
+        .maybeSingle();
+      // Cannot tell is not the same as not there, and being wrong here means
+      // paying Claude to read the same PDF on every sync forever.
+      if (seenErr) {
+        console.error(`[gmail] could not check whether ${att.filename} is already filed, leaving it: ${seenErr.message}`);
+        continue;
+      }
+      if (already) continue;
+
+      // googleapis rejects on failure rather than returning an error, and the
+      // whole loop body is inside a try, so there is nothing to check here.
+      const attachment = await gmail.users.messages.attachments.get({
+        userId: 'me', messageId, id: att.attachmentId,
+      });
+      const encoded = attachment?.data?.data;
+      if (!encoded) continue;
+
+      const buffer = Buffer.from(String(encoded).replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+
+      // Keep the file, not only what Claude read out of it. A contract you
+      // cannot open is half a contract.
+      const path = `${weddingId}/${messageId}_${att.filename}`;
+      const { error: storeErr } = await supabaseAdmin.storage
+        .from('vendor-contracts')
+        .upload(path, buffer, { contentType: att.mimeType, upsert: true });
+      if (storeErr) {
+        // Worth saying out loud: the bucket has its own size cap, and it is
+        // smaller than the one checked above. See [[rixey-supabase-bucket-size-caps]].
+        console.error(`[gmail] could not store ${att.filename}: ${storeErr.message}`);
+      }
+
+      const isPdf = att.mimeType === 'application/pdf';
+      const textResponse = await anthropic.messages.create({
+        model: MODEL_SONNET,
+        max_tokens: 8000,
+        messages: [{
+          role: 'user',
+          content: [
+            isPdf
+              ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buffer.toString('base64') } }
+              : { type: 'image', source: { type: 'base64', media_type: att.mimeType, data: buffer.toString('base64') } },
+            { type: 'text', text: 'Extract ALL text from this document exactly as it appears. Return only the text.' },
+          ],
+        }],
+      });
+
+      const saved = await saveContract({
+        weddingId,
+        filename: att.filename,
+        fileType: att.mimeType,
+        text: textResponse.content[0].text,
+        source: 'email',
+        gmailMessageId: messageId,
+        storagePath: storeErr ? null : path,
+      });
+      if (saved) filed++;
+    } catch (e) {
+      console.error(`[gmail] attachment ${att.filename} on ${messageId}: ${e.message}`);
+    }
+  }
+
+  if (filed) console.log(`[gmail] filed ${filed} document(s) from "${subject}"`);
+  return filed;
+}
+
+/**
  * Go back for the bodies the old reader could not see.
  *
  * The marker in processed_emails is what stops an email being imported twice,
@@ -3735,7 +4022,10 @@ async function runEmailBodyBackfill(body, { bump }) {
   const empty = rows.filter(r => !String(r.body_text || '').trim());
   await bump({ total: empty.length });
 
-  const summary = { looked: empty.length, recovered: 0, stillEmpty: 0, gone: 0, notesExtracted: 0, failed: 0 };
+  const summary = {
+    looked: empty.length, recovered: 0, stillEmpty: 0, gone: 0,
+    notesExtracted: 0, documentsFiled: 0, failed: 0,
+  };
   const examples = [];
 
   for (const [i, row] of empty.entries()) {
@@ -3745,6 +4035,18 @@ async function runEmailBodyBackfill(body, { bump }) {
         userId: 'me', id: row.gmail_message_id, format: 'full',
       });
       const text = readMessageBody(full.data.payload);
+
+      // The attachment is the reason the body was lost, and it is usually the
+      // point of the email. Worth going back for whether or not there were any
+      // words around it, so this runs before the empty check below.
+      if (apply && row.wedding_id) {
+        summary.documentsFiled += await fileEmailAttachments({
+          messageId: row.gmail_message_id,
+          payload: full.data.payload,
+          weddingId: row.wedding_id,
+          subject: row.subject,
+        });
+      }
 
       if (!text.trim()) {
         // Genuinely wordless now that the reader can see properly. A calendar
@@ -6399,7 +6701,10 @@ app.post('/api/vendors/:id/contract', upload.single('contract'), async (req, res
         // survives, because the URL has a one-year token baked into it.
         contract_url: signedUrlData.signedUrl,
         contract_path: fileName,
-        contract_date: venueToday()   // the day it was signed at the venue
+        // The day it was uploaded, not the day it was signed. The date on the
+        // document is read below and written to contract_document_date, which
+        // is what the vendor screen shows.
+        contract_date: venueToday()
       })
       .eq('id', id)
       .select()
@@ -6429,12 +6734,27 @@ app.post('/api/vendors/:id/contract', upload.single('contract'), async (req, res
           }]
         });
 
-        await supabaseAdmin.from('contracts').insert({
-          wedding_id: vendor.wedding_id,
+        const contractText = textResponse.content[0].text;
+        const contractFacts = await readContractFacts(contractText, file.originalname);
+
+        await saveContract({
+          weddingId: vendor.wedding_id,
           filename: file.originalname,
-          file_type: file.mimetype,
-          extracted_text: textResponse.content[0].text
+          fileType: file.mimetype,
+          text: contractText,
+          source: 'vendor',
+          storagePath: fileName,
+          facts: contractFacts,
         });
+
+        // The date on the page, back onto the booking the vendor screen reads.
+        if (contractFacts.documentDate) {
+          const { error: dateErr } = await supabaseAdmin
+            .from('vendor_checklist')
+            .update({ contract_document_date: contractFacts.documentDate })
+            .eq('id', id);
+          if (dateErr) console.error(`[contracts] could not record the document date on booking ${id}: ${dateErr.message}`);
+        }
 
         // Extract planning notes
         const extractionPrompt = `Extract key planning details from this vendor contract as a JSON array. For each item include:
@@ -7830,7 +8150,7 @@ app.get('/api/venue-vendors', async (req, res) => {
   try {
     const [vendors, bookings, weddings] = await Promise.all([
       allVendorRows('vendors', '*'),
-      allVendorRows('vendor_checklist', 'id, vendor_id, wedding_id, vendor_type, contract_url, contract_path, is_booked, created_at'),
+      allVendorRows('vendor_checklist', 'id, vendor_id, wedding_id, vendor_type, contract_url, contract_path, contract_document_date, is_booked, created_at'),
       allVendorRows('weddings', 'id, couple_names, wedding_date'),
     ]);
 
@@ -7918,6 +8238,29 @@ app.get('/api/venue-vendors/:id', async (req, res) => {
     }
     const weddingById = new Map(weddings.map(w => [w.id, w]));
 
+    // Every contract on file from this vendor, across those weddings.
+    //
+    // vendor_checklist holds one contract_path per booking, so a vendor who
+    // sent a revised contract overwrote the first and the screen showed
+    // whichever landed last. The contracts table keeps all of them with the
+    // date read off the page, so the current one can be chosen properly.
+    const vendorSpellings = [vendor.name, ...(vendor.aliases || [])].filter(Boolean);
+    const contractsByWedding = new Map();
+    if (weddingIds.length) {
+      const { data: rows, error: cErr } = await supabaseAdmin
+        .from('contracts')
+        .select('id, wedding_id, filename, vendor_name, document_date, created_at, version, superseded_by')
+        .in('wedding_id', weddingIds);
+      // Missing contract columns means migration 033 has not been run. The
+      // screen carries on with the booking's own contract rather than 500ing.
+      if (cErr && !tableMissing(cErr) && cErr.code !== '42703') throw cErr;
+      for (const row of rows || []) {
+        if (!vendorSpellings.some(n => isSameVendor(n, row.vendor_name))) continue;
+        if (!contractsByWedding.has(row.wedding_id)) contractsByWedding.set(row.wedding_id, []);
+        contractsByWedding.get(row.wedding_id).push(row);
+      }
+    }
+
     const history = await Promise.all(bookings.map(async b => ({
       id: b.id,
       wedding_id: b.wedding_id,
@@ -7930,7 +8273,27 @@ app.get('/api/venue-vendors/:id', async (req, res) => {
       arrival_time: b.arrival_time,
       departure_time: b.departure_time,
       contract_url: await contractLinkFor(b),
-      contract_date: b.contract_date,
+      // The date on the contract where one could be read, falling back to the
+      // day it was uploaded. Shown as one or the other, never as both, so a
+      // screen never presents an upload date as though it were the agreement.
+      contract_date: b.contract_document_date || b.contract_date,
+      contract_date_is_document: Boolean(b.contract_document_date),
+      // The current version and what it replaced, so the screen can say
+      // "v3, two earlier versions" instead of listing three equal contracts.
+      ...(() => {
+        const { current, history: earlier } = currentAndHistory(contractsByWedding.get(b.wedding_id) || []);
+        return {
+          current_contract: current
+            ? {
+              id: current.id,
+              filename: current.filename,
+              document_date: current.document_date,
+              version: current.version,
+            }
+            : null,
+          earlier_contract_count: earlier.length,
+        };
+      })(),
       // Worth knowing which links are the old baked-in kind still to be fixed.
       contract_is_legacy: Boolean(!b.contract_path && b.contract_url),
     })));

@@ -507,14 +507,34 @@ function VendorProfile({ id, onSaved }) {
                 <span className="text-sage-400 text-xs italic">booked as “{h.booked_as}”</span>
               )}
               {h.contract_url ? (
-                <a
-                  href={h.contract_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs text-sage-600 underline ml-auto"
-                >
-                  Contract{h.contract_date ? ` · ${fmtDate(h.contract_date)}` : ''} ↗
-                </a>
+                <span className="ml-auto flex items-center gap-2">
+                  <a
+                    href={h.contract_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-sage-600 underline"
+                  >
+                    {/* The date on the contract where one could be read. It used
+                        to show contract_date, which is the day somebody pressed
+                        upload, presented as though it were the agreement's own
+                        date. Say which one this is rather than leave it to be
+                        assumed. */}
+                    Contract{h.contract_date ? ` · ${fmtDate(h.contract_date)}` : ''} ↗
+                  </a>
+                  {h.contract_date && !h.contract_date_is_document && (
+                    <span className="text-xs text-sage-300" title="No date could be read off the document, so this is the day it was uploaded">
+                      uploaded
+                    </span>
+                  )}
+                  {h.earlier_contract_count > 0 && (
+                    <span
+                      className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5"
+                      title={`This is the most recent version. ${h.earlier_contract_count} earlier one${h.earlier_contract_count === 1 ? '' : 's'} on file.`}
+                    >
+                      v{h.current_contract?.version || 1}
+                    </span>
+                  )}
+                </span>
               ) : (
                 <span className="text-xs text-sage-300 ml-auto">no contract</span>
               )}
