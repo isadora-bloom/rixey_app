@@ -83,7 +83,7 @@ const EMPTY_FORM = {
   notes: '',
 };
 
-export default function RehearsalDinner({ weddingId, userId }) {
+export default function RehearsalDinner({ weddingId }) {
   const [form, setForm] = useState(EMPTY_FORM);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -97,7 +97,15 @@ export default function RehearsalDinner({ weddingId, userId }) {
         if (res.ok) {
           const data = await res.json();
           if (data) {
-            setForm(prev => ({ ...prev, ...data }));
+            // Only the fields the form owns. Merging the whole row put id,
+            // wedding_id and the timestamps into the form, and straight back
+            // into the next save.
+            const mine = Object.fromEntries(
+              Object.keys(EMPTY_FORM)
+                .filter(k => data[k] !== undefined && data[k] !== null)
+                .map(k => [k, data[k]])
+            );
+            setForm(prev => ({ ...prev, ...mine }));
           }
         }
       } catch (err) {
@@ -119,7 +127,10 @@ export default function RehearsalDinner({ weddingId, userId }) {
     try {
       await apiFetch(`${API_URL}/api/rehearsal-dinner`, {
         method: 'POST',
-        body: JSON.stringify({ weddingId, userId, ...form }),
+        // form only. It used to send userId, which is not a column on
+        // rehearsal_dinner and nothing on the server reads, and that alone
+        // was enough to fail every save.
+        body: JSON.stringify({ weddingId, ...form }),
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);

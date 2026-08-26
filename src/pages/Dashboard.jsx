@@ -1080,7 +1080,7 @@ export default function Dashboard() {
               )}
               {activeSection === 'rehearsal' && profile?.wedding_id && (
                 <div className="p-4 sm:p-6">
-                  <RehearsalDinner weddingId={profile.wedding_id} userId={user?.id} />
+                  <RehearsalDinner weddingId={profile.wedding_id} />
                 </div>
               )}
               {activeSection === 'bedrooms' && profile?.wedding_id && (

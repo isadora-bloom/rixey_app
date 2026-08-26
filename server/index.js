@@ -37,6 +37,7 @@ import {
 } from './lib/quo-calls.js';
 import { guestCareContext } from '../shared/guest-care.js';
 import { buildDirectory, matchMeeting } from '../shared/meeting-match.js';
+import { readMessageBody } from '../shared/gmail-body.js';
 import { buildPortalSnapshot } from './lib/sheet-diff/portal-snapshot.js';
 import cron from 'node-cron';
 import * as XLSX from 'xlsx';
@@ -3454,25 +3455,11 @@ async function runGmailSync(body, { bump }) {
             continue;
           }
 
-          // Get message body
-          let bodyText = '';
+          // Get message body. Walks the whole part tree, because attaching a
+          // file pushes the text two levels down and this used to look at one.
+          // See shared/gmail-body.js for what that cost.
           const payload = fullMessage.data.payload;
-
-          if (payload.body?.data) {
-            bodyText = Buffer.from(payload.body.data, 'base64').toString('utf-8');
-          } else if (payload.parts) {
-            const textPart = payload.parts.find(p => p.mimeType === 'text/plain');
-            if (textPart?.body?.data) {
-              bodyText = Buffer.from(textPart.body.data, 'base64').toString('utf-8');
-            } else {
-              // Try HTML part
-              const htmlPart = payload.parts.find(p => p.mimeType === 'text/html');
-              if (htmlPart?.body?.data) {
-                bodyText = Buffer.from(htmlPart.body.data, 'base64').toString('utf-8')
-                  .replace(/<[^>]*>/g, ' '); // Strip HTML tags
-              }
-            }
-          }
+          const bodyText = readMessageBody(payload);
 
           // Whose email is this, and can we actually tell?
           //
@@ -3696,6 +3683,115 @@ async function runGmailSync(body, { bump }) {
     };
   }
 }
+
+/**
+ * Go back for the bodies the old reader could not see.
+ *
+ * The marker in processed_emails is what stops an email being imported twice,
+ * and it did its job: every one of these is marked imported, so a normal sync
+ * will never look at them again. They are imported and empty, which is the
+ * worst of both. 124 of them, and because the cause was an attachment they are
+ * the contracts, the invoices and the banquet event orders.
+ *
+ * This re-reads the message from Gmail, stores the body the walker now finds,
+ * and extracts the planning notes that were never extracted. It does not
+ * re-attribute anything: whoever the email is filed against stays filed
+ * against, because that is a separate question and one the review queue owns.
+ *
+ * Dry run unless { apply: true }. A message that has aged out of the mailbox is
+ * reported, not skipped silently.
+ */
+async function runEmailBodyBackfill(body, { bump }) {
+  const apply = body?.apply === true;
+
+  const tokens = await loadAndRefreshGmailTokens();
+  if (!tokens) throw new Error('Gmail is not connected. Reconnect it in the admin panel.');
+
+  // Every row, paginated. A short read here means quietly repairing some of
+  // them and calling it done, which is the bug this file keeps having.
+  const rows = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabaseAdmin
+      .from('processed_emails')
+      .select('gmail_message_id, wedding_id, subject, body_text')
+      .range(from, from + 999);
+    if (error) throw new Error(`Could not read the imported emails: ${error.message}`);
+    rows.push(...data);
+    if (data.length < 1000) break;
+  }
+
+  // '[Automated sender — skipped]' is a decision somebody made, not a failure,
+  // so it is left alone.
+  const empty = rows.filter(r => !String(r.body_text || '').trim());
+  await bump({ total: empty.length });
+
+  const summary = { looked: empty.length, recovered: 0, stillEmpty: 0, gone: 0, notesExtracted: 0, failed: 0 };
+  const examples = [];
+
+  for (const [i, row] of empty.entries()) {
+    if (i % 10 === 0) await bump({ processed: i });
+    try {
+      const full = await gmail.users.messages.get({
+        userId: 'me', id: row.gmail_message_id, format: 'full',
+      });
+      const text = readMessageBody(full.data.payload);
+
+      if (!text.trim()) {
+        // Genuinely wordless now that the reader can see properly. A calendar
+        // acceptance, say. Nothing to recover.
+        summary.stillEmpty++;
+        continue;
+      }
+
+      if (apply) {
+        const { error: updErr } = await supabaseAdmin
+          .from('processed_emails')
+          .update({ body_text: text.substring(0, 10000) })
+          .eq('gmail_message_id', row.gmail_message_id);
+        // A failed write here means the notes below would be extracted from
+        // text nobody can read afterwards. Stop on this row.
+        if (updErr) throw new Error(`could not save the body: ${updErr.message}`);
+      }
+      summary.recovered++;
+      if (examples.length < 20) examples.push({ subject: row.subject || '(no subject)', chars: text.length });
+
+      // The notes were never extracted, because there was nothing to extract
+      // them from. Only for emails that belong to a couple; an unattributed one
+      // stays in the review queue where it is.
+      if (row.wedding_id) {
+        if (apply) {
+          const notes = await extractPlanningNotesAI(
+            text, row.wedding_id, `Email: ${row.subject || '(no subject)'}`, 'email',
+          );
+          if (notes.length) await savePlanningNotes(notes);
+          summary.notesExtracted += notes.length;
+        } else {
+          // Dry run says what it would read, not what it would find.
+          summary.notesExtracted += 0;
+        }
+      }
+    } catch (e) {
+      // Gmail says 404 for a message that has been deleted since import.
+      if (e?.code === 404 || e?.status === 404) {
+        summary.gone++;
+      } else {
+        summary.failed++;
+        console.error(`[gmail-backfill] ${row.gmail_message_id}: ${e.message}`);
+      }
+    }
+  }
+
+  return {
+    processed: summary.recovered,
+    detail: {
+      mode: apply ? 'applied' : 'dry run — nothing was written',
+      ...summary,
+      examples,
+    },
+  };
+}
+
+app.post('/api/gmail/backfill-bodies', requireAdmin, backgroundSync('gmail-backfill', runEmailBodyBackfill));
 
 // Disconnect Gmail
 app.post('/api/gmail/disconnect', async (req, res) => {
@@ -10767,15 +10863,46 @@ app.get('/api/rehearsal-dinner/:weddingId', async (req, res) => {
     res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+// The columns this table actually has. Everything else in the body is dropped.
+//
+// This used to spread the whole body into the upsert, so anything the form
+// sent that was not a column killed the save. The form sends userId, which is
+// not a column and never was, and PostgREST answered "Could not find the
+// 'userId' column of 'rehearsal_dinner' in the schema cache" — which reached
+// Grace as an error about a user id while she was saving a rehearsal dinner.
+// One row has ever been saved here, in May.
+const REHEARSAL_DINNER_FIELDS = [
+  'bar_type', 'location', 'location_notes', 'food_type', 'food_notes',
+  'high_chairs_needed', 'high_chairs_count', 'seating_type', 'linens_source',
+  'decor_source', 'using_disposables', 'renting_china', 'renting_flatware',
+  'table_layout', 'guest_count', 'notes',
+];
+
 app.post('/api/rehearsal-dinner', async (req, res) => {
   try {
-    const { weddingId, ...fields } = req.body;
+    const { weddingId } = req.body;
+    if (!weddingId) return res.status(400).json({ error: 'weddingId required' });
+
+    const fields = {};
+    for (const f of REHEARSAL_DINNER_FIELDS) {
+      if (req.body[f] !== undefined) fields[f] = req.body[f];
+    }
+
+    // Say what was ignored. A dropped key is usually a client sending
+    // something harmless, and occasionally a field that was meant to save.
+    const ignored = Object.keys(req.body)
+      .filter(k => k !== 'weddingId' && !REHEARSAL_DINNER_FIELDS.includes(k));
+    if (ignored.length) console.log('[rehearsal-dinner] ignored fields:', ignored.join(', '));
+
     const { data, error } = await supabaseAdmin.from('rehearsal_dinner')
       .upsert({ wedding_id: weddingId, ...fields, updated_at: new Date().toISOString() }, { onConflict: 'wedding_id' })
       .select().single();
     if (error) throw error;
     res.json(data);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    console.error('Save rehearsal dinner error:', e);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ─── Table Layout Canvas ───────────────────────────────────────────────────────

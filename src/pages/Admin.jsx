@@ -78,6 +78,9 @@ export default function Admin() {
   const [askingQuestion, setAskingQuestion] = useState(false)
   const [gmailConnected, setGmailConnected] = useState(false)
   const [gmailSyncing, setGmailSyncing] = useState(false)
+  // Set once a dry run has found bodies worth recovering, so the button can
+  // change from "count them" to "file them".
+  const [bodyBackfillPlanned, setBodyBackfillPlanned] = useState(false)
   const [gmailStatus, setGmailStatus] = useState('')
   const [quoConnected, setQuoConnected] = useState(false)
   const [quoSyncing, setQuoSyncing] = useState(false)
@@ -232,6 +235,50 @@ export default function Admin() {
     } catch (err) {
       setGmailStatus('Failed to sync emails')
       toastError(`Could not sync Gmail: ${err.message}`)
+    }
+    setGmailSyncing(false)
+  }
+
+  /**
+   * The emails that came in with no body, read again properly.
+   *
+   * Always counts before it writes. The first press reports what it found and
+   * changes nothing; the second does the work. That is deliberate — this
+   * rewrites the body of mail already on file and extracts planning notes onto
+   * couples, and neither should happen because a button was near the mouse.
+   */
+  const recoverEmailBodies = async (apply = false) => {
+    setGmailSyncing(true)
+    setGmailStatus(apply ? 'Reading them again and filing the notes…' : 'Counting what can be recovered…')
+    try {
+      const data = await apiFetch(`${API_URL}/api/gmail/backfill-bodies`, {
+        method: 'POST',
+        body: JSON.stringify({ apply }),
+      })
+      if (!data.jobId) {
+        setGmailStatus(data.message || data.error || 'It did not start')
+      } else {
+        const job = await followSyncJob(data.jobId, {
+          kind: 'gmail-backfill',
+          setStatus: setGmailStatus,
+          noun: 'emails',
+          describeDone: (j) => {
+            const d = j.detail || {}
+            const bits = [`${d.recovered || 0} of ${d.looked || 0} emails have a body after all`]
+            if (d.notesExtracted) bits.push(`${d.notesExtracted} planning notes filed`)
+            if (d.stillEmpty) bits.push(`${d.stillEmpty} genuinely have no words in them`)
+            if (d.gone) bits.push(`${d.gone} no longer in the mailbox`)
+            if (d.failed) bits.push(`${d.failed} failed, see the server log`)
+            return (apply ? 'Done. ' : 'Nothing written yet. ') + bits.join(', ')
+              + (apply ? '' : ' Press Recover again to file them.')
+          },
+        })
+        setBodyBackfillPlanned(!apply && (job?.detail?.recovered || 0) > 0)
+        if (apply) loadData()
+      }
+    } catch (err) {
+      setGmailStatus('Could not recover the missing bodies')
+      toastError(`Could not recover the missing bodies: ${err.message}`)
     }
     setGmailSyncing(false)
   }
@@ -412,14 +459,19 @@ export default function Admin() {
    * follows the job instead of holding a request open for minutes. The old way
    * died partway through on 14 August and reported itself as a CORS error,
    * having quietly skipped the two newest meetings.
+   *
+   * Zoom is the default because Zoom is what it was written for. Any other
+   * background job passes its own kind, its own status setter and its own word
+   * for what it is counting.
    */
-  const followSyncJob = async (jobId) => {
+  const followSyncJob = async (jobId, opts = {}) => {
+    const { kind = 'zoom', setStatus = setZoomStatus, noun = 'meetings', describeDone } = opts
     const started = Date.now()
     while (Date.now() - started < 20 * 60 * 1000) {
       await new Promise(r => setTimeout(r, 4000))
       let job
       try {
-        const data = await apiFetch(`${API_URL}/api/admin/sync-jobs?kind=zoom&limit=10`)
+        const data = await apiFetch(`${API_URL}/api/admin/sync-jobs?kind=${kind}&limit=10`)
         job = (data.jobs || []).find(j => j.id === jobId)
       } catch {
         continue                       // a blip in polling is not a failed sync
@@ -428,29 +480,34 @@ export default function Admin() {
 
       const seen = job.total ? ` of ${job.total}` : ''
       if (job.status === 'running' && !job.stalled) {
-        setZoomStatus(`Working: ${job.processed}${seen} meetings${job.last_item ? ` — ${job.last_item}` : ''}`)
+        setStatus(`Working: ${job.processed}${seen} ${noun}${job.last_item ? ` — ${job.last_item}` : ''}`)
         continue
       }
       if (job.stalled) {
-        setZoomStatus(`Stopped after ${job.processed}${seen} meetings. Press Sync again to carry on from there.`)
-        return
+        setStatus(`Stopped after ${job.processed}${seen} ${noun}. Press Sync again to carry on from there.`)
+        return job
       }
       if (job.status === 'failed') {
-        setZoomStatus(`Failed after ${job.processed}${seen}: ${job.last_error || 'unknown error'}`)
-        return
+        setStatus(`Failed after ${job.processed}${seen}: ${job.last_error || 'unknown error'}`)
+        return job
+      }
+      if (describeDone) {
+        setStatus(describeDone(job))
+        return job
       }
       // "0 of 10 meetings, 0 filed to couples" is what a run reports when
       // every recording is already on file — which is a healthy sync, and
       // reads exactly like a broken one. The server now says which kind of
       // nothing it was, so lead with that.
-      setZoomStatus(
-        `Done. ${job.detail?.message || `${job.processed}${seen} meetings, ${job.matched} filed to couples`}`
+      setStatus(
+        `Done. ${job.detail?.message || `${job.processed}${seen} ${noun}, ${job.matched} filed to couples`}`
         + (job.needs_review ? ` ${job.needs_review} need you to say whose they are.` : '')
         + (job.failed ? ` ${job.failed} skipped.` : '')
       )
-      return
+      return job
     }
-    setZoomStatus('Still running after 20 minutes — check the sync history.')
+    setStatus('Still running after 20 minutes — check the sync history.')
+    return null
   }
 
   const syncZoom = async () => {
@@ -1931,6 +1988,8 @@ export default function Admin() {
             gmailStatus={gmailStatus}
             connectGmail={connectGmail}
             syncEmails={syncEmails}
+            recoverEmailBodies={recoverEmailBodies}
+            bodyBackfillPlanned={bodyBackfillPlanned}
             disconnectGmail={disconnectGmail}
             quoConnected={quoConnected}
             quoSyncing={quoSyncing}

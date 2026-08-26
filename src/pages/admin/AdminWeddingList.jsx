@@ -47,6 +47,8 @@ export default function AdminWeddingList({
   gmailStatus,
   connectGmail,
   syncEmails,
+  recoverEmailBodies,
+  bodyBackfillPlanned,
   disconnectGmail,
   quoConnected,
   quoSyncing,
@@ -495,6 +497,18 @@ export default function AdminWeddingList({
                     Disconnect
                   </button>
                 </div>
+                {/* The emails that arrived with an attachment lost their whole
+                    body on the way in, so a contract imported as a subject line
+                    and nothing else. This goes back for them. Counts first,
+                    writes only when pressed again. */}
+                <button
+                  onClick={() => recoverEmailBodies(bodyBackfillPlanned)}
+                  disabled={gmailSyncing}
+                  className="w-full px-4 py-2 bg-cream-100 text-sage-700 rounded-lg text-sm hover:bg-cream-200 disabled:opacity-50"
+                  title="Re-read emails that came in with an empty body, usually because they had a document attached"
+                >
+                  {bodyBackfillPlanned ? 'Recover them now' : 'Recover missing bodies'}
+                </button>
                 {gmailStatus && (
                   <p className="text-sage-600 text-sm bg-cream-50 p-2 rounded">{gmailStatus}</p>
                 )}

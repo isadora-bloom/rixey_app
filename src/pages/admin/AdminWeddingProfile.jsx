@@ -1253,7 +1253,7 @@ export default function AdminWeddingProfile({
               )}
 
               {activeTab === 'rehearsal' && (
-                <RehearsalDinner weddingId={viewingWedding.id} userId={null} />
+                <RehearsalDinner weddingId={viewingWedding.id} />
               )}
 
               {activeTab === 'bedrooms' && (
