@@ -32,6 +32,7 @@ export default function VendorsAdmin() {
   const [panel, setPanel] = useState(null)   // 'questions' | 'unlinked' | null
   const [adding, setAdding] = useState(false)
   const [newVendor, setNewVendor] = useState({ name: '', categories: '', is_recommended: true })
+  const [sending, setSending] = useState(null)
 
   const load = useCallback(async () => {
     try {
@@ -99,6 +100,22 @@ export default function VendorsAdmin() {
       // generic failure. apiFetch surfaces the server's own words.
       toastError(err.message)
     }
+  }
+
+  const sendProfileLink = async (v) => {
+    const again = v.portal_invited_at
+      ? `They were last sent this on ${fmtDate(v.portal_invited_at)}. Send it again?`
+      : `Send ${v.name} their profile link at ${v.email}?`
+    if (!confirm(again)) return
+    setSending(v.id)
+    try {
+      await apiFetch(`${API_URL}/api/venue-vendors/${v.id}/invite`, { method: 'POST' })
+      success(`Sent to ${v.email}`)
+      await load()
+    } catch (err) {
+      toastError(err.message)
+    }
+    setSending(null)
   }
 
   const copyPortalLink = (v) => {
@@ -290,6 +307,28 @@ export default function VendorsAdmin() {
                   >
                     {v.is_recommended ? '★ Recommended' : 'Recommend'}
                   </button>
+                  {/* Only where there is somewhere to send it. A button that
+                      cannot work is worse than no button. */}
+                  {v.email && (
+                    <button
+                      onClick={() => sendProfileLink(v)}
+                      disabled={sending === v.id}
+                      title={v.portal_invited_at
+                        ? `Last sent ${fmtDate(v.portal_invited_at)}${v.portal_invite_count > 1 ? `, ${v.portal_invite_count} times in all` : ''}`
+                        : `Send their profile link to ${v.email}`}
+                      className={`text-xs px-3 py-1.5 rounded-lg border transition disabled:opacity-50 ${
+                        v.portal_invited_at
+                          ? 'border-cream-300 text-sage-400 hover:border-sage-300'
+                          : 'border-sage-300 text-sage-700 hover:bg-sage-50'
+                      }`}
+                    >
+                      {sending === v.id
+                        ? 'Sending…'
+                        : v.portal_invited_at
+                          ? `Sent ${fmtDate(v.portal_invited_at)}`
+                          : 'Send profile link'}
+                    </button>
+                  )}
                   <button
                     onClick={() => copyPortalLink(v)}
                     className="text-xs px-3 py-1.5 rounded-lg border border-cream-300 text-sage-500 hover:border-sage-300"

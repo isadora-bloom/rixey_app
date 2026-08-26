@@ -18,7 +18,7 @@
     "audit:errors": "node scripts/audit-unchecked-errors.mjs --max 69",
     "audit:nav": "node scripts/audit-nav-parity.mjs",
     "audit:unsurfaced": "node scripts/audit-unsurfaced.mjs",
-    "audit:writes": "node scripts/audit-unfiltered-writes.mjs --max 6",
+    "audit:writes": "node scripts/audit-unfiltered-writes.mjs --max 0",
     "columns": "node scripts/generate-column-map.mjs",
     "test:unit": "node --test \"tests/unit/*.test.mjs\""
   },

@@ -21,6 +21,8 @@ import { buildDiff, applyChoices } from './lib/sheet-diff/index.js';
 import { guestFullName, plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, headcount, parsePlusOneCell, usesPersonModel, personDisplayName, toParties, allPeople } from '../shared/guest-names.js';
 import { sendsConfirmation } from '../shared/rsvp-fields.js';
 import { isSameVendor, vendorKey } from '../shared/vendor-names.js';
+import { vendorInviteEmail } from '../shared/vendor-invite-email.js';
+import { onlyColumns } from './middleware/table-columns.js';
 import { rsvpConfirmationHtml } from './lib/rsvp-confirmation.js';
 import { WALKTHROUGH_TARGETS, TARGET_KEYS, buildNote, organisePrompt, parseItems } from './lib/walkthrough.js';
 import { extractDocument } from './lib/doc-sync/extract.js';
@@ -220,7 +222,9 @@ const PUBLIC_ROUTES = [
   '/api/w/',                  // public wedding websites
   '/api/rsvp/',               // public RSVP
   '/api/vendor-portal/',      // token-based vendor portal
-  '/api/vendor-directory',    // public vendor directory
+  // Deliberately NOT public any more. It carries Rixey's whole curated list
+  // and her note on each vendor, which is worth something to a competitor and
+  // nothing to a stranger. Only the dashboard reads it, always signed in.
   '/api/wedding-website/check-slug/', // slug availability check
 ];
 
@@ -7811,9 +7815,8 @@ app.post('/api/recommended-vendors', async (req, res) => {
 app.put('/api/recommended-vendors/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const updates = { ...req.body };
-
-    // Remove id from updates if present
+    const { fields: updates, ignored } = onlyColumns('vendors', req.body);
+    if (ignored.length) console.log('[recommended-vendors] ignored:', ignored.join(', '));
     delete updates.id;
 
     const { data, error } = await supabaseAdmin
@@ -8188,6 +8191,10 @@ app.get('/api/venue-vendors', async (req, res) => {
           pricing_info: v.pricing_info,
           is_recommended: v.is_recommended === true,
           is_published: v.is_published,
+          email: v.email,
+          phone: v.phone,
+          portal_invited_at: v.portal_invited_at,
+          portal_invite_count: v.portal_invite_count || 0,
           has_profile: Boolean(v.bio || (v.photos || []).length),
           last_vendor_update: v.last_vendor_update,
           edit_token: v.edit_token,
@@ -8423,6 +8430,60 @@ app.post('/api/venue-vendors/:id/contact-evidence/:evidenceId', async (req, res)
   } catch (err) {
     console.error('Contact evidence error:', err);
     res.status(500).json({ error: 'Failed to update that' });
+  }
+});
+
+// POST send this vendor their portal link, one at a time from the screen.
+//
+// The batch script exists for the first run; this is for the vendor you add on
+// a Tuesday. Same letter either way, from shared/vendor-invite-email.js.
+app.post('/api/venue-vendors/:id/invite', async (req, res) => {
+  try {
+    const { data: vendor, error } = await supabaseAdmin
+      .from('vendors').select('*').eq('id', req.params.id).single();
+    if (error || !vendor) return res.status(404).json({ error: 'Vendor not found' });
+    if (!vendor.email) return res.status(400).json({ error: 'No email address on file for them' });
+
+    const adminDomain = String(process.env.ADMIN_EMAIL || 'rixeymanor.com').split('@').pop().toLowerCase();
+    if (String(vendor.email).toLowerCase().endsWith(`@${adminDomain}`)) {
+      return res.status(400).json({ error: 'That is a Rixey address, so there is nobody to send it to' });
+    }
+
+    const tokens = await loadAndRefreshGmailTokens();
+    if (!tokens) return res.status(503).json({ error: 'Gmail is not connected. Reconnect it in the admin panel.' });
+
+    const { count, error: cErr } = await supabaseAdmin
+      .from('vendor_checklist')
+      .select('wedding_id', { count: 'exact', head: true })
+      .eq('vendor_id', vendor.id);
+    if (cErr) throw cErr;
+
+    const { subject, html } = vendorInviteEmail({
+      vendors: [vendor],
+      weddings: count || 0,
+      portalUrl: process.env.FRONTEND_URL || 'https://rixeymanor.com',
+    });
+
+    const sent = await sendViaGmail(vendor.email, subject, html);
+    if (!sent) return res.status(502).json({ error: 'Gmail would not send it' });
+
+    // Marked only once it has gone. The other way round is how a failed send
+    // becomes a vendor nobody ever asks again.
+    const { data: updated, error: uErr } = await supabaseAdmin
+      .from('vendors')
+      .update({
+        portal_invited_at: new Date().toISOString(),
+        portal_invite_count: (vendor.portal_invite_count || 0) + 1,
+      })
+      .eq('id', vendor.id)
+      .select('portal_invited_at, portal_invite_count')
+      .single();
+    if (uErr) throw uErr;
+
+    res.json({ sent: true, to: vendor.email, ...updated });
+  } catch (err) {
+    console.error('Vendor invite error:', err);
+    res.status(500).json({ error: err.message || 'Failed to send' });
   }
 });
 
@@ -11065,7 +11126,10 @@ app.post('/api/wedding-details', async (req, res) => {
     // Strip session metadata the autosave hook bundles in. Anything left in
     // `fields` must map to a real column or the upsert dies on the first
     // unknown name and nothing saves.
-    const { weddingId, userId, id, created_at, updated_at, ...fields } = req.body;
+    const { weddingId } = req.body;
+    const { fields, ignored } = onlyColumns('wedding_details', req.body);
+    if (ignored.length) console.log('[wedding-details] ignored:', ignored.join(', '));
+    for (const k of ['id', 'created_at', 'updated_at', 'wedding_id']) delete fields[k];
     const { data, error } = await supabaseAdmin.from('wedding_details')
       .upsert({ wedding_id: weddingId, ...fields, updated_at: new Date().toISOString() }, { onConflict: 'wedding_id' })
       .select().single();
@@ -11907,8 +11971,10 @@ app.get('/api/bar-shopping/:weddingId', async (req, res) => {
 
 app.post('/api/bar-shopping/:weddingId', async (req, res) => {
   try {
+    const { fields, ignored } = onlyColumns('bar_shopping_list', req.body);
+    if (ignored.length) console.log('[bar-shopping] ignored:', ignored.join(', '));
     const { data, error } = await supabaseAdmin.from('bar_shopping_list')
-      .insert({ ...req.body, wedding_id: req.params.weddingId })
+      .insert({ ...fields, wedding_id: req.params.weddingId })
       .select().single();
     if (error) throw error;
     res.json(data);
@@ -12267,9 +12333,11 @@ app.get('/api/wedding-party/:weddingId', async (req, res) => {
 
 app.post('/api/wedding-party/:weddingId', async (req, res) => {
   try {
+    const { fields, ignored } = onlyColumns('wedding_party', req.body);
+    if (ignored.length) console.log('[wedding-party] ignored:', ignored.join(', '));
     const { data, error } = await supabaseAdmin
       .from('wedding_party')
-      .insert({ ...req.body, wedding_id: req.params.weddingId })
+      .insert({ ...fields, wedding_id: req.params.weddingId })
       .select()
       .single();
     if (error) throw error;
@@ -12432,7 +12500,9 @@ app.put('/api/venue-settings', async (req, res) => {
       .maybeSingle();
     if (existingErr) throw existingErr;
 
-    const payload = { ...req.body, updated_at: new Date().toISOString() };
+    const { fields, ignored } = onlyColumns('venue_settings', req.body);
+    if (ignored.length) console.log('[venue-settings] ignored:', ignored.join(', '));
+    const payload = { ...fields, updated_at: new Date().toISOString() };
     delete payload.id;
     delete payload.created_at;
 

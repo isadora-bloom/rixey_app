@@ -31,6 +31,7 @@
  */
 import 'dotenv/config';
 import { createClient } from '@supabase/supabase-js';
+import { vendorInviteEmail } from '../shared/vendor-invite-email.js';
 
 const db = createClient(
   process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL,
@@ -120,85 +121,15 @@ if (ONLY) {
 if (LIMIT) groups = groups.slice(0, LIMIT);
 
 // ── what it says ─────────────────────────────────────────────────────────────
+//
+// The letter itself lives in shared/vendor-invite-email.js, because the button
+// on the Vendors screen sends the same one.
 
-const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-function message(group) {
-  const many = group.vendors.length > 1;
-  const first = group.vendors[0];
-  const weddings = Math.max(...group.vendors.map(v => weddingCount.get(v.id)?.size || 0));
-
-  const worked = weddings > 1
-    ? `You have worked ${weddings} weddings here with us`
-    : weddings === 1
-      ? 'You have worked a wedding here with us'
-      : 'You are on the list of people we recommend to our couples';
-
-  const links = group.vendors.map(v => `
-    <p style="margin: 0 0 10px;">
-      ${many ? `<strong style="font-size:14px;">${esc(v.name)}</strong><br>` : ''}
-      <a href="${PORTAL}/vendor/${v.edit_token}"
-         style="display:inline-block; background:#5C6B4F; color:#ffffff; padding:11px 22px; border-radius:6px; text-decoration:none; font-size:14px;">
-        Fill in your profile →
-      </a>
-    </p>`).join('');
-
-  return {
-    subject: many
-      ? 'Your profiles in the Rixey Manor vendor directory'
-      : `Your profile in the Rixey Manor vendor directory`,
-    html: `
-<div style="font-family: Georgia, serif; max-width: 580px; margin: 0 auto; padding: 30px 20px; color: #3d3d3d; background: #fefbf7;">
-  <div style="padding-bottom: 16px; margin-bottom: 24px; border-bottom: 2px solid #7C9070;">
-    <span style="font-size: 11px; letter-spacing: 3px; text-transform: uppercase; color: #7C9070;">Rixey Manor</span>
-  </div>
-
-  <p style="font-size: 16px; line-height: 1.7; margin: 0 0 18px;">
-    Hello${first.contact && !String(first.contact).includes('@') ? ` ${esc(String(first.contact).split(/[,(]/)[0].trim())}` : ''},
-  </p>
-
-  <p style="font-size: 16px; line-height: 1.7; margin: 0 0 18px;">
-    ${worked}, and every couple who books Rixey can see that recommendation in
-    their planning portal. At the moment all it says is your name and a line
-    from me. You can say more.
-  </p>
-
-  <p style="font-size: 16px; line-height: 1.7; margin: 0 0 18px;">
-    ${many
-      ? `We have you listed ${group.vendors.length} times, so there ${group.vendors.length === 2 ? 'are two links' : 'are links'} below, one for each. No password, nothing to sign up for.`
-      : 'The link below is yours. No password, nothing to sign up for.'}
-    ${many ? 'They open a page' : 'It opens a page'} where you can add a few photos, describe what you do
-    in your own words, put in your contact details and say what you are
-    booking. Whatever you save goes straight into the directory our couples
-    browse.
-  </p>
-
-  ${links}
-
-  <p style="font-size: 16px; line-height: 1.7; margin: 18px 0;">
-    One thing worth knowing: there is a box for an offer for Rixey couples, and
-    couples can filter the directory down to just the vendors offering one. If
-    you put something there, that is where you turn up.
-  </p>
-
-  <p style="font-size: 16px; line-height: 1.7; margin: 0 0 18px;">
-    Keep the link. It stays live, so you can come back and change anything
-    whenever you like.
-  </p>
-
-  <p style="font-size: 16px; line-height: 1.7; margin: 0 0 6px;">Thank you,</p>
-  <p style="font-size: 16px; line-height: 1.7; margin: 0 0 24px;">Isadora<br>
-    <span style="color:#7a7a7a; font-size:14px;">Rixey Manor</span></p>
-
-  <div style="margin-top: 32px; padding-top: 16px; border-top: 1px solid #e8e0d5;">
-    <p style="font-size: 12px; color: #999; margin: 0;">
-      Rixey Manor · Rapidan, VA · rixeymanor.com<br>
-      If you would rather not be listed, reply to this email and we will take you off.
-    </p>
-  </div>
-</div>`,
-  };
-}
+const message = group => vendorInviteEmail({
+  vendors: group.vendors,
+  weddings: Math.max(...group.vendors.map(v => weddingCount.get(v.id)?.size || 0)),
+  portalUrl: PORTAL,
+});
 
 // ── report ───────────────────────────────────────────────────────────────────
 

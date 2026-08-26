@@ -86,7 +86,7 @@ export class ApiError extends Error {
  * will, so these must not be blocked for want of a token.
  */
 const PUBLIC_PATHS = [
-  '/api/w/', '/api/rsvp/', '/api/vendor-portal/', '/api/vendor-directory',
+  '/api/w/', '/api/rsvp/', '/api/vendor-portal/',
   '/api/wedding-website/check-slug/', '/api/health',
 ]
 

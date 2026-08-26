@@ -48,7 +48,6 @@ const PUBLIC_PREFIXES = [
   '/api/w/',                          // public wedding websites
   '/api/rsvp/',                       // public RSVP (password-gated separately)
   '/api/vendor-portal/',              // token-based vendor portal
-  '/api/vendor-directory',            // public vendor directory
   '/api/wedding-website/check-slug/', // slug availability during setup
   '/api/health',
 ];
