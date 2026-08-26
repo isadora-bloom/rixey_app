@@ -109,7 +109,14 @@ groups.sort((a, b) =>
   Math.max(...b.vendors.map(v => weddingCount.get(v.id)?.size || 0))
   - Math.max(...a.vendors.map(v => weddingCount.get(v.id)?.size || 0)));
 
-if (ONLY) groups = groups.slice(0, 1).map(g => ({ ...g, email: ONLY, test: true }));
+if (ONLY) {
+  // If the address is one of the recipients, send them their real message.
+  // Otherwise redirect the first one, so a test to your own inbox shows a
+  // genuine letter rather than a made-up one. Marked `test` either way so
+  // nobody gets marked as invited by a rehearsal.
+  const mine = groups.find(g => g.email === ONLY.toLowerCase());
+  groups = mine ? [{ ...mine, test: true }] : groups.slice(0, 1).map(g => ({ ...g, email: ONLY, test: true }));
+}
 if (LIMIT) groups = groups.slice(0, LIMIT);
 
 // ── what it says ─────────────────────────────────────────────────────────────
@@ -157,10 +164,13 @@ function message(group) {
   </p>
 
   <p style="font-size: 16px; line-height: 1.7; margin: 0 0 18px;">
-    The link below is yours. No password, nothing to sign up for. It opens a
-    page where you can add a few photos, describe what you do in your own
-    words, put in your contact details and say what you are booking. Whatever
-    you save goes straight into the directory our couples browse.
+    ${many
+      ? `We have you listed ${group.vendors.length} times, so there ${group.vendors.length === 2 ? 'are two links' : 'are links'} below, one for each. No password, nothing to sign up for.`
+      : 'The link below is yours. No password, nothing to sign up for.'}
+    ${many ? 'They open a page' : 'It opens a page'} where you can add a few photos, describe what you do
+    in your own words, put in your contact details and say what you are
+    booking. Whatever you save goes straight into the directory our couples
+    browse.
   </p>
 
   ${links}
