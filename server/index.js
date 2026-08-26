@@ -366,6 +366,10 @@ app.use('/api/recommended-vendors', requireAdmin);
 // see. They shipped on 26 August mounted outside this list, which left them
 // readable by anyone at all, since the /api middleware above attaches a user
 // when there is one and never blocks when there is not.
+// Signed in, but not admin: this is the couples' directory. Removing it from
+// PUBLIC_ROUTES was not enough on its own, because the /api middleware above
+// attaches a user when there is one and lets everyone through either way.
+app.use('/api/vendor-directory', requireAuth);
 app.use('/api/venue-vendors', requireAdmin);
 app.use('/api/venue-vendors-unlinked', requireAdmin);
 app.use('/api/vendor-merge-review', requireAdmin);
