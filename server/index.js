@@ -1254,6 +1254,24 @@ async function extractPlanningNotesAI(text, weddingId, source, sourceType = 'mes
   const model = isTranscript ? MODEL_SONNET : MODEL_HAIKU;
   const chunks = isTranscript ? chunkForExtraction(cleanText) : [cleanText.substring(0, 2000)];
 
+  // The tail below used to be shared, and it undid the short-message rules
+  // above it: "emotional signals are the highest priority, never skip these",
+  // with an example of reading a bride's state of mind off a sentence. Told
+  // both to record only what was said and to never skip a feeling, the model
+  // did the second. So a text asking about ADA access came back as "suggests
+  // they or someone in their immediate circle has mobility or access needs",
+  // and an apology for paying by transfer as "may be carrying some guilt about
+  // spending". Neither person said anything of the kind, and both are now in
+  // their file. Two instructions pulling opposite ways is not a prompt.
+  const TRANSCRIPT_TAIL = `Write notes the way a caring, experienced coordinator would jot them — specific and human (e.g. "Bride is stressed about her mom and future MIL being in the same room — both have strong personalities", not just "family tension").
+Capture the specifics that make a note usable later: names, numbers, dates, quantities, who said it, and what was actually agreed versus merely floated.
+Allergies and emotional signals are the highest priority — never skip these.`;
+
+  const SHORT_MESSAGE_TAIL = `Record what was said, in fewer words than they used. Names, numbers, dates, quantities, and what was actually asked or agreed.
+Do not describe how anyone feels, or what a message suggests about their health, their finances, their family or their state of mind, unless they said it themselves. "Jake's dad uses a wheelchair" is a fact they told you. "This suggests someone close to them has access needs" is a guess about strangers, and it goes in their file as though somebody checked it.
+Record an allergy, a disability or a worry when it is stated. Do not infer one.
+Do not add what somebody should do next. The person reading this can see that for themselves.`;
+
   const instruction = isTranscript
     ? `Read this ${sourceType} as a thoughtful wedding coordinator would. Extract every logistics decision AND every emotional signal — stress, grief, family tension, financial worry, what this day means to them. This may be the only written record of the conversation, so be thorough.`
     : `Read this text message as a wedding coordinator and record only what it actually tells you.
@@ -1285,9 +1303,7 @@ At most two notes, and one is usually too many. Keep each under about two lines.
 ${instruction}${chunks.length > 1 ? `\n\nThis is part ${i + 1} of ${chunks.length} of a longer conversation. Extract only what is in this part; the other parts are handled separately. The start and end may cut mid-sentence — ignore fragments you cannot understand.` : ''}
 
 Return a JSON array. Each item: {"category": "<category>", "content": "<concise coordinator note>"}
-Write notes the way a caring, experienced coordinator would jot them — specific and human (e.g. "Bride is stressed about her mom and future MIL being in the same room — both have strong personalities", not just "family tension").
-Capture the specifics that make a note usable later: names, numbers, dates, quantities, who said it, and what was actually agreed versus merely floated.
-Allergies and emotional signals are the highest priority — never skip these.
+${isShortMessage ? SHORT_MESSAGE_TAIL : TRANSCRIPT_TAIL}
 If nothing noteworthy was said, return [].
 Return ONLY the JSON array.
 
