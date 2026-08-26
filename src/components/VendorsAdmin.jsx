@@ -323,14 +323,12 @@ function VendorProfile({ id, onSaved }) {
   const [form, setForm] = useState(null)
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => {
-    let live = true
-    ;(async () => {
-      try {
-        const res = await fetch(`${API_URL}/api/venue-vendors/${id}`, { headers: await authHeaders() })
-        if (!res.ok) throw new Error(`Returned ${res.status}`)
-        const d = await res.json()
-        if (!live) return
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/venue-vendors/${id}`, { headers: await authHeaders() })
+      if (!res.ok) throw new Error(`Returned ${res.status}`)
+      const d = await res.json()
+      {
         setDetail(d)
         setForm({
           name: d.vendor.name || '',
@@ -345,12 +343,13 @@ function VendorProfile({ id, onSaved }) {
           internal_notes: d.vendor.internal_notes || '',
           aliases: (d.vendor.aliases || []).join(', '),
         })
-      } catch (e) {
-        if (live) setErr(e.message || 'Could not load this vendor')
       }
-    })()
-    return () => { live = false }
+    } catch (e) {
+      setErr(e.message || 'Could not load this vendor')
+    }
   }, [id])
+
+  useEffect(() => { load() }, [load])
 
   const save = async () => {
     setSaving(true)
@@ -446,6 +445,14 @@ function VendorProfile({ id, onSaved }) {
         {field('Pricing', 'pricing_info')}
       </div>
 
+      <ContactEvidence
+        vendorId={id}
+        evidence={detail.contactEvidence || []}
+        form={form}
+        onUse={(field, value) => setForm(f => ({ ...f, [field]: value }))}
+        onChanged={() => { load(); onSaved?.() }}
+      />
+
       <label className="block">
         <span className="text-xs text-sage-500">Also booked as</span>
         <input
@@ -519,6 +526,102 @@ function VendorProfile({ id, onSaved }) {
       {detail.mergedRows?.length > 0 && (
         <p className="text-xs text-sage-400">
           Merged in: {detail.mergedRows.map(m => m.name).join(', ')}. Their old portal links still work and open this record.
+        </p>
+      )}
+    </div>
+  )
+}
+
+// ── where a phone number came from ───────────────────────────────────────────
+
+const EVIDENCE_LABEL = { email: 'Email', phone: 'Phone', website: 'Website', instagram: 'Instagram', person: 'Contact person' }
+const EVIDENCE_FIELD = { email: 'email', phone: 'phone', website: 'website', instagram: 'instagram', person: 'contact' }
+const SOURCE_LABEL = {
+  booking: 'from a booking',
+  document: 'from a planning document',
+  contract_note: 'from a contract',
+}
+
+function ContactEvidence({ vendorId, evidence, form, onUse, onChanged }) {
+  const { error: toastError } = useToast()
+  const [busy, setBusy] = useState(null)
+
+  const live = evidence.filter(e => !e.dismissed)
+  if (!live.length) return null
+
+  const act = async (e, action) => {
+    setBusy(e.id)
+    try {
+      await apiFetch(`${API_URL}/api/venue-vendors/${vendorId}/contact-evidence/${e.id}`, {
+        method: 'POST',
+        body: JSON.stringify({ action }),
+      })
+      if (action === 'use') onUse?.(EVIDENCE_FIELD[e.kind], e.value)
+      onChanged?.()
+    } catch (err) {
+      toastError(`Could not do that: ${err.message}`)
+    }
+    setBusy(null)
+  }
+
+  const kinds = [...new Set(live.map(e => e.kind))]
+
+  return (
+    <div className="bg-white border border-cream-200 rounded-xl p-3">
+      <p className="text-xs font-semibold uppercase tracking-widest text-sage-400 mb-2">
+        Everything we hold for them
+      </p>
+      <div className="space-y-2">
+        {kinds.map(kind => {
+          const forKind = live.filter(e => e.kind === kind)
+          const inUse = form?.[EVIDENCE_FIELD[kind]]
+          return (
+            <div key={kind}>
+              <p className="text-xs text-sage-400">{EVIDENCE_LABEL[kind] || kind}</p>
+              <div className="flex flex-wrap gap-1.5 mt-0.5">
+                {forKind.map(e => {
+                  const current = inUse && String(inUse).trim() === e.value
+                  return (
+                    <span
+                      key={e.id}
+                      className={`inline-flex items-center gap-2 rounded-lg px-2 py-1 text-xs border ${
+                        current ? 'bg-sage-50 border-sage-300 text-sage-800' : 'bg-cream-50 border-cream-200 text-sage-600'
+                      }`}
+                    >
+                      <span>{e.value}</span>
+                      <span className="text-sage-400">
+                        {SOURCE_LABEL[e.source] || e.source}{e.seen_count > 1 ? ` ·  ${e.seen_count} times` : ''}
+                      </span>
+                      {current ? (
+                        <span className="text-sage-500">in use</span>
+                      ) : (
+                        <button
+                          disabled={busy === e.id}
+                          onClick={() => act(e, 'use')}
+                          className="text-sage-600 underline disabled:opacity-50"
+                        >
+                          use
+                        </button>
+                      )}
+                      <button
+                        disabled={busy === e.id}
+                        onClick={() => act(e, 'dismiss')}
+                        title="Wrong, and do not offer it again"
+                        className="text-sage-300 hover:text-red-500 disabled:opacity-50"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      {live.some(e => e.seen_count > 1) && (
+        <p className="text-xs text-sage-400 mt-2">
+          Counted, not repeated. Four weddings listing the same number is the best evidence there is that it is the right one.
         </p>
       )}
     </div>

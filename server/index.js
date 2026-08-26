@@ -7437,6 +7437,9 @@ app.delete('/api/recommended-vendors/:id', async (req, res) => {
 // and migrations do not land at the same instant, and a couple opening the
 // directory in the gap should see vendors, not an error.
 const columnMissing = err => err?.code === '42703' || /column .* does not exist/i.test(err?.message || '');
+// A whole table this code wants that a migration has not created yet.
+const tableMissing = err => err?.code === '42P01' || /relation .* does not exist/i.test(err?.message || '')
+  || /could not find the table/i.test(err?.message || '');
 
 app.get('/api/vendor-directory', async (req, res) => {
   try {
@@ -7833,6 +7836,17 @@ app.get('/api/venue-vendors/:id', async (req, res) => {
       .from('vendors').select('id, name, category, edit_token').eq('merged_into', vendor.id);
     if (mErr) throw mErr;
 
+    // Every contact detail ever seen for them, and where. The record holds the
+    // one in use; this is the rest, which is what you want when it bounces.
+    let contactEvidence = [];
+    const { data: ev, error: eErr } = await supabaseAdmin
+      .from('vendor_contact_evidence')
+      .select('*')
+      .eq('vendor_id', vendor.id)
+      .order('seen_count', { ascending: false });
+    if (eErr && !tableMissing(eErr)) throw eErr;
+    if (!eErr) contactEvidence = ev;
+
     res.json({
       vendor: {
         ...vendor,
@@ -7840,6 +7854,7 @@ app.get('/api/venue-vendors/:id', async (req, res) => {
       },
       history,
       mergedRows: mergedRows || [],
+      contactEvidence,
     });
   } catch (err) {
     console.error('Venue vendor error:', err);
@@ -7907,6 +7922,38 @@ app.put('/api/venue-vendors/:id', async (req, res) => {
   } catch (err) {
     console.error('Update venue vendor error:', err);
     res.status(500).json({ error: 'Failed to save vendor' });
+  }
+});
+
+// POST use this detail, or say it is wrong
+const EVIDENCE_FIELD = { email: 'email', phone: 'phone', website: 'website', instagram: 'instagram', person: 'contact' };
+
+app.post('/api/venue-vendors/:id/contact-evidence/:evidenceId', async (req, res) => {
+  try {
+    const { data: row, error } = await supabaseAdmin
+      .from('vendor_contact_evidence').select('*').eq('id', req.params.evidenceId).single();
+    if (error || !row) return res.status(404).json({ error: 'Not found' });
+    if (row.vendor_id !== req.params.id) return res.status(400).json({ error: 'That detail belongs to another vendor' });
+
+    if (req.body.action === 'dismiss') {
+      // Kept rather than deleted, so the next import does not offer it again.
+      const { error: dErr } = await supabaseAdmin
+        .from('vendor_contact_evidence').update({ dismissed: true }).eq('id', row.id);
+      if (dErr) throw dErr;
+      return res.json({ ok: true });
+    }
+
+    if (req.body.action !== 'use') return res.status(400).json({ error: 'action must be use or dismiss' });
+
+    const field = EVIDENCE_FIELD[row.kind];
+    if (!field) return res.status(400).json({ error: `Nothing on the record holds a ${row.kind}` });
+    const { error: uErr } = await supabaseAdmin
+      .from('vendors').update({ [field]: row.value }).eq('id', row.vendor_id);
+    if (uErr) throw uErr;
+    res.json({ ok: true, field, value: row.value });
+  } catch (err) {
+    console.error('Contact evidence error:', err);
+    res.status(500).json({ error: 'Failed to update that' });
   }
 });
 
