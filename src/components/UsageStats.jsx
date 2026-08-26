@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
 import { authHeaders } from '../utils/api'
+import { weddingName } from '../../shared/wedding-name.js'
 
 
 export default function UsageStats({ weddingId, weddings = [] }) {
@@ -53,7 +54,7 @@ export default function UsageStats({ weddingId, weddings = [] }) {
   // Get wedding name by ID
   const getWeddingName = (id) => {
     const wedding = weddings.find(w => w.id === id)
-    return wedding?.couple_names || 'Unknown'
+    return weddingName(wedding)
   }
 
   if (loading) {

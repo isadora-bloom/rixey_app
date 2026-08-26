@@ -23,6 +23,7 @@ import CrashReports from '../components/CrashReports'
 import AdminWeddingList from './admin/AdminWeddingList'
 import AdminWeddingProfile from './admin/AdminWeddingProfile'
 import { detectEscalation } from './admin/adminUtils'
+import { weddingName } from '../../shared/wedding-name.js'
 
 export default function Admin() {
   const navigate = useNavigate()
@@ -1429,7 +1430,7 @@ export default function Admin() {
                 <div className="flex-1">
                   <p className="text-sage-800 font-medium">{q.question}</p>
                   <p className="text-sage-400 text-sm mt-1">
-                    {wedding?.project_name || wedding?.couple_names || 'Unknown'} · {new Date(q.created_at).toLocaleDateString()}
+                    {weddingName(wedding)} · {new Date(q.created_at).toLocaleDateString()}
                     {q.confidence_level && (
                       <span className="ml-2 text-amber-600">{q.confidence_level}% confident</span>
                     )}
@@ -1448,7 +1449,12 @@ export default function Admin() {
 
               {q.sage_response && (
                 <div className="bg-white rounded-lg p-3 mb-3 text-sm text-sage-600 border border-cream-200">
-                  <span className="font-medium">Sage said:</span> {q.sage_response.substring(0, 200)}...
+                  {/* The whole reply. It was cut at 200 characters with an
+                      ellipsis bolted on whether or not anything had been cut,
+                      so the one thing this panel exists to show was the one
+                      thing you could not read. */}
+                  <p className="font-medium mb-1">Sage said:</p>
+                  <p className="whitespace-pre-line max-h-64 overflow-y-auto">{q.sage_response}</p>
                 </div>
               )}
 

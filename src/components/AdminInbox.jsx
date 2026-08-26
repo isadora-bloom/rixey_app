@@ -3,6 +3,7 @@ import { API_URL } from '../config/api'
 import { apiFetch, authHeaders } from '../utils/api'
 import { useToast } from './ui/Toast'
 import { formatDateOnly } from '../utils/dates'
+import { weddingName } from '../../shared/wedding-name.js'
 
 
 export default function AdminInbox({ weddings = [], onUnreadChange }) {
@@ -120,7 +121,10 @@ export default function AdminInbox({ weddings = [], onUnreadChange }) {
 
   const getWeddingName = (weddingId) => {
     const wedding = weddings.find(w => w.id === weddingId)
-    return wedding?.couple_names || 'Unknown Couple'
+    // Was couple_names alone, which is empty on two live weddings, so Anisa &
+    // Austin and Megan and Robert read as "Unknown Couple" through twelve
+    // messages while their names sat in project_name.
+    return weddingName(wedding, 'Unknown couple')
   }
 
   const getWedding = (weddingId) => {

@@ -1,5 +1,6 @@
 import { getLastActivity } from './adminUtils'
 import { formatDateOnly } from '../../utils/dates'
+import { weddingName } from '../../../shared/wedding-name.js'
 
 export default function AdminWeddingList({
   weddings,
@@ -119,7 +120,7 @@ export default function AdminWeddingList({
 
               {/* Activity updates */}
               {deduped.map(a => {
-                const coupleName = a.weddings?.couple_names || weddings.find(w => w.id === a.wedding_id)?.couple_names || 'Unknown'
+                const coupleName = weddingName(a.weddings || weddings.find(w => w.id === a.wedding_id))
                 const label = ACTIVITY_LABELS[a.activity_type] || a.activity_type.replace(/_/g, ' ')
                 const emoji = {
                   timeline_updated: '📅', tables_updated: '🪑', floor_plan_needed: '📐',
