@@ -523,10 +523,18 @@ async function suggestWedding(supabaseAdmin, callerName, weddings) {
   const last = parts.length > 1 ? parts[parts.length - 1].toLowerCase() : '';
 
   if (last.length >= 3) {
-    const { data: guests } = await supabaseAdmin
+    const { data: guests, error: guestErr } = await supabaseAdmin
       .from('wedding_guests')
       .select('wedding_id, first_name, last_name')
       .ilike('last_name', last);
+
+    // A lookup that failed is not a surname nobody has. Swallowing it would
+    // hand back "no match" with the same face as a real answer, and the caller
+    // files the call on that. Say we could not tell.
+    if (guestErr) {
+      console.error('suggestWedding guest lookup failed:', guestErr.message);
+      return { weddingId: null, confidence: 0, reason: 'Could not check the guest lists just now, so this one needs a human.' };
+    }
 
     const hits = (guests || []).filter(g => !first || String(g.first_name || '').toLowerCase() === first);
     const weddingIds = [...new Set(hits.map(g => g.wedding_id))];

@@ -48,7 +48,8 @@ async function weddingWithGuests() {
   for (const g of data) counts[g.wedding_id] = (counts[g.wedding_id] || 0) + 1
   const [id] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0] || []
   if (!id) throw new Error('No wedding has any guests to render')
-  const { data: w } = await admin.from('weddings').select('id, couple_names').eq('id', id).single()
+  const { data: w, error: wErr } = await admin.from('weddings').select('id, couple_names').eq('id', id).single()
+  if (wErr) throw new Error(wErr.message)
   return w
 }
 

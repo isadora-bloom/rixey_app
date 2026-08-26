@@ -83,6 +83,7 @@ for (const [label, id, patch] of [['Brandi', brandi.id, brandiUpdate], ['Andy', 
   console.log(`  ${label} updated`);
 }
 
-const { data: check } = await db.from('wedding_guests').select('*').in('id', [brandi.id, andy.id]);
+const { data: check, error: checkErr } = await db.from('wedding_guests').select('*').in('id', [brandi.id, andy.id]);
+if (checkErr) { console.error(`could not read the rows back: ${checkErr.message}`); process.exit(1); }
 console.log('\nverified:');
 for (const g of check) console.log(`  ${g.first_name} ${g.last_name || '(+1)'}  rsvp=${g.rsvp}  extras=${JSON.stringify(g.rsvp_extras)}`);
