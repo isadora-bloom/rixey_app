@@ -26,13 +26,21 @@ if (error) {
   process.exit(1)
 }
 
-const live = vendors.filter(v => v.is_published === true)
-const hidden = vendors.filter(v => v.is_published === false)
-const undecided = vendors.filter(v => v.is_published == null)
-const edited = vendors.filter(v => v.last_vendor_update)
+// A merged duplicate is not a vendor, and a vendor Rixey does not recommend is
+// not in the couples' directory. Both were true of every row when this was
+// written and neither is true now.
+const all = vendors
+const rows = all.filter(v => !v.merged_into)
+const recommended = rows.filter(v => v.is_recommended)
+
+const live = rows.filter(v => v.is_published === true)
+const hidden = rows.filter(v => v.is_published === false)
+const undecided = rows.filter(v => v.is_published == null)
+const edited = rows.filter(v => v.last_vendor_update)
 const hasContent = v => Boolean(v.bio || (v.photos || []).length || v.special_offer || v.availability_note)
 
-console.log(`${vendors.length} vendors in the directory. Couples see all of them.`)
+console.log(`${rows.length} vendors on file${all.length !== rows.length ? `, plus ${all.length - rows.length} merged into another` : ''}.`)
+console.log(`Couples see the ${recommended.length} you recommend.`)
 console.log(`  ${live.length} showing their own photos and words`)
 console.log(`  ${hidden.length} hidden on purpose`)
 console.log(`  ${undecided.length} with nothing of their own yet`)
@@ -51,7 +59,7 @@ edited
   })
 
 // The failure this whole thing was about: content written, nobody can see it.
-const stranded = vendors.filter(v => hasContent(v) && v.is_published !== true)
+const stranded = rows.filter(v => hasContent(v) && v.is_published !== true)
 if (stranded.length) {
   console.log(`\n⚠ ${stranded.length} vendor(s) have written something no couple can see:`)
   stranded.forEach(v => console.log(`  ${v.name} (${v.category}) — is_published ${v.is_published}`))
@@ -63,12 +71,18 @@ if (stranded.length) {
 // Offers with a date on them that has passed. Shown to nobody, but worth
 // knowing about before a vendor asks why their offer stopped appearing.
 const today = new Date().toISOString().slice(0, 10)
-const expired = vendors.filter(v => v.special_offer && v.special_expiry && v.special_expiry < today)
+const expired = rows.filter(v => v.special_offer && v.special_expiry && v.special_expiry < today)
 if (expired.length) {
   console.log(`\n${expired.length} offer(s) have expired and are no longer shown:`)
   expired.forEach(v => console.log(`  ${v.name} — "${v.special_offer}" ended ${v.special_expiry}`))
 }
 
-// Categories that are almost the same category.
-const cats = [...new Set(vendors.map(v => v.category).filter(Boolean))].sort()
+// A profile on a merged row is fine: the survivor carries a copy, and the old
+// row stays reachable by its own portal link.
+const onMerged = all.filter(v => v.merged_into && hasContent(v)).length
+if (onMerged) console.log(`
+${onMerged} merged row(s) still hold their own copy of a profile. The survivor has it too.`)
+
+// What a couple actually sees as headings.
+const cats = [...new Set(recommended.flatMap(v => (v.categories?.length ? v.categories : [v.category])).filter(Boolean))].sort()
 console.log(`\n${cats.length} categories: ${cats.join(', ')}`)

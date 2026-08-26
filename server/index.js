@@ -8474,6 +8474,33 @@ async function mergeVendors(targetId, candidateId) {
     if (!target[f] && candidate[f]) patch[f] = candidate[f];
   }
 
+  // And so is the profile the vendor wrote themselves, which is the whole
+  // reason any of this exists. The first version of this merge carried the
+  // contact fields and nothing else, so merging Serendipity into Serendipity
+  // Catering left six photos and a bio stranded on a row no couple can reach,
+  // and merging Gateau into Gateau Distinctive Cakes took eight photos out of
+  // the directory altogether. Two of the seven profiles Rixey has, lost to a
+  // tidy-up.
+  for (const f of ['bio', 'special_offer', 'special_expiry', 'availability_note']) {
+    if (!target[f] && candidate[f]) patch[f] = candidate[f];
+  }
+  if (!(target.photos || []).length && (candidate.photos || []).length) {
+    patch.photos = candidate.photos;
+  }
+  if (candidate.last_vendor_update
+      && (!target.last_vendor_update || candidate.last_vendor_update > target.last_vendor_update)) {
+    patch.last_vendor_update = candidate.last_vendor_update;
+  }
+  // A profile that was showing goes on showing. null means nobody had decided,
+  // so the candidate's decision carries; an explicit false on the target was
+  // somebody hiding them on purpose and stands.
+  if (target.is_published == null && candidate.is_published != null) {
+    patch.is_published = candidate.is_published;
+  }
+  // Recommendation is a judgement about the vendor, not a property of the row.
+  // Merging must not quietly take somebody out of the couples' directory.
+  if (!target.is_recommended && candidate.is_recommended) patch.is_recommended = true;
+
   const { error: tErr } = await supabaseAdmin.from('vendors').update(patch).eq('id', target.id);
   if (tErr) throw tErr;
 
