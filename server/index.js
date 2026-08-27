@@ -739,7 +739,33 @@ async function loadAndRefreshGmailTokens() {
     }
   }
 
-  return tokens;
+  // The row that was read, with whatever token is actually valid now. The old
+  // version returned the row untouched, so a caller that used
+  // tokens.access_token after a refresh was holding a dead string. That is why
+  // the send-capability check reported "not authorised" minutes after Isadora
+  // had granted it: it asked Google about an expired token, and Google says
+  // nothing at all about an expired token.
+  return { ...tokens, access_token: oauth2Client.credentials?.access_token || tokens.access_token };
+}
+
+/**
+ * May this account send mail? Asked of Google, not inferred from having a token.
+ * Returns { ok, canSend, scopes, error }.
+ */
+async function gmailSendCapability() {
+  const tokens = await loadAndRefreshGmailTokens();
+  if (!tokens) return { ok: false, canSend: false, scopes: [], error: 'Gmail is not connected. Reconnect it in the admin panel.' };
+
+  const info = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(tokens.access_token)}`)
+    .then(r => r.json()).catch(() => null);
+  const scopes = String(info?.scope || '').split(' ').filter(Boolean);
+  const canSend = scopes.some(sc => /gmail\.send|gmail\.compose|gmail\.modify|mail\.google\.com/.test(sc));
+  return {
+    ok: canSend,
+    canSend,
+    scopes,
+    error: canSend ? null : 'Gmail is connected but the account is not authorised to send mail. Reconnect Gmail in the admin panel to grant it.',
+  };
 }
 
 // System prompt for Sage
@@ -3500,12 +3526,8 @@ app.get('/api/gmail/status', async (req, res) => {
       // only ever answered the first. Reading worked, so the panel said
       // "Connected" in green while every email the portal tried to send was
       // refused for want of a scope nobody had asked for.
-      const info = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(tokens.access_token)}`)
-        .then(r => r.json()).catch(() => null);
-      const scopes = String(info?.scope || '').split(' ');
-      const canSend = scopes.some(sc => /gmail\.send|gmail\.compose|gmail\.modify|mail\.google\.com/.test(sc));
-
-      res.json({ connected: true, canSend, scopes: scopes.filter(Boolean) });
+      const cap = await gmailSendCapability();
+      res.json({ connected: true, canSend: cap.canSend, scopes: cap.scopes });
     } catch (testErr) {
       console.log('Gmail test failed:', testErr.message);
       res.json({ connected: false });
@@ -8816,24 +8838,9 @@ app.put('/api/venue-vendors-unlinked/:bookingId', async (req, res) => {
 // across fifty: the run would report success and deliver nothing.
 app.get('/api/vendor-invites/ready', requireAdmin, async (req, res) => {
   try {
-    const tokens = await loadAndRefreshGmailTokens();
-    if (!tokens) {
-      return res.json({ ok: false, error: 'Gmail is not connected. Reconnect it in the admin panel.' });
-    }
-
-    // Having a token is not the same as being allowed to send with it. This
-    // check used to stop at "there is a token", which is exactly the lie the
-    // whole email path had been telling.
-    const info = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(tokens.access_token)}`)
-      .then(r => r.json()).catch(() => null);
-    const scopes = String(info?.scope || '').split(' ');
-    const canSend = scopes.some(sc => /gmail\.send|gmail\.compose|gmail\.modify|mail\.google\.com/.test(sc));
-    if (!canSend) {
-      return res.json({
-        ok: false,
-        error: 'Gmail is connected but the account is not authorised to send mail. Reconnect Gmail in the admin panel to grant it.',
-      });
-    }
+    // Having a token is not the same as being allowed to send with it.
+    const cap = await gmailSendCapability();
+    if (!cap.ok) return res.json({ ok: false, error: cap.error });
     res.json({ ok: true, from: process.env.ADMIN_EMAIL || 'the connected Gmail account' });
   } catch (err) {
     console.error('Vendor invite readiness error:', err);
