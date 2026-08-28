@@ -1113,48 +1113,113 @@ const KB_STOP_WORDS = new Set([
   'need','know','tell','please','thanks','thank','hi','hello','hey',
 ]);
 
-// Get relevant knowledge based on the user's question
-async function getRelevantKnowledge(question) {
-  // Extract meaningful keywords from the question
-  const keywords = question
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, '')
-    .split(/\s+/)
-    .filter(w => w.length >= 3 && !KB_STOP_WORDS.has(w));
+/**
+ * The knowledge base entries that actually bear on the question.
+ *
+ * This used to take the first five words of the question that were not stop
+ * words, build an OR of `ilike %word%` across title and content, and take
+ * whatever fifteen rows came back. Three things went wrong at once and they
+ * compounded.
+ *
+ * The five were taken in the order they were typed, so a polite preamble
+ * pushed the subject out of the window: "what are the dimensions of the
+ * outdoor patio area please" searched on quick, question, planner, dimensions,
+ * outdoor and never on patio.
+ *
+ * The OR made every match equal, and `back` is a substring of background,
+ * backyard and feedback, so common words dragged in half the table.
+ *
+ * And the limit of fifteen then cut it with no ranking at all, so the entry
+ * that answered the question was crowded out by the first fifteen rows that
+ * happened to contain a common word.
+ *
+ * The result: "How big is the back patio?" returned fifteen entries, none of
+ * them the five that say 40 x 70. Sage answered that she did not know, about a
+ * thing Isadora had written down five times.
+ *
+ * Now the whole table is loaded and scored here. It is 104 rows; the ranking
+ * matters far more than the round trip, and the round trip is cached anyway.
+ */
 
-  // If we have keywords, filter by them
-  if (keywords.length > 0) {
-    const orFilters = keywords.slice(0, 5).map(kw => {
-      const safe = kw.replace(/%/g, '\\%').replace(/_/g, '\\_');
-      return `title.ilike.%${safe}%,content.ilike.%${safe}%`;
-    }).join(',');
+const KB_CACHE_MS = 5 * 60 * 1000;
+let kbCache = { at: 0, rows: null };
 
-    const { data, error } = await supabaseAdmin
-      .from('knowledge_base')
-      .select('title, category, subcategory, content')
-      .or(orFilters)
-      .limit(15);
-
-    if (!error && data && data.length > 0) {
-      return data.map(item =>
-        `## ${item.title} (${item.category} > ${item.subcategory})\n${item.content}`
-      ).join('\n\n---\n\n');
-    }
-  }
-
-  // Fallback: load all entries if no keywords or no matches
+async function loadKnowledgeBase() {
+  if (kbCache.rows && Date.now() - kbCache.at < KB_CACHE_MS) return kbCache.rows;
   const { data, error } = await supabaseAdmin
     .from('knowledge_base')
-    .select('title, category, subcategory, content');
-
+    .select('title, category, subcategory, content')
+    .range(0, 4999);
   if (error) {
-    console.error('Error fetching knowledge:', error);
-    return '';
+    console.error('Error fetching knowledge:', error.message);
+    // Stale is better than silent. An empty knowledge base makes Sage claim
+    // ignorance of things the venue has written down.
+    return kbCache.rows || [];
   }
+  kbCache = { at: Date.now(), rows: data };
+  return data;
+}
 
-  return data.map(item =>
+const kbWords = text => String(text || '').toLowerCase().match(/[a-z0-9']+/g) || [];
+
+function renderKnowledge(rows) {
+  return rows.map(item =>
     `## ${item.title} (${item.category} > ${item.subcategory})\n${item.content}`
   ).join('\n\n---\n\n');
+}
+
+async function getRelevantKnowledge(question) {
+  const rows = await loadKnowledgeBase();
+  if (!rows.length) return '';
+
+  // Every meaningful word, not the first five. Dropping the subject because it
+  // came after "I was just wondering" is how this failed.
+  const keywords = [...new Set(kbWords(question).filter(w => w.length >= 3 && !KB_STOP_WORDS.has(w)))];
+  if (!keywords.length) return renderKnowledge(rows);
+
+  // A word in few entries says more about what is being asked than a word in
+  // most of them. "patio" appears in a handful; "wedding" appears in nearly
+  // all, and matching on it is the same as matching on nothing.
+  const docs = rows.map(r => ({
+    row: r,
+    title: new Set(kbWords(`${r.title} ${r.category} ${r.subcategory}`)),
+    body: new Set(kbWords(r.content)),
+    len: kbWords(r.content).length,
+  }));
+  const avgLen = docs.reduce((a, d) => a + d.len, 0) / (docs.length || 1);
+  const appearsIn = kw => docs.filter(d => d.title.has(kw) || d.body.has(kw)).length;
+  const weight = kw => {
+    const n = appearsIn(kw);
+    if (n === 0) return 0;
+    return Math.log(rows.length / n) + 0.2;
+  };
+
+  const scored = docs.map(d => {
+    let score = 0;
+    for (const kw of keywords) {
+      const w = weight(kw);
+      if (!w) continue;
+      // Whole words only. `back` must not match `background`, which is most of
+      // what the old substring search was matching on.
+      if (d.title.has(kw)) score += w * 3;
+      else if (d.body.has(kw)) score += w;
+    }
+    // A long entry matches more of the question by chance. Without this, the
+    // 900-word Move-In Day Guide beat the two-line answer to "how many people
+    // can sleep on site", on the strength of containing more words.
+    const lengthPenalty = 1 / (1 + Math.log1p(d.len / Math.max(avgLen, 1)));
+    return { row: d.row, score: score * lengthPenalty };
+  }).filter(x => x.score > 0).sort((a, b) => b.score - a.score);
+
+  // Nothing scored: hand over everything rather than nothing, which is what
+  // the old fallback did and the one part of it that was right.
+  if (!scored.length) return renderKnowledge(rows);
+
+  // Anything close to the best answer comes too, since a question often has
+  // its answer spread over two entries.
+  const best = scored[0].score;
+  const keep = scored.filter(x => x.score >= best * 0.35).slice(0, 10);
+  return renderKnowledge(keep.map(x => x.row));
 }
 
 // Strip VTT timestamps/headers to plain conversation text
