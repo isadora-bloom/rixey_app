@@ -6174,11 +6174,15 @@ app.post('/api/admin/contact-messages/:id/share', async (req, res) => {
 // Meetings the matcher would not guess at.
 app.get('/api/admin/ingest-review', async (req, res) => {
   try {
+    // Bounded: an unfiled backlog is exactly the kind of table that grows.
+    const requested = parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 1000) : 200;
     const { data, error } = await supabaseAdmin
       .from('ingest_review')
       .select('*, suggested:suggested_wedding_id(id, couple_names, wedding_date)')
       .eq('status', 'open')
-      .order('occurred_at', { ascending: false });
+      .order('occurred_at', { ascending: false })
+      .range(0, limit - 1);
     if (error) throw error;
     res.json({ items: data || [] });
   } catch (error) {
