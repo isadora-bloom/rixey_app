@@ -28,6 +28,16 @@ window.addEventListener('error', (event) => {
   reportError(event.error || event.message)
 })
 
+// Belt-and-braces alongside the listener above: assigning window.onerror
+// catches the same runtime errors through the older global-handler API, in
+// case anything ever runs before the listener is attached. reportError
+// dedupes by message + first stack line internally, so a storm of the same
+// fault (a render loop, say) still reaches the venue once, not once per
+// handler per occurrence.
+window.onerror = function (message, source, lineno, colno, error) {
+  reportError(error || message)
+}
+
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <App />
