@@ -362,6 +362,16 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST $API/api/client-errors \
   -H 'Content-Type: application/json' -d '{"message":"smoke test","url":"/"}'
 ```
 
+## Ask Sage from the admin home — `POST /api/admin/ask`
+
+```sh
+# 403 as a couple. It answers out of buildWeddingContext, which carries the
+# family calls and emails migration 028 exists to keep from them.
+curl -s -o /dev/null -w '%{http_code}\n' -X POST $API/api/admin/ask \
+  -H "Authorization: Bearer $COUPLE" -H 'Content-Type: application/json' \
+  -d '{"text":"tell me the caterer for alyssas wedding"}'
+```
+
 ## Staff sign-off — `POST /api/finalisations/:weddingId`
 
 ```sh

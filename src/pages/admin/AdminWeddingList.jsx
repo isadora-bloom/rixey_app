@@ -1,6 +1,7 @@
 import { getLastActivity } from './adminUtils'
 import { formatDateOnly } from '../../utils/dates'
 import { weddingName } from '../../../shared/wedding-name.js'
+import AskSageBar from '../../components/admin/AskSageBar'
 import NeedsYou from '../../components/admin/NeedsYou'
 import IntegrationsCard from '../../components/admin/IntegrationsCard'
 import WeddingCard from '../../components/admin/WeddingCard'
@@ -127,9 +128,16 @@ export default function AdminWeddingList({
   const hasAnything = last24h.signups.length > 0 || deduped.length > 0
 
   return (
-    // Stacked on a phone, two columns from lg up. The right-hand column is
-    // pinned to column three across both left-hand rows, so the DOM order
-    // (feed, needs-you, weddings) is also the phone order.
+    <div className="space-y-4 sm:space-y-6">
+
+    {/* Ask Sage about any wedding, above everything, because it is the one
+        thing here that does not need her to know where to look first. It loads
+        nothing, so a slow answer holds up nothing below it. */}
+    <AskSageBar weddings={weddings} onOpenProfile={viewWeddingProfile} />
+
+    {/* Stacked on a phone, two columns from lg up. The right-hand column is
+        pinned to column three across both left-hand rows, so the DOM order
+        (feed, needs-you, weddings) is also the phone order. */}
     <div className="flex flex-col lg:grid lg:grid-cols-3 gap-4 sm:gap-6">
 
       {/* LEFT, row one: Last 24 hours */}
@@ -384,6 +392,8 @@ export default function AdminWeddingList({
           </div>
         </div>
       </div>
+    </div>
+
     </div>
   )
 }
