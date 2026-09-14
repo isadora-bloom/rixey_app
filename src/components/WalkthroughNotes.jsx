@@ -154,6 +154,12 @@ function MediaStrip({ walkthroughId, media, onChange, onReload, meetingLabel, to
               </div>
               <p className="text-xs text-sage-600 whitespace-pre-wrap max-h-40 overflow-y-auto leading-relaxed">{m.transcript}</p>
             </div>
+          ) : m.transcript_error ? (
+            // The recording is safe either way; this is a failed transcription,
+            // not a missing one, and the two used to look identical.
+            <div key={`e-${m.id}`} className="border border-red-200 bg-red-50 rounded-lg p-3">
+              <p className="text-xs text-red-700">Transcription failed: {m.transcript_error}</p>
+            </div>
           ) : null)}
           <p className="text-xs text-sage-400">
             Transcribing takes about a minute per ten minutes of audio. Refresh if it hasn&apos;t appeared.
@@ -327,7 +333,7 @@ export default function WalkthroughNotes({ weddingId, enquiryId }) {
   // recording that failed.
   useEffect(() => {
     if (!active) return
-    const pending = media.some(m => m.kind === 'audio' && !m.transcript)
+    const pending = media.some(m => m.kind === 'audio' && !m.transcript && !m.transcript_error)
     if (!pending) return
     let stop = false
     const startedAt = Date.now()
