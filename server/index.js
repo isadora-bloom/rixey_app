@@ -51,6 +51,10 @@ import {
   importWithMarker, normaliseConfidence,
 } from './lib/extraction-markers.js';
 import { detectMigration036, has036 } from './lib/migration-036.js';
+import { detectMigration037 } from './lib/migration-037.js';
+import {
+  saveTableLayout, readTableLayout, discardDraft,
+} from './lib/table-layout-draft.js';
 import { safeStorageKey } from './lib/storage-key.js';
 import cron from 'node-cron';
 import { parseSpreadsheet } from './lib/spreadsheet.js';
@@ -12504,18 +12508,18 @@ app.post('/api/timeline', async (req, res) => {
 });
 
 // Get wedding table setup
+//
+// A couple gets the live layout with the venue's unsent draft stripped out. An
+// admin gets both, so the planner can show work in progress without publishing
+// it. See server/lib/table-layout-draft.js for why that is not one row.
 app.get('/api/tables/:weddingId', async (req, res) => {
   try {
     const { weddingId } = req.params;
+    const admin = await isAdminUser(req.userId);
 
-    const { data, error } = await supabaseAdmin
-      .from('wedding_tables')
-      .select('*')
-      .eq('wedding_id', weddingId)
-      .single();
-
-    if (error && error.code !== 'PGRST116') throw error;
-    res.json({ tables: data || null });
+    const result = await readTableLayout(supabaseAdmin, { weddingId, admin });
+    if (result.error) console.error('Get tables error:', result.error.message);
+    res.status(result.status).json(result.body);
   } catch (error) {
     console.error('Get tables error:', error);
     res.status(500).json({ error: 'Failed to fetch table setup' });
@@ -12523,60 +12527,32 @@ app.get('/api/tables/:weddingId', async (req, res) => {
 });
 
 // Save wedding table setup
+//
+// Where this lands is decided by who sent it, not by what the body claims. A
+// venue autosave goes to the draft column; only Send to Client writes the row
+// the couple reads. A couple's save behaves exactly as it always has.
 app.post('/api/tables', async (req, res) => {
   try {
-    const {
-      weddingId, userId, guestCount, tableShape, guestsPerTable,
-      headTable, headTableSize, headTableSided, sweetheartTable,
-      cocktailTables, kidsTable, kidsCount,
-      layoutNotes, linenColor, napkinColor,
-      centerpieceNotes, extraTables,
-      linenVenueChoice, runnerStyle,
-      chargersOn, checkeredDanceFloor,
-      loungeArea, linenNotes, isDraft
-    } = req.body;
+    const { weddingId, userId, guestCount, tableShape } = req.body;
+    const admin = await isAdminUser(req.userId);
 
-    const { data, error } = await supabaseAdmin
-      .from('wedding_tables')
-      .upsert({
-        wedding_id:           weddingId,
-        guest_count:          guestCount,
-        table_shape:          tableShape,
-        guests_per_table:     guestsPerTable,
-        head_table:           headTable,
-        head_table_size:      headTableSize,      // # people at head table
-        head_table_placement: headTableSided,     // 'one' or 'two' (repurposed field)
-        sweetheart_table:     sweetheartTable,
-        cocktail_tables:      cocktailTables,
-        kids_table:           kidsTable,
-        kids_count:           kidsCount,
-        layout_notes:         layoutNotes,
-        linen_color:          linenColor,
-        napkin_color:         napkinColor,
-        centerpiece_notes:    centerpieceNotes,
-        extra_tables:         extraTables || {},
-        linen_venue_choice:   linenVenueChoice,
-        runner_style:         runnerStyle,
-        chair_sash:           chargersOn,         // repurposed for chargers
-        dance_floor_size:     checkeredDanceFloor ? 'checkered' : 'none',
-        lounge_area:          loungeArea,
-        linen_notes:          linenNotes,
-        is_draft:             isDraft === true,
-        updated_at:           new Date().toISOString()
-      }, { onConflict: 'wedding_id' })
-      .select()
-      .single();
+    const result = await saveTableLayout(supabaseAdmin, { body: req.body, admin });
+    if (result.status !== 200) return res.status(result.status).json(result.body);
 
-    if (error) throw error;
+    // An unsent draft is not a change to the couple's file, so it does not go
+    // in their activity feed.
+    if (result.body.savedTo === 'live') {
+      await logActivity(weddingId, userId, 'tables_updated', `${guestCount} guests, ${tableShape} tables`);
+    }
 
-    // Log activity
-    await logActivity(weddingId, userId, 'tables_updated', `${guestCount} guests, ${tableShape} tables`);
-
-    // Only notify admin when couple sends (not on draft saves)
-    if (!isDraft) {
+    // Only notify admin when the couple sends (not on their own draft saves,
+    // and not when Rixey publishes a layout to them).
+    if (result.notifyCouple) {
       notifyAdminOfActivity(weddingId, 'tables_updated', `${guestCount} guests, ${tableShape} tables`);
       try {
-        const { data: wedding } = await supabaseAdmin.from('weddings').select('couple_names').eq('id', weddingId).single();
+        const { data: wedding, error: weddingError } = await supabaseAdmin
+          .from('weddings').select('couple_names').eq('id', weddingId).single();
+        if (weddingError) console.error('[Tables] Could not read couple name:', weddingError.message);
         const couple = wedding?.couple_names || 'Your couple';
         await createNotification(
           weddingId, 'admin', 'floor_plan_needed',
@@ -12588,10 +12564,24 @@ app.post('/api/tables', async (req, res) => {
       }
     }
 
-    res.json({ tables: data });
+    res.json(result.body);
   } catch (error) {
     console.error('Save tables error:', error);
     res.status(500).json({ error: 'Failed to save table setup' });
+  }
+});
+
+// Throw away the venue's unsent table layout. The couple's live layout stays.
+app.post('/api/tables/:weddingId/discard-draft', async (req, res) => {
+  try {
+    if (!(await isAdminUser(req.userId))) {
+      return res.status(403).json({ error: 'Admins only' });
+    }
+    const result = await discardDraft(supabaseAdmin, { weddingId: req.params.weddingId });
+    res.status(result.status).json(result.body);
+  } catch (error) {
+    console.error('Discard table draft error:', error);
+    res.status(500).json({ error: 'Failed to discard draft' });
   }
 });
 
@@ -16913,6 +16903,13 @@ detectMigration035(supabaseAdmin).catch(err => {
 // And the same for 036: sheet_sync_log.source and vendors.logo_url.
 detectMigration036(supabaseAdmin).catch(err => {
   console.error('[036] could not probe for the new columns:', err.message);
+});
+
+// And 037: wedding_tables.draft, which is where a venue's unfinished table
+// layout goes. Without it an admin autosave is refused rather than written to
+// the row the couple reads.
+detectMigration037(supabaseAdmin).catch(err => {
+  console.error('[037] could not probe for the draft column:', err.message);
 });
 
 // Look at today's memo without waiting until 8am, and without sending it.

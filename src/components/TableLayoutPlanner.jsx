@@ -1,9 +1,18 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import { useToast } from './ui/Toast'
 import { useAutosave } from '../hooks/useAutosave'
 import SaveIndicator from './ui/SaveIndicator'
+import ConfirmDialog from './ui/ConfirmDialog'
+
+/** "14 Sept, 15:42", or nothing at all if there is no timestamp to show. */
+function whenText(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+}
 
 
 const TABLE_SHAPES = [
@@ -194,7 +203,21 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
   // Extra tables
   const [extraTables, setExtraTables] = useState({})
 
+  // The couple's own in-progress flag. Theirs alone: it tells Rixey whether to
+  // start building from this yet, and an admin never writes it by typing.
   const [isDraft, setIsDraft]   = useState(false)
+  // The venue's unsent work. Lives in wedding_tables.draft, which the couple's
+  // planner never reads.
+  const [hasDraft, setHasDraft]         = useState(false)
+  const [draftSavedAt, setDraftSavedAt] = useState(null)
+  const [sentToClientAt, setSentToClientAt] = useState(null)
+  const [publishing, setPublishing]     = useState(false)
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
+  // The server's sentence when draft storage is not there yet. Shown in place
+  // of the save indicator, once, rather than a toast on every keystroke.
+  const [blockedMessage, setBlockedMessage] = useState(null)
+  const blockedRef = useRef(false)
+  const blockedToastedRef = useRef(false)
   const [loading, setLoading]   = useState(true)
   const [loadError, setLoadError] = useState(false)
   const hasLoadedRef = useRef(false)
@@ -203,12 +226,35 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
   const loadTableSetup = useCallback(async () => {
     setLoadError(false)
     try {
-      const response = await fetch(`${API_URL}/api/tables/${weddingId}`, {
-        headers: await authHeaders()
-      })
-      if (!response.ok) throw new Error('Could not load table setup')
-      const data = await response.json()
-      if (data.tables) {
+      const data = await loadJson(`${API_URL}/api/tables/${weddingId}`)
+      // An admin gets their unsent draft back alongside the live layout, and
+      // the draft is what they were last working on, so it wins.
+      const d = isAdmin ? data?.draft : null
+      if (d) {
+        setGuestCount(d.guestCount || 100)
+        setSliderValue(d.guestCount || 100)
+        setTableShape(d.tableShape || 'round')
+        setGuestsPerTable(d.guestsPerTable || 8)
+        setSweetheartTable(d.sweetheartTable ?? true)
+        setHeadTable(d.headTable || false)
+        setHeadTablePeople(d.headTableSize || 10)
+        setHeadTableSided(d.headTableSided === 'two' ? 'two' : 'one')
+        setCocktailTables(d.cocktailTables || 0)
+        setKidsTable(d.kidsTable || false)
+        setKidsCount(d.kidsCount || 0)
+        setLinenColor(d.linenColor || 'white')
+        setNapkinColor(d.napkinColor || 'sage')
+        setLinenVenueChoice(d.linenVenueChoice || false)
+        setRunnerStyle(d.runnerStyle || 'none')
+        setChargersOn(d.chargersOn || false)
+        setCheckeredDanceFloor(d.checkeredDanceFloor === true)
+        setLoungeArea(d.loungeArea || false)
+        setCenterpieceNotes(d.centerpieceNotes || '')
+        setLayoutNotes(d.layoutNotes || '')
+        setLinenNotes(d.linenNotes || '')
+        setExtraTables(d.extraTables || {})
+        if (d.tableShape === 'mixed') setRectTableCount(0)
+      } else if (data?.tables) {
         const t = data.tables
         setGuestCount(t.guest_count || 100)
         setSliderValue(t.guest_count || 100)
@@ -234,84 +280,193 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
         setLayoutNotes(t.layout_notes || '')
         setLinenNotes(t.linen_notes || '')
         setExtraTables(t.extra_tables || {})
-        setIsDraft(t.is_draft || false)
         if (t.table_shape === 'mixed') setRectTableCount(0)
       }
+      // is_draft only ever describes the couple's own save.
+      if (!isAdmin) setIsDraft(data?.tables?.is_draft || false)
+      setHasDraft(!!d)
+      setDraftSavedAt(d ? data?.draft_updated_at || null : null)
+      setSentToClientAt(data?.sent_to_client_at || null)
     } catch (err) {
       console.error('Failed to load table setup:', err)
       setLoadError(true)
     }
     setLoading(false)
-  }, [weddingId])
+  }, [weddingId, isAdmin])
 
   useEffect(() => {
+    // Load on mount. The rule wants no setState in an effect body, and this
+    // one is a fetch that has to start somewhere; it is the same load effect
+    // this component has always had.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (weddingId) loadTableSetup()
   }, [weddingId, loadTableSetup])
 
+  // A 409 here means draft storage is missing, so nothing was saved. Say it
+  // once in the header and stop toasting, because the autosave will keep
+  // hitting it on every edit until the migration lands.
+  const reportSaveProblem = useCallback((msg) => {
+    if (blockedRef.current) {
+      if (blockedToastedRef.current) return
+      blockedToastedRef.current = true
+    }
+    toastError(msg)
+  }, [toastError])
+
   const { schedule: scheduleSave, flush: flushSave, state: saveState } = useAutosave(
     async (payload) => {
-      await apiFetch(`${API_URL}/api/tables`, {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      })
+      try {
+        const res = await apiFetch(`${API_URL}/api/tables`, {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        })
+        blockedRef.current = false
+        setBlockedMessage(null)
+        // savedTo is the server saying where it actually put it. The couple's
+        // side ignores it; the admin's side is the whole point.
+        if (res?.savedTo === 'draft') {
+          setHasDraft(true)
+          setDraftSavedAt(res.draftUpdatedAt || new Date().toISOString())
+        } else if (res?.savedTo === 'live' && payload.isDraft === false) {
+          setHasDraft(false)
+          setDraftSavedAt(null)
+          if (res.sentToClientAt) setSentToClientAt(res.sentToClientAt)
+        }
+      } catch (err) {
+        if (err?.status === 409) {
+          blockedRef.current = true
+          setBlockedMessage(err.message)
+        }
+        throw err
+      }
     },
-    { delay: 1500, errorMessage: 'Could not save table setup', toastError }
+    { delay: 1500, errorMessage: 'Could not save table setup', toastError: reportSaveProblem }
   )
 
+  const buildPayload = useCallback((draftFlag) => ({
+    weddingId,
+    userId,
+    guestCount,
+    tableShape,
+    guestsPerTable,
+    headTable,
+    headTableSize: headTablePeople,    // stored as head_table_size
+    headTableSided,                    // stored as head_table_placement (repurposed)
+    sweetheartTable,
+    cocktailTables,
+    kidsTable,
+    kidsCount,
+    linenColor,
+    napkinColor,
+    linenVenueChoice,
+    runnerStyle,
+    chargersOn,                        // stored as chair_sash (repurposed)
+    checkeredDanceFloor,               // stored as dance_floor_size = 'checkered'/'none'
+    loungeArea,
+    centerpieceNotes,
+    layoutNotes,
+    linenNotes,
+    extraTables,
+    isDraft: draftFlag,
+  }), [
+    weddingId, userId, guestCount, tableShape, guestsPerTable,
+    headTable, headTablePeople, headTableSided, sweetheartTable, cocktailTables,
+    kidsTable, kidsCount, linenColor, napkinColor, linenVenueChoice, runnerStyle,
+    chargersOn, checkeredDanceFloor, loungeArea, centerpieceNotes, layoutNotes,
+    linenNotes, extraTables,
+  ])
+
+  // The buttons fire after a state update (the slider commit), so they read the
+  // payload builder from a ref rather than the one captured at click time.
+  const buildPayloadRef = useRef(buildPayload)
+  useEffect(() => { buildPayloadRef.current = buildPayload }, [buildPayload])
+
+  // Autosave. An admin edit is always a draft edit: there is no keystroke that
+  // can reach the couple. Only the explicit Send to Client below does that.
   useEffect(() => {
     if (loading || loadError) return
     if (!hasLoadedRef.current) {
       hasLoadedRef.current = true
       return
     }
-    scheduleSave({
-      weddingId,
-      userId,
-      guestCount,
-      tableShape,
-      guestsPerTable,
-      headTable,
-      headTableSize: headTablePeople,    // stored as head_table_size
-      headTableSided,                    // stored as head_table_placement (repurposed)
-      sweetheartTable,
-      cocktailTables,
-      kidsTable,
-      kidsCount,
-      linenColor,
-      napkinColor,
-      linenVenueChoice,
-      runnerStyle,
-      chargersOn,                        // stored as chair_sash (repurposed)
-      checkeredDanceFloor,               // stored as dance_floor_size = 'checkered'/'none'
-      loungeArea,
-      centerpieceNotes,
-      layoutNotes,
-      linenNotes,
-      extraTables,
-      isDraft,
-    })
-  }, [
-    loading, loadError, weddingId, userId, guestCount, tableShape, guestsPerTable,
-    headTable, headTablePeople, headTableSided, sweetheartTable, cocktailTables,
-    kidsTable, kidsCount, linenColor, napkinColor, linenVenueChoice, runnerStyle,
-    chargersOn, checkeredDanceFloor, loungeArea, centerpieceNotes, layoutNotes,
-    linenNotes, extraTables, isDraft, scheduleSave,
-  ])
+    if (isAdmin) {
+      // The banner waits for the server to confirm the draft landed, rather
+      // than claiming work is held that might have been refused.
+      scheduleSave(buildPayload(true))
+      return
+    }
+    scheduleSave(buildPayload(isDraft))
+  }, [loading, loadError, isAdmin, isDraft, buildPayload, scheduleSave])
 
-  // The two explicit actions (Save Draft / Send to Client, couple's Save /
-  // Send to Rixey) carry meaning beyond a plain autosave — is_draft decides
-  // whether Rixey staff treat this as still-in-progress or ready to build
-  // from. So clicking them sets the flag and flushes right away, the same
-  // pattern WebsiteBuilder uses for its Publish/Unpublish button, rather than
-  // waiting for the debounce.
-  const setDraftAndFlush = (draft) => {
+  const commitSlider = () => {
     if (sliderTimerRef.current) {
       clearTimeout(sliderTimerRef.current)
       sliderTimerRef.current = null
       setGuestCount(sliderValue)
     }
+  }
+
+  // The couple's two buttons (Save / Send to Rixey) carry meaning beyond a
+  // plain autosave: is_draft decides whether Rixey staff treat this as
+  // still-in-progress or ready to build from. So clicking them sets the flag
+  // and flushes right away rather than waiting for the debounce.
+  const setDraftAndFlush = (draft) => {
+    commitSlider()
     setIsDraft(draft)
     setTimeout(() => flushSave(), 0)
+  }
+
+  /** Admin: save the draft now rather than waiting out the debounce. */
+  const saveDraftNow = () => {
+    commitSlider()
+    setTimeout(() => {
+      scheduleSave(buildPayloadRef.current(true))
+      flushSave()
+    }, 0)
+  }
+
+  /**
+   * Admin: publish the draft to the couple.
+   *
+   * Any pending draft edit is flushed first so the two writes cannot cross,
+   * then this one request copies the layout onto the live columns and clears
+   * the draft server-side.
+   */
+  const sendToClient = () => {
+    commitSlider()
+    setTimeout(async () => {
+      setPublishing(true)
+      try {
+        await flushSave()
+        const res = await apiFetch(`${API_URL}/api/tables`, {
+          method: 'POST',
+          body: JSON.stringify(buildPayloadRef.current(false)),
+        })
+        setHasDraft(false)
+        setDraftSavedAt(null)
+        setSentToClientAt(res?.sentToClientAt || new Date().toISOString())
+        blockedRef.current = false
+        setBlockedMessage(null)
+      } catch (err) {
+        toastError(err?.message ? `Could not send to the client: ${err.message}` : 'Could not send to the client')
+      }
+      setPublishing(false)
+    }, 0)
+  }
+
+  /** Admin: throw the unsent draft away and go back to what the couple sees. */
+  const discardDraft = async () => {
+    try {
+      await apiFetch(`${API_URL}/api/tables/${weddingId}/discard-draft`, { method: 'POST' })
+      blockedRef.current = false
+      setBlockedMessage(null)
+      // Skip one autosave pass, so reloading the live values is not itself
+      // read as an edit and written straight back as a new draft.
+      hasLoadedRef.current = false
+      await loadTableSetup()
+    } catch (err) {
+      toastError(err?.message ? `Could not discard the draft: ${err.message}` : 'Could not discard the draft')
+    }
   }
 
   // ── Calculations ──────────────────────────────────────────────────────────
@@ -376,25 +531,45 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
         <div>
           <h2 className="font-serif text-xl text-sage-700">Table & Seating Planner</h2>
           <p className="text-sage-700 text-sm">
-            {isAdmin && isDraft && <span className="text-amber-600 font-medium">In progress — not visible to client · </span>}
+            {isAdmin && hasDraft && (
+              <span className="text-amber-600 font-medium">
+                In progress, not visible to client
+                {draftSavedAt && whenText(draftSavedAt) ? `, last saved ${whenText(draftSavedAt)}` : ''} ·{' '}
+              </span>
+            )}
+            {isAdmin && !hasDraft && (
+              <span className="text-sage-500">
+                {sentToClientAt && whenText(sentToClientAt)
+                  ? `Live for the couple since ${whenText(sentToClientAt)}`
+                  : 'Live for the couple'} ·{' '}
+              </span>
+            )}
             Calculate tables, linens, and layout
           </p>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          <SaveIndicator state={saveState} />
+          {blockedMessage
+            ? <span className="text-xs text-rose-600 max-w-[16rem]">{blockedMessage}</span>
+            : <SaveIndicator state={saveState} />}
           <button onClick={() => window.print()} type="button"
             className="px-3 py-2 rounded-lg text-sm font-medium border border-sage-300 text-sage-700 hover:bg-sage-50 transition">
             Print
           </button>
           {isAdmin ? (
             <>
-              <button onClick={() => setDraftAndFlush(true)} disabled={saveState === 'saving'}
+              {hasDraft && (
+                <button onClick={() => setConfirmDiscard(true)} disabled={publishing}
+                  className="px-3 py-2 rounded-lg text-sm font-medium border border-sage-300 text-sage-700 hover:bg-sage-50 transition disabled:opacity-50">
+                  Discard draft
+                </button>
+              )}
+              <button onClick={saveDraftNow} disabled={saveState === 'saving' || publishing}
                 className="px-3 py-2 rounded-lg text-sm font-medium border border-amber-300 text-amber-700 hover:bg-amber-50 transition disabled:opacity-50">
                 Save Draft
               </button>
-              <button onClick={() => setDraftAndFlush(false)} disabled={saveState === 'saving'}
+              <button onClick={sendToClient} disabled={saveState === 'saving' || publishing}
                 className="px-3 py-2 rounded-lg text-sm font-medium bg-sage-600 text-white hover:bg-sage-700 transition disabled:opacity-50">
-                Send to Client
+                {publishing ? 'Sending…' : 'Send to Client'}
               </button>
             </>
           ) : (
@@ -971,6 +1146,16 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
       {centerpieceNotes && (<><h2>Centrepieces</h2><p>{centerpieceNotes}</p></>)}
       {layoutNotes && (<><h2>Layout Notes</h2><p>{layoutNotes}</p></>)}
     </div>
+
+    <ConfirmDialog
+      open={confirmDiscard}
+      onClose={() => setConfirmDiscard(false)}
+      onConfirm={discardDraft}
+      title="Discard this draft?"
+      message="Your unsent changes go for good and the planner goes back to the layout the couple can see. Their own layout is untouched either way."
+      confirmLabel="Discard draft"
+      danger
+    />
     </>
   )
 }
