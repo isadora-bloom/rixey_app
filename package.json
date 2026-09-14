@@ -18,7 +18,7 @@
     "test": "playwright test",
     "import-kb": "node scripts/import-knowledge.js",
     "audit": "npm run audit:errors && npm run audit:nav && npm run audit:unsurfaced && npm run audit:writes && npm run audit:fetch && npm run audit:pages && npm run test:unit",
-    "audit:errors": "node scripts/audit-unchecked-errors.mjs --max 53",
+    "audit:errors": "node scripts/audit-unchecked-errors.mjs --max 50",
     "audit:nav": "node scripts/audit-nav-parity.mjs",
     "audit:unsurfaced": "node scripts/audit-unsurfaced.mjs",
     "audit:writes": "node scripts/audit-unfiltered-writes.mjs --max 0",
