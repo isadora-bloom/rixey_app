@@ -13501,6 +13501,44 @@ async function readCapped(response, cap) {
   return out;
 }
 
+/**
+ * Write a bar recipe, or answer the request explaining why not.
+ *
+ * Returns the saved row, or null having already sent a response — the two
+ * extraction routes check for null and stop. Doing it this way keeps the error
+ * wording in one place: a caller that forgets weddingId should be told that
+ * rather than getting a 500 out of PostgREST.
+ *
+ * servings_basis is not asked for. The old two-step flow set it on the second
+ * request from a field the extraction never saw, and the model is told to
+ * quote quantities per serving, so 1 is the honest default.
+ */
+async function saveBarRecipe(req, res, { name, source_type, source_url, ingredients }) {
+  const weddingId = req.body?.weddingId || req.body?.wedding_id;
+  if (!weddingId) {
+    res.status(400).json({ error: 'weddingId required' });
+    return null;
+  }
+  const { data, error } = await supabaseAdmin.from('bar_recipes')
+    .insert({
+      wedding_id: weddingId,
+      name: name || 'Untitled recipe',
+      source_type,
+      source_url: source_url || null,
+      ingredients,
+      servings_basis: 1,
+    })
+    .select().single();
+  if (error) {
+    // The read has already been paid for, so say plainly that it could not be
+    // kept rather than returning the ingredients as though they were filed.
+    console.error('[bar-recipes] extracted but could not save:', error.message);
+    res.status(500).json({ error: `Read the recipe but could not save it: ${error.message}` });
+    return null;
+  }
+  return data;
+}
+
 // Extract ingredients from a URL using Claude
 //
 // Signed in only, and the URL is checked before anything is fetched. This used
@@ -13563,7 +13601,19 @@ app.post('/api/bar-recipes/extract-url', requireAuth, async (req, res) => {
     const raw = message.content[0].text.trim();
     const match = raw.match(/\[[\s\S]*\]/);
     if (!match) return res.status(422).json({ error: 'Could not parse ingredients from that page.' });
-    res.json({ ingredients: JSON.parse(match[0]) });
+    const ingredients = JSON.parse(match[0]);
+
+    // Save it here rather than trusting a second request.
+    //
+    // This used to answer with the ingredients and nothing else, and the
+    // browser was expected to post them straight back to the save route. Close
+    // the tab in between, or lose the connection, and a paid Claude read of a
+    // recipe page is simply gone. Reading and saving are one act.
+    const saved = await saveBarRecipe(req, res, {
+      name, source_type: 'url', source_url: url, ingredients,
+    });
+    if (!saved) return;   // saveBarRecipe has answered
+    res.json({ recipe: saved, saved: true, ingredients });
   } catch (err) {
     console.error('Recipe URL extract error:', err);
     res.status(500).json({ error: err.message });
@@ -13573,9 +13623,17 @@ app.post('/api/bar-recipes/extract-url', requireAuth, async (req, res) => {
 // Extract ingredients from an uploaded image/PDF using Claude Vision
 app.post('/api/bar-recipes/extract-upload', requireAuth, upload.single('file'), async (req, res) => {
   try {
-    const { name } = req.body;
+    const { name, weddingId } = req.body;
     const file = req.file;
     if (!file) return res.status(400).json({ error: 'No file provided' });
+
+    // weddingAccess runs before multer, so on a multipart request it saw a body
+    // with no wedding in it and let this through. Same hand-check as the other
+    // upload routes, on the first line after the form is parsed.
+    if (weddingId) {
+      const allowed = await assertWeddingMember(supabaseAdmin, req, weddingId);
+      if (!allowed.ok) return res.status(allowed.status).json({ error: 'You do not have access to this wedding' });
+    }
 
     const base64   = file.buffer.toString('base64');
     const isPdf    = file.mimetype === 'application/pdf';
@@ -13602,7 +13660,13 @@ app.post('/api/bar-recipes/extract-upload', requireAuth, upload.single('file'), 
     const raw = message.content[0].text.trim();
     const match = raw.match(/\[[\s\S]*\]/);
     if (!match) return res.status(422).json({ error: 'Could not parse ingredients from that image.' });
-    res.json({ ingredients: JSON.parse(match[0]) });
+    const ingredients = JSON.parse(match[0]);
+
+    const saved = await saveBarRecipe(req, res, {
+      name, source_type: 'upload', source_url: null, ingredients,
+    });
+    if (!saved) return;
+    res.json({ recipe: saved, saved: true, ingredients });
   } catch (err) {
     console.error('Recipe upload extract error:', err);
     res.status(500).json({ error: err.message });
