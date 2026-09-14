@@ -43,6 +43,7 @@ import {
 } from './lib/quo-calls.js';
 import { guestCareContext } from '../shared/guest-care.js';
 import { buildDirectory, matchMeeting } from '../shared/meeting-match.js';
+import { matchWedding } from '../shared/wedding-match.js';
 import { readMessageBody, readAttachments } from '../shared/gmail-body.js';
 import { placeNewContract, groupByVendor, currentAndHistory } from '../shared/contract-versions.js';
 import { buildPortalSnapshot } from './lib/sheet-diff/portal-snapshot.js';
@@ -3675,6 +3676,49 @@ async function buildWeddingContext(weddingId, { noteLimit = 400 } = {}) {
   };
 }
 
+/**
+ * One wedding, one question, one answer.
+ *
+ * Both venue-side Q&A routes come through here: the wedding profile's own box,
+ * which already knows the wedding, and the Ask Sage bar on the admin home,
+ * which had to work it out from a sentence. The prompt lives in one place so
+ * the two cannot start answering the same question differently depending on
+ * which box it was typed into.
+ */
+async function answerAboutWedding(weddingId, question, { endpoint = 'ask-contracts' } = {}) {
+  const { context: fullContext, hasAnything } = await buildWeddingContext(weddingId);
+
+  if (!hasAnything) {
+    return { answer: 'No planning information has been recorded for this wedding yet.' };
+  }
+
+  console.log(`Answering admin question with ${Math.round(fullContext.length/1000)}K chars of context for wedding ${weddingId}`);
+
+  const response = await anthropic.messages.create({
+    model: MODEL_SONNET,
+    max_tokens: 1000,
+    messages: [{
+      role: 'user',
+      content: `You are helping a wedding venue coordinator answer questions about a client's wedding. Use the planning information below to answer accurately and specifically. Cite your source (which section the info came from).
+
+If the information is not found, say so clearly.
+
+${fullContext}
+QUESTION: ${question}
+
+Answer concisely and helpfully:`
+    }]
+  });
+
+  const answer = response.content[0].text;
+  console.log('Q&A answer:', answer.substring(0, 100) + '...');
+
+  // Log usage (admin query, no userId)
+  await logUsage(weddingId, null, endpoint, response);
+
+  return { answer };
+}
+
 // Ask questions about contracts AND planning notes
 app.post('/api/ask-contracts', async (req, res) => {
   try {
@@ -3684,42 +3728,103 @@ app.post('/api/ask-contracts', async (req, res) => {
       return res.status(400).json({ error: 'Wedding ID and question required' });
     }
 
-    const { context: fullContext, hasAnything } = await buildWeddingContext(weddingId);
-
-    if (!hasAnything) {
-      return res.json({ answer: "No planning information has been recorded for this wedding yet." });
-    }
-
-    console.log(`Answering admin question with ${Math.round(fullContext.length/1000)}K chars of context for wedding ${weddingId}`);
-
-    // Ask Claude
-    const response = await anthropic.messages.create({
-      model: MODEL_SONNET,
-      max_tokens: 1000,
-      messages: [{
-        role: 'user',
-        content: `You are helping a wedding venue coordinator answer questions about a client's wedding. Use the planning information below to answer accurately and specifically. Cite your source (which section the info came from).
-
-If the information is not found, say so clearly.
-
-${fullContext}
-QUESTION: ${question}
-
-Answer concisely and helpfully:`
-      }]
-    });
-
-    const answer = response.content[0].text;
-    console.log('Q&A answer:', answer.substring(0, 100) + '...');
-
-    // Log usage (admin query, no userId)
-    await logUsage(weddingId, null, 'ask-contracts', response);
-
+    const { answer } = await answerAboutWedding(weddingId, question);
     res.json({ answer });
 
   } catch (error) {
     console.error('Q&A error:', error);
     res.status(500).json({ error: 'Failed to answer question' });
+  }
+});
+
+/**
+ * Ask about any wedding without picking one first.
+ *
+ * "tell me the caterer for alyssas wedding" is one action, not three. The name
+ * is scored against the book by shared/wedding-match.js, the rest of the
+ * sentence becomes the question, and the answer comes back through the same
+ * path the wedding profile's own Q&A box uses.
+ *
+ * Two of the three answers this can give are not answers: a list of candidates
+ * when more than one couple fits the name, and nothing at all when no name in
+ * the sentence is a couple here. Both are on purpose. Guessing produces a
+ * confident, specific, wrong answer about a real wedding, and that is the one
+ * failure nobody catches.
+ *
+ * Mounted under /api/admin, so requireAdmin already applies. Nothing here may
+ * ever be reachable by a couple: buildWeddingContext carries the family calls
+ * and emails that migration 028 exists to keep from them.
+ */
+app.post('/api/admin/ask', async (req, res) => {
+  try {
+    const text = String(req.body?.text || '').trim();
+    const chosenId = req.body?.weddingId || null;
+
+    if (!text) {
+      return res.status(400).json({ error: 'Type a question first.' });
+    }
+
+    const NAME_COLUMNS = 'id, couple_names, partner1_name, partner2_name, project_name, wedding_date, archived';
+    let wedding = null;
+    let question = text;
+    let confidence = 'high';
+
+    if (chosenId) {
+      // She has already told us which wedding, so the name matching is only
+      // there to take that name back out of the question.
+      const { data, error } = await supabaseAdmin
+        .from('weddings')
+        .select(NAME_COLUMNS)
+        .eq('id', chosenId)
+        .maybeSingle();
+      if (error) {
+        console.error('[admin ask] could not read that wedding:', error.message);
+        return res.status(500).json({ error: 'Could not look that wedding up.' });
+      }
+      if (!data) return res.status(404).json({ error: 'That wedding is not here any more.' });
+      wedding = data;
+      question = matchWedding(text, [data]).question;
+    } else {
+      const { data: weddings, error } = await supabaseAdmin
+        .from('weddings')
+        .select(NAME_COLUMNS);
+      if (error) {
+        console.error('[admin ask] could not read the wedding list:', error.message);
+        return res.status(500).json({ error: 'Could not read the wedding list.' });
+      }
+
+      const match = matchWedding(text, weddings || []);
+      question = match.question;
+
+      if (!match.wedding) {
+        return res.json({
+          resolved: false,
+          candidates: match.candidates.map(w => ({
+            id: w.id,
+            couple_names: w.couple_names,
+            wedding_date: w.wedding_date,
+          })),
+          question,
+        });
+      }
+
+      wedding = match.wedding;
+      confidence = match.confidence;
+    }
+
+    const { answer } = await answerAboutWedding(wedding.id, question, { endpoint: 'admin-ask' });
+
+    res.json({
+      resolved: true,
+      wedding: { id: wedding.id, couple_names: wedding.couple_names, wedding_date: wedding.wedding_date },
+      question,
+      answer,
+      confidence,
+    });
+
+  } catch (error) {
+    console.error('[admin ask] failed:', error);
+    res.status(500).json({ error: 'Could not answer that. Try again in a moment.' });
   }
 });
 
