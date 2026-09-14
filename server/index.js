@@ -11800,6 +11800,54 @@ app.get('/api/sage-messages/:weddingId', async (req, res) => {
 });
 
 // Get planning notes for a wedding (uses supabaseAdmin to bypass RLS)
+/**
+ * What Rixey has actually filed against this wedding, for the couple.
+ *
+ * "Share this with the couple" on a call or an email writes a planning note
+ * with status 'confirmed' (see the contact-message share route) and the couple
+ * had no screen that read one, so every share since the feature landed went
+ * into a table nobody on that side could see.
+ *
+ * Deliberately narrower than the venue route above:
+ *  - confirmed and added only. A 'pending' note is a machine's guess that
+ *    nobody has checked, and a couple reading a guess as fact is the failure
+ *    mode this whole status column exists to prevent.
+ *  - no source_message. It carries venue-internal phrasing, the address an
+ *    email came from and, on the extraction paths, a slice of the original
+ *    message. The couple gets the note, not the paperwork behind it.
+ *
+ * Shape (binding, W3 renders it):
+ *   { notes: [{ id, category, content, created_at }], total }
+ * Newest first. Mounted with a single uuid in the path, so weddingAccess
+ * scopes it to members of that wedding, or an admin.
+ */
+app.get('/api/planning-notes/couple/:weddingId', async (req, res) => {
+  try {
+    const { weddingId } = req.params;
+
+    // A wedding fed by Gmail, Quo and Zoom for a year passes 1000 notes, and a
+    // select with no range drops the rest silently.
+    const notes = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin
+        .from('planning_notes')
+        .select('id, category, content, created_at')
+        .eq('wedding_id', weddingId)
+        .in('status', ['confirmed', 'added'])
+        .order('created_at', { ascending: false })
+        .range(from, from + 999);
+      if (error) throw error;
+      notes.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
+
+    res.json({ notes, total: notes.length });
+  } catch (error) {
+    console.error('Get couple planning notes error:', error);
+    res.status(500).json({ error: 'Failed to fetch notes' });
+  }
+});
+
 app.get('/api/planning-notes/:weddingId', async (req, res) => {
   try {
     const { weddingId } = req.params;
