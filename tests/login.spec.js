@@ -31,6 +31,23 @@ let testUserId = null
 let testWeddingId = null
 
 test.beforeAll(async () => {
+  // Delete any leftover weddings with couple_names exactly 'Playwright & Test'
+  const { error: deleteWeddingErr } = await admin
+    .from('weddings')
+    .delete()
+    .eq('couple_names', 'Playwright & Test')
+  if (deleteWeddingErr) console.warn('[test setup] could not delete stale weddings:', deleteWeddingErr.message)
+
+  // Delete any leftover auth users whose email starts with 'playwright-' and ends with '@rixey-test.invalid'
+  const { data: users, error: listErr } = await admin.auth.admin.listUsers()
+  if (!listErr && users?.users) {
+    for (const u of users.users) {
+      if (u.email?.startsWith('playwright-') && u.email?.endsWith('@rixey-test.invalid')) {
+        await admin.auth.admin.deleteUser(u.id).catch(() => {})
+      }
+    }
+  }
+
   const { data, error } = await admin.auth.admin.createUser({
     email: testEmail,
     password: testPassword,
@@ -66,34 +83,37 @@ test.beforeAll(async () => {
 })
 
 test.afterAll(async () => {
-  if (testWeddingId) {
-    // Six of the twelve names here did not exist: budget_items,
-    // timeline_events, tables, guests, wedding_worksheets and internal_notes.
-    // Paired with `.then(() => {}, () => {})`, which swallows the error, the
-    // cleanup has always looked like it worked while leaving guest, timeline
-    // and budget rows behind on every run.
-    const childTables = [
-      'wedding_budget', 'wedding_timeline', 'table_layouts', 'wedding_tables',
-      'wedding_guests', 'vendor_checklist', 'activity_log', 'notifications',
-      'planning_checklist', 'wedding_internal_notes', 'section_finalisations',
-      'planning_notes', 'wedding_guest_care', 'allergy_registry',
-    ]
-    const failures = []
-    for (const t of childTables) {
-      const { error } = await admin.from(t).delete().eq('wedding_id', testWeddingId)
-      if (error) failures.push(`${t}: ${error.message}`)
-    }
-    // Say so rather than swallowing it. A cleanup that quietly fails leaves
-    // test data in a live database, and the next person to notice is whoever
-    // wonders why a wedding has guests nobody invited.
-    if (failures.length) console.error('[test cleanup] could not clear:', failures.join(' | '))
+  try {
+    if (testWeddingId) {
+      // Six of the twelve names here did not exist: budget_items,
+      // timeline_events, tables, guests, wedding_worksheets and internal_notes.
+      // Paired with `.then(() => {}, () => {})`, which swallows the error, the
+      // cleanup has always looked like it worked while leaving guest, timeline
+      // and budget rows behind on every run.
+      const childTables = [
+        'wedding_budget', 'wedding_timeline', 'table_layouts', 'wedding_tables',
+        'wedding_guests', 'vendor_checklist', 'activity_log', 'notifications',
+        'planning_checklist', 'wedding_internal_notes', 'section_finalisations',
+        'planning_notes', 'wedding_guest_care', 'allergy_registry',
+      ]
+      const failures = []
+      for (const t of childTables) {
+        const { error } = await admin.from(t).delete().eq('wedding_id', testWeddingId)
+        if (error) failures.push(`${t}: ${error.message}`)
+      }
+      // Say so rather than swallowing it. A cleanup that quietly fails leaves
+      // test data in a live database, and the next person to notice is whoever
+      // wonders why a wedding has guests nobody invited.
+      if (failures.length) console.error('[test cleanup] could not clear:', failures.join(' | '))
 
-    const { error: wErr } = await admin.from('weddings').delete().eq('id', testWeddingId)
-    if (wErr) console.error('[test cleanup] wedding not removed:', wErr.message)
-  }
-  if (testUserId) {
-    await admin.from('profiles').delete().eq('id', testUserId)
-    await admin.auth.admin.deleteUser(testUserId)
+      const { error: wErr } = await admin.from('weddings').delete().eq('id', testWeddingId)
+      if (wErr) console.error('[test cleanup] wedding not removed:', wErr.message)
+    }
+  } finally {
+    if (testUserId) {
+      await admin.from('profiles').delete().eq('id', testUserId)
+      await admin.auth.admin.deleteUser(testUserId)
+    }
   }
 })
 
