@@ -327,6 +327,9 @@ export default function KnowledgeBaseAdmin() {
                       </span>
                     )}
                   </div>
+                  {entry.description && (
+                    <p className="text-sage-500 text-sm italic mb-1">{entry.description}</p>
+                  )}
                   <p className="text-sage-600 text-sm">
                     {searchQuery
                       ? <Highlight text={getSnippet(entry.content, searchQuery)} query={searchQuery} />

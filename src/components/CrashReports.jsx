@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
 import { apiFetch } from '../utils/api'
 import { useToast } from './ui/Toast'
+import Modal from './ui/Modal'
 
 /**
  * Crashes that happened in somebody's browser.
@@ -47,6 +48,8 @@ export default function CrashReports() {
   const [busy, setBusy] = useState(null)
   const [showDone, setShowDone] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  const [resolving, setResolving] = useState(null)   // the row the dialog is open for
+  const [notesDraft, setNotesDraft] = useState('')
 
   const fetchRows = () => apiFetch(`${API_URL}/api/admin/client-errors`)
 
@@ -81,12 +84,25 @@ export default function CrashReports() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const resolve = async (row) => {
+  const openResolve = (row) => {
+    setNotesDraft(row.notes || '')
+    setResolving(row)
+  }
+
+  const resolve = async () => {
+    const row = resolving
+    if (!row) return
     setBusy(row.id)
     try {
-      await apiFetch(`${API_URL}/api/admin/client-errors/${row.id}/resolve`, { method: 'POST' })
-      setRows(prev => prev.map(r => r.id === row.id ? { ...r, status: 'done' } : r))
+      // The route that actually keeps the notes. The older POST .../resolve
+      // took no body, so anything typed into a resolve dialog went nowhere.
+      await apiFetch(`${API_URL}/api/client-errors/${row.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'done', notes: notesDraft }),
+      })
+      setRows(prev => prev.map(r => r.id === row.id ? { ...r, status: 'done', notes: notesDraft } : r))
       toastSuccess('Marked as dealt with. It will come back if it happens again.')
+      setResolving(null)
     } catch (err) {
       toastError(`Could not update that: ${err.message}`)
     }
@@ -170,7 +186,7 @@ export default function CrashReports() {
               </div>
               {row.status !== 'done' && (
                 <button
-                  onClick={() => resolve(row)}
+                  onClick={() => openResolve(row)}
                   disabled={busy === row.id}
                   className="text-xs px-3 py-1.5 rounded-lg border border-sage-300 text-sage-600 hover:bg-sage-50 transition disabled:opacity-50 shrink-0"
                 >
@@ -178,6 +194,10 @@ export default function CrashReports() {
                 </button>
               )}
             </div>
+
+            {row.status === 'done' && row.notes && (
+              <p className="text-xs text-sage-600 mt-2 italic">{row.notes}</p>
+            )}
 
             <button
               onClick={() => setExpanded(expanded === row.id ? null : row.id)}
@@ -210,6 +230,30 @@ export default function CrashReports() {
           </div>
         ))}
       </div>
+
+      <Modal open={!!resolving} onClose={() => setResolving(null)} title="Mark as dealt with">
+        <p className="text-sm text-sage-600 mb-3">{resolving?.message}</p>
+        <label className="block text-xs text-sage-500 mb-1">What was done about it (optional)</label>
+        <textarea
+          value={notesDraft}
+          onChange={e => setNotesDraft(e.target.value)}
+          rows={3}
+          placeholder="e.g. fixed in the guest-list dedup, or already covered by a retry"
+          className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm resize-y"
+        />
+        <div className="flex gap-2 justify-end mt-4">
+          <button onClick={() => setResolving(null)} className="px-4 py-2 rounded-lg text-sm border border-cream-300 text-sage-600 hover:bg-cream-50">
+            Cancel
+          </button>
+          <button
+            onClick={resolve}
+            disabled={busy === resolving?.id}
+            className="px-4 py-2 rounded-lg text-sm bg-sage-600 text-white hover:bg-sage-700 disabled:opacity-50"
+          >
+            {busy === resolving?.id ? 'Saving…' : 'Dealt with'}
+          </button>
+        </div>
+      </Modal>
     </div>
   )
 }

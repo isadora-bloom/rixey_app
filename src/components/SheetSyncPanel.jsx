@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { apiFetch, ApiError } from '../utils/api'
+import SyncHistoryList from './admin/SyncHistoryList'
 
 const API_URL = import.meta.env.VITE_API_URL || ''
 
@@ -188,11 +189,13 @@ export default function SheetSyncPanel({ wedding }) {
           <span className="text-sage-400">
             Sheet: <em>{diff.sheetTitle || '(untitled)'}</em>
           </span>
-          {diff.lastApply && (
-            <span className="text-sage-400">
-              Last applied: <em>{new Date(diff.lastApply.applied_at).toLocaleString()}</em>
-            </span>
-          )}
+        </div>
+      )}
+
+      {weddingId && (
+        <div>
+          <h3 className="text-sm font-semibold text-sage-700">History</h3>
+          <SyncHistoryList weddingId={weddingId} source="sheet" emptyLabel="Nothing applied from the sheet yet." />
         </div>
       )}
 

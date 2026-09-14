@@ -6,7 +6,7 @@ import VendorChecklist from '../../components/VendorChecklist'
 import InspoGallery from '../../components/InspoGallery'
 import PlanningChecklist from '../../components/PlanningChecklist'
 import CouplePhoto from '../../components/CouplePhoto'
-import WebsiteBuilder from '../../components/WebsiteBuilder'
+import WebsiteReadOnlyTab from '../../components/admin/WebsiteReadOnlyTab'
 import PhotoBucket from '../../components/PhotoBucket'
 import WeddingParty from '../../components/WeddingParty'
 import BarPlanner from '../../components/BarPlanner'
@@ -38,10 +38,15 @@ import WeddingCompleteness from './WeddingCompleteness'
 import WalkthroughNotes from '../../components/WalkthroughNotes'
 import AdminWorksheets from '../../components/admin/AdminWorksheets'
 import WeddingContacts from '../../components/admin/WeddingContacts'
+import ZoomTranscriptsPanel from '../../components/admin/ZoomTranscriptsPanel'
+import CommunicationPulseCard from '../../components/admin/CommunicationPulseCard'
+import { API_URL } from '../../config/api'
+import { apiFetch } from '../../utils/api'
 import DocumentSyncPanel from '../../components/DocumentSyncPanel'
 import { getLastActivity, getCategoryIcon, getCategoryLabel } from './adminUtils'
 import { weddingTabs } from './weddingTabs'
-import { resolveSectionKey, sectionsFor } from '../../../shared/sections.js'
+import { resolveSectionKey, sectionsFor, FINALISABLE_KEYS } from '../../../shared/sections.js'
+import SectionFinaliser from '../../components/SectionFinaliser'
 import SectionIcon from '../../components/ui/SectionIcon'
 import SectionJump from '../../components/ui/SectionJump'
 import useCollapsedGroups from '../../hooks/useCollapsedGroups'
@@ -105,6 +110,7 @@ export default function AdminWeddingProfile({
   // Section sign-offs, canonicalised by Admin.jsx the same way the couple's
   // menu reads them. Feeds the tick and pending count in the sidebar below.
   sectionFinalisations = {},
+  onSectionFinalised,
   updateNoteStatus,
   notesSearchQuery,
   setNotesSearchQuery,
@@ -192,9 +198,23 @@ export default function AdminWeddingProfile({
     if (el) el.scrollTop = el.scrollHeight
   }, [selectedChatUser, weddingMessages])
 
+  // The contacts badge. WeddingContacts loads its own messages when the tab is
+  // open, but the tab list needs the count before anyone has clicked it, so
+  // this fetches the same route independently. A failure here just leaves the
+  // badge at zero rather than breaking the tab list.
+  const [contactMessageCount, setContactMessageCount] = useState(0)
+  useEffect(() => {
+    let alive = true
+    if (!viewingWedding?.id) return
+    apiFetch(`${API_URL}/api/admin/contact-messages/${viewingWedding.id}`)
+      .then(data => { if (alive) setContactMessageCount((data?.messages || []).length) })
+      .catch(() => { if (alive) setContactMessageCount(0) })
+    return () => { alive = false }
+  }, [viewingWedding?.id])
+
   // One list for the sidebar and the phone dropdown both. See weddingTabs.js
   // for what went missing on phones while these were two lists.
-  const TABS = weddingTabs({ planningNotes, uncertainQuestions, viewingWedding, borrowSelections, activities, sectionFinalisations })
+  const TABS = weddingTabs({ planningNotes, uncertainQuestions, viewingWedding, borrowSelections, activities, sectionFinalisations, contactMessageCount })
 
   // Collapsible groups, remembered per browser the same way the couple's menu
   // remembers them (see useCollapsedGroups). 'venue' keeps this memory
@@ -267,6 +287,14 @@ export default function AdminWeddingProfile({
       onExit: exitViewAs,
     }
   }, [viewingAsCouple, viewingWedding, exitViewAs])
+
+  // Same window as the couple's own SectionFinaliser (Dashboard.jsx): within six
+  // weeks of the wedding date, staying true through the day itself.
+  const isPreWedding = useMemo(() => {
+    if (!viewingWedding?.wedding_date) return false
+    const days = (new Date(viewingWedding.wedding_date + 'T23:59:59') - new Date()) / (1000 * 60 * 60 * 24)
+    return days >= 0 && days <= 42
+  }, [viewingWedding?.wedding_date])
 
   const [guestListKey, setGuestListKey] = useState(0)
   const [editingName, setEditingName] = useState(false)
@@ -491,6 +519,7 @@ export default function AdminWeddingProfile({
         </ViewAsProvider>
       </div>
       ) : (
+      <>
       <main className="max-w-6xl mx-auto px-3 sm:px-4 py-4 sm:py-8">
         {/* Escalation Alert */}
         {escalation?.hasEscalation && (
@@ -725,6 +754,8 @@ export default function AdminWeddingProfile({
                     </div>
                   </div>
 
+                  <CommunicationPulseCard weddingId={viewingWedding.id} />
+
                   {/* Planning Links */}
                   <div className="flex flex-wrap items-center gap-2">
                     {viewingWedding.honeybook_link ? (
@@ -837,7 +868,9 @@ export default function AdminWeddingProfile({
                         {borrowSelections.length > 0 && (
                           <button onClick={() => setActiveTab('borrow')} className="text-left bg-orange-50 border border-orange-200 rounded-xl p-3 hover:shadow-sm transition group">
                             <p className="text-sm font-medium text-sage-700 mb-1">📋 Borrow</p>
-                            <p className="text-xs text-sage-500">{borrowSelections.length} items selected</p>
+                            <p className="text-xs text-sage-500">
+                              {borrowSelections.map(s => s.item_name).filter(Boolean).join(', ')}
+                            </p>
                             <p className="text-xs text-sage-400 mt-1 group-hover:text-sage-600">View →</p>
                           </button>
                         )}
@@ -1428,7 +1461,10 @@ export default function AdminWeddingProfile({
               )}
 
               {activeTab === 'walkthrough' && (
-                <WalkthroughNotes weddingId={viewingWedding.id} />
+                <div>
+                  <WalkthroughNotes weddingId={viewingWedding.id} />
+                  <ZoomTranscriptsPanel weddingId={viewingWedding.id} />
+                </div>
               )}
 
               {/* The people with no login. Their calls and emails reached
@@ -1790,12 +1826,10 @@ export default function AdminWeddingProfile({
                 <GuestCareNotes weddingId={viewingWedding.id} />
               )}
 
-              {/* Website Builder Tab */}
+              {/* Website Builder Tab — read-only here. The couple writes this in
+                  their own portal; the venue only needs to see it and check it. */}
               {activeTab === 'website-builder' && (
-                <WebsiteBuilder
-                  weddingId={viewingWedding.id}
-                  coupleNames={viewingWedding.couple_names}
-                />
+                <WebsiteReadOnlyTab weddingId={viewingWedding.id} />
               )}
 
               {/* Photo Library Tab */}
@@ -1871,6 +1905,21 @@ export default function AdminWeddingProfile({
           </div>
         </div>
       </main>
+
+      {/* Staff sign-off. The couple's own bar lives in Dashboard.jsx, mounted
+          with role="couple"; this is the venue's half of the same row, on the
+          same finalisable sections. */}
+      {FINALISABLE_KEYS.has(activeTab) && (
+        <SectionFinaliser
+          sectionKey={activeTab}
+          weddingId={viewingWedding.id}
+          finalisations={sectionFinalisations}
+          onFinalised={onSectionFinalised}
+          role="staff"
+          isPreWedding={isPreWedding}
+        />
+      )}
+      </>
       )}
 
       <ConfirmDialog

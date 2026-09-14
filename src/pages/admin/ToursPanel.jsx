@@ -298,6 +298,10 @@ export default function ToursPanel({ onCountChange }) {
   const [syncing, setSyncing] = useState(false)
   const [briefing, setBriefing] = useState(null)
   const [converting, setConverting] = useState(null)
+  // Kept above Row rather than inside it: Row is redefined on every render of
+  // this component, so any state declared inside it would reset on every
+  // keystroke elsewhere in the panel — a sync, a status change, anything.
+  const [outcomeDrafts, setOutcomeDrafts] = useState({})
 
   const load = async () => {
     try {
@@ -353,6 +357,17 @@ export default function ToursPanel({ onCountChange }) {
       setList(prev => prev.map(x => x.id === e.id ? { ...x, status } : x))
     } catch (err) {
       toastError(`Could not update that: ${err.message}`)
+    }
+  }
+
+  const saveOutcomeNotes = async (e, outcome_notes) => {
+    try {
+      await apiFetch(`${API_URL}/api/admin/enquiries/${e.id}`, {
+        method: 'PATCH', body: JSON.stringify({ outcome_notes }),
+      })
+      setList(prev => prev.map(x => x.id === e.id ? { ...x, outcome_notes } : x))
+    } catch (err) {
+      toastError(`Could not save that: ${err.message}`)
     }
   }
 
@@ -441,6 +456,20 @@ export default function ToursPanel({ onCountChange }) {
             </>
           )}
         </div>
+      </div>
+
+      <div className="mt-2">
+        <textarea
+          value={outcomeDrafts[e.id] ?? e.outcome_notes ?? ''}
+          onChange={ev => setOutcomeDrafts(prev => ({ ...prev, [e.id]: ev.target.value }))}
+          onBlur={ev => {
+            const value = ev.target.value
+            if (value !== (e.outcome_notes || '')) saveOutcomeNotes(e, value)
+          }}
+          rows={2}
+          placeholder="How it went, or how this ended…"
+          className="w-full border border-cream-200 rounded-lg px-3 py-2 text-sm resize-y"
+        />
       </div>
     </div>
   )

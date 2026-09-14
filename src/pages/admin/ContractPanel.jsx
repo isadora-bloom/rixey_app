@@ -133,10 +133,28 @@ export default function ContractPanel({ weddingId, uploadingContract, handleCont
                       </p>
                     </div>
                   </div>
-                  <svg className={`w-4 h-4 text-sage-400 flex-shrink-0 transition ${expandedId === c.id ? 'rotate-180' : ''}`}
-                    fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {/* Every contract has extracted text, not every one has the
+                        actual file. Say which this is rather than let a missing
+                        link read as a bug. */}
+                    {c.download_url ? (
+                      <a
+                        href={c.download_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={e => e.stopPropagation()}
+                        className="px-2.5 py-1 text-xs font-medium bg-sage-50 text-sage-700 rounded-lg hover:bg-sage-100 transition"
+                      >
+                        Download
+                      </a>
+                    ) : (
+                      <span className="text-xs text-sage-400">No file kept</span>
+                    )}
+                    <svg className={`w-4 h-4 text-sage-400 transition ${expandedId === c.id ? 'rotate-180' : ''}`}
+                      fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </div>
                 </button>
                 {expandedId === c.id && (
                   <div className="px-4 pb-4 border-t border-cream-100">
