@@ -1837,14 +1837,27 @@ app.post('/api/chat', requireAuth, async (req, res) => {
           });
         }
 
-        // Get recent planning notes (confirmed details from all sources)
-        const { data: notes } = await supabaseAdmin
+        // Planning notes a human has actually agreed to.
+        //
+        // This used to include `pending` and print the lot under the heading
+        // CONFIRMED PLANNING DETAILS. Pending is the status an extraction gets:
+        // a guess Claude made off an email, never reviewed, sitting in the
+        // approval queue. Sage read them out to the couple as settled fact,
+        // including guesses made off an outsider's email that happened to be
+        // filed against their wedding.
+        //
+        // The cap went with it. Thirty newest meant one Zoom import could evict
+        // every confirmed fact the couple has, quietly, on the day of the
+        // import.
+        const { data: notes, error: notesErr } = await supabaseAdmin
           .from('planning_notes')
           .select('category, content')
           .eq('wedding_id', weddingId)
-          .in('status', ['added', 'confirmed', 'pending'])
+          .in('status', ['added', 'confirmed'])
           .order('created_at', { ascending: false })
-          .limit(30);
+          .limit(150);
+
+        if (notesErr) console.error('[chat] could not read planning notes for context:', notesErr.message);
 
         if (notes && notes.length > 0) {
           weddingContext += '\nCONFIRMED PLANNING DETAILS:\n';
