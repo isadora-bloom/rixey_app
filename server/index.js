@@ -43,7 +43,7 @@ import { readMessageBody, readAttachments } from '../shared/gmail-body.js';
 import { placeNewContract, groupByVendor, currentAndHistory } from '../shared/contract-versions.js';
 import { buildPortalSnapshot } from './lib/sheet-diff/portal-snapshot.js';
 import cron from 'node-cron';
-import * as XLSX from 'xlsx';
+import { parseSpreadsheet } from './lib/spreadsheet.js';
 // PDF parsing removed - using Claude vision for all documents
 
 // Configure multer for file uploads
@@ -14182,25 +14182,22 @@ function splitGuestName(full) {
 }
 
 // Parse xlsx/csv buffer → { tables: [...], totalGuests, warnings }
-async function parseSeatingBuffer(buffer, filename) {
-  const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
+async function parseSeatingBuffer(buffer, filename, mimetype) {
+  const { sheetNames: allSheetNames, sheets } = await parseSpreadsheet(buffer, { originalname: filename, mimetype });
 
   // Pick the most data-rich non-meta sheet
   const SKIP_SHEET = /notes?|legend|key|instruction|readme|about|meta/i;
-  const candidates = workbook.SheetNames.filter(n => !SKIP_SHEET.test(n));
-  const sheetNames = candidates.length > 0 ? candidates : workbook.SheetNames;
+  const candidates = allSheetNames.filter(n => !SKIP_SHEET.test(n));
+  const sheetNames = candidates.length > 0 ? candidates : allSheetNames;
 
-  let mainSheet = workbook.Sheets[sheetNames[0]];
+  let mainSheetName = sheetNames[0];
   let maxRows = 0;
   for (const name of sheetNames) {
-    const ws = workbook.Sheets[name];
-    const ref = ws['!ref'];
-    if (!ref) continue;
-    const range = XLSX.utils.decode_range(ref);
-    if (range.e.r > maxRows) { maxRows = range.e.r; mainSheet = ws; }
+    const rowCount = sheets[name]?.rowCount || 0;
+    if (rowCount > maxRows) { maxRows = rowCount; mainSheetName = name; }
   }
 
-  const rawRows = XLSX.utils.sheet_to_json(mainSheet, { header: 1, defval: null, blankrows: false });
+  const rawRows = sheets[mainSheetName]?.rows || [];
   if (rawRows.length < 2) throw new Error('Spreadsheet appears empty — needs at least a header row and one data row.');
 
   const headerRow = rawRows[0].map(h => (h === null || h === undefined) ? '' : String(h));
@@ -14379,7 +14376,7 @@ app.post('/api/seating/import', spreadsheetUpload.single('file'), async (req, re
 
     if (action === 'parse') {
       if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-      const chart = await parseSeatingBuffer(req.file.buffer, req.file.originalname);
+      const chart = await parseSeatingBuffer(req.file.buffer, req.file.originalname, req.file.mimetype);
       return res.json({ ok: true, chart });
     }
 
