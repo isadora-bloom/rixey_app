@@ -10644,15 +10644,26 @@ app.post('/api/sage-messages/inject', requireAdmin, async (req, res) => {
 // Get all Sage chat messages for all weddings (admin view - for escalation detection)
 app.get('/api/sage-messages/all', requireAdmin, async (req, res) => {
   try {
-    // Get all messages using admin client
-    const { data: messages, error } = await supabaseAdmin
-      .from('messages')
-      .select('*')
-      .order('created_at', { ascending: false });
+    // messages only grows, and this reloaded every Sage message ever sent on
+    // every sync/file/upload (Admin.jsx's loadData). Default to a trailing
+    // window; ?since=<ISO> narrows or widens it. Still paged underneath in
+    // case the window holds more than 1000 rows.
+    const since = req.query.since || new Date(Date.now() - 30 * 86400000).toISOString();
 
-    if (error) throw error;
+    const messages = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin
+        .from('messages')
+        .select('*')
+        .gte('created_at', since)
+        .order('created_at', { ascending: false })
+        .range(from, from + 999);
+      if (error) throw error;
+      messages.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
 
-    res.json({ messages: messages || [] });
+    res.json({ messages });
   } catch (error) {
     console.error('Get all sage messages error:', error);
     res.status(500).json({ error: 'Failed to fetch Sage messages' });
