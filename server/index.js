@@ -14495,16 +14495,20 @@ async function commitSeatingToGuests(weddingId, tables, replaceExisting) {
         // too, but a path that only works because of a trigger is a path that
         // breaks on any database where the trigger has not been run.
         const newId = crypto.randomUUID();
-        const { data: newGuest } = await supabaseAdmin
+        const { data: newGuest, error: insertError } = await supabaseAdmin
           .from('wedding_guests')
           .insert({ id: newId, party_id: newId, wedding_id: weddingId, ...payload })
           .select('id')
           .single();
-        if (newGuest) {
+        if (insertError) {
+          // Counted as created even when it never landed. Warn instead of
+          // silently inflating the summary the admin reads back.
+          warnings.push(`${full || 'A guest'} could not be added: ${insertError.message}`);
+        } else {
           personIndex.set(key, newGuest.id);
           assignedTable.set(newGuest.id, guest.table_assignment);
+          created++;
         }
-        created++;
       }
     }
   }
