@@ -164,14 +164,28 @@ export function createWeddingAccess(supabaseAdmin) {
   // refuse a legitimate call. 47 rows today; refreshed on a slow timer.
   let weddingIds = null, weddingIdsAt = 0;
   const WEDDING_TTL_MS = 60_000;
+  // A miss refreshes the list before it is believed, with a short cooldown so
+  // a stream of garbage uuids cannot turn into a stream of table scans. Found
+  // by the smoke test: a wedding created after the list was cached read as
+  // "not a wedding" for up to a minute, and "not a wedding" means allow.
+  const MISS_COOLDOWN_MS = 5_000;
+  async function refreshWeddingIds() {
+    const { data, error } = await supabaseAdmin.from('weddings').select('id');
+    if (error) return false;
+    weddingIds = new Set((data || []).map(w => w.id));
+    weddingIdsAt = Date.now();
+    return true;
+  }
   async function isWeddingId(id) {
     if (!weddingIds || weddingIdsAt < Date.now() - WEDDING_TTL_MS) {
-      const { data, error } = await supabaseAdmin.from('weddings').select('id');
-      if (error) return null;            // unknown: caller treats as undetermined
-      weddingIds = new Set((data || []).map(w => w.id));
-      weddingIdsAt = Date.now();
+      if (!(await refreshWeddingIds())) return null;   // unknown: caller treats as undetermined
     }
-    return weddingIds.has(id);
+    if (weddingIds.has(id)) return true;
+    if (weddingIdsAt < Date.now() - MISS_COOLDOWN_MS) {
+      if (!(await refreshWeddingIds())) return null;
+      return weddingIds.has(id);
+    }
+    return false;
   }
 
   return async function weddingAccess(req, res, next) {
