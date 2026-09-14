@@ -41,3 +41,4 @@ All migrations are applied manually via `run-migration.ts` (never auto-applied o
 | 034_couple_profile_fix.sql | | applied |
 | 035_extraction_markers.sql | 2026-09-14 | applied 2026-09-14 by Isadora |
 | 036_ingestion_gaps.sql | 2026-09-14 | applied 2026-09-14 by Isadora |
+| 037_table_layout_draft.sql | 2026-09-14 | pending — needs Isadora |

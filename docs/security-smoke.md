@@ -491,3 +491,25 @@ Not a curl either. `GET /api/notifications/client/:weddingId` and
 `GET /api/admin/notifications` must both carry `email_sent`. Disconnect Gmail,
 trigger a couple-facing notification, and the row must come back with
 `email_sent` false rather than looking delivered.
+
+## The venue's table-layout draft
+
+Both sides of the table planner wrote one row, so an admin autosave on a layout
+that had already been sent reached the couple about a second and a half later,
+under a banner saying it was not visible to them. Needs migration 037.
+
+```sh
+# The couple's read must carry none of the venue's unsent work. Both must print
+# false. is_draft must survive: that flag is the couple's own, not the venue's.
+curl -s $API/api/tables/$OURS -H "Authorization: Bearer $COUPLE" \
+  | jq '.tables | has("draft"), has("draft_updated_at")'
+
+# 403 — only Rixey may throw the venue's draft away
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  $API/api/tables/$OURS/discard-draft -H "Authorization: Bearer $COUPLE"
+```
+
+Then, signed in as ADMIN, change any field on a wedding whose layout has
+already been sent, wait for the save indicator, and run the couple's read
+again: `.tables.guest_count` must not have moved. It moves only after Send to
+Client.
