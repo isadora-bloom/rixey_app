@@ -9894,30 +9894,48 @@ app.get('/api/messages/admin/unread', requireAdmin, async (req, res) => {
 // Get all conversations for admin (latest message per wedding)
 app.get('/api/messages/admin/conversations', requireAdmin, async (req, res) => {
   try {
-    // Get all messages grouped by wedding, with latest first
-    const { data, error } = await supabaseAdmin
-      .from('direct_messages')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (error) throw error;
-
-    // Group by wedding and get latest + unread count
-    const conversations = {};
-    data?.forEach(msg => {
-      if (!conversations[msg.wedding_id]) {
-        conversations[msg.wedding_id] = {
-          wedding_id: msg.wedding_id,
-          latest_message: msg,
-          unread_count: 0
-        };
+    // direct_messages only grows; select('*') with no bound silently cut off
+    // at PostgREST's 1000-row default and both the message list and the
+    // unread counts it produced were wrong past that. Paged in a loop
+    // (see runQuoBackfillExtraction for the same pattern).
+    const latestByWedding = {};
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin
+        .from('direct_messages')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .range(from, from + 999);
+      if (error) throw error;
+      for (const msg of data || []) {
+        if (!latestByWedding[msg.wedding_id]) latestByWedding[msg.wedding_id] = msg;
       }
-      if (msg.sender_type === 'client' && !msg.is_read) {
-        conversations[msg.wedding_id].unread_count++;
-      }
-    });
+      if (!data || data.length < 1000) break;
+    }
 
-    res.json({ conversations: Object.values(conversations) });
+    // Unread counts computed separately, bounded to just the unread rows
+    // rather than by scanning every message ever sent to find them.
+    const unreadCounts = {};
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin
+        .from('direct_messages')
+        .select('wedding_id')
+        .eq('sender_type', 'client')
+        .eq('is_read', false)
+        .range(from, from + 999);
+      if (error) throw error;
+      for (const row of data || []) {
+        unreadCounts[row.wedding_id] = (unreadCounts[row.wedding_id] || 0) + 1;
+      }
+      if (!data || data.length < 1000) break;
+    }
+
+    const conversations = Object.entries(latestByWedding).map(([weddingId, latest]) => ({
+      wedding_id: weddingId,
+      latest_message: latest,
+      unread_count: unreadCounts[weddingId] || 0,
+    }));
+
+    res.json({ conversations });
   } catch (error) {
     console.error('Get conversations error:', error);
     res.status(500).json({ error: 'Failed to fetch conversations' });
