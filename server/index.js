@@ -384,6 +384,8 @@ app.use('/api/storefront', (req, res, next) => {
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
+  timeout: 120_000,
+  maxRetries: 2,
 });
 
 // Single source of truth for model IDs — update here when Anthropic releases new versions
