@@ -43,27 +43,13 @@ import { apiFetch, loadJson } from '../utils/api'
 import { useToast } from '../components/ui/Toast'
 import DashboardChat from './dashboard/DashboardChat'
 import FloatingSage from '../components/FloatingSage'
+import CoupleDocuments from '../components/CoupleDocuments'
+import CoupleCompleteness from '../components/CoupleCompleteness'
 import DashboardNav, { FINALISABLE } from './dashboard/DashboardNav'
 import DashboardHeader from './dashboard/DashboardHeader'
 import { shrinkImageForUpload } from '../utils/image'
-import { resolveSectionKey, sectionByKey } from '../../shared/sections.js'
+import { resolveSectionKey } from '../../shared/sections.js'
 
-/**
- * A section that is in the menu but whose panel is still being built.
- *
- * Registering the key now is what keeps the two sides the same shape, and a
- * menu entry that opens a blank white box is the thing that makes people write
- * in saying the portal is broken. So it says what it is and that it is coming.
- */
-function ComingShortly({ sectionKey }) {
-  const label = sectionByKey(sectionKey)?.label || 'This section'
-  return (
-    <div className="p-8 text-center">
-      <p className="font-medium text-sage-700">{label}</p>
-      <p className="text-sage-400 text-sm mt-1">Coming shortly.</p>
-    </div>
-  )
-}
 
 // The five steps OnboardingChecklist walks a couple through.
 const ONBOARDING_STEP_KEYS = [
@@ -956,13 +942,12 @@ export default function Dashboard() {
               )}
 
               {/* Documents and Completeness: the couple's read-only view of
-                  their planning file. U2 is building CoupleDocuments and
-                  CoupleCompleteness; the orchestrator swaps them in here. */}
+                  their planning file. */}
               {activeSection === 'documents' && profile?.wedding_id && (
-                <ComingShortly sectionKey="documents" />
+                <CoupleDocuments weddingId={profile.wedding_id} />
               )}
               {activeSection === 'completeness' && profile?.wedding_id && (
-                <ComingShortly sectionKey="completeness" />
+                <CoupleCompleteness weddingId={profile.wedding_id} onOpenSection={setActiveSection} />
               )}
 
               {/* What the venue wrote up after walking the place with them */}

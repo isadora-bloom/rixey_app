@@ -26,6 +26,7 @@
 
 // Order matters. Both menus render groups in this order.
 export const GROUP_ORDER = [
+  'Home',
   'Get Started',
   'Plan',
   'Day Of',
@@ -100,7 +101,7 @@ export const SECTIONS = [
   { key: 'resources', label: 'Resources', group: 'Connect', icon: 'Link', sides: ['couple'], aliases: [] },
 
   // Venue only
-  { key: 'overview', label: 'Overview', group: 'Venue only', icon: 'LayoutDashboard', sides: ['venue'], aliases: [] },
+  { key: 'overview', label: 'Overview', group: 'Home', icon: 'LayoutDashboard', sides: ['venue'], aliases: [] },
   { key: 'notes', label: 'Planning Notes', group: 'Venue only', icon: 'NotebookPen', sides: ['venue'], aliases: [] },
   { key: 'conversations', label: 'Sage Conversations', group: 'Venue only', icon: 'MessagesSquare', sides: ['venue'], aliases: ['messages'] },
   { key: 'contacts', label: 'Family & Contacts', group: 'Venue only', icon: 'Contact', sides: ['venue'], aliases: [] },

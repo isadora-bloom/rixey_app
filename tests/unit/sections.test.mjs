@@ -74,6 +74,7 @@ test('no two sections share an icon', () => {
 
 test('group order is the same on both sides, and stable', () => {
   assert.deepEqual(GROUP_ORDER, [
+    'Home',
     'Get Started',
     'Plan',
     'Day Of',

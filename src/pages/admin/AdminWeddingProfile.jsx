@@ -39,25 +39,12 @@ import WeddingContacts from '../../components/admin/WeddingContacts'
 import DocumentSyncPanel from '../../components/DocumentSyncPanel'
 import { getLastActivity, getCategoryIcon, getCategoryLabel } from './adminUtils'
 import { weddingTabs } from './weddingTabs'
-import { resolveSectionKey, sectionByKey } from '../../../shared/sections.js'
+import { resolveSectionKey } from '../../../shared/sections.js'
 import SectionIcon from '../../components/ui/SectionIcon'
+import RsvpSettingsTab from '../../components/admin/RsvpSettingsTab'
 import { weddingName } from '../../../shared/wedding-name.js'
 import { ConfirmDialog } from '../../components/ui'
 
-/**
- * A tab that is in the menu but whose panel is still being built. Registering
- * the key now is what keeps the venue's menu and the couple's the same shape,
- * and a tab that opens a blank panel reads as a broken page.
- */
-function ComingShortly({ sectionKey }) {
-  const label = sectionByKey(sectionKey)?.label || 'This tab'
-  return (
-    <div className="p-8 text-center">
-      <p className="font-medium text-sage-700">{label}</p>
-      <p className="text-sage-400 text-sm mt-1">Coming shortly.</p>
-    </div>
-  )
-}
 
 export default function AdminWeddingProfile({
   viewingWedding,
@@ -1310,13 +1297,8 @@ export default function AdminWeddingProfile({
               {activeTab === 'worksheets' && (
                 <AdminWorksheets wedding={viewingWedding} />
               )}
-
-              {/* RSVP Settings. The couple has had this for months and the
-                  venue had no way to see what they had switched on, so Grace
-                  was reading it back off a screenshot. U2 is building
-                  RsvpSettingsTab; the orchestrator swaps it in here. */}
               {activeTab === 'rsvp-settings' && (
-                <ComingShortly sectionKey="rsvp-settings" />
+                <RsvpSettingsTab weddingId={viewingWedding.id} />
               )}
 
               {activeTab === 'allergies' && (
