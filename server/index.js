@@ -6219,18 +6219,44 @@ app.post('/api/zoom/callback', async (req, res) => {
   }
 });
 
-// Check Zoom connection status
+// Check Zoom connection status.
+//
+// "Connected" was a row in a table: it went green the moment somebody finished
+// the OAuth dance and stayed green after the grant was revoked, after the
+// refresh token rotated into a failed write, and through every 401 the sync
+// got. So it now spends one cheap API call actually asking Zoom, and reports
+// the last sync alongside — a light that says connected while the last four
+// runs failed is not telling you anything useful.
 app.get('/api/zoom/status', async (req, res) => {
+  const lastJob = await lastSyncJob('zoom');
   try {
-    const { data: tokens } = await supabaseAdmin
+    const { data: tokens, error } = await supabaseAdmin
       .from('zoom_tokens')
-      .select('*')
+      .select('access_token')
       .limit(1)
-      .single();
+      .maybeSingle();
 
-    res.json({ connected: !!tokens?.access_token });
+    if (error) return res.json({ connected: false, reason: `Could not read the stored Zoom token: ${error.message}`, ...lastJob });
+    if (!tokens?.access_token) return res.json({ connected: false, reason: 'Zoom has never been connected.', ...lastJob });
+
+    const accessToken = await getZoomAccessToken();
+    if (!accessToken) return res.json({ connected: false, reason: 'The stored Zoom token could not be refreshed. Reconnect Zoom.', ...lastJob });
+
+    const probe = await fetch('https://api.zoom.us/v2/users/me', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!probe.ok) {
+      const body = await probe.text().catch(() => '');
+      return res.json({
+        connected: false,
+        reason: `Zoom answered ${probe.status} when asked who we are${probe.status === 401 ? ' — the grant has been revoked, reconnect Zoom' : ''}. ${body.slice(0, 160)}`.trim(),
+        ...lastJob,
+      });
+    }
+
+    res.json({ connected: true, ...lastJob });
   } catch (error) {
-    res.json({ connected: false });
+    res.json({ connected: false, reason: error.message, ...lastJob });
   }
 });
 
@@ -6359,6 +6385,14 @@ async function runZoomSync({ jobId, sinceDays, reprocess }) {
   };
 
   {
+    // The same guard the Quo family has had since August. Two Zoom runs over
+    // the same meetings both download the transcript and both run a Claude
+    // extraction, and the model does not word a note the same way twice — so
+    // the second run does not collide with the first, it paraphrases it. The
+    // manual endpoint and the cron can now both be in flight at once, which is
+    // exactly the shape that turned 341 texts into 855 notes.
+    await assertNoOverlappingJob(['zoom'], jobId);
+
     const accessToken = await getZoomAccessToken();
     if (!accessToken) {
       return fail('Zoom is not connected. Reconnect it in the admin panel.');
@@ -6367,9 +6401,15 @@ async function runZoomSync({ jobId, sinceDays, reprocess }) {
     // wedding_date comes along because it is one of the three things allowed to
     // settle a match: a first and last name, both halves of the couple, or a
     // name with the wedding date.
-    const { data: weddings } = await supabaseAdmin
+    const { data: weddings, error: weddingsErr } = await supabaseAdmin
       .from('weddings')
       .select('id, couple_names, wedding_date, profiles(name, email)');
+
+    // A failed read here builds an empty directory, and an empty directory
+    // matches nothing — so every meeting in the run goes to the review queue
+    // as unattributable, which looks like a matching problem rather than a
+    // database one. Stop instead.
+    if (weddingsErr) throw new Error(`Could not read the wedding list to match against: ${weddingsErr.message}`);
 
     // Each wedding keeps its own names and is scored against the whole title,
     // rather than every wedding writing its first names into one shared map
@@ -6486,6 +6526,11 @@ async function runZoomSync({ jobId, sinceDays, reprocess }) {
     // way to tell them apart was to go and query Zoom by hand.
     let alreadyImported = 0;
     let noTranscript = 0;
+    // Transcripts Zoom would not hand over. Counted apart from noTranscript,
+    // because "not written yet" and "refused" want different reactions.
+    let transcriptFailed = 0;
+    // Extractions attempted and lost.
+    let extractFailed = 0;
 
     for (const meeting of meetings) {
       const meetingId = meeting.uuid;
@@ -6498,15 +6543,29 @@ async function runZoomSync({ jobId, sinceDays, reprocess }) {
 
       if (!transcriptFile) { noTranscript++; continue; }
 
-      // Download transcript
+      // Download transcript.
+      //
+      // The status was never checked, so Zoom's error body — a line of JSON
+      // saying the token had expired — was stored as the meeting transcript and
+      // then read by Claude as though it were a conversation. Checked before
+      // the marker row is written, so a failed download is retried on the next
+      // run rather than marked done for ever.
       let transcriptText = '';
       try {
         const transcriptResponse = await fetch(
           `${transcriptFile.download_url}?access_token=${accessToken}`
         );
+        if (!transcriptResponse.ok) {
+          console.error(`Zoom transcript download for "${meeting.topic}" returned ${transcriptResponse.status}; leaving the meeting for the next run`);
+          transcriptFailed++;
+          skipped++;
+          continue;
+        }
         transcriptText = await transcriptResponse.text();
       } catch (err) {
         console.error('Error downloading transcript:', err);
+        transcriptFailed++;
+        skipped++;
         continue;
       }
 
@@ -6570,12 +6629,28 @@ async function runZoomSync({ jobId, sinceDays, reprocess }) {
 
       // Save full transcript as a planning note so Sage can search it
       if (matchedWeddingId && transcriptText) {
-        notesExtracted += await fileZoomMeeting({
+        const filed = await fileZoomMeeting({
           weddingId: matchedWeddingId,
           topic: meeting.topic,
           startTime: meeting.start_time,
           transcriptText,
+          meetingId,
         });
+        notesExtracted += filed.notes;
+        if (filed.error) {
+          extractFailed++;
+          const patch = markerExtractionPatch({ error: filed.error });
+          if (patch) {
+            const { error: patchErr } = await supabaseAdmin
+              .from('processed_zoom_meetings').update(patch).eq('zoom_meeting_id', meetingId);
+            if (patchErr) console.error(`[zoom] could not record the extraction outcome for ${meetingId}: ${patchErr.message}`);
+          }
+        } else {
+          const patch = markerExtractionPatch({ error: null });
+          if (patch) {
+            await supabaseAdmin.from('processed_zoom_meetings').update(patch).eq('zoom_meeting_id', meetingId);
+          }
+        }
       }
 
       newlyProcessed++;
@@ -6621,6 +6696,13 @@ async function runZoomSync({ jobId, sinceDays, reprocess }) {
         recordingsFound: meetings.length,
         alreadyImported,
         noTranscript,
+        // Zoom had a transcript and would not give it to us. Different from
+        // noTranscript, which is Zoom still writing it.
+        transcriptFailed,
+        extractFailed,
+        extractFailedNote: extractFailed
+          ? `${extractFailed} meeting(s) were imported but could not be read for planning notes.${has035('markers') ? ' Each one has extract_error set; run the extraction retry to pick them up.' : ' Migration 035 is not applied, so which ones is only in the log.'}`
+          : 'ok',
       },
     });
   }
@@ -6634,13 +6716,29 @@ async function runZoomSync({ jobId, sinceDays, reprocess }) {
  * versions of this would drift, and the one used less often would be the one
  * that quietly stopped working.
  *
- * @returns {Promise<number>} how many planning notes were extracted
+ * A reprocess run refreshes the raw transcript note and stops there. The notes
+ * this meeting produced are already on file; asking Claude again does not find
+ * them again, it writes them again in slightly different words, and exact-string
+ * dedup cannot catch a paraphrase. That is how 341 texts became 855 notes.
+ *
+ * @returns {Promise<{ notes: number, error: string|null, skipped: boolean }>}
  */
-async function fileZoomMeeting({ weddingId, topic, startTime, transcriptText }) {
+async function fileZoomMeeting({ weddingId, topic, startTime, transcriptText, meetingId = null }) {
   const cleanTranscript = parseVttToText(transcriptText);
   const meetingLabel = topic || 'Untitled';
-  const meetingDate = startTime ? new Date(startTime).toLocaleDateString() : 'unknown date';
+  // venueDate, not the server's locale. toLocaleDateString on a Railway box in
+  // UTC rolls the date over at 7pm Virginia time, so an evening meeting got
+  // tomorrow's date in its source key and was filed as a second, different
+  // meeting on the next run.
+  const meetingDate = startTime ? venueDate(startTime) : 'unknown date';
   const transcriptSource = `Zoom meeting on ${meetingDate}`;
+  // Every transcript already on file was keyed with the server's own locale.
+  // Looked up alongside the new key so a meeting filed before this change is
+  // recognised rather than written a second time under a differently formatted
+  // date.
+  const legacySource = startTime
+    ? `Zoom meeting on ${new Date(startTime).toLocaleDateString()}`
+    : transcriptSource;
   const noteBody = `[Zoom Meeting: ${meetingLabel} — ${meetingDate}]\n${cleanTranscript}`;
 
   // Don't re-file a transcript we already hold for this meeting. If the copy on
@@ -6651,7 +6749,7 @@ async function fileZoomMeeting({ weddingId, topic, startTime, transcriptText }) 
     .select('id, content')
     .eq('wedding_id', weddingId)
     .eq('category', 'zoom_transcript')
-    .eq('source_message', transcriptSource)
+    .in('source_message', [...new Set([transcriptSource, legacySource])])
     .limit(1);
   // Unanswerable means do nothing, not write a second copy of a transcript.
   if (priorTranscriptErr) {
@@ -6684,12 +6782,36 @@ async function fileZoomMeeting({ weddingId, topic, startTime, transcriptText }) 
   // transcript, i.e. the greeting. Every meeting was being mined from its first
   // thirty seconds.
   const source = `Zoom meeting: ${meetingLabel} (${meetingDate})`;
-  const notes = await extractPlanningNotesAI(transcriptText, weddingId, source, 'transcript');
-  if (notes.length > 0) {
-    await savePlanningNotes(notes);
-    console.log(`  Extracted ${notes.length} planning notes from "${meetingLabel}"`);
+
+  // Has this meeting already been read? A reprocess run reaches here with the
+  // marker rows deliberately ignored, so without this check every meeting in
+  // the window is extracted again and the model paraphrases its own notes back
+  // into the couple's file.
+  const done = await sourceAlreadyExtracted({
+    weddingId,
+    sourceKind: 'zoom',
+    sourceId: meetingId,
+    sourceMessage: source,
+  });
+
+  const outcome = await importWithMarker({
+    alreadyExtracted: done,
+    extract: () => extractPlanningNotesAI(
+      transcriptText, weddingId, source, 'transcript',
+      { sourceKind: 'zoom', sourceId: meetingId },
+    ),
+    save: savePlanningNotes,
+  });
+
+  if (outcome.status === 'extraction-skipped') {
+    console.log(`  "${meetingLabel}" has already been read for planning notes, refreshing the transcript only`);
+  } else if (outcome.status === 'extract-failed') {
+    console.error(`  Could not read "${meetingLabel}" for planning notes: ${outcome.error}`);
+  } else if (outcome.notes > 0) {
+    console.log(`  Extracted ${outcome.notes} planning notes from "${meetingLabel}"`);
   }
-  return notes.length;
+
+  return { notes: outcome.notes, error: outcome.error || null, skipped: outcome.status === 'extraction-skipped' };
 }
 
 // ============ SYNC VISIBILITY ============
@@ -7044,13 +7166,15 @@ app.post('/api/admin/ingest-review/:id/assign', async (req, res) => {
         .update({ wedding_id: weddingId }).eq('gmail_message_id', item.external_id);
       if (updErr) throw updErr;
 
-      const notes = await extractPlanningNotesAI(
+      const { notes, error: extractErr } = await extractPlanningNotesAI(
         email.body_text || '',
         weddingId,
         `Email: ${email.subject || '(no subject)'}`,
         'email',
+        { sourceKind: 'email', sourceId: item.external_id },
       );
       if (notes.length) await savePlanningNotes(notes);
+      if (extractErr) console.error(`[review] extraction failed while filing ${item.external_id}: ${extractErr}`);
 
       await supabaseAdmin.from('ingest_review').update({
         status: 'resolved',
@@ -7058,7 +7182,9 @@ app.post('/api/admin/ingest-review/:id/assign', async (req, res) => {
         resolved_by: req.userId || null,
         resolved_at: new Date().toISOString(),
       }).eq('id', item.id);
-      return res.json({ ok: true, notesExtracted: notes.length });
+      // The email is filed either way; say so when the reading of it failed,
+      // rather than reporting zero notes as though there were none to find.
+      return res.json({ ok: true, notesExtracted: notes.length, extractError: extractErr || null });
     }
 
     const { data: meeting, error: mErr } = await supabaseAdmin
@@ -7073,11 +7199,12 @@ app.post('/api/admin/ingest-review/:id/assign', async (req, res) => {
     }).eq('zoom_meeting_id', item.external_id);
     if (updErr) throw updErr;
 
-    const notes = await fileZoomMeeting({
+    const filed = await fileZoomMeeting({
       weddingId,
       topic: meeting.meeting_topic,
       startTime: item.occurred_at,
       transcriptText: meeting.transcript_text || '',
+      meetingId: item.external_id,
     });
 
     await supabaseAdmin.from('ingest_review').update({
@@ -7087,7 +7214,7 @@ app.post('/api/admin/ingest-review/:id/assign', async (req, res) => {
       resolved_at: new Date().toISOString(),
     }).eq('id', item.id);
 
-    res.json({ ok: true, notesExtracted: notes });
+    res.json({ ok: true, notesExtracted: filed.notes, extractError: filed.error });
   } catch (error) {
     console.error('assign review item error:', error);
     res.status(500).json({ error: 'Could not file that meeting: ' + error.message });
@@ -7209,18 +7336,29 @@ app.post('/api/zoom/reextract', async (req, res) => {
     }
 
     let totalNotes = 0;
+    let failedSources = 0;
     for (const src of sources) {
-      const notes = await extractPlanningNotesAI(src.text, src.wedding_id, `Zoom meeting: ${src.label}`, 'transcript');
+      const { notes, error: extractErr } = await extractPlanningNotesAI(
+        src.text, src.wedding_id, `Zoom meeting: ${src.label}`, 'transcript',
+      );
+      if (extractErr) {
+        failedSources++;
+        console.error(`Re-extract failed for "${src.label}": ${extractErr}`);
+      }
       if (notes.length > 0) {
         await savePlanningNotes(notes);
         totalNotes += notes.length;
         console.log(`Re-extracted ${notes.length} notes from "${src.label}"`);
-      } else {
+      } else if (!extractErr) {
         console.log(`No notes extracted from "${src.label}" (text length: ${src.text?.length || 0})`);
       }
     }
 
-    res.json({ message: `Re-extracted ${totalNotes} planning notes from ${sources.length} transcript(s).` });
+    res.json({
+      message: `Re-extracted ${totalNotes} planning notes from ${sources.length} transcript(s).`
+        + (failedSources ? ` ${failedSources} transcript(s) could not be read.` : ''),
+      failedSources,
+    });
   } catch (error) {
     console.error('Re-extract error:', error);
     res.status(500).json({ error: 'Failed to re-extract: ' + error.message });
