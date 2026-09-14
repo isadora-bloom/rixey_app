@@ -585,12 +585,13 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
       if (recipeMode === 'url') {
         data = await apiFetch(`${API_URL}/api/bar-recipes/extract-url`, {
           method: 'POST',
-          body: JSON.stringify({ url: recipeUrl, name: recipeName }),
+          body: JSON.stringify({ url: recipeUrl, name: recipeName, weddingId }),
         })
       } else {
         const form = new FormData()
         form.append('file', recipeFile)
         form.append('name', recipeName)
+        form.append('weddingId', weddingId)
         data = await apiFetch(`${API_URL}/api/bar-recipes/extract-upload`, { method: 'POST', body: form })
       }
       if (data && data.saved && data.recipe) {

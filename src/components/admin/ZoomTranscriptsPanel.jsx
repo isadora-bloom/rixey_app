@@ -40,6 +40,7 @@ function normalise(row) {
 // before ({ processed_meetings: { data } }); read whichever arrives.
 function extractRows(data) {
   if (Array.isArray(data)) return data
+  if (Array.isArray(data?.meetings)) return data.meetings
   if (Array.isArray(data?.data)) return data.data
   if (Array.isArray(data?.rows)) return data.rows
   if (Array.isArray(data?.transcripts)) return data.transcripts

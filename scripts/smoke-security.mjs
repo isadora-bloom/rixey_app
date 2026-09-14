@@ -127,6 +127,14 @@ try {
   await check('own completeness', 200, `/api/completeness/${A.wedding}`, { token: A.token });
   await check('another couple\'s completeness', 403, `/api/completeness/${B.wedding}`, { token: A.token });
 
+  // Ingestion gap routes, 14 Sep evening.
+  await check('own notes from Rixey', 200, `/api/planning-notes/couple/${A.wedding}`, { token: A.token });
+  await check('another couple\'s notes from Rixey', 403, `/api/planning-notes/couple/${B.wedding}`, { token: A.token });
+  await check('accommodations admin write as a couple', 403, '/api/admin/accommodations', { method: 'POST', token: A.token, json: { name: 'smoke' } });
+  await check('onboarding read as a couple', 403, `/api/admin/onboarding/${A.wedding}`, { token: A.token });
+  await check('staff sign-off as a couple', [400, 403], `/api/finalisations/${A.wedding}`, { method: 'POST', token: A.token, json: { section: 'budget', role: 'staff', finalised: true } });
+  await check('removed google-debug route', 404, '/api/google-debug');
+
   // Ingestion audit, 14 Sep evening.
   await check('mark admin notifications read without a token', 401, '/api/notifications/read', { method: 'PUT', json: { recipientType: 'admin' } });
   await check('mark admin notifications read as a couple', 403, '/api/notifications/read', { method: 'PUT', token: A.token, json: { recipientType: 'admin' } });
