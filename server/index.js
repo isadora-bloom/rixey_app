@@ -14571,19 +14571,29 @@ app.get('/api/documents/:weddingId', async (req, res) => {
       .eq('wedding_id', req.params.weddingId)
       .order('created_at', { ascending: false });
     if (error) throw error;
-    res.json((data || []).map(d => ({
-      id: d.id,
-      filename: d.filename,
-      kind: d.kind,
-      page_count: d.page_count,
-      parsed_at: d.parsed_at,
-      created_at: d.created_at,
-      // day-of-media is a public bucket (migration 016), so the stored path
-      // is enough to build a stable link; nothing to sign or let expire.
-      download_url: d.storage_path
-        ? supabaseAdmin.storage.from('day-of-media').getPublicUrl(d.storage_path).data.publicUrl
-        : null,
-    })));
+    // The documents sit in day-of-media, which is a public bucket, so the
+    // path alone would do. Hand out a signed link anyway: these are the
+    // couple's contracts and plans, and a link that stops working after an
+    // hour is the right shape for that even while the bucket is public.
+    const docs = await Promise.all((data || []).map(async d => {
+      let download_url = null;
+      if (d.storage_path) {
+        const { data: signed, error: signErr } = await supabaseAdmin.storage
+          .from('day-of-media').createSignedUrl(d.storage_path, 60 * 60);
+        if (signErr) console.error('[documents] could not sign a link:', signErr.message);
+        download_url = signed?.signedUrl || null;
+      }
+      return {
+        id: d.id,
+        filename: d.filename,
+        kind: d.kind,
+        page_count: d.page_count,
+        parsed_at: d.parsed_at,
+        created_at: d.created_at,
+        download_url,
+      };
+    }));
+    res.json(docs);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
