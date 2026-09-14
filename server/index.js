@@ -3127,8 +3127,11 @@ async function buildWeddingContext(weddingId, { noteLimit = 400 } = {}) {
 
     // Who and when, first, because everything else is judged against the date.
     if (wedding) {
+      // Whole days at the venue, not wall-clock hours wherever the server or
+      // reader happens to be — the old version drifted by a day depending on
+      // the hour it ran.
       const days = wedding.wedding_date
-        ? Math.ceil((new Date(wedding.wedding_date + 'T00:00:00') - new Date()) / 86400000)
+        ? Math.round((new Date(`${wedding.wedding_date}T12:00:00Z`) - new Date(`${venueToday()}T12:00:00Z`)) / 86400000)
         : null;
       const when = wedding.wedding_date
         ? `${wedding.wedding_date}${days === null ? '' : days < 0 ? ` (${Math.abs(days)} days ago)` : ` (${days} days away)`}`
