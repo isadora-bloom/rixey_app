@@ -127,6 +127,9 @@ try {
   await check('own completeness', 200, `/api/completeness/${A.wedding}`, { token: A.token });
   await check('another couple\'s completeness', 403, `/api/completeness/${B.wedding}`, { token: A.token });
 
+  // Ask Sage from the admin home: admin only.
+  await check('admin ask as a couple', 403, '/api/admin/ask', { method: 'POST', token: A.token, json: { text: 'tell me the caterer for smoke a' } });
+
   // Ingestion gap routes, 14 Sep evening.
   await check('own notes from Rixey', 200, `/api/planning-notes/couple/${A.wedding}`, { token: A.token });
   await check('another couple\'s notes from Rixey', 403, `/api/planning-notes/couple/${B.wedding}`, { token: A.token });
