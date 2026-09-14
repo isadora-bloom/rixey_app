@@ -15892,10 +15892,35 @@ app.get('/api/finalisations/:weddingId', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+/**
+ * Sign a section off, as the couple or as Rixey.
+ *
+ * staff_finalised has been a column since the table was created and had no
+ * writer: SectionFinaliser was mounted with role="couple" hardcoded, so the
+ * venue's own "we have checked this" was unreachable and every sign-off in the
+ * database is a couple's.
+ *
+ * Body: { section, role | party, value }. `role` is the name the client
+ * component uses and `party` is what this route has always taken; both work,
+ * because the two are the same thing and renaming one of them would only move
+ * the mismatch.
+ *
+ * Staff is admin-only. Without that check any couple could tick Rixey's own
+ * sign-off on their file, which is the one mark on the screen that is supposed
+ * to mean somebody at the venue looked.
+ */
 app.post('/api/finalisations/:weddingId', async (req, res) => {
   try {
-    const { section, party, value } = req.body; // party: 'couple' | 'staff'
-    if (!section || !party) return res.status(400).json({ error: 'section and party required' });
+    const { section, value } = req.body;
+    const party = req.body.role || req.body.party;   // 'couple' | 'staff'
+    if (!section || !party) return res.status(400).json({ error: 'section and role required' });
+    if (party !== 'couple' && party !== 'staff') {
+      return res.status(400).json({ error: "role must be 'couple' or 'staff'" });
+    }
+
+    if (party === 'staff' && !(await isAdminUser(req.userId))) {
+      return res.status(403).json({ error: 'Only Rixey can sign a section off' });
+    }
 
     const field     = party === 'couple' ? 'couple_finalised' : 'staff_finalised';
     const fieldAt   = party === 'couple' ? 'couple_finalised_at' : 'staff_finalised_at';
