@@ -15425,7 +15425,43 @@ async function sendDailyDigest({ dryRun = false } = {}) {
     .select('id', { count: 'exact', head: true })
     .is('admin_answer', null);
 
-  if (weddingIds.length === 0 && !openQuestionCount) {
+  // The syncs, and the queue of things they could not place.
+  //
+  // Both sections render every day, including the days they have nothing to
+  // say. A brief that only speaks up when something is wrong teaches you to
+  // skim past it, and then the one morning it does speak up you skim past that
+  // too. "Syncs: all fine" is a sentence worth printing.
+  const { data: failedSyncs, error: failedSyncsErr } = await supabaseAdmin
+    .from('sync_jobs')
+    .select('kind, trigger, status, started_at, finished_at, last_error, heartbeat_at')
+    .in('status', ['failed', 'running'])
+    .gte('started_at', since)
+    .order('started_at', { ascending: false })
+    .limit(50);
+  if (failedSyncsErr) console.error('[Digest] could not read sync_jobs:', failedSyncsErr.message);
+
+  // A 'running' row whose heartbeat died is a killed run, and it belongs in
+  // this list. It is the exact shape of the 14 August Zoom sync that nothing
+  // ever reported.
+  const badSyncs = (failedSyncs || []).filter(j =>
+    j.status === 'failed'
+    || (j.status === 'running' && Date.now() - new Date(j.heartbeat_at || j.started_at).getTime() > 60 * 60 * 1000)
+  );
+
+  const { data: reviewQueue, error: reviewErr } = await supabaseAdmin
+    .from('ingest_review')
+    .select('created_at, source')
+    .eq('status', 'open')
+    .order('created_at', { ascending: true })
+    .limit(1000);
+  if (reviewErr) console.error('[Digest] could not read the review queue:', reviewErr.message);
+
+  const reviewCount = (reviewQueue || []).length;
+  const oldestReviewDays = reviewCount
+    ? Math.floor((Date.now() - new Date(reviewQueue[0].created_at).getTime()) / 86400000)
+    : 0;
+
+  if (weddingIds.length === 0 && !openQuestionCount && !badSyncs.length && !reviewCount) {
     console.log('[Digest] No portal activity in last 24h and nothing outstanding — skipping');
     return { skipped: true, reason: 'Nothing happened and nothing is outstanding' };
   }
@@ -15529,6 +15565,39 @@ async function sendDailyDigest({ dryRun = false } = {}) {
         ${openQuestions.length > 12 ? `<div style="font-size:12px;color:#b45309;margin-top:8px;">and ${openQuestions.length - 12} more</div>` : ''}
       </div>`;
 
+  // Escaped, because last_error is a database message and a subject line is a
+  // couple's own typing. lib/rsvp-confirmation.js has the same helper.
+  const esc = (s) => String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
+  const syncHtml = `
+      <div style="margin-bottom:20px;background:#fff;border-radius:8px;padding:16px;border:1px solid ${badSyncs.length ? '#fecaca' : '#e8e0d5'};">
+        <div style="font-size:15px;font-weight:bold;color:${badSyncs.length ? '#991b1b' : '#3d3d3d'};margin-bottom:8px;">Syncs that failed in the last 24h</div>
+        ${badSyncs.length === 0
+          ? `<div style="font-size:13px;color:#5c6b4f;">None. Every run in the last 24 hours finished.</div>`
+          : `<table style="width:100%;border-collapse:collapse;">${badSyncs.slice(0, 12).map(j => `
+          <tr>
+            <td style="padding:6px 0;border-bottom:1px solid #f0ebe3;vertical-align:top;">
+              <span style="font-size:13px;color:#991b1b;font-weight:bold;">${esc(j.kind)}</span>
+              <span style="font-size:11px;color:#999;margin-left:6px;">${esc(j.trigger)} · ${new Date(j.started_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' })}</span>
+              <div style="font-size:12px;color:#7c2d12;margin-top:2px;">${j.status === 'running' ? 'Stopped without finishing. ' : ''}${esc(String(j.last_error || 'No error was recorded.').slice(0, 200))}</div>
+            </td>
+          </tr>`).join('')}</table>
+          ${badSyncs.length > 12 ? `<div style="font-size:12px;color:#991b1b;margin-top:8px;">and ${badSyncs.length - 12} more</div>` : ''}`}
+      </div>`;
+
+  const queueHtml = `
+      <div style="margin-bottom:20px;background:#fff;border-radius:8px;padding:16px;border:1px solid #e8e0d5;">
+        <div style="font-size:15px;font-weight:bold;color:#3d3d3d;margin-bottom:8px;">Waiting in review</div>
+        <div style="font-size:13px;color:${reviewCount ? '#9a3412' : '#5c6b4f'};">
+          ${reviewCount === 0
+            ? 'Nothing. Every email, meeting and call that came in could be placed.'
+            : `${reviewCount} item${reviewCount === 1 ? '' : 's'}, oldest ${oldestReviewDays === 0 ? 'today' : oldestReviewDays === 1 ? '1 day' : `${oldestReviewDays} days`} old. These are emails, meetings and calls the ingestion could not tie to a couple.`}
+        </div>
+        ${reviewCount ? `<a href="${frontendUrl}/admin" style="display:inline-block;margin-top:8px;font-size:12px;color:#5C6B4F;">Place them in admin →</a>` : ''}
+      </div>`;
+
   const html = `
     <div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;padding:30px 20px;color:#3d3d3d;background:#fefbf7;">
       <div style="padding-bottom:16px;margin-bottom:8px;border-bottom:2px solid #7C9070;">
@@ -15537,6 +15606,8 @@ async function sendDailyDigest({ dryRun = false } = {}) {
       <h2 style="font-size:20px;color:#3d3d3d;margin:0 0 4px;font-weight:normal;">Daily Portal Memo</h2>
       <p style="font-size:13px;color:#999;margin:0 0 24px;">${dateStr}</p>
       ${needsYouHtml}
+      ${syncHtml}
+      ${queueHtml}
       ${coupleHtml}
       <a href="${frontendUrl}/admin" style="display:inline-block;background:#5C6B4F;color:white;padding:10px 20px;border-radius:6px;text-decoration:none;font-size:14px;">View all in admin →</a>
       <div style="margin-top:32px;padding-top:16px;border-top:1px solid #e8e0d5;">
@@ -15546,20 +15617,126 @@ async function sendDailyDigest({ dryRun = false } = {}) {
 
   const waiting = (openQuestions || []).length;
   const subject = portalSubject(
-    `Daily memo — ${dateStr}${waiting ? ` · ${waiting} waiting on you` : ''}`
+    `Daily memo — ${dateStr}${waiting ? ` · ${waiting} waiting on you` : ''}${badSyncs.length ? ` · ${badSyncs.length} sync failure${badSyncs.length === 1 ? '' : 's'}` : ''}`
   );
 
   if (dryRun) {
-    return { subject, html, to: adminEmail, waiting, couples: sections.length };
+    return { subject, html, to: adminEmail, waiting, couples: sections.length, failedSyncs: badSyncs.length, reviewQueue: reviewCount };
   }
 
   await sendEmail(adminEmail, subject, html);
-  console.log(`[Digest] Sent to ${adminEmail} (${waiting} open question(s))`);
-  return { subject, to: adminEmail, waiting, couples: sections.length };
+  console.log(`[Digest] Sent to ${adminEmail} (${waiting} open question(s), ${badSyncs.length} sync failure(s), ${reviewCount} in review)`);
+  return { subject, to: adminEmail, waiting, couples: sections.length, failedSyncs: badSyncs.length, reviewQueue: reviewCount };
 }
 
 // 8 AM ET daily
 cron.schedule('0 8 * * *', () => { sendDailyDigest().catch(err => console.error('[Digest] Error:', err.message)); }, { timezone: 'America/New_York' });
+
+/**
+ * Tell an admin a scheduled sync failed.
+ *
+ * A failure on a manual run has somebody watching the panel. A failure at 05
+ * past the hour has nobody, and until now it went to a Railway log. Deduped per
+ * kind per day, because a broken Gmail grant fails twenty-four times before
+ * anybody reads the first one.
+ */
+const syncFailureNotified = new Map();
+async function notifySyncFailure(kind, message) {
+  const today = venueToday();
+  if (syncFailureNotified.get(kind) === today) return;
+  syncFailureNotified.set(kind, today);
+
+  // The in-memory guard covers a single process; this covers a restart, which
+  // on Railway happens more often than a day. A rolling twenty hours rather
+  // than a calendar day, because "midnight" here would be parsed in the
+  // server's own timezone and Railway runs in UTC — four hours out from the
+  // venue, and quietly, which is the whole reason shared/venue-time.js exists.
+  const dayStart = new Date(Date.now() - 20 * 60 * 60 * 1000).toISOString();
+  const { data: already, error: dedupeErr } = await supabaseAdmin
+    .from('notifications')
+    .select('id')
+    .eq('recipient_type', 'admin')
+    .eq('type', 'sync_failed')
+    .ilike('title', `%${kind}%`)
+    .gte('created_at', dayStart)
+    .limit(1);
+  // Cannot tell means send it. A second copy of a failure notice is a nuisance;
+  // a missing one is the thing this whole audit is about.
+  if (dedupeErr) console.error('[sync] could not check for an existing failure notice:', dedupeErr.message);
+  if (already?.length) return;
+
+  await createNotification(
+    null, 'admin', 'sync_failed',
+    `The scheduled ${kind} sync failed`,
+    `${message}\n\nIt will try again on the next hour. If it keeps failing, the connection probably needs reconnecting in the admin panel.`,
+  );
+}
+
+/**
+ * Run an import on a timer, against a job row, without stacking.
+ *
+ * Zoom got a cron in August because a meeting went missing. Gmail and Quo never
+ * did, so emails and texts sat outside the portal until somebody remembered to
+ * press a button — which, being honest about it, nobody does on the off-chance.
+ * Same shape for all three: check nothing of that kind is live, open a row,
+ * run, and mark the row failed if it throws. A job left 'running' for ever is
+ * the failure mode this is meant to end, so the catch matters more than the
+ * body.
+ */
+async function runScheduledSync(kind, runner, body = {}) {
+  try {
+    // Don't stack runs. A long import is normal; two at once means duplicate
+    // Claude extractions and a race on the processed-marker rows.
+    const { data: running, error: runningErr } = await supabaseAdmin
+      .from('sync_jobs').select('id, heartbeat_at').eq('kind', kind).eq('status', 'running');
+    // This guard exists to stop two runs overlapping, and it failed open: a
+    // broken read produced an empty list, which reads as "nothing running", so
+    // it would start a second one. Skipping an hour costs nothing.
+    if (runningErr) {
+      console.error(`[${kind} cron] could not check for a running sync, skipping this hour:`, runningErr.message);
+      return;
+    }
+    const live = (running || []).filter(j => Date.now() - new Date(j.heartbeat_at).getTime() < 15 * 60 * 1000);
+    if (live.length) {
+      console.log(`[${kind} cron] a sync is already running, skipping this hour`);
+      return;
+    }
+
+    const { data: job, error } = await supabaseAdmin.from('sync_jobs')
+      .insert({ kind, trigger: 'scheduled', detail: body })
+      .select().single();
+    if (error) {
+      console.error(`[${kind} cron] could not open a job row, skipping this hour:`, error.message);
+      return;
+    }
+
+    const bump = (fields) => supabaseAdmin.from('sync_jobs')
+      .update({ ...fields, heartbeat_at: new Date().toISOString() }).eq('id', job.id);
+
+    try {
+      const summary = await runner(body, { jobId: job.id, bump }) || {};
+      await bump({
+        status: 'finished',
+        finished_at: new Date().toISOString(),
+        processed: summary.processed || 0,
+        matched: summary.matched || 0,
+        needs_review: summary.needsReview || 0,
+        failed: summary.failed || 0,
+        detail: summary.detail || {},
+      });
+      console.log(`[${kind} cron] finished: ${summary.processed || 0} processed`);
+    } catch (err) {
+      const message = String(err?.message || err);
+      console.error(`[${kind} cron] failed:`, message);
+      // The job row is the only record that this ran at all. Leaving it
+      // 'running' is how a dead sync looks identical to a busy one.
+      await bump({ status: 'failed', finished_at: new Date().toISOString(), last_error: message });
+      await notifySyncFailure(kind, message);
+    }
+  } catch (err) {
+    console.error(`[${kind} cron] Error:`, err.message);
+  }
+}
 
 /**
  * Pull Zoom on a timer instead of waiting for somebody to press a button.
@@ -15572,16 +15749,15 @@ cron.schedule('0 8 * * *', () => { sendDailyDigest().catch(err => console.error(
  *
  * Hourly at twenty past. Meetings already on file are skipped, so a run with
  * nothing new to do costs one API call.
+ *
+ * runZoomSync marks its own row finished and handles most failures itself, so
+ * this wrapper only has to own the ones that escape it — which it did not, and
+ * that is how a thrown error left a row saying 'running' for a fortnight.
  */
 cron.schedule('20 * * * *', async () => {
   try {
-    // Don't stack runs. A long import is normal; two at once means duplicate
-    // Claude extractions and a race on the processed-marker rows.
     const { data: running, error: runningErr } = await supabaseAdmin
       .from('sync_jobs').select('id, heartbeat_at').eq('kind', 'zoom').eq('status', 'running');
-    // This guard exists to stop two runs overlapping, and it failed open: a
-    // broken read produced an empty list, which reads as "nothing running", so
-    // it would start a second one. Skipping an hour costs nothing.
     if (runningErr) {
       console.error('[Zoom cron] could not check for a running sync, skipping this hour:', runningErr.message);
       return;
@@ -15597,10 +15773,65 @@ cron.schedule('20 * * * *', async () => {
       .select().single();
     if (error) throw error;
 
-    await runZoomSync({ jobId: job.id, sinceDays: 30, reprocess: false });
+    try {
+      await runZoomSync({ jobId: job.id, sinceDays: 30, reprocess: false });
+    } catch (runErr) {
+      const message = String(runErr?.message || runErr);
+      console.error('[Zoom cron] run failed:', message);
+      await supabaseAdmin.from('sync_jobs').update({
+        status: 'failed', finished_at: new Date().toISOString(),
+        heartbeat_at: new Date().toISOString(), last_error: message,
+      }).eq('id', job.id);
+      await notifySyncFailure('zoom', message);
+    }
   } catch (err) {
     console.error('[Zoom cron] Error:', err.message);
   }
+}, { timezone: VENUE_TZ });
+
+/**
+ * Gmail at five past, Quo at thirty-five past.
+ *
+ * Spread around the hour rather than all on the same minute: each of these
+ * walks every registered client and each one runs Claude per item, so three
+ * starting together would fight for the same rate limits and make all three
+ * slower. Zoom is already at twenty past.
+ *
+ * Both skip quietly when the integration is not set up. A venue that has not
+ * connected Gmail does not need an hourly log line telling it so.
+ */
+cron.schedule('5 * * * *', async () => {
+  let tokens = null;
+  try {
+    tokens = await loadAndRefreshGmailTokens();
+  } catch (err) {
+    // A refresh that throws is a grant that has gone, which is worth a job row
+    // saying so rather than a log line. runGmailSync asks again and turns it
+    // into the same error with the reconnect instruction on it.
+    console.error('[gmail cron] token refresh failed:', err.message);
+    await runScheduledSync('gmail', runGmailSync, { sinceDays: 30, trigger: 'scheduled' });
+    return;
+  }
+  if (!tokens) {
+    console.log('[gmail cron] Gmail is not connected, nothing to do');
+    return;
+  }
+  await runScheduledSync('gmail', runGmailSync, { sinceDays: 30, trigger: 'scheduled' });
+}, { timezone: VENUE_TZ });
+
+cron.schedule('35 * * * *', async () => {
+  if (!QUO_API_KEY) {
+    console.log('[quo cron] no Quo API key, nothing to do');
+    return;
+  }
+  await runScheduledSync('quo', runQuoSync, { sinceDays: 30, trigger: 'scheduled' });
+}, { timezone: VENUE_TZ });
+
+// Ask the database once, at boot, which of migration 035's columns exist. Every
+// behaviour that needs one is gated on the answer, so the syncs and the crons
+// run either way and say clearly what is switched off.
+detectMigration035(supabaseAdmin).catch(err => {
+  console.error('[035] could not probe for the new columns:', err.message);
 });
 
 // Look at today's memo without waiting until 8am, and without sending it.
