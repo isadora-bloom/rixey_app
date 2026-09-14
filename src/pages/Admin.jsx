@@ -27,6 +27,25 @@ import AdminWeddingProfile from './admin/AdminWeddingProfile'
 import { detectEscalation, getLastActivityAt } from './admin/adminUtils'
 import { weddingName } from '../../shared/wedding-name.js'
 
+// section_finalisations rows keyed by whatever the section was called when
+// they were written, folded onto today's keys. Later writes win, so
+// un-ticking a section that also has an old row still reads as un-ticked.
+//
+// Copied rather than imported: this is the same function as
+// canonicaliseFinalisations in src/pages/Dashboard.jsx (~line 75). It is pure
+// (no Dashboard state, just resolveSectionKey), so it would rather live once
+// in shared/sections.js, but this agent's edits are scoped to Admin.jsx and
+// AdminWeddingProfile.jsx only, so it is copied here instead of moved.
+function canonicaliseFinalisations(rows) {
+  const map = {}
+  Object.entries(rows || {})
+    .map(([storedKey, row]) => [resolveSectionKey(storedKey), row])
+    .filter(([key]) => key)
+    .sort((a, b) => String(a[1]?.updated_at || '').localeCompare(String(b[1]?.updated_at || '')))
+    .forEach(([key, row]) => { map[key] = { ...(map[key] || {}), ...row } })
+  return map
+}
+
 export default function Admin() {
   const navigate = useNavigate()
   const { error: toastError, success: toastSuccess } = useToast()
@@ -52,6 +71,11 @@ export default function Admin() {
   // than re-fetching it themselves.
   const [directConversations, setDirectConversations] = useState({})
   const [planningNotes, setPlanningNotes] = useState([])
+  // Section sign-offs for whichever wedding is open, canonicalised the same
+  // way the couple's own menu reads them (see canonicaliseFinalisations
+  // above). Keyed by canonical section key so the two marks in the venue
+  // sidebar mean the same thing they do on the couple's side.
+  const [sectionFinalisations, setSectionFinalisations] = useState({})
   const [activeTab, setActiveTabRaw] = useState('overview')
   const [tabHistory, setTabHistory] = useState([])
 
@@ -995,6 +1019,7 @@ export default function Admin() {
     setUploadResult(null)
     setCollapsedNoteCategories({})
     setInjectText('')
+    setSectionFinalisations({})
     // When opened from a "needs attention" flag, land directly on that person's
     // conversation (or the right tab for a non-Sage escalation); otherwise
     // start on the overview tab.
@@ -1020,6 +1045,7 @@ export default function Admin() {
       borrowResult,
       activitiesResult,
       internalNotesResult,
+      finalisationsResult,
     ] = await Promise.allSettled([
       apiFetch(`${API_URL}/api/couple-photo/${wedding.id}`),
       apiFetch(`${API_URL}/api/sage-messages/${wedding.id}`),
@@ -1036,12 +1062,14 @@ export default function Admin() {
       apiFetch(`${API_URL}/api/borrow-selections/${wedding.id}`),
       apiFetch(`${API_URL}/api/activities/${wedding.id}?limit=20`),
       apiFetch(`${API_URL}/api/internal-notes/${wedding.id}`),
+      apiFetch(`${API_URL}/api/finalisations/${wedding.id}`),
     ])
 
     const PANEL_LABELS = {
       photo: 'couple photo', messages: 'Sage conversation', notes: 'planning notes',
       timeline: 'timeline', tables: 'tables', staffing: 'staffing', budget: 'budget',
       borrow: 'borrow selections', activities: 'recent activity', internalNotes: 'internal notes',
+      finalisations: 'section sign-offs',
     }
     const failedPanels = {}
     const failed = (key) => { failedPanels[key] = true }
@@ -1145,6 +1173,13 @@ export default function Admin() {
     } else {
       setInternalNotes([])
       failed('internalNotes')
+    }
+
+    if (finalisationsResult.status === 'fulfilled') {
+      setSectionFinalisations(canonicaliseFinalisations(finalisationsResult.value))
+    } else {
+      setSectionFinalisations({})
+      failed('finalisations')
     }
 
     setSectionLoadErrors(failedPanels)
@@ -1484,6 +1519,7 @@ export default function Admin() {
         setCouplePhotos={setCouplePhotos}
         planningNotes={planningNotes}
         setPlanningNotes={setPlanningNotes}
+        sectionFinalisations={sectionFinalisations}
         updateNoteStatus={updateNoteStatus}
         notesSearchQuery={notesSearchQuery}
         setNotesSearchQuery={setNotesSearchQuery}
