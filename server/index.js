@@ -12,6 +12,10 @@ import rateLimit from 'express-rate-limit';
 // createHash, so the fingerprint would throw inside the one handler whose
 // whole job is to not throw.
 import crypto from 'node:crypto';
+// Used to resolve a user-supplied recipe URL before fetching it, so the server
+// cannot be pointed at Railway's own metadata or anything else on the private
+// network. See /api/bar-recipes/extract-url.
+import dns from 'node:dns/promises';
 import { requireAuth, requireAdmin } from './middleware/auth.js';
 import { createWeddingAccess, assertWeddingMember } from './middleware/weddingAccess.js';
 import { validateBody } from './middleware/validate.js';
@@ -12230,17 +12234,128 @@ app.delete('/api/bar-shopping/:id', async (req, res) => {
 });
 
 // Recipes
+
+/**
+ * Is this resolved address somewhere on the private network?
+ *
+ * A server that fetches a URL a stranger chose is a way into everything the
+ * server can reach and the caller cannot: Railway's internal services, the
+ * cloud metadata endpoint on 169.254.169.254, anything on localhost.
+ */
+function isPrivateAddress(address, family) {
+  const ip = String(address || '');
+  if (family === 4 || /^\d+\.\d+\.\d+\.\d+$/.test(ip)) {
+    const [a, b] = ip.split('.').map(Number);
+    if (a === 127) return true;                       // loopback
+    if (a === 10) return true;                        // private
+    if (a === 172 && b >= 16 && b <= 31) return true; // private
+    if (a === 192 && b === 168) return true;          // private
+    if (a === 169 && b === 254) return true;          // link-local, incl. metadata
+    if (a === 0) return true;                         // 0.0.0.0/8 reaches localhost on Linux
+    if (a === 100 && b >= 64 && b <= 127) return true; // carrier-grade NAT
+    if (a >= 224) return true;                        // multicast and reserved
+    return false;
+  }
+  const v6 = ip.toLowerCase();
+  // An IPv4-mapped address wears an IPv6 coat; judge the address inside it.
+  const mapped = v6.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) return isPrivateAddress(mapped[1], 4);
+  if (v6 === '::1' || v6 === '::') return true;
+  if (/^f[cd]/.test(v6)) return true;                 // fc00::/7 unique local
+  if (/^fe[89ab]/.test(v6)) return true;              // fe80::/10 link-local
+  return false;
+}
+
+/**
+ * Check a URL is safe to fetch: http(s) only, and every address its hostname
+ * resolves to is public.
+ *
+ * Every address, not the first one: a hostname that answers with one public
+ * and one private address would otherwise pass the check and connect to
+ * whichever the OS picked. This does not close DNS rebinding — the name could
+ * answer differently between this lookup and the fetch — which would need the
+ * connection pinned to the address checked here. The cheap and complete fixes
+ * are far apart, and this is the cheap one.
+ */
+async function assertFetchableUrl(raw) {
+  let parsed;
+  try { parsed = new URL(String(raw)); }
+  catch { return { ok: false, why: 'That does not look like a web address.' }; }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { ok: false, why: 'Only http and https addresses can be read.' };
+  }
+
+  let addresses;
+  try {
+    addresses = await dns.lookup(parsed.hostname, { all: true });
+  } catch {
+    return { ok: false, why: 'That address could not be found.' };
+  }
+
+  if (!addresses.length || addresses.some(a => isPrivateAddress(a.address, a.family))) {
+    return { ok: false, why: 'That address is not one this server will fetch.' };
+  }
+  return { ok: true, url: parsed };
+}
+
+/** Read at most `cap` bytes of a response, then stop pulling. */
+async function readCapped(response, cap) {
+  if (!response.body) return '';
+  // Streaming decode, so a multi-byte character split across two chunks is not
+  // mangled and nothing larger than the cap is ever held.
+  const decoder = new TextDecoder('utf-8');
+  let out = '';
+  let total = 0;
+  for await (const chunk of response.body) {
+    total += chunk.length;
+    out += decoder.decode(chunk, { stream: true });
+    if (total >= cap) break;
+  }
+  return out;
+}
+
 // Extract ingredients from a URL using Claude
-app.post('/api/bar-recipes/extract-url', async (req, res) => {
+//
+// Signed in only, and the URL is checked before anything is fetched. This used
+// to take any URL at all from an anonymous caller and fetch it server-side,
+// which is a request forgery hole: file://, http://localhost, and the cloud
+// metadata endpoint were all reachable, and whatever came back was handed to
+// Claude and returned to the caller.
+app.post('/api/bar-recipes/extract-url', requireAuth, async (req, res) => {
   try {
     const { url, name } = req.body;
     if (!url) return res.status(400).json({ error: 'url required' });
 
-    // Fetch the page content
-    const pageRes = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
-    });
-    const html = await pageRes.text();
+    // Redirects are followed by hand so every hop is checked, not just the one
+    // the caller typed. Left to fetch, a public URL that 302s to 169.254.169.254
+    // would defeat the whole check.
+    let target = url;
+    let pageRes = null;
+    for (let hop = 0; hop < 5; hop++) {
+      const safe = await assertFetchableUrl(target);
+      if (!safe.ok) return res.status(400).json({ error: safe.why });
+
+      pageRes = await fetch(safe.url, {
+        redirect: 'manual',
+        signal: AbortSignal.timeout(15_000),
+        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
+      });
+
+      if (pageRes.status >= 300 && pageRes.status < 400 && pageRes.headers.get('location')) {
+        target = new URL(pageRes.headers.get('location'), safe.url).toString();
+        pageRes = null;
+        continue;
+      }
+      break;
+    }
+    if (!pageRes) return res.status(400).json({ error: 'That page redirects too many times.' });
+    if (!pageRes.ok) return res.status(422).json({ error: 'That page could not be read.' });
+
+    // 500kB is generous for a recipe page and stops a hostile or merely huge
+    // response from filling memory. Only the first 20k characters are used
+    // anyway.
+    const html = await readCapped(pageRes, 500 * 1024);
     // Strip script/style blocks first (their text content is noise), then tags
     const text = html
       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
