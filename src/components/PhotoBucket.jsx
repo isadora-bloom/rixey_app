@@ -349,6 +349,35 @@ export default function PhotoBucket({ weddingId, readOnly = false }) {
     }
   }
 
+  // Swaps sort_order with the visible neighbour (within the current filter,
+  // since that's the order being looked at) through the same PUT route as
+  // tagging, optimistic with rollback on failure.
+  const handleReorder = async (photo, direction) => {
+    const list = filteredPhotos
+    const idx = list.findIndex(p => p.id === photo.id)
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1
+    if (idx === -1 || swapIdx < 0 || swapIdx >= list.length) return
+    const other = list[swapIdx]
+    const aOrder = photo.sort_order
+    const bOrder = other.sort_order
+    const snapshot = photos
+    setPhotos(prev => prev.map(p => {
+      if (p.id === photo.id) return { ...p, sort_order: bOrder }
+      if (p.id === other.id) return { ...p, sort_order: aOrder }
+      return p
+    }))
+    try {
+      await Promise.all([
+        apiFetch(`${API_URL}/api/wedding-photos/${photo.id}`, { method: 'PUT', body: JSON.stringify({ sort_order: bOrder }) }),
+        apiFetch(`${API_URL}/api/wedding-photos/${other.id}`, { method: 'PUT', body: JSON.stringify({ sort_order: aOrder }) }),
+      ])
+    } catch (err) {
+      console.error('Reorder error:', err)
+      setPhotos(snapshot)
+      toastError(`Could not reorder photos: ${err.message}`)
+    }
+  }
+
   // Filter options
   const allTags = ['website', 'hero', ...CONTEXT_TAGS.map(t => t.tag)]
   const filteredPhotos = filterTag === 'all'
@@ -465,7 +494,7 @@ export default function PhotoBucket({ weddingId, readOnly = false }) {
           </div>
         ) : (
           <div className={`grid gap-2 ${selectedPhoto ? 'grid-cols-2 sm:grid-cols-3' : 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5'}`}>
-            {filteredPhotos.map(photo => (
+            {filteredPhotos.map((photo, i) => (
               <button
                 key={photo.id}
                 type="button"
@@ -480,6 +509,33 @@ export default function PhotoBucket({ weddingId, readOnly = false }) {
 
                 {/* Overlay: tag indicators */}
                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition" />
+
+                {!readOnly && (
+                  <div className="absolute top-1 left-1 flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      onClick={(e) => { e.stopPropagation(); handleReorder(photo, 'up') }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); handleReorder(photo, 'up') } }}
+                      aria-disabled={i === 0}
+                      className={`w-6 h-6 bg-black/60 text-white rounded-full flex items-center justify-center hover:bg-black/80 ${i === 0 ? 'opacity-30 pointer-events-none' : ''}`}
+                      title="Move earlier"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" /></svg>
+                    </span>
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      onClick={(e) => { e.stopPropagation(); handleReorder(photo, 'down') }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); handleReorder(photo, 'down') } }}
+                      aria-disabled={i === filteredPhotos.length - 1}
+                      className={`w-6 h-6 bg-black/60 text-white rounded-full flex items-center justify-center hover:bg-black/80 ${i === filteredPhotos.length - 1 ? 'opacity-30 pointer-events-none' : ''}`}
+                      title="Move later"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                    </span>
+                  </div>
+                )}
                 <div className="absolute bottom-1 left-1 flex gap-1 flex-wrap">
                   {photo.tags?.includes('website') && (
                     <span className="w-4 h-4 bg-sage-600 rounded-full flex items-center justify-center" title="On website">

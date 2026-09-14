@@ -105,7 +105,7 @@ export default function SectionFinaliser({
               }`}>
                 {myDone && <span className="text-white text-[9px] leading-none">✓</span>}
               </span>
-              <span>{myDone ? `${myLabel}: signed off` : `${myLabel}: sign off`}</span>
+              <span>{role === 'couple' ? (myDone ? `${myLabel}: signed off` : `${myLabel}: sign off`) : 'Rixey has checked this'}</span>
             </button>
 
             {/* Their status — read only */}

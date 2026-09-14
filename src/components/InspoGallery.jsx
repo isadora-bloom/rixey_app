@@ -110,6 +110,40 @@ export default function InspoGallery({ weddingId, userId, isAdmin = false }) {
     }
   }
 
+  // Only the person who uploaded an image, or an admin, can delete it — a
+  // venue viewing a couple's gallery used to see delete on every photo,
+  // including ones it never uploaded.
+  const canDelete = (image) => isAdmin || (!!userId && image.uploaded_by === userId)
+
+  // Up/down swaps display_order with the visible neighbour (respecting the
+  // active category filter, since that's the order the couple is looking at)
+  // and writes both rows through the gallery's existing PUT route.
+  const handleReorder = async (image, direction) => {
+    const list = filteredImages
+    const idx = list.findIndex(img => img.id === image.id)
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1
+    if (idx === -1 || swapIdx < 0 || swapIdx >= list.length) return
+    const other = list[swapIdx]
+    const aOrder = image.display_order
+    const bOrder = other.display_order
+    const snapshot = images
+    setImages(prev => prev.map(img => {
+      if (img.id === image.id) return { ...img, display_order: bOrder }
+      if (img.id === other.id) return { ...img, display_order: aOrder }
+      return img
+    }))
+    try {
+      await Promise.all([
+        apiFetch(`${API_URL}/api/inspo/${image.id}`, { method: 'PUT', body: JSON.stringify({ displayOrder: bOrder }) }),
+        apiFetch(`${API_URL}/api/inspo/${other.id}`, { method: 'PUT', body: JSON.stringify({ displayOrder: aOrder }) }),
+      ])
+    } catch (error) {
+      console.error('Error reordering images:', error)
+      setImages(snapshot)
+      toastError(`Could not reorder images: ${error.message}`)
+    }
+  }
+
   if (loading) {
     return <div className="text-sage-400 text-center py-4">Loading gallery...</div>
   }
@@ -202,7 +236,7 @@ export default function InspoGallery({ weddingId, userId, isAdmin = false }) {
         </div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-          {filteredImages.map(image => (
+          {filteredImages.map((image, i) => (
             <div
               key={image.id}
               className="relative aspect-square rounded-lg overflow-hidden bg-cream-100 group cursor-pointer"
@@ -219,6 +253,26 @@ export default function InspoGallery({ weddingId, userId, isAdmin = false }) {
                     <p className="text-white text-xs truncate">{image.caption}</p>
                   )}
                 </div>
+              </div>
+              <div className="absolute top-1 left-1 flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); handleReorder(image, 'up') }}
+                  disabled={i === 0}
+                  className="w-6 h-6 bg-black/60 text-white rounded-full flex items-center justify-center hover:bg-black/80 disabled:opacity-30 disabled:cursor-not-allowed"
+                  title="Move earlier"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" /></svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); handleReorder(image, 'down') }}
+                  disabled={i === filteredImages.length - 1}
+                  className="w-6 h-6 bg-black/60 text-white rounded-full flex items-center justify-center hover:bg-black/80 disabled:opacity-30 disabled:cursor-not-allowed"
+                  title="Move later"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                </button>
               </div>
             </div>
           ))}
@@ -292,12 +346,14 @@ export default function InspoGallery({ weddingId, userId, isAdmin = false }) {
                     >
                       Edit
                     </button>
-                    <button
-                      onClick={() => handleDelete(selectedImage.id)}
-                      className="text-red-500 hover:text-red-700 text-sm"
-                    >
-                      Delete
-                    </button>
+                    {canDelete(selectedImage) && (
+                      <button
+                        onClick={() => handleDelete(selectedImage.id)}
+                        className="text-red-500 hover:text-red-700 text-sm"
+                      >
+                        Delete
+                      </button>
+                    )}
                   </div>
                 </div>
               )}

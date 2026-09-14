@@ -17,6 +17,8 @@ export default function VendorPortal() {
   const [saveError, setSaveError] = useState('')
   const [uploadingPhoto, setUploadingPhoto] = useState(false)
   const [photos, setPhotos] = useState([])
+  const [uploadingLogo, setUploadingLogo] = useState(false)
+  const logoInputRef = useRef()
   const photoInputRef = useRef()
 
   useEffect(() => {
@@ -77,6 +79,23 @@ export default function VendorPortal() {
       toastError(`Photo upload failed: ${err.message}`)
     }
     setUploadingPhoto(false)
+    e.target.value = ''
+  }
+
+  const uploadLogo = async (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    setUploadingLogo(true)
+    const fd = new FormData()
+    fd.append('logo', file)
+    try {
+      const data = await apiFetch(`${API_URL}/api/vendor-portal/${token}/logo`, { method: 'POST', body: fd })
+      if (data?.vendor) setVendor(data.vendor)
+      else if (data?.logo_url) setVendor(v => ({ ...v, logo_url: data.logo_url }))
+    } catch (err) {
+      toastError(`Logo upload failed: ${err.message}`)
+    }
+    setUploadingLogo(false)
     e.target.value = ''
   }
 
@@ -210,6 +229,31 @@ export default function VendorPortal() {
               placeholder="e.g. Packages from $2,500 · Full-day coverage available"
             />
           </div>
+        </section>
+
+        {/* Logo */}
+        <section className="bg-white rounded-2xl shadow-sm border border-cream-200 p-5">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h2 className="font-semibold text-sage-700">Your Logo</h2>
+              <p className="text-xs text-sage-400 mt-0.5">Shown beside your name in the couples&apos; directory</p>
+            </div>
+            <input ref={logoInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/svg+xml" className="hidden" onChange={uploadLogo} />
+            <button
+              onClick={() => logoInputRef.current?.click()}
+              disabled={uploadingLogo}
+              className="text-sm px-4 py-2 bg-sage-600 text-white rounded-xl hover:bg-sage-700 disabled:opacity-50 transition shrink-0"
+            >
+              {uploadingLogo ? 'Uploading…' : vendor.logo_url ? 'Replace logo' : '+ Add logo'}
+            </button>
+          </div>
+          {vendor.logo_url ? (
+            <div className="mt-4 w-24 h-24 rounded-xl overflow-hidden bg-cream-50 border border-cream-200 flex items-center justify-center">
+              <img src={vendor.logo_url} alt={`${vendor.name} logo`} className="w-full h-full object-contain" />
+            </div>
+          ) : (
+            <p className="mt-4 text-sage-400 text-sm">No logo uploaded yet.</p>
+          )}
         </section>
 
         {/* Photos */}

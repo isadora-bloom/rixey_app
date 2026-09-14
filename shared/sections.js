@@ -70,6 +70,7 @@ export const SECTIONS = [
   { key: 'timeline', label: 'Timeline', group: 'Plan', icon: 'CalendarClock', sides: ['couple', 'venue'], aliases: [], finalisable: true, noteCategories: ['timeline'] },
   { key: 'tables', label: 'Tables', group: 'Plan', icon: 'LayoutGrid', sides: ['couple', 'venue'], aliases: [], finalisable: true, noteCategories: [] },
   { key: 'documents', label: 'Documents', group: 'Plan', icon: 'FileText', sides: ['couple', 'venue'], aliases: [], noteCategories: [] },
+  { key: 'rixey-notes', label: 'Notes from Rixey', group: 'Plan', icon: 'StickyNote', sides: ['couple'], aliases: [], noteCategories: [] },
   { key: 'completeness', label: 'Completeness', group: 'Plan', icon: 'Gauge', sides: ['couple', 'venue'], aliases: [], noteCategories: [] },
 
   // Day Of

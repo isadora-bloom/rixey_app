@@ -25,6 +25,23 @@ const TYPE_DOT_COLOR = {
   planning_reminder: 'bg-purple-400',
 }
 
+// Types whose caller in server/index.js's createNotification passes a real
+// emailTo (sage_uncertain, escalation, new_message) rather than an explicit
+// null or no argument at all (checkin, client_activity, floor_plan_needed,
+// sync_failed). Only these ever actually try to send an email, so only these
+// can meaningfully be "not emailed" rather than routine, silent, in-app-only.
+const EMAILING_TYPES = new Set(['sage_uncertain', 'escalation', 'new_message'])
+const FIVE_MINUTES_MS = 5 * 60 * 1000
+
+// A little after the row is written email_sent flips true if the send
+// succeeded; checking this before then would flash the mark on every row for
+// the instant the email is in flight.
+function emailLikelyMissed(n) {
+  if (n.email_sent !== false) return false
+  if (!EMAILING_TYPES.has(n.type)) return false
+  return Date.now() - new Date(n.created_at).getTime() > FIVE_MINUTES_MS
+}
+
 export default function NotificationBell({ recipientType, weddingId, extraItems = [] }) {
   const { error: toastError } = useToast()
   const [notifications, setNotifications] = useState([])
@@ -174,7 +191,17 @@ export default function NotificationBell({ recipientType, weddingId, extraItems 
                   <div className="flex items-start gap-2">
                     <span className={`w-2 h-2 rounded-full flex-shrink-0 mt-1.5 ${n.is_read ? 'bg-cream-300' : (TYPE_DOT_COLOR[n.type] || 'bg-sage-400')}`} />
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-sage-800 leading-tight">{n.title}</p>
+                      <p className="text-sm font-medium text-sage-800 leading-tight flex items-center gap-1.5">
+                        {n.title}
+                        {emailLikelyMissed(n) && (
+                          <span
+                            className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-700 shrink-0"
+                            title="This should have gone out as an email but email_sent is still false"
+                          >
+                            not emailed
+                          </span>
+                        )}
+                      </p>
                       {n.body && (
                         <p className="text-xs text-sage-500 mt-0.5 line-clamp-2">{n.body}</p>
                       )}

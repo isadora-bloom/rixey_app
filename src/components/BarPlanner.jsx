@@ -593,8 +593,17 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
         form.append('name', recipeName)
         data = await apiFetch(`${API_URL}/api/bar-recipes/extract-upload`, { method: 'POST', body: form })
       }
-      if (data && data.ingredients) setEditableIngredients(data.ingredients)
-      else alert((data && data.error) || 'Could not extract ingredients.')
+      if (data && data.saved && data.recipe) {
+        // The server already saved this row — posting it again from
+        // saveRecipe would create a duplicate. Add it straight to the list.
+        setRecipes(prev => [...prev, data.recipe])
+        setAddingRecipe(false)
+        setRecipeName(''); setRecipeUrl(''); setRecipeFile(null); setEditableIngredients(null)
+      } else if (data && data.ingredients) {
+        setEditableIngredients(data.ingredients)
+      } else {
+        alert((data && data.error) || 'Could not extract ingredients.')
+      }
     } catch (err) {
       toastError(`Could not extract recipe: ${err.message}`)
     }
