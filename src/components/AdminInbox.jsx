@@ -15,15 +15,25 @@ export default function AdminInbox({ weddings = [], onUnreadChange }) {
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [totalUnread, setTotalUnread] = useState(0)
+  const [loadError, setLoadError] = useState(false)
   const messagesEndRef = useRef(null)
+  const selectedWeddingRef = useRef(null)
+  useEffect(() => { selectedWeddingRef.current = selectedWedding }, [selectedWedding])
+  // Whether the last poll's failure has already been toasted — a ref, not
+  // state, so the 30s interval (captured once, on mount) reads the current
+  // value rather than the one from whichever render created it.
+  const toastedErrorRef = useRef(false)
 
   useEffect(() => {
     loadConversations()
     loadUnreadCounts()
-    // Poll every 30 seconds
+    // Poll every 30 seconds. Refetches the open thread too — without this a
+    // reply that arrived while a conversation was open just sat unseen until
+    // you closed and reopened it.
     const interval = setInterval(() => {
       loadConversations()
       loadUnreadCounts()
+      if (selectedWeddingRef.current) loadMessages(selectedWeddingRef.current.id)
     }, 30000)
     return () => clearInterval(interval)
   }, [])
@@ -46,13 +56,17 @@ export default function AdminInbox({ weddings = [], onUnreadChange }) {
 
   const loadConversations = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/messages/admin/conversations`, {
-        headers: await authHeaders()
-      })
-      const data = await response.json()
+      const data = await apiFetch(`${API_URL}/api/messages/admin/conversations`)
       setConversations(data.conversations || [])
+      setLoadError(false)
+      toastedErrorRef.current = false
     } catch (err) {
       console.error('Failed to load conversations:', err)
+      // Only the first failure in a run gets a toast — the 30s poll would
+      // otherwise repeat it for as long as the problem lasts.
+      if (!toastedErrorRef.current) toastError(`Could not load conversations: ${err.message}`)
+      toastedErrorRef.current = true
+      setLoadError(true)
     }
     setLoading(false)
   }
@@ -178,6 +192,11 @@ export default function AdminInbox({ weddings = [], onUnreadChange }) {
         <div className="divide-y divide-cream-100">
           {loading ? (
             <p className="text-sage-400 text-center py-8">Loading conversations...</p>
+          ) : loadError ? (
+            <div className="p-6 text-center">
+              <p className="text-sage-500 mb-2">Could not load conversations</p>
+              <button onClick={loadConversations} className="text-sage-600 underline hover:text-sage-800 text-sm">Retry</button>
+            </div>
           ) : conversations.length === 0 ? (
             <div className="p-6 text-center">
               <p className="text-sage-500 mb-4">No conversations yet</p>
@@ -189,7 +208,7 @@ export default function AdminInbox({ weddings = [], onUnreadChange }) {
                     onClick={() => startConversation(wedding)}
                     className="w-full text-left p-3 rounded-lg hover:bg-cream-50 border border-cream-200 transition"
                   >
-                    <p className="font-medium text-sage-700">{wedding.couple_names}</p>
+                    <p className="font-medium text-sage-700">{weddingName(wedding)}</p>
                     <p className="text-sage-400 text-xs">
                       {wedding.wedding_date
                         ? formatDateOnly(wedding.wedding_date)
@@ -253,7 +272,7 @@ export default function AdminInbox({ weddings = [], onUnreadChange }) {
                   {weddings
                     .filter(w => !w.archived && !conversations.find(c => c.wedding_id === w.id))
                     .map(w => (
-                      <option key={w.id} value={w.id}>{w.couple_names}</option>
+                      <option key={w.id} value={w.id}>{weddingName(w)}</option>
                     ))}
                 </select>
               </div>
@@ -265,7 +284,7 @@ export default function AdminInbox({ weddings = [], onUnreadChange }) {
         <div className="flex flex-col h-[420px] sm:h-[500px]">
           {/* Thread header */}
           <div className="p-3 bg-sage-50 border-b border-cream-200">
-            <p className="font-medium text-sage-700">{selectedWedding.couple_names}</p>
+            <p className="font-medium text-sage-700">{weddingName(selectedWedding)}</p>
             <p className="text-sage-400 text-xs">
               {selectedWedding.wedding_date
                 ? formatDateOnly(selectedWedding.wedding_date, { month: 'long', day: 'numeric', year: 'numeric' })
