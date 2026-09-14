@@ -6301,18 +6301,26 @@ app.post('/api/admin/ingest-review/:id/ignore', async (req, res) => {
 // Debug: inspect stored Zoom transcripts
 app.get('/api/zoom/transcripts', async (req, res) => {
   try {
+    // Both tables only grow. Bounded to the newest N unless the caller asks
+    // for more (still capped).
+    const requested = parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 1000) : 200;
+
     const { data: meetings, error: meetingsErr } = await supabaseAdmin
       .from('processed_zoom_meetings')
       .select('zoom_meeting_id, meeting_topic, wedding_id, processed_at, transcript_text')
-      .order('processed_at', { ascending: false });
+      .order('processed_at', { ascending: false })
+      .range(0, limit - 1);
     if (meetingsErr) throw meetingsErr;
 
     // Also check planning_notes for zoom_transcript entries
-    const { data: transcriptNotes } = await supabaseAdmin
+    const { data: transcriptNotes, error: notesErr } = await supabaseAdmin
       .from('planning_notes')
       .select('id, wedding_id, content, source_message, created_at')
       .eq('category', 'zoom_transcript')
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .range(0, limit - 1);
+    if (notesErr) throw notesErr;
 
     const meetings_summary = (meetings || []).map(m => ({
       id: m.zoom_meeting_id,
