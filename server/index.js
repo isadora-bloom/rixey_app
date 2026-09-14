@@ -603,7 +603,7 @@ async function createNotification(weddingId, recipientType, type, title, body, e
     // Rate-limit: deduplicate client_activity notifications within 5 minutes per wedding
     if (type === 'client_activity') {
       const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-      const { data: recent } = await supabaseAdmin
+      const { data: recent, error: dedupError } = await supabaseAdmin
         .from('notifications')
         .select('id')
         .eq('wedding_id', weddingId)
@@ -611,6 +611,12 @@ async function createNotification(weddingId, recipientType, type, title, body, e
         .eq('type', 'client_activity')
         .gte('created_at', fiveMinAgo)
         .limit(1);
+      if (dedupError) {
+        // Can't tell whether this is a duplicate, so skip rather than risk
+        // sending one twice.
+        console.error('[Notifications] Dedup check failed:', dedupError.message);
+        return;
+      }
       if (recent?.length > 0) return;
     }
 
