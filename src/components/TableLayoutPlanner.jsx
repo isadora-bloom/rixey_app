@@ -1,7 +1,9 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { API_URL } from '../config/api'
 import { authHeaders, apiFetch } from '../utils/api'
 import { useToast } from './ui/Toast'
+import { useAutosave } from '../hooks/useAutosave'
+import SaveIndicator from './ui/SaveIndicator'
 
 
 const TABLE_SHAPES = [
@@ -194,20 +196,17 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
 
   const [isDraft, setIsDraft]   = useState(false)
   const [loading, setLoading]   = useState(true)
-  const [saving, setSaving]     = useState(false)
-  const [saved, setSaved]       = useState(false)
-  const [saveError, setSaveError] = useState(null)
+  const [loadError, setLoadError] = useState(false)
+  const hasLoadedRef = useRef(false)
   const { error: toastError } = useToast()
 
-  useEffect(() => {
-    if (weddingId) loadTableSetup()
-  }, [weddingId])
-
-  const loadTableSetup = async () => {
+  const loadTableSetup = useCallback(async () => {
+    setLoadError(false)
     try {
       const response = await fetch(`${API_URL}/api/tables/${weddingId}`, {
         headers: await authHeaders()
       })
+      if (!response.ok) throw new Error('Could not load table setup')
       const data = await response.json()
       if (data.tables) {
         const t = data.tables
@@ -240,56 +239,79 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
       }
     } catch (err) {
       console.error('Failed to load table setup:', err)
+      setLoadError(true)
     }
     setLoading(false)
-  }
+  }, [weddingId])
 
-  const saveTableSetup = async (draft = false) => {
-    // Flush any pending slider debounce so we save the latest value
-    if (sliderTimerRef.current) clearTimeout(sliderTimerRef.current)
-    const guestCountToSave = sliderValue
-    setGuestCount(guestCountToSave)
-    setSaving(true)
-    setSaveError(null)
-    try {
+  useEffect(() => {
+    if (weddingId) loadTableSetup()
+  }, [weddingId, loadTableSetup])
+
+  const { schedule: scheduleSave, flush: flushSave, state: saveState } = useAutosave(
+    async (payload) => {
       await apiFetch(`${API_URL}/api/tables`, {
         method: 'POST',
-        body: JSON.stringify({
-          weddingId,
-          userId,
-          guestCount: guestCountToSave,
-          tableShape,
-          guestsPerTable,
-          headTable,
-          headTableSize: headTablePeople,    // stored as head_table_size
-          headTableSided,                    // stored as head_table_placement (repurposed)
-          sweetheartTable,
-          cocktailTables,
-          kidsTable,
-          kidsCount,
-          linenColor,
-          napkinColor,
-          linenVenueChoice,
-          runnerStyle,
-          chargersOn,                        // stored as chair_sash (repurposed)
-          checkeredDanceFloor,               // stored as dance_floor_size = 'checkered'/'none'
-          loungeArea,
-          centerpieceNotes,
-          layoutNotes,
-          linenNotes,
-          extraTables,
-          isDraft: draft,
-        })
+        body: JSON.stringify(payload),
       })
-      setIsDraft(draft)
-      setSaved(true)
-      setTimeout(() => setSaved(false), 3000)
-    } catch (err) {
-      console.error('Failed to save table setup:', err)
-      setSaveError('Save failed — please try again.')
-      toastError(`Could not save table setup: ${err.message}`)
+    },
+    { delay: 1500, errorMessage: 'Could not save table setup', toastError }
+  )
+
+  useEffect(() => {
+    if (loading || loadError) return
+    if (!hasLoadedRef.current) {
+      hasLoadedRef.current = true
+      return
     }
-    setSaving(false)
+    scheduleSave({
+      weddingId,
+      userId,
+      guestCount,
+      tableShape,
+      guestsPerTable,
+      headTable,
+      headTableSize: headTablePeople,    // stored as head_table_size
+      headTableSided,                    // stored as head_table_placement (repurposed)
+      sweetheartTable,
+      cocktailTables,
+      kidsTable,
+      kidsCount,
+      linenColor,
+      napkinColor,
+      linenVenueChoice,
+      runnerStyle,
+      chargersOn,                        // stored as chair_sash (repurposed)
+      checkeredDanceFloor,               // stored as dance_floor_size = 'checkered'/'none'
+      loungeArea,
+      centerpieceNotes,
+      layoutNotes,
+      linenNotes,
+      extraTables,
+      isDraft,
+    })
+  }, [
+    loading, loadError, weddingId, userId, guestCount, tableShape, guestsPerTable,
+    headTable, headTablePeople, headTableSided, sweetheartTable, cocktailTables,
+    kidsTable, kidsCount, linenColor, napkinColor, linenVenueChoice, runnerStyle,
+    chargersOn, checkeredDanceFloor, loungeArea, centerpieceNotes, layoutNotes,
+    linenNotes, extraTables, isDraft, scheduleSave,
+  ])
+
+  // The two explicit actions (Save Draft / Send to Client, couple's Save /
+  // Send to Rixey) carry meaning beyond a plain autosave — is_draft decides
+  // whether Rixey staff treat this as still-in-progress or ready to build
+  // from. So clicking them sets the flag and flushes right away, the same
+  // pattern WebsiteBuilder uses for its Publish/Unpublish button, rather than
+  // waiting for the debounce.
+  const setDraftAndFlush = (draft) => {
+    if (sliderTimerRef.current) {
+      clearTimeout(sliderTimerRef.current)
+      sliderTimerRef.current = null
+      setGuestCount(sliderValue)
+    }
+    setIsDraft(draft)
+    setTimeout(() => flushSave(), 0)
   }
 
   // ── Calculations ──────────────────────────────────────────────────────────
@@ -324,6 +346,15 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
 
   if (loading) return <div className="text-sage-600 text-center py-8">Loading table setup…</div>
 
+  if (loadError) {
+    return (
+      <div className="text-center py-8">
+        <p className="text-rose-600 text-sm mb-2">Could not load table setup.</p>
+        <button onClick={loadTableSetup} className="text-sm text-sage-600 underline hover:no-underline">Retry</button>
+      </div>
+    )
+  }
+
   const selectedExtraTables = EXTRA_TABLES.flatMap(cat => cat.tables)
     .filter(t => extraTables[t.id]?.selected)
     .map(t => ({
@@ -350,32 +381,31 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
           </p>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          {saveError && <span className="text-red-500 text-xs">{saveError}</span>}
-          {saved && <span className="text-green-600 text-xs">✓ Saved</span>}
+          <SaveIndicator state={saveState} />
           <button onClick={() => window.print()} type="button"
             className="px-3 py-2 rounded-lg text-sm font-medium border border-sage-300 text-sage-700 hover:bg-sage-50 transition">
             Print
           </button>
           {isAdmin ? (
             <>
-              <button onClick={() => saveTableSetup(true)} disabled={saving}
+              <button onClick={() => setDraftAndFlush(true)} disabled={saveState === 'saving'}
                 className="px-3 py-2 rounded-lg text-sm font-medium border border-amber-300 text-amber-700 hover:bg-amber-50 transition disabled:opacity-50">
-                {saving ? 'Saving…' : 'Save Draft'}
+                Save Draft
               </button>
-              <button onClick={() => saveTableSetup(false)} disabled={saving}
+              <button onClick={() => setDraftAndFlush(false)} disabled={saveState === 'saving'}
                 className="px-3 py-2 rounded-lg text-sm font-medium bg-sage-600 text-white hover:bg-sage-700 transition disabled:opacity-50">
-                {saving ? 'Saving…' : 'Send to Client'}
+                Send to Client
               </button>
             </>
           ) : (
             <>
-              <button onClick={() => saveTableSetup(true)} disabled={saving}
+              <button onClick={() => setDraftAndFlush(true)} disabled={saveState === 'saving'}
                 className="px-3 py-2 rounded-lg text-sm font-medium border border-sage-300 text-sage-700 hover:bg-sage-50 transition disabled:opacity-50">
-                {saving ? 'Saving…' : 'Save'}
+                Save
               </button>
-              <button onClick={() => saveTableSetup(false)} disabled={saving}
-                className={`px-3 py-2 rounded-lg text-sm font-medium transition ${saveError ? 'bg-red-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'} disabled:opacity-50`}>
-                {saving ? 'Saving…' : saveError ? 'Retry' : 'Send to Rixey'}
+              <button onClick={() => setDraftAndFlush(false)} disabled={saveState === 'saving'}
+                className="px-3 py-2 rounded-lg text-sm font-medium bg-sage-600 text-white hover:bg-sage-700 transition disabled:opacity-50">
+                Send to Rixey
               </button>
             </>
           )}
@@ -839,23 +869,23 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
 
       {/* Bottom Save Buttons */}
       <div className="sticky bottom-0 bg-gradient-to-t from-white via-white to-transparent pt-4 pb-2">
-        {saveError && (
-          <p className="text-center text-sm text-red-600 mb-2">{saveError}</p>
-        )}
+        <div className="flex justify-center mb-2">
+          <SaveIndicator state={saveState} />
+        </div>
         {isAdmin ? (
-          <button onClick={saveTableSetup} disabled={saving}
-            className={`w-full px-5 py-3 rounded-lg font-medium transition text-lg ${saved ? 'bg-green-500 text-white' : saveError ? 'bg-red-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'} disabled:opacity-50 shadow-lg`}>
-            {saved ? '✓ Table Setup Saved!' : saving ? 'Saving…' : saveError ? 'Save failed — tap to retry' : 'Save Table Setup'}
+          <button onClick={() => setDraftAndFlush(false)} disabled={saveState === 'saving'}
+            className="w-full px-5 py-3 rounded-lg font-medium transition text-lg bg-sage-600 text-white hover:bg-sage-700 disabled:opacity-50 shadow-lg">
+            {saveState === 'saving' ? 'Saving…' : 'Save Table Setup'}
           </button>
         ) : (
           <div className="flex gap-3">
-            <button onClick={() => saveTableSetup(true)} disabled={saving}
+            <button onClick={() => setDraftAndFlush(true)} disabled={saveState === 'saving'}
               className="flex-1 px-5 py-3 rounded-lg font-medium transition text-lg border border-sage-300 text-sage-700 hover:bg-sage-50 disabled:opacity-50 shadow-lg">
-              {saving ? 'Saving…' : saved && isDraft ? '✓ Saved!' : 'Save'}
+              {saveState === 'saving' ? 'Saving…' : 'Save'}
             </button>
-            <button onClick={() => saveTableSetup(false)} disabled={saving}
-              className={`flex-1 px-5 py-3 rounded-lg font-medium transition text-lg ${saved && !isDraft ? 'bg-green-500 text-white' : saveError ? 'bg-red-500 text-white' : 'bg-sage-600 text-white hover:bg-sage-700'} disabled:opacity-50 shadow-lg`}>
-              {saved && !isDraft ? '✓ Sent to Rixey!' : saving ? 'Saving…' : saveError ? 'Save failed — tap to retry' : 'Send to Rixey'}
+            <button onClick={() => setDraftAndFlush(false)} disabled={saveState === 'saving'}
+              className="flex-1 px-5 py-3 rounded-lg font-medium transition text-lg bg-sage-600 text-white hover:bg-sage-700 disabled:opacity-50 shadow-lg">
+              {saveState === 'saving' ? 'Saving…' : 'Send to Rixey'}
             </button>
           </div>
         )}
