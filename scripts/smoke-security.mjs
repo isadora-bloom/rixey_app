@@ -120,6 +120,13 @@ try {
   await check('extract-url without a token', 401, '/api/bar-recipes/extract-url', { method: 'POST', json: { url: 'http://169.254.169.254/latest/meta-data/' } });
   await check('extract-url to a private address', [400, 403], '/api/bar-recipes/extract-url', { method: 'POST', token: A.token, json: { url: 'http://169.254.169.254/latest/meta-data/' } });
 
+  // Parity routes added 14 Sep: member-scoped by the path uuid.
+  await check('own documents list', 200, `/api/documents/${A.wedding}`, { token: A.token });
+  await check('another couple\'s documents', 403, `/api/documents/${B.wedding}`, { token: A.token });
+  await check('documents without a token', [401, 403], `/api/documents/${B.wedding}`);
+  await check('own completeness', 200, `/api/completeness/${A.wedding}`, { token: A.token });
+  await check('another couple\'s completeness', 403, `/api/completeness/${B.wedding}`, { token: A.token });
+
   // Item 23: debug route gated.
   await check('gmail-callback-debug without a token', [401, 403], '/api/gmail-callback-debug');
   await check('health stays public', 200, '/api/health');
