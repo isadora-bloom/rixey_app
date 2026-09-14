@@ -13350,9 +13350,31 @@ app.put('/api/guests/:id', async (req, res) => {
 });
 
 // POST bulk import guests from CSV
+/**
+ * Import a guest list, adding or updating.
+ *
+ * Body: { weddingId, guests, mode }. mode 'add' is what this has always done:
+ * insert every row, warn about names already on the list, and let the couple
+ * decide. mode 'update' matches on (wedding_id, lower(first_name),
+ * lower(last_name)) and writes onto the row it finds, inserting only the ones
+ * it does not.
+ *
+ * Returns { added, updated, skipped, guests, duplicates, duplicateWarning }.
+ *
+ * Why the match is not a database constraint: two people at a wedding can
+ * genuinely be called the same thing, and a unique index would refuse the
+ * second one at the moment the couple most needs it in. So the matching is a
+ * choice the person importing makes, once, per import.
+ *
+ * Plus-one rows are never matched against. A plus one is a person row like any
+ * other since 025, and matching a host's line onto their own plus one would
+ * overwrite a real guest with somebody else's details. Only party hosts are
+ * candidates; the plus one is then reconciled from the host row afterwards.
+ */
 app.post('/api/guests/bulk', async (req, res) => {
   try {
     const { weddingId, guests } = req.body;
+    const mode = req.body.mode === 'update' ? 'update' : 'add';
     if (!weddingId || !Array.isArray(guests) || guests.length === 0) {
       return res.status(400).json({ error: 'weddingId and guests array required' });
     }
@@ -13409,32 +13431,84 @@ app.post('/api/guests/bulk', async (req, res) => {
     // doubled it, and with no unique constraint on the table nothing stopped
     // it. Rather than change that behaviour and risk dropping a genuine second
     // guest with the same name, the import now says what it is about to do.
-    const { data: already, error: alreadyErr } = await supabaseAdmin
-      .from('wedding_guests')
-      .select('first_name, last_name')
-      .eq('wedding_id', weddingId);
-    // The whole point of this read is to warn about duplicates before writing.
-    // A failed read reports "no duplicates", which is the one answer that is
-    // worse than not asking.
-    if (alreadyErr) throw new Error(`Could not check the existing guest list: ${alreadyErr.message}`);
+    // A guest list can pass 1000 rows — a 400-person wedding with plus ones is
+    // 800 before anyone has been added twice — so this pages.
+    const already = [];
+    for (let from = 0; ; from += 1000) {
+      const { data: page, error: alreadyErr } = await supabaseAdmin
+        .from('wedding_guests')
+        .select('id, first_name, last_name, is_plus_one')
+        .eq('wedding_id', weddingId)
+        .range(from, from + 999);
+      // The whole point of this read is to know who is already here before
+      // writing. A failed read reports "nobody", which is the one answer that
+      // is worse than not asking.
+      if (alreadyErr) throw new Error(`Could not check the existing guest list: ${alreadyErr.message}`);
+      already.push(...(page || []));
+      if (!page || page.length < 1000) break;
+    }
     const key = (f, l) => `${String(f || '').trim().toLowerCase()}|${String(l || '').trim().toLowerCase()}`;
     const existingNames = new Set(already.map(g => key(g.first_name, g.last_name)));
+
+    // Hosts only, and first match wins. Where a wedding already holds two
+    // people with the same name the import cannot tell which was meant, so it
+    // writes onto the one it found first and the duplicate list says so.
+    const hostByName = new Map();
+    for (const g of already) {
+      if (g.is_plus_one) continue;
+      const k = key(g.first_name, g.last_name);
+      if (!hostByName.has(k)) hostByName.set(k, g.id);
+    }
+
     const duplicates = rows
       .filter(r => existingNames.has(key(r.first_name, r.last_name)))
       .map(r => [r.first_name, r.last_name].filter(Boolean).join(' '));
 
+    // In update mode the matched rows are written one at a time. A bulk upsert
+    // is not available here: there is no unique constraint to conflict on, for
+    // the reason in the comment above the route.
+    let updated = 0;
+    const updatedRows = [];
+    const toInsert = [];
+    for (const r of rows) {
+      const hit = mode === 'update' ? hostByName.get(key(r.first_name, r.last_name)) : undefined;
+      if (!hit) { toInsert.push(r); continue; }
+      // wedding_id and the name are what matched, so they are not rewritten.
+      const { wedding_id: _w, first_name: _f, last_name: _l, ...patch } = r;
+      const { data: row, error: upErr } = await supabaseAdmin
+        .from('wedding_guests').update(patch).eq('id', hit).select().maybeSingle();
+      if (upErr) {
+        // Loud rather than silent: the rest of the import still runs, and the
+        // count at the end will not add up to the file, which is the point.
+        console.error(`[guests] could not update ${r.first_name} ${r.last_name || ''}:`, upErr.message);
+        continue;
+      }
+      if (row) { updated += 1; updatedRows.push(row); }
+    }
+
     // Every imported guest heads their own party, for the same reason as
     // above. Without this the whole import fails on the first row.
-    const rowsWithParty = rows.map(r => {
+    const rowsWithParty = toInsert.map(r => {
       const id = crypto.randomUUID();
       return { ...r, id, party_id: id };
     });
 
-    const { data, error } = await supabaseAdmin
-      .from('wedding_guests')
-      .insert(rowsWithParty)
-      .select();
-    if (error) throw error;
+    let data = [];
+    if (rowsWithParty.length) {
+      const { data: inserted, error } = await supabaseAdmin
+        .from('wedding_guests')
+        .insert(rowsWithParty)
+        .select();
+      if (error) throw error;
+      data = inserted || [];
+    }
+
+    // Reconcile the plus one on every row that was updated rather than added.
+    // The host row now carries whatever the file said about their plus one,
+    // and syncPlusOneRow is the one place that turns that into a person row,
+    // removes one that has gone, and leaves the plus one's own table, email
+    // and tags alone.
+    for (const row of updatedRows) await syncPlusOneRow(row);
 
     // Give the imported plus ones rows of their own.
     //
@@ -13470,6 +13544,10 @@ app.post('/api/guests/bulk', async (req, res) => {
         table_assignment: g.table_assignment || null,
       });
     }
+    // Rows in the file that were neither added nor updated: only the ones an
+    // update failed on, since every other row lands somewhere.
+    const skipped = rows.length - data.length - updated;
+
     if (plusOneRows.length) {
       const { error: poErr } = await supabaseAdmin.from('wedding_guests').insert(plusOneRows);
       // The guests are already in. Say loudly that their plus ones are not,
@@ -13478,6 +13556,9 @@ app.post('/api/guests/bulk', async (req, res) => {
         console.error('[guests] imported guests but not their plus ones:', poErr.message);
         return res.json({
           guests: data,
+          added: data.length,
+          updated,
+          skipped,
           imported: data.length,
           duplicates,
           duplicateWarning: `Imported ${data.length} guests, but their plus ones could not be added: ${poErr.message}. Check the list before relying on the numbers.`,
@@ -13487,12 +13568,19 @@ app.post('/api/guests/bulk', async (req, res) => {
 
     res.json({
       guests: data,
+      added: data.length,
+      updated,
+      skipped,
+      // The name the old client reads. Kept so an un-updated browser still
+      // shows a number rather than "undefined guests imported".
       imported: data.length,
       plusOnesCreated: plusOneRows.length,
       duplicates,
-      // Two people can genuinely share a name, so this reports rather than
-      // decides. The couple knows which it is; the server does not.
-      duplicateWarning: duplicates.length
+      // Two people can genuinely share a name, so in add mode this reports
+      // rather than decides. The couple knows which it is; the server does not.
+      // In update mode the same names are what was matched on, so saying they
+      // are now listed twice would be false.
+      duplicateWarning: (mode === 'add' && duplicates.length)
         ? `${duplicates.length} of these ${duplicates.length === 1 ? 'name was' : 'names were'} already on the guest list, so ${duplicates.length === 1 ? 'it is' : 'they are'} now listed twice. Check for duplicates if this was a re-import.`
         : null,
     });
