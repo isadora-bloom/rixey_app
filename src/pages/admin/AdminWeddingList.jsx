@@ -1,12 +1,18 @@
+import { useState, useEffect } from 'react'
 import { getLastActivity } from './adminUtils'
 import { formatDateOnly } from '../../utils/dates'
 import { weddingName } from '../../../shared/wedding-name.js'
+import { apiFetch } from '../../utils/api'
+import { API_URL } from '../../config/api'
+import { useToast } from '../../components/ui/Toast'
 
 export default function AdminWeddingList({
   weddings,
   unlinkedProfiles,
+  setUnlinkedProfiles,
   displayedWeddings,
   allMessages,
+  directConversations,
   escalations,
   couplePhotos,
   showArchived,
@@ -66,6 +72,35 @@ export default function AdminWeddingList({
   clearZoom,
   disconnectZoom,
 }) {
+  const { error: toastError, success: toastSuccess } = useToast()
+  // Wedding chosen per unlinked account, and which one (if any) is mid-request.
+  const [linkChoice, setLinkChoice] = useState({})
+  const [linking, setLinking] = useState(null)
+
+  // Sets profiles.wedding_id server-side. Was: nothing — the banner used to
+  // point at a wedding "Access tab" that has never existed, so there was no
+  // way to link an orphaned login to its wedding at all.
+  const linkProfileToWedding = async (profileId) => {
+    const weddingId = linkChoice[profileId]
+    if (!weddingId) return
+    setLinking(profileId)
+    try {
+      await apiFetch(`${API_URL}/api/admin/profiles/${profileId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ wedding_id: weddingId }),
+      })
+      setUnlinkedProfiles?.(prev => prev.filter(p => p.id !== profileId))
+      toastSuccess('Linked. They will see their wedding next time they load the portal.')
+    } catch (err) {
+      if (err.status === 404) {
+        toastError('Not live yet — the linking endpoint has not been deployed here.')
+      } else {
+        toastError(`Could not link that account: ${err.message}`)
+      }
+    }
+    setLinking(null)
+  }
+
   const ACTIVITY_LABELS = {
     timeline_updated:    'updated their timeline',
     tables_updated:      'updated their table layout',
@@ -170,7 +205,7 @@ export default function AdminWeddingList({
                       className="bg-white rounded-lg p-2 text-sm cursor-pointer hover:bg-amber-100 transition"
                     >
                       <p className="text-sage-700 line-clamp-1">{q.question}</p>
-                      <p className="text-sage-400 text-xs">{wedding?.couple_names}</p>
+                      <p className="text-sage-400 text-xs">{weddingName(wedding)}</p>
                     </div>
                   )
                 })}
@@ -298,16 +333,35 @@ export default function AdminWeddingList({
                   {unlinkedProfiles.length} account{unlinkedProfiles.length === 1 ? '' : 's'} not linked to a wedding
                 </p>
                 <p className="text-xs text-amber-800 mt-0.5 mb-2">
-                  They can sign in and see nothing. Link them from the wedding&apos;s Access tab.
+                  They can sign in and see nothing until you link them to a wedding below.
                 </p>
-                <ul className="space-y-1">
+                <ul className="space-y-2">
                   {unlinkedProfiles.map(p => (
-                    <li key={p.id} className="text-xs text-amber-900">
-                      <span className="font-medium">{p.name || 'Unnamed'}</span>{' '}
-                      <span className="opacity-70">&lt;{p.email}&gt;</span>{' '}
-                      <span className="opacity-60">
-                        {p.role || 'no role'} · since {String(p.created_at).slice(0, 10)}
+                    <li key={p.id} className="text-xs text-amber-900 flex flex-wrap items-center gap-2">
+                      <span>
+                        <span className="font-medium">{p.name || 'Unnamed'}</span>{' '}
+                        <span className="opacity-70">&lt;{p.email}&gt;</span>{' '}
+                        <span className="opacity-60">
+                          {p.role || 'no role'} · since {String(p.created_at).slice(0, 10)}
+                        </span>
                       </span>
+                      <select
+                        value={linkChoice[p.id] || ''}
+                        onChange={e => setLinkChoice(prev => ({ ...prev, [p.id]: e.target.value }))}
+                        className="border border-amber-300 rounded-lg px-2 py-1 bg-white text-amber-900"
+                      >
+                        <option value="">Link to this wedding…</option>
+                        {weddings.filter(w => !w.archived).map(w => (
+                          <option key={w.id} value={w.id}>{weddingName(w)}</option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={() => linkProfileToWedding(p.id)}
+                        disabled={!linkChoice[p.id] || linking === p.id}
+                        className="px-2.5 py-1 rounded-lg bg-amber-600 text-white disabled:opacity-40"
+                      >
+                        {linking === p.id ? 'Linking…' : 'Link'}
+                      </button>
                     </li>
                   ))}
                 </ul>
@@ -324,7 +378,7 @@ export default function AdminWeddingList({
               ) : (
                 displayedWeddings.map(wedding => {
                   const escalation = escalations[wedding.id]
-                  const lastActivity = getLastActivity(allMessages[wedding.id])
+                  const lastActivity = getLastActivity(wedding, allMessages[wedding.id], directConversations?.[wedding.id])
                   const couplePhoto = couplePhotos[wedding.id]
 
                   return (
@@ -375,7 +429,14 @@ export default function AdminWeddingList({
                             {escalation?.hasEscalation && (
                               <span className="bg-red-100 text-red-600 text-xs px-2 py-0.5 rounded flex items-center gap-1">
                                 <button
-                                  onClick={(e) => { e.stopPropagation(); viewWeddingProfile(wedding, { focusUserId: escalation.messages?.[0]?.user_id }) }}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    const first = escalation.messages?.[0]
+                                    viewWeddingProfile(wedding, {
+                                      focusUserId: first?.user_id,
+                                      focusTab: first?.source === 'direct' ? 'direct-messages' : undefined,
+                                    })
+                                  }}
                                   className="hover:underline"
                                   title="Open the conversation that needs attention"
                                 >
@@ -740,8 +801,92 @@ export default function AdminWeddingList({
               </a>
             </div>
           </div>
+
+          {/* Sync history — under the integration cards above. Their statuses
+              only ever said "connected"; this is where a run that failed, or
+              stopped partway through, actually shows up. */}
+          <SyncHistoryPanel />
         </div>
       </div>
     </>
+  )
+}
+
+/**
+ * The last 20 sync runs, whatever kind. Nothing else in the admin says
+ * whether a run actually finished, or where it stopped if it didn't — the
+ * integration cards above only ever report "connected", which is a fact
+ * about the token, not about the last run.
+ */
+function SyncHistoryPanel() {
+  const [jobs, setJobs] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
+
+  // Doesn't set `loading` itself — the mount call relies on the useState(true)
+  // default, and a manual refresh sets it beforehand. That keeps this effect's
+  // synchronous portion free of a setState call.
+  const load = async () => {
+    try {
+      const data = await apiFetch(`${API_URL}/api/admin/sync-jobs?limit=20`)
+      setJobs(data.jobs || [])
+      setLoadError(false)
+    } catch {
+      setLoadError(true)
+    }
+    setLoading(false)
+  }
+
+  // Same shape as every other mount-time fetch in this codebase (see
+  // KnowledgeBaseAdmin, DirectMessagesPanel): load the panel's own data once
+  // it mounts. The linter can't tell the setState calls below the first
+  // `await` apart from ones before it.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { load() }, [])
+
+  const refresh = () => { setLoading(true); load() }
+
+  return (
+    <div className="bg-white rounded-xl border border-cream-200 p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="font-medium text-sage-700">Sync history</h3>
+        <button onClick={refresh} className="text-xs text-sage-400 hover:text-sage-600">Refresh</button>
+      </div>
+      {loading ? (
+        <p className="text-sage-400 text-sm">Loading…</p>
+      ) : loadError ? (
+        <p className="text-sage-400 text-sm">
+          Could not load. <button onClick={refresh} className="underline hover:text-sage-600">Retry</button>
+        </p>
+      ) : jobs.length === 0 ? (
+        <p className="text-sage-400 text-sm">No syncs recorded yet.</p>
+      ) : (
+        <ul className="space-y-2 max-h-64 overflow-y-auto text-xs">
+          {jobs.map(j => (
+            <li key={j.id} className="border-b border-cream-100 pb-2 last:border-0">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-medium text-sage-700 capitalize">{j.kind}</span>
+                <span className={`px-1.5 py-0.5 rounded ${
+                  j.status === 'failed' ? 'bg-red-100 text-red-700'
+                  : j.stalled ? 'bg-amber-100 text-amber-700'
+                  : j.status === 'running' ? 'bg-sage-100 text-sage-700'
+                  : 'bg-green-100 text-green-700'
+                }`}>
+                  {j.stalled ? 'stalled' : j.status}
+                </span>
+              </div>
+              <p className="text-sage-400 mt-0.5">
+                {j.trigger || 'manual'} · started {j.started_at ? new Date(j.started_at).toLocaleString() : '—'}
+                {j.finished_at ? ` · finished ${new Date(j.finished_at).toLocaleString()}` : ''}
+              </p>
+              <p className="text-sage-400">
+                {j.processed || 0} processed
+                {j.last_error ? ` · ${j.last_error}` : ''}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }
