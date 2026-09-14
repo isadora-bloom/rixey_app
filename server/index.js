@@ -9056,6 +9056,12 @@ app.get('/api/usage/:weddingId', async (req, res) => {
 // ============ KNOWLEDGE BASE ADMIN ============
 
 // Get all knowledge base entries
+//
+// select('*') carries `description`, the one-line summary of what an entry is
+// for. It has been a column since the table was created and no screen showed
+// it, so the admin list reads as a wall of titles with no way to tell two
+// entries on the same subject apart. Named here so a later tightening of this
+// select cannot drop it again.
 app.get('/api/knowledge-base', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
@@ -10693,7 +10699,14 @@ app.post('/api/admin/enquiries/sync', requireAdmin, async (req, res) => {
   }
 });
 
-/** The diary, newest meeting first among the upcoming ones. */
+/**
+ * The diary, newest meeting first among the upcoming ones.
+ *
+ * select('*') carries outcome_notes, which is the whole record of how a tour
+ * went. It has an accepting PATCH and nothing that showed it back, so what was
+ * typed after a tour went into a column no screen read — named here so a later
+ * tightening of the select cannot quietly drop it again.
+ */
 app.get('/api/admin/enquiries', requireAdmin, async (req, res) => {
   try {
     const { status, includePast } = req.query;
@@ -10720,8 +10733,13 @@ app.get('/api/admin/enquiries', requireAdmin, async (req, res) => {
     //
     // Computed on read rather than stored, so it cannot go stale against a
     // wedding that moved.
-    const { data: weddingDates } = await supabaseAdmin
+    const { data: weddingDates, error: datesErr } = await supabaseAdmin
       .from('weddings').select('id, couple_names, wedding_date').not('wedding_date', 'is', null);
+    // An empty list here means "every date they asked for is free", which is
+    // exactly the wrong thing to tell somebody standing in the room. The diary
+    // is still worth showing, so the failure is logged rather than thrown, and
+    // date_taken_by comes back null on every row instead of falsely empty.
+    if (datesErr) console.error('[enquiries] could not read wedding dates to check against:', datesErr.message);
     const byDate = new Map();
     for (const w of weddingDates || []) {
       if (!byDate.has(w.wedding_date)) byDate.set(w.wedding_date, []);
