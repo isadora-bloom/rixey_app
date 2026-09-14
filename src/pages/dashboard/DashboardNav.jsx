@@ -4,9 +4,11 @@
 // are no hand-written labels left in here: the couple's menu and the venue's
 // menu read the same list, so "open Bar Planner" means the same thing on both
 // ends of a phone call.
-import { useState } from 'react'
 import { sectionsFor, FINALISABLE_KEYS, resolveSectionKey } from '../../../shared/sections.js'
 import SectionIcon from '../../components/ui/SectionIcon'
+import SectionJump from '../../components/ui/SectionJump'
+import useSectionStatus from '../../hooks/useSectionStatus'
+import useCollapsedGroups from '../../hooks/useCollapsedGroups'
 
 const COUPLE_GROUPS = sectionsFor('couple')
 
@@ -18,7 +20,8 @@ const FINALISABLE = FINALISABLE_KEYS
 // It renders the same sections the sidebar does, which is the whole point:
 // two couples once wrote in saying the portal only had four things in it,
 // because on a phone the hamburger showed the header's resource links and
-// nothing else.
+// nothing else. Never collapsed, same as the phone dropdown below: a section
+// nobody can reach on a phone is a section that does not exist.
 const NAV_ITEMS = COUPLE_GROUPS.flatMap(({ group, sections }) => [
   { section: group },
   ...sections.map(s => ({ key: s.key, label: s.label, icon: s.icon })),
@@ -27,6 +30,8 @@ const NAV_ITEMS = COUPLE_GROUPS.flatMap(({ group, sections }) => [
 export { FINALISABLE, NAV_ITEMS }
 
 // Which sections show a little dot when there is a saved summary behind them.
+// Only reached outside the pre-wedding window, where the finalisation tick
+// and pending count below take over — see isPreWedding below.
 const DOT_KEYS = new Set(['budget', 'timeline', 'tables'])
 
 export default function DashboardNav({
@@ -36,6 +41,7 @@ export default function DashboardNav({
   timelineSummary,
   tableSummary,
   finalisations,
+  planningNotes = [],
   isPreWedding,
   onboardingComplete = false,
 }) {
@@ -45,21 +51,11 @@ export default function DashboardNav({
     tables: !!tableSummary,
   }
 
-  // Deliberately simple: one open/closed flag per group, only for groups the
-  // couple has actually clicked, nothing remembered between visits. U3 is
-  // building proper collapsible groups that remember themselves, and this is
-  // meant to be lifted straight out when that lands.
-  //
-  // Once onboarding is finished, Get Started has nothing left to say, so it
-  // starts closed. Worked out while rendering rather than pushed into state by
-  // an effect, so a click still wins and the onboarding answer arriving late
-  // does not shut a group the couple has just opened.
-  const [toggled, setToggled] = useState({})
-  const isCollapsed = (group) =>
-    group in toggled ? toggled[group] : (group === 'Get Started' && onboardingComplete)
+  const { finalised, pending } = useSectionStatus(finalisations, planningNotes)
+  const { isCollapsed, toggleGroup } = useCollapsedGroups('couple')
 
-  const toggleGroup = (group) =>
-    setToggled(prev => ({ ...prev, [group]: !isCollapsed(group) }))
+  // The group holding whatever is open stays open, whatever is stored for it.
+  const activeGroup = COUPLE_GROUPS.find(g => g.sections.some(s => s.key === activeSection))?.group
 
   return (
     <>
@@ -69,14 +65,22 @@ export default function DashboardNav({
           <div className="px-4 pt-5 pb-3 flex justify-center border-b border-cream-200">
             <img src="/rixey-manor-logo-optimized.png" alt="Rixey Manor" className="h-16 w-auto" />
           </div>
+          <SectionJump groups={COUPLE_GROUPS} onJump={setActiveSection} />
           <nav className="p-2">
             {COUPLE_GROUPS.map(({ group, sections }) => {
-              const collapsed = isCollapsed(group)
+              // Once onboarding is finished, Get Started has nothing left to
+              // say, so it defaults closed the first time nobody has clicked
+              // it. Worked out fresh each render rather than baked into the
+              // stored state, so a click still wins and the onboarding answer
+              // arriving late does not shut a group the couple has just
+              // opened.
+              const defaultCollapsed = group === 'Get Started' && onboardingComplete
+              const collapsed = isCollapsed(group, { activeGroup, defaultCollapsed })
               return (
                 <div key={group}>
                   <button
                     type="button"
-                    onClick={() => toggleGroup(group)}
+                    onClick={() => toggleGroup(group, collapsed)}
                     aria-expanded={!collapsed}
                     className="w-full flex items-center justify-between text-xs font-semibold text-sage-400 uppercase tracking-wide px-3 pt-3 pb-1 hover:text-sage-600"
                   >
@@ -97,22 +101,28 @@ export default function DashboardNav({
                         <SectionIcon sectionKey={section.key} />
                         <span>{section.label}</span>
                       </span>
-                      {/* Finalisation ticks — last 6 weeks only */}
-                      {isPreWedding && FINALISABLE.has(section.key) ? (
-                        <span className="flex items-center gap-0.5 shrink-0">
-                          {[
-                            finalisations[section.key]?.couple_finalised,
-                            finalisations[section.key]?.staff_finalised,
-                          ].map((done, i) => (
+                      {/* Finalisation tick + pending count — last 6 weeks
+                          only, the same window the finaliser bar itself
+                          uses, so a section cannot show signed-off in the
+                          menu once the bar that sets it has gone. */}
+                      {isPreWedding ? (
+                        <span className="flex items-center gap-1 shrink-0">
+                          {finalised.has(section.key) && (
                             <span
-                              key={i}
-                              className={`w-3 h-3 rounded-full border flex items-center justify-center ${
-                                done ? 'bg-sage-500 border-sage-500' : 'border-cream-400 bg-white'
-                              }`}
+                              className="w-4 h-4 rounded-full bg-sage-500 flex items-center justify-center shrink-0"
+                              title="Couple signed off"
                             >
-                              {done && <span className="text-white text-[7px] leading-none">✓</span>}
+                              <span className="text-white text-[9px] leading-none">✓</span>
                             </span>
-                          ))}
+                          )}
+                          {pending.get(section.key) > 0 && (
+                            <span
+                              className="bg-amber-100 text-amber-700 text-xs px-1.5 py-0.5 rounded-full min-w-[1.25rem] text-center"
+                              title="Waiting on Rixey"
+                            >
+                              {pending.get(section.key)}
+                            </span>
+                          )}
                         </span>
                       ) : (
                         DOT_KEYS.has(section.key) && dots[section.key] && (
@@ -130,7 +140,10 @@ export default function DashboardNav({
 
       {/* Mobile: section dropdown — same registry, same order, so a section
           cannot exist on one and be missing from the other. Never collapsed:
-          a <select> with a hidden optgroup is just a section nobody can reach. */}
+          a <select> with a hidden optgroup is just a section nobody can reach.
+          No jump box here either, for the same reason: typing into a phone
+          keyboard to filter a list this short saves nothing a native <select>
+          does not already do. */}
       <div className="lg:hidden mb-3">
         <select
           value={activeSection}
