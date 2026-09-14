@@ -5291,8 +5291,9 @@ app.post('/api/notes-highlights', async (req, res) => {
       return res.json({ highlights: 'No planning notes or contracts found for this wedding yet.' });
     }
 
+    // Whole days at the venue — see the identical fix on the highlights path.
     const daysAway = wedding?.wedding_date
-      ? Math.ceil((new Date(wedding.wedding_date + 'T00:00:00') - new Date()) / 86400000)
+      ? Math.round((new Date(`${wedding.wedding_date}T12:00:00Z`) - new Date(`${venueToday()}T12:00:00Z`)) / 86400000)
       : null;
 
     const prompt = `You are the senior coordinator at Rixey Manor, briefing the venue owner before she looks at this wedding. She has read the file before. She does not need it read back to her, she needs to know what she would otherwise miss.
