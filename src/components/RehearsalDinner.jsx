@@ -1,8 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { API_URL } from '../config/api'
 import { authHeaders, apiFetch } from '../utils/api'
-import { Button, Input } from './ui'
+import { Input } from './ui'
 import { useToast } from './ui/Toast'
+import { useAutosave } from '../hooks/useAutosave'
+import SaveIndicator from './ui/SaveIndicator'
 
 
 function ToggleGroup({ options, value, onChange }) {
@@ -86,60 +88,62 @@ const EMPTY_FORM = {
 export default function RehearsalDinner({ weddingId }) {
   const [form, setForm] = useState(EMPTY_FORM);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const hasLoadedRef = useRef(false);
   const { error: toastError } = useToast();
 
-  useEffect(() => {
-    async function fetchData() {
-      try {
-        const res = await fetch(`${API_URL}/api/rehearsal-dinner/${weddingId}`, { headers: await authHeaders() });
-        if (res.ok) {
-          const data = await res.json();
-          if (data) {
-            // Only the fields the form owns. Merging the whole row put id,
-            // wedding_id and the timestamps into the form, and straight back
-            // into the next save.
-            const mine = Object.fromEntries(
-              Object.keys(EMPTY_FORM)
-                .filter(k => data[k] !== undefined && data[k] !== null)
-                .map(k => [k, data[k]])
-            );
-            setForm(prev => ({ ...prev, ...mine }));
-          }
-        }
-      } catch (err) {
-        console.error('Failed to load rehearsal dinner details:', err);
-      } finally {
-        setLoading(false);
+  const fetchData = useCallback(async () => {
+    setLoadError(false);
+    try {
+      const res = await fetch(`${API_URL}/api/rehearsal-dinner/${weddingId}`, { headers: await authHeaders() });
+      if (!res.ok) throw new Error('Could not load rehearsal dinner details');
+      const data = await res.json();
+      if (data) {
+        // Only the fields the form owns. Merging the whole row put id,
+        // wedding_id and the timestamps into the form, and straight back
+        // into the next save.
+        const mine = Object.fromEntries(
+          Object.keys(EMPTY_FORM)
+            .filter(k => data[k] !== undefined && data[k] !== null)
+            .map(k => [k, data[k]])
+        );
+        setForm(prev => ({ ...prev, ...mine }));
       }
+    } catch (err) {
+      console.error('Failed to load rehearsal dinner details:', err);
+      setLoadError(true);
+    } finally {
+      setLoading(false);
     }
-    fetchData();
   }, [weddingId]);
+
+  useEffect(() => { fetchData(); }, [fetchData]);
 
   const set = useCallback((field, value) => {
     setForm(prev => ({ ...prev, [field]: value }));
   }, []);
 
-  async function handleSave(e) {
-    e.preventDefault();
-    setSaving(true);
-    try {
+  const { schedule: scheduleSave, state: saveState } = useAutosave(
+    async (payload) => {
+      // form only. It used to send userId, which is not a column on
+      // rehearsal_dinner and nothing on the server reads, and that alone
+      // was enough to fail every save.
       await apiFetch(`${API_URL}/api/rehearsal-dinner`, {
         method: 'POST',
-        // form only. It used to send userId, which is not a column on
-        // rehearsal_dinner and nothing on the server reads, and that alone
-        // was enough to fail every save.
-        body: JSON.stringify({ weddingId, ...form }),
+        body: JSON.stringify({ weddingId, ...payload }),
       });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2500);
-    } catch (err) {
-      toastError(`Could not save rehearsal dinner: ${err.message}`);
-    } finally {
-      setSaving(false);
+    },
+    { delay: 1200, errorMessage: 'Could not save rehearsal dinner', toastError }
+  );
+
+  useEffect(() => {
+    if (loading || loadError) return;
+    if (!hasLoadedRef.current) {
+      hasLoadedRef.current = true;
+      return;
     }
-  }
+    scheduleSave(form);
+  }, [loading, loadError, form, scheduleSave]);
 
   if (loading) {
     return (
@@ -149,14 +153,26 @@ export default function RehearsalDinner({ weddingId }) {
     );
   }
 
+  if (loadError) {
+    return (
+      <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-600 max-w-2xl">
+        Could not load rehearsal dinner details.{' '}
+        <button onClick={fetchData} className="underline hover:no-underline ml-1">Retry</button>
+      </div>
+    );
+  }
+
   return (
-    <form onSubmit={handleSave} className="space-y-6 max-w-2xl">
+    <div className="space-y-6 max-w-2xl">
       {/* Header */}
-      <div>
-        <h2 className="text-xl font-semibold text-sage-700">Rehearsal Dinner</h2>
-        <p className="mt-1 text-sm text-sage-500">
-          Tell us about your rehearsal dinner plans so we can help coordinate the space and setup.
-        </p>
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-semibold text-sage-700">Rehearsal Dinner</h2>
+          <p className="mt-1 text-sm text-sage-500">
+            Tell us about your rehearsal dinner plans so we can help coordinate the space and setup.
+          </p>
+        </div>
+        <SaveIndicator state={saveState} />
       </div>
 
       {/* ── BAR ── */}
@@ -323,21 +339,6 @@ export default function RehearsalDinner({ weddingId }) {
           className="w-full border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300 resize-none"
         />
       </div>
-
-      {/* Save button */}
-      <div className="sticky bottom-0 bg-white/90 backdrop-blur-sm border-t border-cream-200 -mx-1 px-1 py-3 flex items-center justify-between gap-4">
-        {saved ? (
-          <span className="text-sm text-sage-600 font-medium">Saved</span>
-        ) : (
-          <span />
-        )}
-        <Button
-          type="submit"
-          disabled={saving}
-        >
-          {saving ? 'Saving...' : 'Save'}
-        </Button>
-      </div>
-    </form>
+    </div>
   );
 }

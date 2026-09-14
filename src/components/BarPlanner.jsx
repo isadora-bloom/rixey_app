@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { API_URL } from '../config/api'
 import { authHeaders, apiFetch } from '../utils/api'
 import { useToast } from './ui/Toast'
+import { useAutosave } from '../hooks/useAutosave'
+import SaveIndicator from './ui/SaveIndicator'
 
 
 // ── Ingredient scaling → meaningful units ─────────────────────────────────────
@@ -279,10 +281,13 @@ function printList(items, coupleNames) {
 
 // ── Notes box ─────────────────────────────────────────────────────────────────
 
-function NotesBox({ value, onChange, placeholder }) {
+function NotesBox({ value, onChange, placeholder, saveState }) {
   return (
     <div className="mt-6 border-t border-cream-100 pt-4">
-      <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-2">Notes</p>
+      <div className="flex items-center gap-2 mb-2">
+        <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide">Notes</p>
+        {saveState && <SaveIndicator state={saveState} />}
+      </div>
       <textarea value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder || 'Any notes for this section…'}
         rows={3} className="w-full border border-cream-200 rounded-xl px-3 py-2 text-sm text-sage-700 placeholder-sage-300 focus:outline-none focus:ring-2 focus:ring-sage-300 resize-none" />
     </div>
@@ -358,12 +363,18 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
   const [items, setItems] = useState([])
   const [recipes, setRecipes] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
 
-  // Calculator state
+  // Calculator state. guestCountProp/weddingDate come from the wedding record;
+  // when the parent hasn't got them yet, these are placeholders, not facts —
+  // see guestCountIsPlaceholder / seasonIsPlaceholder below.
+  const guestCountTouchedRef = useRef(false)
   const [guests, setGuests]         = useState(Math.min(200, guestCountProp || 80))
   const [hours, setHours]           = useState(5)
   const [barType, setBarType]       = useState('beer-wine')
   const [season, setSeason]         = useState(() => seasonFromDate(weddingDate) || (new Date().getMonth() >= 4 && new Date().getMonth() <= 9 ? 'summer' : 'winter'))
+  const guestCountIsPlaceholder = !guestCountProp
+  const seasonIsPlaceholder = !weddingDate
   const [beerLevel,    setBeerLevel]    = useState(2) // 0=None 1=Light 2=Average 3=Heavy
   const [wineLevel,    setWineLevel]    = useState(2)
   const [spiritsLevel, setSpiritLevel]  = useState(2)
@@ -385,14 +396,13 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
   const [extracting, setExtracting]                   = useState(false)
   const [editableIngredients, setEditableIngredients] = useState(null) // editable before saving
   const fileRef     = useRef()
-  const notesTimer  = useRef()
 
   // Notes per tab
   const [notes, setNotes] = useState({ calculator: '', list: '', recipes: '' })
   // Shopping list: show calc summary
   const [showCalcSummary, setShowCalcSummary] = useState(false)
 
-  useEffect(() => { load() }, [weddingId])
+  useEffect(() => { load() }, [load])
 
   useEffect(() => {
     const bt         = BAR_TYPES.find(b => b.key === barType) || BAR_TYPES[0]
@@ -409,6 +419,15 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
     if (s) setSeason(s)
   }, [weddingDate])
 
+  // The parent may not have the real guest count on first render and pass it
+  // in once its own load finishes. Pick that up, but only until the couple
+  // has actually touched the guest count themselves.
+  useEffect(() => {
+    if (guestCountProp && !guestCountTouchedRef.current) {
+      setGuests(Math.min(200, guestCountProp))
+    }
+  }, [guestCountProp])
+
   const selectBarType = (key) => {
     setBarType(key)
     setBeerLevel(2)
@@ -416,7 +435,8 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
     setSpiritLevel(2)
   }
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    setLoadError(false)
     try {
       const hdrs = await authHeaders()
       const [itemsRes, recipesRes, notesRes] = await Promise.all([
@@ -424,31 +444,35 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
         fetch(`${API_URL}/api/bar-recipes/${weddingId}`, { headers: hdrs }),
         fetch(`${API_URL}/api/bar-notes/${weddingId}`, { headers: hdrs }),
       ])
+      if (!itemsRes.ok || !recipesRes.ok || !notesRes.ok) throw new Error('Could not load bar planner')
       setItems(await itemsRes.json() || [])
       setRecipes(await recipesRes.json() || [])
       const n = await notesRes.json()
       setNotes({ calculator: '', list: '', recipes: '', ...n })
-    } catch (err) { console.error('Failed to load bar planner:', err) }
+    } catch (err) {
+      console.error('Failed to load bar planner:', err)
+      setLoadError(true)
+    }
     setLoading(false)
-  }
+  }, [weddingId])
+
+  const { schedule: scheduleNotes, state: notesSaveState } = useAutosave(
+    async (payload) => {
+      await apiFetch(`${API_URL}/api/bar-notes/${weddingId}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      })
+    },
+    { delay: 800, errorMessage: 'Could not save bar notes', toastError }
+  )
 
   const updateNotes = useCallback((tabKey, val) => {
     setNotes(prev => {
       const next = { ...prev, [tabKey]: val }
-      clearTimeout(notesTimer.current)
-      notesTimer.current = setTimeout(async () => {
-        try {
-          await apiFetch(`${API_URL}/api/bar-notes/${weddingId}`, {
-            method: 'PUT',
-            body: JSON.stringify(next),
-          })
-        } catch (err) {
-          toastError(`Could not save bar notes: ${err.message}`)
-        }
-      }, 800)
+      scheduleNotes(next)
       return next
     })
-  }, [weddingId, toastError])
+  }, [scheduleNotes])
 
   // ── Shopping list ──
 
@@ -650,6 +674,15 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
 
   if (loading) return <p className="text-sage-400 text-center py-8">Loading bar planner…</p>
 
+  if (loadError) {
+    return (
+      <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-600 max-w-2xl mx-auto">
+        Could not load the bar planner.{' '}
+        <button onClick={load} className="underline hover:no-underline ml-1">Retry</button>
+      </div>
+    )
+  }
+
   const checkedCount = items.filter(i => i.checked).length
   const totalCount   = items.length
   const unchecked    = items.filter(i => !i.checked)
@@ -708,7 +741,11 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
           <div>
             <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-3">
               Season <span className="font-normal normal-case text-sage-400">— affects red vs white wine split</span>
-              {weddingDate && <span className="font-normal normal-case text-sage-400"> (auto-detected from your wedding date)</span>}
+              {seasonIsPlaceholder ? (
+                <span className="font-normal normal-case text-amber-600"> (placeholder — guessed from today's date, not your wedding date)</span>
+              ) : (
+                <span className="font-normal normal-case text-sage-400"> (auto-detected from your wedding date)</span>
+              )}
             </p>
             <div className="flex gap-3">
               {[
@@ -751,12 +788,17 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
           {/* Guest count */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <label className="text-xs font-semibold text-sage-500 uppercase tracking-wide">Guest count</label>
-              <input type="number" value={guests} min={10} max={200} onChange={e => setGuests(Math.min(200, Math.max(1, Number(e.target.value))))}
+              <label className="text-xs font-semibold text-sage-500 uppercase tracking-wide">
+                Guest count
+                {guestCountIsPlaceholder && (
+                  <span className="font-normal normal-case text-amber-600"> — placeholder, not your real guest count yet</span>
+                )}
+              </label>
+              <input type="number" value={guests} min={10} max={200} onChange={e => { guestCountTouchedRef.current = true; setGuests(Math.min(200, Math.max(1, Number(e.target.value)))) }}
                 className="w-20 border border-cream-300 rounded-lg px-2 py-1 text-sm text-center font-medium text-sage-700 focus:outline-none focus:ring-2 focus:ring-sage-300" />
             </div>
             <input type="range" min={10} max={200} step={5} value={guests}
-              onChange={e => setGuests(Number(e.target.value))} className="w-full accent-sage-600" />
+              onChange={e => { guestCountTouchedRef.current = true; setGuests(Number(e.target.value)) }} className="w-full accent-sage-600" />
             <div className="flex justify-between text-xs text-sage-300 mt-1"><span>10</span><span>50</span><span>100</span><span>150</span><span>200</span></div>
           </div>
 
@@ -894,7 +936,7 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
             Add to shopping list
           </button>
 
-          <NotesBox value={notes.calculator} onChange={v => updateNotes('calculator', v)}
+          <NotesBox value={notes.calculator} onChange={v => updateNotes('calculator', v)} saveState={notesSaveState}
             placeholder="Notes about the bar setup, preferences, restrictions…" />
         </div>
       )}
@@ -1013,7 +1055,7 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
             </div>
           )}
 
-          <NotesBox value={notes.list} onChange={v => updateNotes('list', v)}
+          <NotesBox value={notes.list} onChange={v => updateNotes('list', v)} saveState={notesSaveState}
             placeholder="Shopping notes — where to buy, brands you like, things to remember…" />
         </div>
       )}
@@ -1142,7 +1184,7 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
             </button>
           )}
 
-          <NotesBox value={notes.recipes} onChange={v => updateNotes('recipes', v)}
+          <NotesBox value={notes.recipes} onChange={v => updateNotes('recipes', v)} saveState={notesSaveState}
             placeholder="Notes about cocktail choices, garnish ideas, batch prep instructions…" />
         </div>
       )}

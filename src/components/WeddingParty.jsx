@@ -573,13 +573,13 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
           </p>
           <div className="grid sm:grid-cols-2 gap-3 mb-3">
             <input
-              value={p1Draft || partner1}
+              value={p1Draft ?? partner1}
               onChange={e => setP1Draft(e.target.value)}
               placeholder="Partner 1 name"
               className="border border-amber-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300 bg-white"
             />
             <input
-              value={p2Draft || partner2}
+              value={p2Draft ?? partner2}
               onChange={e => setP2Draft(e.target.value)}
               placeholder="Partner 2 name"
               className="border border-amber-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300 bg-white"
@@ -716,7 +716,7 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
                         </p>
                       )}
                     </div>
-                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition flex-shrink-0">
+                    <div className="flex gap-1 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition flex-shrink-0">
                       <button
                         onClick={() => setEditingId(member.id)}
                         className="p-1.5 text-sage-400 hover:text-sage-700 rounded hover:bg-cream-100"

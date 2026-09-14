@@ -63,6 +63,56 @@ const NAV_ITEMS = [
 // a form field. One list, used in both places, is what stops that recurring.
 export { FINALISABLE, NAV_ITEMS }
 
+// Emoji used to still carry a little visual character in the phone <select>,
+// where the sidebar's icon images can't render. Kept as a lookup so the phone
+// list can be built straight from NAV_ITEMS instead of hand-duplicated, which
+// is what let four whole sections quietly go missing on a phone.
+const NAV_EMOJI = {
+  chat: '💬', worksheets: '📋', 'wedding-details': '💍', checklist: '✅', walkthrough: '📝',
+  budget: '💰', guests: '👥', vendor: '📎', 'preferred-vendors': '⭐', timeline: '📅', tables: '🪑',
+  'ceremony-order': '🎶', 'ceremony-chairs': '🪑', 'table-map': '🗺', staffing: '🙋', bar: '🍹',
+  makeup: '💄', shuttle: '🚌', rehearsal: '🍽', bedrooms: '🛏', decor: '🌿',
+  'rsvp-settings': '📝', allergies: '⚕️', guestcare: '💝',
+  'website-builder': '🌐', photos: '📷', 'wedding-party': '💐',
+  inspo: '💡', borrow: '📦', picks: '🛍', downloads: '📥',
+  'day-of-memories': '📸',
+  inbox: '📬', booking: '📞', resources: '🔗',
+}
+
+// Builds the phone <select>'s children straight from NAV_ITEMS, so a section
+// added to one list is never missing from the other.
+function buildMobileNavOptions() {
+  const nodes = []
+  let currentSection = null
+  let pending = []
+
+  const flush = () => {
+    if (currentSection) {
+      nodes.push(<optgroup key={currentSection} label={currentSection}>{pending}</optgroup>)
+    } else {
+      nodes.push(...pending)
+    }
+    pending = []
+  }
+
+  NAV_ITEMS.forEach(item => {
+    if (item.section) {
+      flush()
+      currentSection = item.section
+      return
+    }
+    const emoji = NAV_EMOJI[item.key]
+    pending.push(
+      <option key={item.key} value={item.key}>
+        {emoji ? `${emoji} ` : ''}{item.label}
+      </option>
+    )
+  })
+  flush()
+
+  return nodes
+}
+
 export default function DashboardNav({
   activeSection,
   setActiveSection,
@@ -138,62 +188,15 @@ export default function DashboardNav({
         </div>
       </div>
 
-      {/* Mobile: section dropdown */}
+      {/* Mobile: section dropdown — built from NAV_ITEMS, same as the sidebar,
+          so a section can't go missing from one and not the other. */}
       <div className="lg:hidden mb-3">
         <select
           value={activeSection}
-          onChange={e => {
-            const val = e.target.value
-            if (val === 'preferred-vendors') { navigate('/vendors'); return }
-            setActiveSection(val)
-          }}
+          onChange={e => setActiveSection(e.target.value)}
           className="w-full p-3 border border-cream-200 rounded-xl bg-white text-sage-700 font-medium focus:outline-none focus:ring-2 focus:ring-sage-300"
         >
-          <option value="chat">💬 Chat with Sage</option>
-          <optgroup label="Get Started">
-            <option value="worksheets">📋 Worksheets</option>
-            <option value="wedding-details">💍 Wedding Details</option>
-            <option value="checklist">✅ Checklist</option>
-          </optgroup>
-          <optgroup label="Plan">
-            <option value="budget">💰 Budget</option>
-            <option value="guests">👥 Guest List</option>
-            <option value="vendor">📎 Vendors</option>
-            <option value="preferred-vendors">⭐ Vendor Directory</option>
-            <option value="timeline">📅 Timeline</option>
-            <option value="tables">🪑 Tables</option>
-          </optgroup>
-          <optgroup label="Day Of">
-            <option value="ceremony-order">🎶 Ceremony Order</option>
-            <option value="ceremony-chairs">🪑 Ceremony Chairs</option>
-            <option value="table-map">🗺 Table Map</option>
-            <option value="staffing">🙋 Staffing Guide</option>
-            <option value="bar">🍹 Bar Planner</option>
-            <option value="makeup">💄 Hair &amp; Makeup</option>
-            <option value="shuttle">🚌 Shuttle Schedule</option>
-            <option value="rehearsal">🍽 Rehearsal Dinner</option>
-            <option value="bedrooms">🛏 Bedroom Assignments</option>
-            <option value="decor">🌿 Decor Inventory</option>
-          </optgroup>
-          <optgroup label="Your Guests">
-            <option value="allergies">⚕️ Allergy Registry</option>
-            <option value="guestcare">💝 Guest Care Notes</option>
-          </optgroup>
-          <optgroup label="Your Website">
-            <option value="website-builder">🌐 Build Your Website</option>
-            <option value="photos">📷 Photo Library</option>
-            <option value="wedding-party">💐 Wedding Party</option>
-          </optgroup>
-          <optgroup label="Rixey">
-            <option value="inspo">💡 Inspiration</option>
-            <option value="borrow">📦 Borrow Brochure</option>
-            <option value="picks">🛍 Rixey Picks</option>
-          </optgroup>
-          <optgroup label="Connect">
-            <option value="inbox">📬 Inbox</option>
-            <option value="booking">📞 Book a Meeting</option>
-            <option value="resources">🔗 Resources</option>
-          </optgroup>
+          {buildMobileNavOptions()}
         </select>
       </div>
     </>

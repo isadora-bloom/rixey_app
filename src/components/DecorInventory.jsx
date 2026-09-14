@@ -124,7 +124,7 @@ function ItemRow({ item, onDelete, onUpdate }) {
       <td className="py-2 px-2 w-10 text-right">
         <button
           onClick={() => onDelete(item.id)}
-          className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-rose-50 text-rose-400 hover:text-rose-600 text-base leading-none"
+          className="opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-rose-50 text-rose-400 hover:text-rose-600 text-base leading-none"
           title="Remove item"
         >
           ×

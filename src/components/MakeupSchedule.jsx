@@ -402,7 +402,7 @@ export default function MakeupSchedule({ weddingId, userId }) {
                       )}
                       <button
                         onClick={() => handleDelete(entry.id)}
-                        className="text-rose-400 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-opacity text-xs px-2 py-1 rounded hover:bg-rose-50"
+                        className="text-rose-400 hover:text-rose-500 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity text-xs px-2 py-1 rounded hover:bg-rose-50"
                         title="Remove"
                       >
                         Remove
