@@ -13,7 +13,7 @@ const srcRoot = join(root, 'src')
 const maxIdx = process.argv.indexOf('--max')
 const MAX = maxIdx > -1 ? Number(process.argv[maxIdx + 1]) : Infinity
 
-const SKIP = new Set(['node_modules', '.git', 'dist', 'backups'])
+const SKIP = new Set(['node_modules', '.git', '.claude', 'dist', 'backups'])
 
 function walk(dir, out = []) {
   for (const name of readdirSync(dir)) {

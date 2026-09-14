@@ -41,7 +41,7 @@ const LIST = process.argv.includes('--list');
 const maxIdx = process.argv.indexOf('--max');
 const MAX = maxIdx > -1 ? Number(process.argv[maxIdx + 1]) : null;
 
-const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'test-results', 'backups', 'playwright-report']);
+const SKIP_DIRS = new Set(['node_modules', '.git', '.claude', 'dist', 'test-results', 'backups', 'playwright-report']);
 
 function walk(dir, out = []) {
   for (const name of readdirSync(dir)) {

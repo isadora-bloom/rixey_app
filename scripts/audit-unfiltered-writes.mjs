@@ -23,7 +23,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const maxIdx = process.argv.indexOf('--max');
 const MAX = maxIdx > -1 ? Number(process.argv[maxIdx + 1]) : null;
 
-const SKIP = new Set(['node_modules', '.git', 'dist', 'backups', 'test-results']);
+const SKIP = new Set(['node_modules', '.git', '.claude', 'dist', 'backups', 'test-results']);
 
 function walk(dir, out = []) {
   for (const name of readdirSync(dir)) {
