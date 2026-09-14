@@ -953,7 +953,11 @@ export default function Dashboard() {
               {/* Bar Planner section */}
               {activeSection === 'bar' && profile?.wedding_id && (
                 <div className="p-4 sm:p-6">
-                  <BarPlanner weddingId={profile.wedding_id} guestCount={profile.guest_count} weddingDate={profile.wedding_date} coupleNames={profile.couple_names} />
+                  {/* profile carries none of these — wedding_date and couple_names live
+                      on the weddings row, and there is no guest_count column on either
+                      profiles or weddings; tableSummary.guestCount (loaded from the
+                      table planner) is the real figure, where one exists. */}
+                  <BarPlanner weddingId={profile.wedding_id} guestCount={tableSummary?.guestCount} weddingDate={wedding?.wedding_date} coupleNames={wedding?.couple_names} />
                 </div>
               )}
 
