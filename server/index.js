@@ -163,7 +163,7 @@ const corsOptions = {
   credentials: true
 };
 app.use(cors(corsOptions));
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 // Blank form fields arrive as "" and Postgres rejects that for every non-text
 // column. Turn those into null before any handler sees them. See coerce.js.
 app.use(coerceBody);
@@ -440,6 +440,8 @@ app.use('/api/manor-assets', (req, res, next) => {
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
+  timeout: 120_000,
+  maxRetries: 2,
 });
 
 // Single source of truth for model IDs — update here when Anthropic releases new versions
@@ -612,6 +614,11 @@ async function sendViaGmail(to, subject, html) {
 
 async function sendNotificationEmail(to, subject, bodyText, recipientType = 'admin') {
   if (!to) return false;
+  // bodyText can carry a client's own words (or the notification title, when
+  // there is no body), so it goes into the HTML escaped. See
+  // lib/rsvp-confirmation.js for the same esc().
+  const esc = s => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
   const linkUrl = recipientType === 'client' ? `${frontendUrl}/` : `${frontendUrl}/admin`;
   const linkLabel = recipientType === 'client' ? 'Open your portal' : 'View in Admin';
@@ -620,7 +627,7 @@ async function sendNotificationEmail(to, subject, bodyText, recipientType = 'adm
       <div style="padding-bottom: 16px; margin-bottom: 24px; border-bottom: 2px solid #7C9070;">
         <span style="font-size: 11px; letter-spacing: 3px; text-transform: uppercase; color: #7C9070;">Rixey Manor Planning Portal</span>
       </div>
-      <p style="font-size: 16px; line-height: 1.7; margin: 0 0 24px;">${bodyText}</p>
+      <p style="font-size: 16px; line-height: 1.7; margin: 0 0 24px;">${esc(bodyText)}</p>
       <a href="${linkUrl}" style="display: inline-block; background: #5C6B4F; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-size: 14px;">${linkLabel} →</a>
       <div style="margin-top: 32px; padding-top: 16px; border-top: 1px solid #e8e0d5;">
         <p style="font-size: 12px; color: #999; margin: 0;">Rapidan, VA · rixeymanor.com</p>
@@ -652,7 +659,7 @@ async function createNotification(weddingId, recipientType, type, title, body, e
     // Rate-limit: deduplicate client_activity notifications within 5 minutes per wedding
     if (type === 'client_activity') {
       const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-      const { data: recent } = await supabaseAdmin
+      const { data: recent, error: dedupError } = await supabaseAdmin
         .from('notifications')
         .select('id')
         .eq('wedding_id', weddingId)
@@ -660,6 +667,12 @@ async function createNotification(weddingId, recipientType, type, title, body, e
         .eq('type', 'client_activity')
         .gte('created_at', fiveMinAgo)
         .limit(1);
+      if (dedupError) {
+        // Can't tell whether this is a duplicate, so skip rather than risk
+        // sending one twice.
+        console.error('[Notifications] Dedup check failed:', dedupError.message);
+        return;
+      }
       if (recent?.length > 0) return;
     }
 
@@ -1910,11 +1923,32 @@ app.post('/api/chat', requireAuth, async (req, res) => {
 
         if (contracts && contracts.length > 0) {
           if (isContractRelated) {
-            // Include full contract text for contract-related questions
+            // Include full contract text for contract-related questions, but
+            // capped: an uncapped inline of every contract on file was the
+            // single biggest thing in this prompt, per-contract and overall.
+            const PER_CONTRACT_CAP = 12_000;
+            const TOTAL_CAP = 40_000;
             weddingContext += '\nFULL CONTRACT DETAILS ON FILE:\n';
-            contracts.forEach(c => {
-              weddingContext += `--- CONTRACT: ${c.filename} ---\n${c.extracted_text || 'No text extracted'}\n\n`;
-            });
+            let contractCharsUsed = 0;
+            for (const c of contracts) {
+              if (contractCharsUsed >= TOTAL_CAP) {
+                weddingContext += `--- CONTRACT: ${c.filename} --- (omitted, total contract text limit reached)\n\n`;
+                continue;
+              }
+              let text = c.extracted_text || 'No text extracted';
+              let truncatedNote = '';
+              if (text.length > PER_CONTRACT_CAP) {
+                text = text.slice(0, PER_CONTRACT_CAP);
+                truncatedNote = ' [truncated]';
+              }
+              const remaining = TOTAL_CAP - contractCharsUsed;
+              if (text.length > remaining) {
+                text = text.slice(0, remaining);
+                truncatedNote = ' [truncated]';
+              }
+              contractCharsUsed += text.length;
+              weddingContext += `--- CONTRACT: ${c.filename}${truncatedNote} ---\n${text}\n\n`;
+            }
             console.log(`Including full contract text for contract-related question`);
           } else {
             // Just summaries for general questions
@@ -2319,9 +2353,15 @@ function formatProfileContext(profile) {
   if (profile.name) parts.push(`Name: ${profile.name}`);
   if (profile.role) parts.push(`Role: ${roleLabels[profile.role] || profile.role}`);
   if (profile.wedding_date) {
-    const date = new Date(profile.wedding_date);
-    const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-    const daysUntil = Math.ceil((date - new Date()) / (1000 * 60 * 60 * 24));
+    // wedding_date is a bare YYYY-MM-DD. Anchor at midday UTC and format in
+    // UTC so it isn't shifted a second time — otherwise this reads a day
+    // early for anyone west of the venue, and "days away" is judged against
+    // whatever timezone the server happens to be in rather than Rixey's.
+    const ymd = String(profile.wedding_date).slice(0, 10);
+    const anchored = /^\d{4}-\d{2}-\d{2}$/.test(ymd) ? new Date(`${ymd}T12:00:00Z`) : new Date(profile.wedding_date);
+    const formatted = anchored.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+    const todayAnchored = new Date(`${venueToday()}T12:00:00Z`);
+    const daysUntil = Math.round((anchored - todayAnchored) / (1000 * 60 * 60 * 24));
     parts.push(`Wedding Date: ${formatted} (${daysUntil > 0 ? daysUntil + ' days away' : 'past'})`);
   }
 
@@ -3185,8 +3225,11 @@ async function buildWeddingContext(weddingId, { noteLimit = 400 } = {}) {
 
     // Who and when, first, because everything else is judged against the date.
     if (wedding) {
+      // Whole days at the venue, not wall-clock hours wherever the server or
+      // reader happens to be — the old version drifted by a day depending on
+      // the hour it ran.
       const days = wedding.wedding_date
-        ? Math.ceil((new Date(wedding.wedding_date + 'T00:00:00') - new Date()) / 86400000)
+        ? Math.round((new Date(`${wedding.wedding_date}T12:00:00Z`) - new Date(`${venueToday()}T12:00:00Z`)) / 86400000)
         : null;
       const when = wedding.wedding_date
         ? `${wedding.wedding_date}${days === null ? '' : days < 0 ? ` (${Math.abs(days)} days ago)` : ` (${days} days away)`}`
@@ -5346,8 +5389,9 @@ app.post('/api/notes-highlights', async (req, res) => {
       return res.json({ highlights: 'No planning notes or contracts found for this wedding yet.' });
     }
 
+    // Whole days at the venue — see the identical fix on the highlights path.
     const daysAway = wedding?.wedding_date
-      ? Math.ceil((new Date(wedding.wedding_date + 'T00:00:00') - new Date()) / 86400000)
+      ? Math.round((new Date(`${wedding.wedding_date}T12:00:00Z`) - new Date(`${venueToday()}T12:00:00Z`)) / 86400000)
       : null;
 
     const prompt = `You are the senior coordinator at Rixey Manor, briefing the venue owner before she looks at this wedding. She has read the file before. She does not need it read back to her, she needs to know what she would otherwise miss.
@@ -6228,11 +6272,15 @@ app.post('/api/admin/contact-messages/:id/share', async (req, res) => {
 // Meetings the matcher would not guess at.
 app.get('/api/admin/ingest-review', async (req, res) => {
   try {
+    // Bounded: an unfiled backlog is exactly the kind of table that grows.
+    const requested = parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 1000) : 200;
     const { data, error } = await supabaseAdmin
       .from('ingest_review')
       .select('*, suggested:suggested_wedding_id(id, couple_names, wedding_date)')
       .eq('status', 'open')
-      .order('occurred_at', { ascending: false });
+      .order('occurred_at', { ascending: false })
+      .range(0, limit - 1);
     if (error) throw error;
     res.json({ items: data || [] });
   } catch (error) {
@@ -6351,18 +6399,26 @@ app.post('/api/admin/ingest-review/:id/ignore', async (req, res) => {
 // Debug: inspect stored Zoom transcripts
 app.get('/api/zoom/transcripts', async (req, res) => {
   try {
+    // Both tables only grow. Bounded to the newest N unless the caller asks
+    // for more (still capped).
+    const requested = parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 1000) : 200;
+
     const { data: meetings, error: meetingsErr } = await supabaseAdmin
       .from('processed_zoom_meetings')
       .select('zoom_meeting_id, meeting_topic, wedding_id, processed_at, transcript_text')
-      .order('processed_at', { ascending: false });
+      .order('processed_at', { ascending: false })
+      .range(0, limit - 1);
     if (meetingsErr) throw meetingsErr;
 
     // Also check planning_notes for zoom_transcript entries
-    const { data: transcriptNotes } = await supabaseAdmin
+    const { data: transcriptNotes, error: notesErr } = await supabaseAdmin
       .from('planning_notes')
       .select('id, wedding_id, content, source_message, created_at')
       .eq('category', 'zoom_transcript')
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .range(0, limit - 1);
+    if (notesErr) throw notesErr;
 
     const meetings_summary = (meetings || []).map(m => ({
       id: m.zoom_meeting_id,
@@ -7145,12 +7201,17 @@ app.post('/api/inspo', requireAuth, upload.single('image'), async (req, res) => 
     const allowed = await assertWeddingMember(supabaseAdmin, req, weddingId);
     if (!allowed.ok) return res.status(allowed.status).json({ error: 'You do not have access to this wedding' });
 
-    // Check count limit
-    const { count } = await supabaseAdmin
+    // Check count limit. A failed count is not "0 images" — treating it as
+    // under the cap would let uploads past MAX_INSPO_IMAGES on every blip.
+    const { count, error: countError } = await supabaseAdmin
       .from('inspo_gallery')
       .select('*', { count: 'exact', head: true })
       .eq('wedding_id', weddingId);
 
+    if (countError) {
+      console.error('inspo count check failed:', countError.message);
+      return res.status(500).json({ error: 'Could not check the image count' });
+    }
     if (count >= MAX_INSPO_IMAGES) {
       return res.status(400).json({ error: `Maximum ${MAX_INSPO_IMAGES} images allowed` });
     }
@@ -7800,12 +7861,25 @@ app.post('/api/checklist/find-match', async (req, res) => {
 // Get usage stats for all weddings
 app.get('/api/usage/stats', async (req, res) => {
   try {
-    // Get usage grouped by wedding
-    const { data: usage, error } = await supabaseAdmin
-      .from('usage_logs')
-      .select('wedding_id, input_tokens, output_tokens, endpoint, created_at');
+    // usage_logs only grows, and this was loading every row ever written.
+    // Default to a trailing window; ?since=<ISO> or ?days=N can widen it.
+    // Still paged underneath, in case the window itself holds more than 1000
+    // rows (see the same pattern at runQuoBackfillExtraction above).
+    const days = Number(req.query.days) > 0 ? Number(req.query.days) : 90;
+    const since = req.query.since || new Date(Date.now() - days * 86400000).toISOString();
 
-    if (error) throw error;
+    const usage = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin
+        .from('usage_logs')
+        .select('wedding_id, input_tokens, output_tokens, endpoint, created_at')
+        .gte('created_at', since)
+        .order('created_at', { ascending: true })
+        .range(from, from + 999);
+      if (error) throw error;
+      usage.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
 
     // Group by wedding and calculate totals
     const weddingStats = {};
@@ -8147,7 +8221,8 @@ app.get('/api/vendor-directory', async (req, res) => {
     }
     if (error) throw error;
 
-    const today = new Date().toISOString().slice(0, 10);
+    // UTC "today" hides an offer from 8pm Eastern onward, four hours early.
+    const today = venueToday();
     const vendors = (data || []).map(v => {
       const live = v.is_published === true;
       // An offer with a date on it stops being an offer after that date.
@@ -8205,6 +8280,27 @@ async function vendorIdForToken(token) {
 function goLiveOnSave(resolved) {
   return resolved && resolved.is_published == null ? { is_published: true } : {};
 }
+
+// Vendor edit tokens never expired and had no way to be replaced — one
+// leaked link (email, forwarded chat) stayed live for good. Protected by the
+// blanket requireAdmin on the /api/admin prefix (line 356).
+app.post('/api/admin/vendors/:id/regenerate-token', async (req, res) => {
+  try {
+    const newToken = crypto.randomUUID();
+    const { data, error } = await supabaseAdmin
+      .from('vendors')
+      .update({ edit_token: newToken })
+      .eq('id', req.params.id)
+      .select('id, edit_token')
+      .single();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Vendor not found' });
+    res.json({ id: data.id, edit_token: data.edit_token });
+  } catch (err) {
+    console.error('Regenerate vendor token error:', err);
+    res.status(500).json({ error: 'Failed to regenerate token' });
+  }
+});
 
 // GET vendor by token (vendor self-edit portal)
 const PORTAL_FIELDS = 'id, category, name, bio, photos, website, contact, pricing_info, instagram, facebook, special_offer, special_expiry, availability_note, is_published, last_vendor_update, merged_into';
@@ -9500,8 +9596,9 @@ app.post('/api/admin/enquiries/:id/link', requireAdmin, async (req, res) => {
     if (!w) return res.status(404).json({ error: 'That wedding does not exist' });
 
     // Recordings made before we knew who they were belong to the wedding too.
-    await supabaseAdmin.from('walkthroughs')
+    const { error: walkthroughError } = await supabaseAdmin.from('walkthroughs')
       .update({ wedding_id: weddingId }).eq('enquiry_id', req.params.id);
+    if (walkthroughError) throw walkthroughError;
 
     const { data, error } = await supabaseAdmin.from('enquiries').update({
       wedding_id: weddingId,
@@ -9905,30 +10002,48 @@ app.get('/api/messages/admin/unread', requireAdmin, async (req, res) => {
 // Get all conversations for admin (latest message per wedding)
 app.get('/api/messages/admin/conversations', requireAdmin, async (req, res) => {
   try {
-    // Get all messages grouped by wedding, with latest first
-    const { data, error } = await supabaseAdmin
-      .from('direct_messages')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (error) throw error;
-
-    // Group by wedding and get latest + unread count
-    const conversations = {};
-    data?.forEach(msg => {
-      if (!conversations[msg.wedding_id]) {
-        conversations[msg.wedding_id] = {
-          wedding_id: msg.wedding_id,
-          latest_message: msg,
-          unread_count: 0
-        };
+    // direct_messages only grows; select('*') with no bound silently cut off
+    // at PostgREST's 1000-row default and both the message list and the
+    // unread counts it produced were wrong past that. Paged in a loop
+    // (see runQuoBackfillExtraction for the same pattern).
+    const latestByWedding = {};
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin
+        .from('direct_messages')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .range(from, from + 999);
+      if (error) throw error;
+      for (const msg of data || []) {
+        if (!latestByWedding[msg.wedding_id]) latestByWedding[msg.wedding_id] = msg;
       }
-      if (msg.sender_type === 'client' && !msg.is_read) {
-        conversations[msg.wedding_id].unread_count++;
-      }
-    });
+      if (!data || data.length < 1000) break;
+    }
 
-    res.json({ conversations: Object.values(conversations) });
+    // Unread counts computed separately, bounded to just the unread rows
+    // rather than by scanning every message ever sent to find them.
+    const unreadCounts = {};
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin
+        .from('direct_messages')
+        .select('wedding_id')
+        .eq('sender_type', 'client')
+        .eq('is_read', false)
+        .range(from, from + 999);
+      if (error) throw error;
+      for (const row of data || []) {
+        unreadCounts[row.wedding_id] = (unreadCounts[row.wedding_id] || 0) + 1;
+      }
+      if (!data || data.length < 1000) break;
+    }
+
+    const conversations = Object.entries(latestByWedding).map(([weddingId, latest]) => ({
+      wedding_id: weddingId,
+      latest_message: latest,
+      unread_count: unreadCounts[weddingId] || 0,
+    }));
+
+    res.json({ conversations });
   } catch (error) {
     console.error('Get conversations error:', error);
     res.status(500).json({ error: 'Failed to fetch conversations' });
@@ -10070,6 +10185,56 @@ app.get('/api/admin/unlinked-profiles', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// The newest timestamp across every inbound channel for one wedding. Each
+// lookup is a single indexed "order desc limit 1", so this stays bounded no
+// matter how large messages/direct_messages/activity_log/processed_emails/
+// processed_quo_messages get — the alternative, loading every row of five
+// ever-growing tables to find a maximum, is exactly the shape of read this
+// fix exists to remove.
+/**
+ * Latest activity per wedding, in five queries for the whole list rather than
+ * five per wedding (the first version did 5 x 47 reads on every admin open).
+ * Each table is read newest-first with a bound; a wedding that has not
+ * appeared in the newest few thousand rows of any table has no recent
+ * activity, which is exactly what the list wants to show.
+ */
+async function lastActivityByWedding(weddings) {
+  const weddingIds = weddings.map(w => w.id);
+  const profileToWedding = new Map();
+  for (const w of weddings) for (const p of (w.profiles || [])) if (p?.id) profileToWedding.set(p.id, w.id);
+  const profileIds = [...profileToWedding.keys()];
+  const latest = new Map();
+  const note = (weddingId, at) => {
+    if (!weddingId || !at) return;
+    const cur = latest.get(weddingId);
+    if (!cur || at > cur) latest.set(weddingId, at);
+  };
+  const WINDOW = 3000;
+  const read = async (label, q, pick) => {
+    const { data, error } = await q;
+    if (error) { console.error(`[admin/weddings] last_activity_at ${label} read failed:`, error.message); return; }
+    for (const r of data || []) pick(r);
+  };
+  await Promise.all([
+    profileIds.length
+      ? read('messages', supabaseAdmin.from('messages').select('user_id, created_at').in('user_id', profileIds)
+          .order('created_at', { ascending: false }).limit(WINDOW),
+          r => note(profileToWedding.get(r.user_id), r.created_at))
+      : Promise.resolve(),
+    read('direct_messages', supabaseAdmin.from('direct_messages').select('wedding_id, created_at').in('wedding_id', weddingIds)
+      .order('created_at', { ascending: false }).limit(WINDOW), r => note(r.wedding_id, r.created_at)),
+    read('activity_log', supabaseAdmin.from('activity_log').select('wedding_id, created_at').in('wedding_id', weddingIds)
+      .order('created_at', { ascending: false }).limit(WINDOW), r => note(r.wedding_id, r.created_at)),
+    read('processed_emails', supabaseAdmin.from('processed_emails').select('wedding_id, processed_at').in('wedding_id', weddingIds)
+      .order('processed_at', { ascending: false }).limit(WINDOW), r => note(r.wedding_id, r.processed_at)),
+    read('processed_quo_messages', supabaseAdmin.from('processed_quo_messages').select('wedding_id, processed_at').in('wedding_id', weddingIds)
+      .order('processed_at', { ascending: false }).limit(WINDOW), r => note(r.wedding_id, r.processed_at)),
+  ]);
+  // The column the activity logger already maintains counts too.
+  for (const w of weddings) note(w.id, w.last_activity);
+  return latest;
+}
+
 app.get('/api/admin/weddings', async (req, res) => {
   try {
     const { data: weddings, error } = await supabaseAdmin
@@ -10080,7 +10245,10 @@ app.get('/api/admin/weddings', async (req, res) => {
 
     if (error) throw error;
 
-    res.json({ weddings: weddings || [] });
+    const latest = await lastActivityByWedding(weddings || []);
+    const weddingsWithActivity = (weddings || []).map(w => ({ ...w, last_activity_at: latest.get(w.id) || null }));
+
+    res.json({ weddings: weddingsWithActivity });
   } catch (error) {
     console.error('Get admin weddings error:', error);
     res.status(500).json({ error: 'Failed to fetch weddings' });
@@ -10655,15 +10823,26 @@ app.post('/api/sage-messages/inject', requireAdmin, async (req, res) => {
 // Get all Sage chat messages for all weddings (admin view - for escalation detection)
 app.get('/api/sage-messages/all', requireAdmin, async (req, res) => {
   try {
-    // Get all messages using admin client
-    const { data: messages, error } = await supabaseAdmin
-      .from('messages')
-      .select('*')
-      .order('created_at', { ascending: false });
+    // messages only grows, and this reloaded every Sage message ever sent on
+    // every sync/file/upload (Admin.jsx's loadData). Default to a trailing
+    // window; ?since=<ISO> narrows or widens it. Still paged underneath in
+    // case the window holds more than 1000 rows.
+    const since = req.query.since || new Date(Date.now() - 30 * 86400000).toISOString();
 
-    if (error) throw error;
+    const messages = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin
+        .from('messages')
+        .select('*')
+        .gte('created_at', since)
+        .order('created_at', { ascending: false })
+        .range(from, from + 999);
+      if (error) throw error;
+      messages.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
 
-    res.json({ messages: messages || [] });
+    res.json({ messages });
   } catch (error) {
     console.error('Get all sage messages error:', error);
     res.status(500).json({ error: 'Failed to fetch Sage messages' });
@@ -10712,15 +10891,22 @@ app.get('/api/planning-notes/:weddingId', async (req, res) => {
   try {
     const { weddingId } = req.params;
 
-    const { data: notes, error } = await supabaseAdmin
-      .from('planning_notes')
-      .select('*')
-      .eq('wedding_id', weddingId)
-      .order('created_at', { ascending: false });
+    // A wedding fed by Gmail/Quo/Zoom extraction for a year can pass 1000
+    // notes; select() with no range silently dropped the rest.
+    const notes = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin
+        .from('planning_notes')
+        .select('*')
+        .eq('wedding_id', weddingId)
+        .order('created_at', { ascending: false })
+        .range(from, from + 999);
+      if (error) throw error;
+      notes.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
 
-    if (error) throw error;
-
-    res.json({ notes: notes || [] });
+    res.json({ notes });
   } catch (error) {
     console.error('Get planning notes error:', error);
     res.status(500).json({ error: 'Failed to fetch planning notes' });
@@ -12574,11 +12760,15 @@ app.put('/api/wedding-photos/:photoId', async (req, res) => {
 
 app.delete('/api/wedding-photos/:photoId', async (req, res) => {
   try {
-    const { data: photo } = await supabaseAdmin
+    const { data: photo, error: readError } = await supabaseAdmin
       .from('wedding_photos')
       .select('storage_path')
       .eq('id', req.params.photoId)
       .single();
+
+    // A failed read is not "no storage path" — deleting the row anyway would
+    // orphan whatever is sitting in storage with nothing left pointing at it.
+    if (readError) return res.status(500).json({ error: readError.message });
 
     if (photo?.storage_path) {
       await supabaseAdmin.storage.from('wedding-photos').remove([photo.storage_path]);
@@ -12676,11 +12866,14 @@ app.put('/api/day-of-media/:id', validateBody(['caption', 'category', 'sort_orde
 
 app.delete('/api/day-of-media/:id', async (req, res) => {
   try {
-    const { data: item } = await supabaseAdmin
+    const { data: item, error: readError } = await supabaseAdmin
       .from('day_of_media')
       .select('storage_path')
       .eq('id', req.params.id)
       .single();
+    // A failed read is not "no storage path" — deleting the row anyway would
+    // orphan whatever is sitting in storage with nothing left pointing at it.
+    if (readError) return res.status(500).json({ error: readError.message });
     if (item?.storage_path) {
       await supabaseAdmin.storage.from('day-of-media').remove([item.storage_path]);
     }
@@ -14184,9 +14377,12 @@ app.post('/api/admin/walkthroughs/:id/apply', requireAdmin, async (req, res) => 
       });
     }
 
-    const { data: items } = await supabaseAdmin
+    const { data: items, error: itemsError } = await supabaseAdmin
       .from('walkthrough_items').select('*')
       .eq('walkthrough_id', wt.id).eq('status', 'accepted');
+    // A failed read looked identical to "nothing accepted yet" and reported
+    // ok:true, applied:0 — success, when nothing had been attempted.
+    if (itemsError) return res.status(500).json({ error: itemsError.message });
     if (!items?.length) return res.json({ ok: true, applied: 0, results: [] });
 
     const label = `${(wt.kind || 'walkthrough').replace(/_/g, ' ')} on ${wt.occurred_on}`;
@@ -14742,16 +14938,20 @@ async function commitSeatingToGuests(weddingId, tables, replaceExisting) {
         // too, but a path that only works because of a trigger is a path that
         // breaks on any database where the trigger has not been run.
         const newId = crypto.randomUUID();
-        const { data: newGuest } = await supabaseAdmin
+        const { data: newGuest, error: insertError } = await supabaseAdmin
           .from('wedding_guests')
           .insert({ id: newId, party_id: newId, wedding_id: weddingId, ...payload })
           .select('id')
           .single();
-        if (newGuest) {
+        if (insertError) {
+          // Counted as created even when it never landed. Warn instead of
+          // silently inflating the summary the admin reads back.
+          warnings.push(`${full || 'A guest'} could not be added: ${insertError.message}`);
+        } else {
           personIndex.set(key, newGuest.id);
           assignedTable.set(newGuest.id, guest.table_assignment);
+          created++;
         }
-        created++;
       }
     }
   }
