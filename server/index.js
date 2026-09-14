@@ -50,6 +50,7 @@ import {
   detectMigration035, has035, markerExtractionPatch, withSource,
   importWithMarker, normaliseConfidence,
 } from './lib/extraction-markers.js';
+import { detectMigration036, has036 } from './lib/migration-036.js';
 import { safeStorageKey } from './lib/storage-key.js';
 import cron from 'node-cron';
 import { parseSpreadsheet } from './lib/spreadsheet.js';
@@ -217,6 +218,20 @@ const rsvpSearchLimiter = rateLimit({
   message: { error: 'Too many lookups. Please wait a moment and try again.' }
 });
 
+// Deleting a vendor's photos needs no login at all: the vendor portal is
+// gated on a link, because a florist is never going to make an account. That
+// makes DELETE /api/vendor-portal/:token/photos the one destructive route in
+// here reachable by anyone holding a URL, and a leaked or forwarded link would
+// let somebody clear a profile at the speed of a loop. Thirty in ten minutes is
+// far more than a vendor tidying their gallery will ever need.
+const vendorPhotoDeleteLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many photo deletions. Please wait a few minutes and try again.' },
+});
+
 // Apply general rate limiter to all routes
 app.use(generalLimiter);
 
@@ -250,21 +265,12 @@ app.get('/api/gmail-callback-debug', requireAdmin, (req, res) => {
   res.json(LAST_GMAIL_CALLBACK);
 });
 
-app.get('/api/google-debug', requireAdmin, (req, res) => {
-  const cid = process.env.GOOGLE_CLIENT_ID || '';
-  const fe = process.env.FRONTEND_URL || '(unset)';
-  res.json({
-    client_id_prefix: cid ? cid.slice(0, 16) + '…' : '(unset)',
-    client_id_project_number: cid.split('-')[0] || '(unset)',
-    redirect_uri: fe === '(unset)'
-      ? 'http://localhost:5173/admin/gmail-callback'
-      : `${fe}/admin/gmail-callback`,
-    frontend_url: fe,
-    has_client_secret: !!process.env.GOOGLE_CLIENT_SECRET,
-    git_commit: process.env.RAILWAY_GIT_COMMIT_SHA || '(unknown)',
-    note: 'project_number must match the GCP project where you added the redirect URI. redirect_uri must appear verbatim in that OAuth client.'
-  });
-});
+// GET /api/google-debug is gone. It existed to diagnose a redirect_uri_mismatch
+// in March, nothing has called it since, and it reported the OAuth client id
+// prefix, the project number, the redirect URI and the deployed commit — a
+// small map of the estate, kept live for ever to answer a question that was
+// answered once. The values are all in the Railway environment where whoever
+// needs them is already looking.
 
 // ============ AUTH MIDDLEWARE ============
 // Public routes that skip auth (matched by path prefix)
@@ -2776,6 +2782,33 @@ async function saveContract({
   return saved;
 }
 
+/**
+ * Put an uploaded contract in the bucket, and answer with its key.
+ *
+ * Both upload paths — the admin one and the Sage attachment one — used to keep
+ * only the extracted text, so `contracts.storage_path` was null on every row
+ * either of them wrote and there was nothing to hand back to a couple asking
+ * for their own file.
+ *
+ * Returns null when the upload fails. That is deliberate: the extraction is
+ * the expensive part and it has already happened, so a bucket that is full or
+ * briefly unreachable must not lose the reading as well as the file. The
+ * failure is logged and the row is written without a path, which is exactly
+ * what every row before this looked like.
+ */
+async function storeContractFile(weddingId, file) {
+  if (!weddingId || !file?.buffer) return null;
+  const path = `${weddingId}/${safeStorageKey(file.originalname)}`;
+  const { error } = await supabaseAdmin.storage
+    .from('vendor-contracts')
+    .upload(path, file.buffer, { contentType: file.mimetype, upsert: false });
+  if (error) {
+    console.error(`[contracts] could not store ${file.originalname}: ${error.message}`);
+    return null;
+  }
+  return path;
+}
+
 // Contract upload and extraction endpoint
 //
 // weddingAccess is mounted on /api and therefore runs before multer. On a
@@ -2833,6 +2866,15 @@ app.post('/api/extract-contract', requireAuth, upload.single('contract'), async 
       console.error('Text extraction error:', textErr);
     }
 
+    // Keep the file, not just what Claude read out of it.
+    //
+    // This path stored the extracted text and threw the PDF away, so a couple
+    // who uploaded their photographer's contract could never get it back, and
+    // the venue was reading a transcription of a document nobody could open.
+    // Stored before the row is written: a contract row pointing at a file that
+    // failed to upload is worse than one with no path at all.
+    const contractPath = await storeContractFile(weddingId, file);
+
     // Save the contract, chained to whatever version it replaces.
     await saveContract({
       weddingId,
@@ -2840,6 +2882,7 @@ app.post('/api/extract-contract', requireAuth, upload.single('contract'), async 
       fileType: file.mimetype,
       text: extractedFullText,
       source: 'upload',
+      storagePath: contractPath,
     });
 
     // Prepare Claude request
@@ -3156,6 +3199,12 @@ app.post('/api/chat-with-file', requireAuth, upload.single('file'), async (req, 
           const contractText = textResponse.content[0].text;
           const contractFacts = await readContractFacts(contractText, file.originalname);
 
+          // Same as the admin path: keep the file itself, under a key that is
+          // safe to store. This one used to upload the document twice, once
+          // here with a Date.now() key and once further down for the vendor
+          // checklist, and neither key ever reached the contracts row.
+          const chatContractPath = await storeContractFile(weddingId, file);
+
           await saveContract({
             weddingId,
             filename: file.originalname,
@@ -3163,6 +3212,7 @@ app.post('/api/chat-with-file', requireAuth, upload.single('file'), async (req, 
             text: contractText,
             source: 'chat',
             facts: contractFacts,
+            storagePath: chatContractPath,
           });
 
           const vendorType = contractFacts.vendorType || 'other';
@@ -3181,16 +3231,15 @@ app.post('/api/chat-with-file', requireAuth, upload.single('file'), async (req, 
           if (existingVendorErr) {
             console.error('Could not check for an existing vendor, not adding one:', existingVendorErr.message);
           } else if (!existingVendor && vendorType !== 'other') {
-            // Upload contract to storage
-            const contractFileName = `${weddingId}/${Date.now()}_${file.originalname}`;
-            const { error: uploadError } = await supabaseAdmin.storage
-              .from('vendor-contracts')
-              .upload(contractFileName, file.buffer, { contentType: file.mimetype });
-
-            if (!uploadError) {
-              const { data: signedUrlData } = await supabaseAdmin.storage
+            // The file is already in the bucket from storeContractFile above.
+            // This used to upload it a second time under a Date.now() key,
+            // which is neither unique nor safe, and left two copies of every
+            // contract a couple sent Sage.
+            if (chatContractPath) {
+              const { data: signedUrlData, error: signErr } = await supabaseAdmin.storage
                 .from('vendor-contracts')
-                .createSignedUrl(contractFileName, 31536000);
+                .createSignedUrl(chatContractPath, 31536000);
+              if (signErr) console.error('[contracts] could not sign the vendor link:', signErr.message);
 
               if (signedUrlData) {
                 // Create new vendor entry with contract
@@ -3279,7 +3328,7 @@ app.get('/api/contracts/:weddingId', async (req, res) => {
     // screen as "no contracts uploaded yet". That is a lie about a wedding
     // holding eleven of them. Fall back to the columns that have always been
     // there and say so, rather than showing an empty list.
-    const BASE = 'id, wedding_id, filename, file_type, extracted_text, created_at';
+    const BASE = 'id, wedding_id, filename, file_type, extracted_text, created_at, storage_path';
     const VERSIONED = `${BASE}, vendor_name, vendor_type, document_date, version, superseded_by, source`;
 
     const readContracts = (columns) => supabaseAdmin.from('contracts')
@@ -3302,11 +3351,28 @@ app.get('/api/contracts/:weddingId', async (req, res) => {
       .eq('wedding_id', weddingId)
       .eq('contract_uploaded', true);
     if (vErr) throw vErr;
+
+    // A link to the file itself, for the rows that have one.
+    //
+    // The bucket is private, so a path is no use to a browser. An hour is the
+    // right life for a link to somebody's contract: long enough to read it,
+    // short enough that a forwarded URL stops working.
+    //
+    // Signed in parallel, and a failure to sign one row never fails the list —
+    // the contract text is the greater part of what this route is for.
+    const withLinks = await Promise.all((contracts || []).map(async c => {
+      if (!c.storage_path) return { ...c, download_url: null };
+      const { data: signed, error: signErr } = await supabaseAdmin.storage
+        .from('vendor-contracts').createSignedUrl(c.storage_path, 60 * 60);
+      if (signErr) console.error(`[contracts] could not sign ${c.filename}: ${signErr.message}`);
+      return { ...c, download_url: signed?.signedUrl || null };
+    }));
+
     // One line per vendor, newest version first, earlier ones kept underneath
     // rather than listed as though they were separate agreements.
     res.json({
-      contracts: contracts || [],
-      contractLines: groupByVendor(contracts || []),
+      contracts: withLinks,
+      contractLines: groupByVendor(withLinks),
       vendorContracts: vendors || [],
       // The screen needs to know it is showing every upload rather than every
       // current version, so it does not promise something it cannot do.
@@ -3849,17 +3915,16 @@ app.post('/api/admin/sheet-sync/:weddingId/diff', async (req, res) => {
   }
 });
 
-// In-memory record of the last apply attempt. Public-readable via
-// GET /api/sheet-sync-apply-debug — payload has no token values, only counts +
-// per-result error messages.
-let LAST_APPLY = { at: null, weddingId: null, attempted: 0, applied: 0, failures: [] };
-
+// GET /api/sheet-sync-apply-debug is gone, and so is the module-level record it
+// served. It held the last apply attempt in memory — one process, cleared on
+// every redeploy, so on Railway it was usually empty and never more than a few
+// hours of history. sheet_sync_log holds all of this properly and is now
+// readable through GET /api/admin/sync-log/:weddingId, per wedding, for good.
 app.post('/api/admin/sheet-sync/:weddingId/apply', async (req, res) => {
   const { weddingId } = req.params;
   const decisions = req.body?.decisions;
   console.log(`[sheet-sync apply] weddingId=${weddingId} decisions=${Array.isArray(decisions) ? decisions.length : 'NOT_ARRAY'}`);
   if (!Array.isArray(decisions)) {
-    LAST_APPLY = { at: new Date().toISOString(), weddingId, attempted: 0, applied: 0, failures: [{ entryId: null, error: 'decisions must be an array' }] };
     return res.status(400).json({ error: 'decisions must be an array' });
   }
   try {
@@ -3867,37 +3932,17 @@ app.post('/api/admin/sheet-sync/:weddingId/apply', async (req, res) => {
       supabase: supabaseAdmin,
       weddingId,
       decisions,
-      appliedBy: req.userId || null
+      appliedBy: req.userId || null,
+      source: 'sheet',
+      recordSource: has036('syncSource'),
     });
     const failures = (result.results || []).filter((r) => !r.ok && !r.skipped);
-    const succeeded = (result.results || []).filter((r) => r.ok && !r.skipped).map((r) => r.entryId);
-    const importDecisions = (decisions || []).filter((d) => d.choice === 'import-sheet').map((d) => d.entryId);
-    LAST_APPLY = {
-      at: new Date().toISOString(),
-      weddingId,
-      attempted: decisions.length,
-      applied: result.appliedCount,
-      failures: failures.map((f) => ({ entryId: f.entryId, error: f.error })),
-      succeededIds: succeeded,
-      importsRequested: importDecisions
-    };
     console.log(`[sheet-sync apply] applied=${result.appliedCount} failures=${failures.length}`);
     res.json(result);
   } catch (err) {
-    LAST_APPLY = {
-      at: new Date().toISOString(),
-      weddingId,
-      attempted: decisions?.length || 0,
-      applied: 0,
-      failures: [{ entryId: null, error: err.message || String(err) }]
-    };
     console.error('[sheet-sync apply]', err);
     res.status(500).json({ error: err.message || 'Internal error' });
   }
-});
-
-app.get('/api/sheet-sync-apply-debug', requireAdmin, (req, res) => {
-  res.json(LAST_APPLY);
 });
 
 // Check Gmail connection status
@@ -4887,6 +4932,53 @@ app.post('/api/admin/client-errors/:id/resolve', requireAdmin, async (req, res) 
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+/**
+ * Change a crash report: its status, the note on it, or both.
+ *
+ * client_errors.notes has been a column since 026 and could never hold a
+ * value — the only writer was the resolve button, which posted no body at all,
+ * so "what turned out to be wrong" was never written down anywhere and the
+ * next identical crash started from nothing.
+ *
+ * requireAdmin by hand: /api/client-errors is not under the /api/admin mount,
+ * because POST /api/client-errors is how a browser reports its own crash and
+ * that one has to stay open to anybody.
+ *
+ * Body: { status?, notes? }. Status is checked against the three the table
+ * uses rather than passed through, since a typo would make a report vanish
+ * from every filtered list.
+ */
+const CLIENT_ERROR_STATUSES = new Set(['open', 'snoozed', 'done']);
+
+app.patch('/api/client-errors/:id', requireAdmin, async (req, res) => {
+  try {
+    const patch = {};
+    if (req.body?.status !== undefined) {
+      const status = String(req.body.status);
+      if (!CLIENT_ERROR_STATUSES.has(status)) {
+        return res.status(400).json({ error: `status must be one of ${[...CLIENT_ERROR_STATUSES].join(', ')}` });
+      }
+      patch.status = status;
+    }
+    // An empty string is a cleared note, not an absent one, so it is kept
+    // apart from undefined and written as null.
+    if (req.body?.notes !== undefined) {
+      patch.notes = req.body.notes === null || req.body.notes === '' ? null : String(req.body.notes).slice(0, 4000);
+    }
+    if (!Object.keys(patch).length) {
+      return res.status(400).json({ error: 'Nothing to change: send status, notes, or both' });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('client_errors').update(patch).eq('id', req.params.id)
+      .select('id, status, notes, message, component, seen_count, first_seen_at, last_seen_at')
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such crash report' });
+    res.json(data);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 
 /**
  * A few lines on what a call or an email was about, for the venue's eyes.
@@ -5002,9 +5094,32 @@ app.get('/api/quo/status', async (req, res) => {
   res.json({ connected: !!QUO_API_KEY, ...(await lastSyncJob(['quo', 'quo-backfill', 'quo-callers'])) });
 });
 
-// Clear processed Quo messages (to allow reprocessing)
+/**
+ * Clear every processed-Quo marker, so the next sync re-reads the lot.
+ *
+ * This deletes the whole table with one POST and no body, which is the entire
+ * record of which text and which call has already been imported. Getting it
+ * wrong costs a full re-import of every conversation Rixey has ever had on that
+ * number. So it now takes { confirm: true }, which no accidental double-click,
+ * retried request or curl-from-history will carry.
+ *
+ * Admin-only already, by the /api/quo mount.
+ */
 app.post('/api/quo/clear-processed', async (req, res) => {
   try {
+    if (req.body?.confirm !== true) {
+      return res.status(400).json({
+        error: 'This clears every processed-message marker and makes the next sync re-read every text and call. Send { "confirm": true } if that is what you want.',
+      });
+    }
+
+    const { count: before, error: countErr } = await supabaseAdmin
+      .from('processed_quo_messages').select('id', { count: 'exact', head: true });
+    // Only for the log line, so a failed count is not worth refusing over —
+    // but it must not be reported as zero either.
+    if (countErr) console.error('[quo] could not count the markers before clearing:', countErr.message);
+    console.log(`[quo] clearing ${countErr ? 'an unknown number of' : before} processed-message markers, asked for by ${req.userId || 'an admin'}`);
+
     const { error } = await supabaseAdmin
       .from('processed_quo_messages')
       .delete()
@@ -6833,6 +6948,23 @@ async function fileZoomMeeting({ weddingId, topic, startTime, transcriptText, me
  * Throwing marks the job failed with the message attached, so an error has
  * somewhere to land instead of a console nobody is reading.
  */
+/**
+ * How many items this run left for a person to look at.
+ *
+ * The runners disagreed about the name. runCallerSweep returns `needs_review`,
+ * after the column; everything else returns `needsReview`, after nothing in
+ * particular. Both writers read only the camelCase one, so the caller sweep's
+ * job row has said 0 since it shipped while its own detail said otherwise.
+ *
+ * Accepting both is the fix rather than renaming one of them, because the
+ * detail blob is already in the database with whichever key it was written
+ * under and a rename would only move the mismatch.
+ */
+function reviewCount(summary) {
+  const s = summary || {};
+  return s.needsReview ?? s.needs_review ?? 0;
+}
+
 function backgroundSync(kind, runner) {
   return async (req, res) => {
     const { data: job, error } = await supabaseAdmin.from('sync_jobs')
@@ -6866,7 +6998,7 @@ function backgroundSync(kind, runner) {
           finished_at: new Date().toISOString(),
           processed: s.processed || 0,
           matched: s.matched || 0,
-          needs_review: s.needsReview || 0,
+          needs_review: reviewCount(s),
           failed: s.failed || 0,
           detail: s.detail || {},
         });
@@ -6905,6 +7037,64 @@ app.get('/api/admin/sync-jobs', async (req, res) => {
   } catch (error) {
     console.error('sync-jobs error:', error);
     res.status(500).json({ error: 'Could not load sync history' });
+  }
+});
+
+/**
+ * What the sheet and document importers have actually written to a wedding.
+ *
+ * sheet_sync_log has been filling up since the sheet sync shipped and nothing
+ * ever read it, so "what did that import change" had no answer beyond the one
+ * timestamp the panel showed — which a document import then overwrote.
+ *
+ * Shape (binding, W2 renders it):
+ *   {
+ *     entries: [{ id, entry_id, choice, op_type, table_name, executed,
+ *                 error, applied_by, applied_at, source }],
+ *     total, limit, offset, hasMore,
+ *     sourceKnown: boolean
+ *   }
+ * Newest first. `source` is 'sheet', 'document' or null; `sourceKnown` is
+ * false when migration 036 has not been applied, in which case every row comes
+ * back with a null source and ?source= is ignored rather than quietly
+ * returning nothing. The two importers write identical op types, so there is
+ * nothing in an old row to work it out from after the fact.
+ */
+app.get('/api/admin/sync-log/:weddingId', async (req, res) => {
+  try {
+    const sourceKnown = has036('syncSource');
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 500);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const wanted = String(req.query.source || '').toLowerCase();
+
+    const COLUMNS = 'id, wedding_id, entry_id, choice, op_type, table_name, executed, error, applied_by, applied_at';
+
+    let q = supabaseAdmin
+      .from('sheet_sync_log')
+      .select(sourceKnown ? `${COLUMNS}, source` : COLUMNS, { count: 'exact' })
+      .eq('wedding_id', req.params.weddingId)
+      .order('applied_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (sourceKnown && (wanted === 'sheet' || wanted === 'document')) {
+      q = q.eq('source', wanted);
+    }
+
+    const { data, error, count } = await q;
+    if (error) throw error;
+
+    const entries = (data || []).map(r => ({ ...r, source: sourceKnown ? (r.source || null) : null }));
+    res.json({
+      entries,
+      total: count ?? entries.length,
+      limit,
+      offset,
+      hasMore: count != null ? offset + entries.length < count : entries.length === limit,
+      sourceKnown,
+    });
+  } catch (error) {
+    console.error('sync-log error:', error);
+    res.status(500).json({ error: 'Could not load the sync log' });
   }
 });
 
@@ -7239,39 +7429,92 @@ app.post('/api/admin/ingest-review/:id/ignore', async (req, res) => {
 });
 
 // Debug: inspect stored Zoom transcripts
+/**
+ * Zoom meetings the portal has read, with the transcript and how it was matched.
+ *
+ * processed_zoom_meetings holds the whole transcript of every onboarding call
+ * and planning meeting, plus match_reason, match_confidence and matched_by —
+ * which is to say, why the portal believes this meeting belongs to this couple.
+ * Nothing in the client has ever called this route, so a meeting filed against
+ * the wrong wedding was undiscoverable and the transcripts themselves were
+ * write-only.
+ *
+ * Query: ?weddingId= to narrow to one couple, ?limit= and ?offset= to page.
+ *
+ * Shape (binding, W2 renders it):
+ *   {
+ *     meetings: [{ id, zoom_meeting_id, wedding_id, meeting_topic,
+ *                  processed_at, participant_names, match_reason,
+ *                  match_confidence, matched_by, transcript_text,
+ *                  transcript_length, transcript_truncated, parsed_preview }],
+ *     total, limit, offset, hasMore,
+ *     notes: [{ id, wedding_id, source, created_at, content_length, content_preview }],
+ *     // the old names, kept while the transition lands
+ *     processed_meetings: { count, data }, zoom_transcript_notes: { count, data }
+ *   }
+ *
+ * transcript_text is capped at 20,000 characters. A ninety-minute VTT runs to
+ * several hundred kilobytes and twenty of them in one response is a page that
+ * never finishes loading; transcript_truncated says when there is more.
+ */
+const ZOOM_TRANSCRIPT_CAP = 20_000;
+
 app.get('/api/zoom/transcripts', async (req, res) => {
   try {
     // Both tables only grow. Bounded to the newest N unless the caller asks
     // for more (still capped).
     const requested = parseInt(req.query.limit, 10);
     const limit = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 1000) : 200;
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const weddingId = req.query.weddingId || null;
 
-    const { data: meetings, error: meetingsErr } = await supabaseAdmin
+    let mq = supabaseAdmin
       .from('processed_zoom_meetings')
-      .select('zoom_meeting_id, meeting_topic, wedding_id, processed_at, transcript_text')
+      .select('id, zoom_meeting_id, meeting_topic, wedding_id, processed_at, participant_names, match_reason, match_confidence, matched_by, transcript_text', { count: 'exact' })
       .order('processed_at', { ascending: false })
-      .range(0, limit - 1);
+      .range(offset, offset + limit - 1);
+    if (weddingId) mq = mq.eq('wedding_id', weddingId);
+
+    const { data: meetings, error: meetingsErr, count } = await mq;
     if (meetingsErr) throw meetingsErr;
 
     // Also check planning_notes for zoom_transcript entries
-    const { data: transcriptNotes, error: notesErr } = await supabaseAdmin
+    let nq = supabaseAdmin
       .from('planning_notes')
       .select('id, wedding_id, content, source_message, created_at')
       .eq('category', 'zoom_transcript')
       .order('created_at', { ascending: false })
-      .range(0, limit - 1);
+      .range(offset, offset + limit - 1);
+    if (weddingId) nq = nq.eq('wedding_id', weddingId);
+
+    const { data: transcriptNotes, error: notesErr } = await nq;
     if (notesErr) throw notesErr;
 
-    const meetings_summary = (meetings || []).map(m => ({
-      id: m.zoom_meeting_id,
-      topic: m.meeting_topic,
-      wedding_id: m.wedding_id,
-      // processed_at is when we ingested it; the table has no created_at.
-      created_at: m.processed_at,
-      transcript_length: m.transcript_text?.length || 0,
-      transcript_preview: m.transcript_text?.substring(0, 300) || null,
-      parsed_preview: m.transcript_text ? parseVttToText(m.transcript_text).substring(0, 300) : null
-    }));
+    const meetings_summary = (meetings || []).map(m => {
+      const text = m.transcript_text || '';
+      return {
+        // zoom_meeting_id is what the old shape called id, and the row's own id
+        // is what a client needs to address one. Both, named for what they are.
+        id: m.zoom_meeting_id,
+        row_id: m.id,
+        zoom_meeting_id: m.zoom_meeting_id,
+        topic: m.meeting_topic,
+        meeting_topic: m.meeting_topic,
+        wedding_id: m.wedding_id,
+        // processed_at is when we ingested it; the table has no created_at.
+        created_at: m.processed_at,
+        processed_at: m.processed_at,
+        participant_names: m.participant_names || null,
+        match_reason: m.match_reason || null,
+        match_confidence: m.match_confidence ?? null,
+        matched_by: m.matched_by || null,
+        transcript_text: text.slice(0, ZOOM_TRANSCRIPT_CAP),
+        transcript_length: text.length,
+        transcript_truncated: text.length > ZOOM_TRANSCRIPT_CAP,
+        transcript_preview: text.substring(0, 300) || null,
+        parsed_preview: text ? parseVttToText(text).substring(0, 300) : null,
+      };
+    });
 
     const notes_summary = (transcriptNotes || []).map(n => ({
       id: n.id,
@@ -7283,10 +7526,20 @@ app.get('/api/zoom/transcripts', async (req, res) => {
     }));
 
     res.json({
+      meetings: meetings_summary,
+      notes: notes_summary,
+      total: count ?? meetings_summary.length,
+      limit,
+      offset,
+      hasMore: count != null ? offset + meetings_summary.length < count : meetings_summary.length === limit,
+      // The names the route has always answered with. Nothing calls it today,
+      // but a route that changes shape and a client that changes with it is
+      // two deploys, and they do not land at the same moment.
       processed_meetings: { count: meetings_summary.length, data: meetings_summary },
       zoom_transcript_notes: { count: notes_summary.length, data: notes_summary }
     });
   } catch (error) {
+    console.error('Zoom transcripts error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -8803,6 +9056,12 @@ app.get('/api/usage/:weddingId', async (req, res) => {
 // ============ KNOWLEDGE BASE ADMIN ============
 
 // Get all knowledge base entries
+//
+// select('*') carries `description`, the one-line summary of what an entry is
+// for. It has been a column since the table was created and no screen showed
+// it, so the admin list reads as a wall of titles with no way to tell two
+// entries on the same subject apart. Named here so a later tightening of this
+// select cannot drop it again.
 app.get('/api/knowledge-base', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
@@ -9257,8 +9516,67 @@ app.post('/api/vendor-portal/:token/photos', upload.single('photo'), async (req,
   }
 });
 
+/**
+ * A vendor's logo, uploaded by the vendor.
+ *
+ * vendors.logo_url exists and nothing has ever written to it, so the directory
+ * shows 218 vendors as identical grey cards. One image, the same bucket as
+ * their photos, under a safe key.
+ *
+ * Gated on the 036 probe even though the column is already on production: this
+ * code will be running against a database somebody rebuilt from the migrations
+ * folder often enough that "it is definitely there" is not a thing to rely on,
+ * and a 42703 here would read to a vendor as "the upload failed" while the
+ * file sat in the bucket.
+ */
+app.post('/api/vendor-portal/:token/logo', upload.single('logo'), async (req, res) => {
+  try {
+    if (!has036('vendorLogo')) {
+      return res.status(503).json({ error: 'Logo uploads are not switched on yet. Rixey has been told.' });
+    }
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    if (!String(req.file.mimetype || '').startsWith('image/')) {
+      return res.status(415).json({ error: 'A logo has to be an image' });
+    }
+
+    const resolved = await vendorIdForToken(req.params.token);
+    if (!resolved) return res.status(404).json({ error: 'Vendor not found' });
+
+    const path = `${resolved.id}/logo/${safeStorageKey(req.file.originalname)}`;
+    const { error: upErr } = await supabaseAdmin.storage
+      .from('vendor-photos')
+      .upload(path, req.file.buffer, { contentType: req.file.mimetype, upsert: false });
+    if (upErr) throw upErr;
+
+    const { data: urlData } = supabaseAdmin.storage.from('vendor-photos').getPublicUrl(path);
+
+    const { data, error } = await supabaseAdmin
+      .from('vendors')
+      .update({
+        logo_url: urlData.publicUrl,
+        last_vendor_update: new Date().toISOString(),
+        // A logo is a profile too, on the same reasoning as the photo route.
+        ...goLiveOnSave(resolved),
+      })
+      .eq('id', resolved.id)
+      .select('id, logo_url, is_published')
+      .single();
+    if (error) throw error;
+    res.json({ logo_url: data.logo_url, is_published: data.is_published });
+  } catch (err) {
+    console.error('Vendor logo upload error:', err);
+    res.status(500).json({ error: err.message || 'Upload failed' });
+  }
+});
+
 // DELETE remove a photo via token
-app.delete('/api/vendor-portal/:token/photos', async (req, res) => {
+//
+// Public by prefix — /api/vendor-portal/ skips auth, because a vendor has no
+// login — and destructive, so it is the one route here that both deletes a
+// file and can be called by anyone holding a link. Rate-limited separately and
+// logged every time: a token that turns up deleting forty photos from four
+// vendors is a thing somebody should be able to find afterwards.
+app.delete('/api/vendor-portal/:token/photos', vendorPhotoDeleteLimiter, async (req, res) => {
   try {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: 'url required' });
@@ -9270,10 +9588,16 @@ app.delete('/api/vendor-portal/:token/photos', async (req, res) => {
       .single();
     if (vErr || !vendor) return res.status(404).json({ error: 'Vendor not found' });
 
+    console.log(`[vendor-portal] photo delete on vendor ${vendor.id} from ${req.ip}: ${url}`);
+
     // Remove from storage
     const parts = url.split('/vendor-photos/');
     if (parts[1]) {
-      await supabaseAdmin.storage.from('vendor-photos').remove([parts[1]]);
+      const { error: rmErr } = await supabaseAdmin.storage.from('vendor-photos').remove([parts[1]]);
+      // The row is the thing the directory reads, so a file that will not go
+      // is worth a log line and not worth refusing the request over — but it
+      // must not pass unnoticed either.
+      if (rmErr) console.error(`[vendor-portal] could not remove ${parts[1]}: ${rmErr.message}`);
     }
 
     const newPhotos = (vendor.photos || []).filter(p => p !== url);
@@ -10101,6 +10425,128 @@ app.put('/api/onboarding/:weddingId', async (req, res) => {
   }
 });
 
+// ============ ACCOMMODATIONS (where a couple's guests can stay) ============
+//
+// Rixey's curated list of nearby places, shown on every couple's wedding
+// website when "Where to Stay" is switched on. The rows were typed straight
+// into the Supabase console because the portal had no writer for this table at
+// all, which means the one list every guest of every wedding reads was edited
+// somewhere with no audit, no validation and no way for anyone but Isadora to
+// touch it.
+//
+// The public read stays exactly as it was: the couple's site reads these rows
+// through GET /api/w/:slug, and the browser reads them with the anon key on
+// /accommodations. Nothing here changes either.
+//
+// Venue-wide, not per wedding — there is no wedding_id on this table.
+// Mounted under /api/admin, so requireAdmin already applies.
+
+app.get('/api/admin/accommodations', async (req, res) => {
+  try {
+    // Small and venue-wide, but it only grows and a select with no range
+    // silently stops at 1000.
+    const rows = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin
+        .from('accommodations').select('*').order('distance').range(from, from + 999);
+      if (error) throw error;
+      rows.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
+    res.json({ accommodations: rows });
+  } catch (error) {
+    console.error('Accommodations list error:', error);
+    res.status(500).json({ error: 'Could not load the accommodation list' });
+  }
+});
+
+app.post('/api/admin/accommodations', async (req, res) => {
+  try {
+    const { fields, ignored } = onlyColumns('accommodations', req.body || {});
+    if (ignored.length) console.log('[accommodations] ignored fields on create:', ignored.join(', '));
+    delete fields.id;
+    delete fields.created_at;
+    if (!String(fields.name || '').trim()) {
+      return res.status(400).json({ error: 'A place needs a name' });
+    }
+    const { data, error } = await supabaseAdmin
+      .from('accommodations').insert(fields).select().single();
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error('Accommodation create error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/admin/accommodations/:id', async (req, res) => {
+  try {
+    const { fields, ignored } = onlyColumns('accommodations', req.body || {});
+    if (ignored.length) console.log('[accommodations] ignored fields on update:', ignored.join(', '));
+    delete fields.id;
+    delete fields.created_at;
+    if (!Object.keys(fields).length) return res.status(400).json({ error: 'Nothing to change' });
+    const { data, error } = await supabaseAdmin
+      .from('accommodations').update(fields).eq('id', req.params.id).select().maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such place' });
+    res.json(data);
+  } catch (error) {
+    console.error('Accommodation update error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/admin/accommodations/:id', async (req, res) => {
+  try {
+    // .select() so a delete that matched nothing says so. A bare delete in
+    // PostgREST is a success whether or not a row was there.
+    const { data, error } = await supabaseAdmin
+      .from('accommodations').delete().eq('id', req.params.id).select('id').maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such place' });
+    res.json({ ok: true, id: data.id });
+  } catch (error) {
+    console.error('Accommodation delete error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * What a couple has and has not done, for the venue.
+ *
+ * onboarding_progress has been filling up since the portal launched and had no
+ * venue-side reader, so "have they uploaded a photo yet, have they talked to
+ * Sage yet" was a question nobody could answer without opening the couple's
+ * own dashboard.
+ *
+ * Reads only. The couple route above creates the row on first read and
+ * recomputes the five booleans off the real tables; doing that here as well
+ * would mean the venue looking at a wedding writes a row into it, which is not
+ * something a read should do. A couple who has never opened the portal has no
+ * row, and the honest answer is that nothing has been recorded rather than a
+ * fresh set of falses invented on the spot.
+ *
+ * Shape (binding, W2 renders it):
+ *   { exists, progress: { couple_photo_uploaded, first_message_sent,
+ *     vendor_added, inspo_uploaded, checklist_item_completed,
+ *     onboarding_dismissed, updated_at } | null }
+ */
+app.get('/api/admin/onboarding/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('onboarding_progress')
+      .select('wedding_id, couple_photo_uploaded, first_message_sent, vendor_added, inspo_uploaded, checklist_item_completed, onboarding_dismissed, created_at, updated_at')
+      .eq('wedding_id', req.params.weddingId)
+      .maybeSingle();
+    if (error) throw error;
+    res.json({ exists: !!data, progress: data || null });
+  } catch (error) {
+    console.error('Admin onboarding read error:', error);
+    res.status(500).json({ error: 'Could not read onboarding progress' });
+  }
+});
+
 // ============ ENQUIRIES (tours and people who are not couples yet) ============
 
 /**
@@ -10115,19 +10561,38 @@ app.put('/api/onboarding/:weddingId', async (req, res) => {
  * wedding; a miss means somebody new. Matched on identifiers rather than names,
  * for the reason written up in shared/meeting-match.js.
  */
-app.post('/api/admin/enquiries/sync', requireAdmin, async (req, res) => {
-  try {
-    const token = process.env.CALENDLY_API_TOKEN;
-    if (!token) return res.status(400).json({ error: 'Calendly API token not configured' });
+/**
+ * Read the Calendly diary and file every booking.
+ *
+ * Pulled out of the route so the hourly cron can run exactly the same import.
+ * Gmail, Quo and Zoom have all been on a timer since August; Calendly was the
+ * one left on a button, and a tour booked on Saturday sat outside the portal
+ * until somebody happened to press it on Monday — which is the same failure
+ * that put this feature here in the first place.
+ *
+ * Throws on anything that means the whole run is worthless (no token, a
+ * rejected token, an unreadable diary) so runScheduledSync marks the job row
+ * failed and notifies. A single booking that will not read is counted into
+ * `skipped` and the rest of the diary still lands.
+ *
+ * Returns a summary in the shape the job row wants: processed, matched,
+ * needsReview, detail.
+ */
+async function runCalendlySync(body = {}) {
+  const token = process.env.CALENDLY_API_TOKEN;
+  if (!token) throw new Error('Calendly API token not configured');
 
-    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
     const me = await fetch('https://api.calendly.com/users/me', { headers });
     if (!me.ok) throw new Error(`Calendly rejected the token (${me.status})`);
     const userUri = (await me.json()).resource.uri;
 
     // A little way back as well as forward: a tour that happened yesterday
-    // still needs its outcome recording.
-    const from = new Date(Date.now() - 14 * 86_400_000).toISOString();
+    // still needs its outcome recording. body.sinceDays widens that for a
+    // catch-up run, which is how the first cron after an outage picks up what
+    // was missed.
+    const sinceDays = Math.min(Math.max(Number(body?.sinceDays) || 14, 1), 365);
+    const from = new Date(Date.now() - sinceDays * 86_400_000).toISOString();
     const url = `https://api.calendly.com/scheduled_events?user=${encodeURIComponent(userUri)}`
       + `&min_start_time=${from}&status=active&count=100&sort=start_time:asc`;
     const evRes = await fetch(url, { headers });
@@ -10204,19 +10669,44 @@ app.post('/api/admin/enquiries/sync', requireAdmin, async (req, res) => {
       }
     }
 
-    res.json({
-      created, updated, existingCouples, skipped, suggested, seen: events.length,
-      message: `${events.length} bookings in the diary. ${created} new, ${updated} updated`
-        + (existingCouples ? `, ${existingCouples} are existing couples` : '')
-        + (skipped ? `, ${skipped} could not be read` : '') + '.',
-    });
+  const message = `${events.length} bookings in the diary. ${created} new, ${updated} updated`
+    + (existingCouples ? `, ${existingCouples} are existing couples` : '')
+    + (skipped ? `, ${skipped} could not be read` : '') + '.';
+
+  return {
+    processed: events.length,
+    matched: existingCouples,
+    // A suggestion is precisely a booking waiting for a person to confirm it,
+    // which is what this column on the job row means everywhere else.
+    needsReview: suggested,
+    failed: skipped,
+    detail: { created, updated, existingCouples, skipped, suggested, seen: events.length, message },
+  };
+}
+
+// The button. Same import, answered inline so the admin panel can show the
+// result it has always shown rather than a job id to go and watch.
+app.post('/api/admin/enquiries/sync', requireAdmin, async (req, res) => {
+  try {
+    const summary = await runCalendlySync(req.body || {});
+    res.json({ ...summary.detail });
   } catch (error) {
     console.error('Enquiry sync error:', error);
-    res.status(500).json({ error: error.message });
+    // A missing token is a configuration answer, not a server fault, and the
+    // panel has always shown it as a 400.
+    const status = /not configured/i.test(error.message || '') ? 400 : 500;
+    res.status(status).json({ error: error.message });
   }
 });
 
-/** The diary, newest meeting first among the upcoming ones. */
+/**
+ * The diary, newest meeting first among the upcoming ones.
+ *
+ * select('*') carries outcome_notes, which is the whole record of how a tour
+ * went. It has an accepting PATCH and nothing that showed it back, so what was
+ * typed after a tour went into a column no screen read — named here so a later
+ * tightening of the select cannot quietly drop it again.
+ */
 app.get('/api/admin/enquiries', requireAdmin, async (req, res) => {
   try {
     const { status, includePast } = req.query;
@@ -10243,8 +10733,13 @@ app.get('/api/admin/enquiries', requireAdmin, async (req, res) => {
     //
     // Computed on read rather than stored, so it cannot go stale against a
     // wedding that moved.
-    const { data: weddingDates } = await supabaseAdmin
+    const { data: weddingDates, error: datesErr } = await supabaseAdmin
       .from('weddings').select('id, couple_names, wedding_date').not('wedding_date', 'is', null);
+    // An empty list here means "every date they asked for is free", which is
+    // exactly the wrong thing to tell somebody standing in the room. The diary
+    // is still worth showing, so the failure is logged rather than thrown, and
+    // date_taken_by comes back null on every row instead of falsely empty.
+    if (datesErr) console.error('[enquiries] could not read wedding dates to check against:', datesErr.message);
     const byDate = new Map();
     for (const w of weddingDates || []) {
       if (!byDate.has(w.wedding_date)) byDate.set(w.wedding_date, []);
@@ -10953,6 +11448,10 @@ const asAdminNotification = (n) => ({
   message: [n.title, n.body].filter(Boolean).join(' — '),
   wedding_id: n.wedding_id,
   read: !!n.is_read,
+  // createNotification writes false here when the email did not go out, and
+  // nothing ever read it, so a notification whose email bounced or whose Gmail
+  // grant had expired looked exactly like one that was delivered.
+  email_sent: n.email_sent ?? null,
   created_at: n.created_at,
 });
 
@@ -10960,7 +11459,7 @@ app.get('/api/admin/notifications', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
       .from('notifications')
-      .select('id, type, title, body, wedding_id, is_read, created_at')
+      .select('id, type, title, body, wedding_id, is_read, email_sent, created_at')
       .eq('recipient_type', 'admin')
       .order('created_at', { ascending: false })
       .limit(50);
@@ -11132,6 +11631,34 @@ function getPulseStage(weddingDate, createdAt) {
   return { stage, min, max };
 }
 
+/**
+ * Is this couple talking to Rixey about as much as couples at this stage do?
+ *
+ * Counts every inbound channel over the last thirty days — emails, texts, Zoom
+ * meetings, Sage chat, direct messages, and portal activity at half weight —
+ * and compares the total against a range for how far off the wedding is. A
+ * quiet couple three weeks out is worth a phone call; a loud one twelve months
+ * out is normal and should not look like an alarm.
+ *
+ * Shape (binding, W2 renders it on the wedding Overview):
+ *   {
+ *     level: 'less' | 'typical' | 'more',
+ *     score: number,
+ *     expected: { min, max },
+ *     stage: string,            // e.g. '3-6 months out', 'Just booked'
+ *     breakdown: { emails, texts, zooms, sageChat, directMessages, portalActivity },
+ *     partial: boolean,         // true when a channel could not be counted
+ *     missing: string[]         // which ones, by breakdown key
+ *   }
+ *
+ * `partial` matters more than it looks. Each channel is counted on its own so
+ * one unreadable table does not fail the lot, and the old code turned every
+ * such failure into a zero — which does not read as "we could not count the
+ * texts", it reads as "they have not texted", and that is the answer that
+ * makes somebody ring a couple who has been in touch all week.
+ *
+ * The batch route below answers the same question for the whole list at once.
+ */
 app.get('/api/communication-pulse/:weddingId', async (req, res) => {
   try {
     const { weddingId } = req.params;
@@ -11150,23 +11677,45 @@ app.get('/api/communication-pulse/:weddingId', async (req, res) => {
     if (wProfilesErr) throw new Error(`Could not read the couple's profiles: ${wProfilesErr.message}`);
     const profileIds = wProfiles.map(p => p.id);
 
-    // Count all inbound communication channels in parallel — each query isolated so one bad table doesn't fail all
-    const safeCount = async (fn) => { try { const r = await fn(); return r.count || 0; } catch { return 0; } };
+    // Each channel counted on its own, so one unreadable table does not fail
+    // the lot. A failure is recorded rather than turned into a zero: these are
+    // counts, and every zero here is read as "they have not been in touch".
+    const missing = [];
+    const safeCount = async (key, fn) => {
+      try {
+        const r = await fn();
+        if (r?.error) {
+          console.error(`[Pulse] could not count ${key} for ${weddingId}: ${r.error.message}`);
+          missing.push(key);
+          return 0;
+        }
+        return r.count || 0;
+      } catch (err) {
+        console.error(`[Pulse] counting ${key} threw for ${weddingId}: ${err.message}`);
+        missing.push(key);
+        return 0;
+      }
+    };
 
+    // head:true with an exact count, so none of these can pass 1000 rows —
+    // the database does the counting and hands back a number.
     const [emailCt, textCt, zoomCt, sageCt, dmCt, actCt] = await Promise.all([
-      safeCount(() => supabaseAdmin.from('processed_emails').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).gte('processed_at', since)),
-      safeCount(() => supabaseAdmin.from('processed_quo_messages').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).eq('direction', 'inbound').gte('processed_at', since)),
-      safeCount(() => supabaseAdmin.from('processed_zoom_meetings').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).gte('processed_at', since)),
-      safeCount(() => profileIds.length ? supabaseAdmin.from('messages').select('id', { count: 'exact', head: true }).in('user_id', profileIds).eq('sender', 'user').gte('created_at', since) : Promise.resolve({ count: 0 })),
-      safeCount(() => supabaseAdmin.from('direct_messages').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).eq('sender_type', 'client').gte('created_at', since)),
-      safeCount(() => supabaseAdmin.from('activity_log').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).gte('created_at', since)),
+      safeCount('emails', () => supabaseAdmin.from('processed_emails').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).gte('processed_at', since)),
+      safeCount('texts', () => supabaseAdmin.from('processed_quo_messages').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).eq('direction', 'inbound').gte('processed_at', since)),
+      safeCount('zooms', () => supabaseAdmin.from('processed_zoom_meetings').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).gte('processed_at', since)),
+      safeCount('sageChat', () => profileIds.length ? supabaseAdmin.from('messages').select('id', { count: 'exact', head: true }).in('user_id', profileIds).eq('sender', 'user').gte('created_at', since) : Promise.resolve({ count: 0 })),
+      safeCount('directMessages', () => supabaseAdmin.from('direct_messages').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).eq('sender_type', 'client').gte('created_at', since)),
+      safeCount('portalActivity', () => supabaseAdmin.from('activity_log').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).gte('created_at', since)),
     ]);
 
     // Weight: direct comms count full, portal activity counts half
     const score = Math.round(emailCt + textCt + zoomCt + sageCt + dmCt + actCt * 0.5);
 
     const { stage, min, max } = getPulseStage(wedding.wedding_date, wedding.created_at);
-    const level = score < min ? 'less' : score > max ? 'more' : 'typical';
+    // An undercount can only push the level down, so a partial read is never
+    // allowed to say "less than usual" — that is the reading somebody acts on.
+    const rawLevel = score < min ? 'less' : score > max ? 'more' : 'typical';
+    const level = missing.length && rawLevel === 'less' ? 'typical' : rawLevel;
 
     res.json({
       level,
@@ -11180,7 +11729,9 @@ app.get('/api/communication-pulse/:weddingId', async (req, res) => {
         sageChat: sageCt,
         directMessages: dmCt,
         portalActivity: actCt,
-      }
+      },
+      partial: missing.length > 0,
+      missing,
     });
   } catch (error) {
     console.error('Communication pulse error:', error);
@@ -11189,6 +11740,9 @@ app.get('/api/communication-pulse/:weddingId', async (req, res) => {
 });
 
 // Batch pulse for all weddings (used by admin list view)
+//
+// Same answer as the route above, for every wedding at once:
+//   { pulses: { [weddingId]: { level, score, stage, partial } }, partial, missing }
 app.get('/api/communication-pulse', requireAdmin, async (req, res) => {
   try {
     const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
@@ -11196,23 +11750,51 @@ app.get('/api/communication-pulse', requireAdmin, async (req, res) => {
     const { data: weddings, error: wErr } = await supabaseAdmin
       .from('weddings')
       .select('id, wedding_date, created_at');
+    // This read was destructured and never looked at, so a failure came out as
+    // an empty pulse map: the admin list showed no pulse on any wedding and
+    // nothing said why.
+    if (wErr) throw new Error(`Could not read the wedding list: ${wErr.message}`);
 
-    if (!weddings?.length) return res.json({ pulses: {} });
+    if (!weddings?.length) return res.json({ pulses: {}, partial: false, missing: [] });
 
-    // Build user_id → wedding_id map via profiles table
-    const safeQ = async (fn) => { try { const r = await fn(); if (r.error) { console.warn('[Pulse] Query error:', r.error.message); } return r.data || []; } catch (e) { console.warn('[Pulse] Query threw:', e.message); return []; } };
+    // Build user_id → wedding_id map via profiles table.
+    //
+    // Paged. Thirty days of activity_log across forty-seven weddings passes
+    // 1000 rows on its own, and a select with no range stops there silently —
+    // so the busiest couples were the ones most likely to be undercounted,
+    // which is exactly backwards.
+    const missing = [];
+    const safeQ = async (key, build) => {
+      const rows = [];
+      try {
+        for (let from = 0; ; from += 1000) {
+          const r = await build().range(from, from + 999);
+          if (r.error) {
+            console.warn(`[Pulse] could not read ${key}: ${r.error.message}`);
+            missing.push(key);
+            return rows;
+          }
+          rows.push(...(r.data || []));
+          if (!r.data || r.data.length < 1000) break;
+        }
+      } catch (e) {
+        console.warn(`[Pulse] reading ${key} threw: ${e.message}`);
+        missing.push(key);
+      }
+      return rows;
+    };
 
-    const profiles = await safeQ(() => supabaseAdmin.from('profiles').select('id, wedding_id').eq('is_admin', false));
+    const profiles = await safeQ('profiles', () => supabaseAdmin.from('profiles').select('id, wedding_id').eq('is_admin', false));
     const userToWedding = {};
     profiles.forEach(p => { if (p.id && p.wedding_id) userToWedding[p.id] = p.wedding_id; });
 
     const [emails, texts, zooms, sageMsgs, directMsgs, activity] = await Promise.all([
-      safeQ(() => supabaseAdmin.from('processed_emails').select('wedding_id').gte('processed_at', since)),
-      safeQ(() => supabaseAdmin.from('processed_quo_messages').select('wedding_id').eq('direction', 'inbound').gte('processed_at', since)),
-      safeQ(() => supabaseAdmin.from('processed_zoom_meetings').select('wedding_id').gte('processed_at', since)),
-      safeQ(() => supabaseAdmin.from('messages').select('user_id').eq('sender', 'user').gte('created_at', since)),
-      safeQ(() => supabaseAdmin.from('direct_messages').select('wedding_id').eq('sender_type', 'client').gte('created_at', since)),
-      safeQ(() => supabaseAdmin.from('activity_log').select('wedding_id').gte('created_at', since)),
+      safeQ('emails', () => supabaseAdmin.from('processed_emails').select('wedding_id').gte('processed_at', since)),
+      safeQ('texts', () => supabaseAdmin.from('processed_quo_messages').select('wedding_id').eq('direction', 'inbound').gte('processed_at', since)),
+      safeQ('zooms', () => supabaseAdmin.from('processed_zoom_meetings').select('wedding_id').gte('processed_at', since)),
+      safeQ('sageChat', () => supabaseAdmin.from('messages').select('user_id').eq('sender', 'user').gte('created_at', since)),
+      safeQ('directMessages', () => supabaseAdmin.from('direct_messages').select('wedding_id').eq('sender_type', 'client').gte('created_at', since)),
+      safeQ('portalActivity', () => supabaseAdmin.from('activity_log').select('wedding_id').gte('created_at', since)),
     ]);
 
     // Count per wedding
@@ -11233,11 +11815,15 @@ app.get('/api/communication-pulse', requireAdmin, async (req, res) => {
       const c = counts[w.id];
       const score = Math.round(c.emails + c.texts + c.zooms + c.sage + c.dm + c.activity * 0.5);
       const { stage, min, max } = getPulseStage(w.wedding_date, w.created_at);
-      pulses[w.id] = { level: score < min ? 'less' : score > max ? 'more' : 'typical', score, stage };
+      const rawLevel = score < min ? 'less' : score > max ? 'more' : 'typical';
+      // As above: an undercount must never read as "quieter than usual".
+      const level = missing.length && rawLevel === 'less' ? 'typical' : rawLevel;
+      pulses[w.id] = { level, score, stage, partial: missing.length > 0 };
     });
 
-    console.log('[Pulse] returning pulses for', Object.keys(pulses).length, 'weddings');
-    res.json({ pulses });
+    console.log('[Pulse] returning pulses for', Object.keys(pulses).length, 'weddings'
+      + (missing.length ? `, without ${missing.join(', ')}` : ''));
+    res.json({ pulses, partial: missing.length > 0, missing });
   } catch (error) {
     console.error('Batch pulse error:', error);
     res.status(500).json({ error: 'Failed to calculate pulses' });
@@ -11740,6 +12326,54 @@ app.get('/api/sage-messages/:weddingId', async (req, res) => {
 });
 
 // Get planning notes for a wedding (uses supabaseAdmin to bypass RLS)
+/**
+ * What Rixey has actually filed against this wedding, for the couple.
+ *
+ * "Share this with the couple" on a call or an email writes a planning note
+ * with status 'confirmed' (see the contact-message share route) and the couple
+ * had no screen that read one, so every share since the feature landed went
+ * into a table nobody on that side could see.
+ *
+ * Deliberately narrower than the venue route above:
+ *  - confirmed and added only. A 'pending' note is a machine's guess that
+ *    nobody has checked, and a couple reading a guess as fact is the failure
+ *    mode this whole status column exists to prevent.
+ *  - no source_message. It carries venue-internal phrasing, the address an
+ *    email came from and, on the extraction paths, a slice of the original
+ *    message. The couple gets the note, not the paperwork behind it.
+ *
+ * Shape (binding, W3 renders it):
+ *   { notes: [{ id, category, content, created_at }], total }
+ * Newest first. Mounted with a single uuid in the path, so weddingAccess
+ * scopes it to members of that wedding, or an admin.
+ */
+app.get('/api/planning-notes/couple/:weddingId', async (req, res) => {
+  try {
+    const { weddingId } = req.params;
+
+    // A wedding fed by Gmail, Quo and Zoom for a year passes 1000 notes, and a
+    // select with no range drops the rest silently.
+    const notes = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin
+        .from('planning_notes')
+        .select('id, category, content, created_at')
+        .eq('wedding_id', weddingId)
+        .in('status', ['confirmed', 'added'])
+        .order('created_at', { ascending: false })
+        .range(from, from + 999);
+      if (error) throw error;
+      notes.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
+
+    res.json({ notes, total: notes.length });
+  } catch (error) {
+    console.error('Get couple planning notes error:', error);
+    res.status(500).json({ error: 'Failed to fetch notes' });
+  }
+});
+
 app.get('/api/planning-notes/:weddingId', async (req, res) => {
   try {
     const { weddingId } = req.params;
@@ -12287,6 +12921,12 @@ app.get('/api/notifications/admin', async (req, res) => {
 });
 
 // Get client notifications for a wedding
+//
+// select('*') carries email_sent, which is the point of it here. A couple's
+// notification is always emailed immediately (see createNotification), so
+// email_sent false on one of these rows means the send failed — a bounced
+// address, or a Gmail grant that has quietly expired — and until now that was
+// indistinguishable from a delivered one on every screen.
 app.get('/api/notifications/client/:weddingId', async (req, res) => {
   try {
     const { weddingId } = req.params;
@@ -12985,9 +13625,31 @@ app.put('/api/guests/:id', async (req, res) => {
 });
 
 // POST bulk import guests from CSV
+/**
+ * Import a guest list, adding or updating.
+ *
+ * Body: { weddingId, guests, mode }. mode 'add' is what this has always done:
+ * insert every row, warn about names already on the list, and let the couple
+ * decide. mode 'update' matches on (wedding_id, lower(first_name),
+ * lower(last_name)) and writes onto the row it finds, inserting only the ones
+ * it does not.
+ *
+ * Returns { added, updated, skipped, guests, duplicates, duplicateWarning }.
+ *
+ * Why the match is not a database constraint: two people at a wedding can
+ * genuinely be called the same thing, and a unique index would refuse the
+ * second one at the moment the couple most needs it in. So the matching is a
+ * choice the person importing makes, once, per import.
+ *
+ * Plus-one rows are never matched against. A plus one is a person row like any
+ * other since 025, and matching a host's line onto their own plus one would
+ * overwrite a real guest with somebody else's details. Only party hosts are
+ * candidates; the plus one is then reconciled from the host row afterwards.
+ */
 app.post('/api/guests/bulk', async (req, res) => {
   try {
     const { weddingId, guests } = req.body;
+    const mode = req.body.mode === 'update' ? 'update' : 'add';
     if (!weddingId || !Array.isArray(guests) || guests.length === 0) {
       return res.status(400).json({ error: 'weddingId and guests array required' });
     }
@@ -13044,32 +13706,84 @@ app.post('/api/guests/bulk', async (req, res) => {
     // doubled it, and with no unique constraint on the table nothing stopped
     // it. Rather than change that behaviour and risk dropping a genuine second
     // guest with the same name, the import now says what it is about to do.
-    const { data: already, error: alreadyErr } = await supabaseAdmin
-      .from('wedding_guests')
-      .select('first_name, last_name')
-      .eq('wedding_id', weddingId);
-    // The whole point of this read is to warn about duplicates before writing.
-    // A failed read reports "no duplicates", which is the one answer that is
-    // worse than not asking.
-    if (alreadyErr) throw new Error(`Could not check the existing guest list: ${alreadyErr.message}`);
+    // A guest list can pass 1000 rows — a 400-person wedding with plus ones is
+    // 800 before anyone has been added twice — so this pages.
+    const already = [];
+    for (let from = 0; ; from += 1000) {
+      const { data: page, error: alreadyErr } = await supabaseAdmin
+        .from('wedding_guests')
+        .select('id, first_name, last_name, is_plus_one')
+        .eq('wedding_id', weddingId)
+        .range(from, from + 999);
+      // The whole point of this read is to know who is already here before
+      // writing. A failed read reports "nobody", which is the one answer that
+      // is worse than not asking.
+      if (alreadyErr) throw new Error(`Could not check the existing guest list: ${alreadyErr.message}`);
+      already.push(...(page || []));
+      if (!page || page.length < 1000) break;
+    }
     const key = (f, l) => `${String(f || '').trim().toLowerCase()}|${String(l || '').trim().toLowerCase()}`;
     const existingNames = new Set(already.map(g => key(g.first_name, g.last_name)));
+
+    // Hosts only, and first match wins. Where a wedding already holds two
+    // people with the same name the import cannot tell which was meant, so it
+    // writes onto the one it found first and the duplicate list says so.
+    const hostByName = new Map();
+    for (const g of already) {
+      if (g.is_plus_one) continue;
+      const k = key(g.first_name, g.last_name);
+      if (!hostByName.has(k)) hostByName.set(k, g.id);
+    }
+
     const duplicates = rows
       .filter(r => existingNames.has(key(r.first_name, r.last_name)))
       .map(r => [r.first_name, r.last_name].filter(Boolean).join(' '));
 
+    // In update mode the matched rows are written one at a time. A bulk upsert
+    // is not available here: there is no unique constraint to conflict on, for
+    // the reason in the comment above the route.
+    let updated = 0;
+    const updatedRows = [];
+    const toInsert = [];
+    for (const r of rows) {
+      const hit = mode === 'update' ? hostByName.get(key(r.first_name, r.last_name)) : undefined;
+      if (!hit) { toInsert.push(r); continue; }
+      // wedding_id and the name are what matched, so they are not rewritten.
+      const { wedding_id: _w, first_name: _f, last_name: _l, ...patch } = r;
+      const { data: row, error: upErr } = await supabaseAdmin
+        .from('wedding_guests').update(patch).eq('id', hit).select().maybeSingle();
+      if (upErr) {
+        // Loud rather than silent: the rest of the import still runs, and the
+        // count at the end will not add up to the file, which is the point.
+        console.error(`[guests] could not update ${r.first_name} ${r.last_name || ''}:`, upErr.message);
+        continue;
+      }
+      if (row) { updated += 1; updatedRows.push(row); }
+    }
+
     // Every imported guest heads their own party, for the same reason as
     // above. Without this the whole import fails on the first row.
-    const rowsWithParty = rows.map(r => {
+    const rowsWithParty = toInsert.map(r => {
       const id = crypto.randomUUID();
       return { ...r, id, party_id: id };
     });
 
-    const { data, error } = await supabaseAdmin
-      .from('wedding_guests')
-      .insert(rowsWithParty)
-      .select();
-    if (error) throw error;
+    let data = [];
+    if (rowsWithParty.length) {
+      const { data: inserted, error } = await supabaseAdmin
+        .from('wedding_guests')
+        .insert(rowsWithParty)
+        .select();
+      if (error) throw error;
+      data = inserted || [];
+    }
+
+    // Reconcile the plus one on every row that was updated rather than added.
+    // The host row now carries whatever the file said about their plus one,
+    // and syncPlusOneRow is the one place that turns that into a person row,
+    // removes one that has gone, and leaves the plus one's own table, email
+    // and tags alone.
+    for (const row of updatedRows) await syncPlusOneRow(row);
 
     // Give the imported plus ones rows of their own.
     //
@@ -13105,6 +13819,10 @@ app.post('/api/guests/bulk', async (req, res) => {
         table_assignment: g.table_assignment || null,
       });
     }
+    // Rows in the file that were neither added nor updated: only the ones an
+    // update failed on, since every other row lands somewhere.
+    const skipped = rows.length - data.length - updated;
+
     if (plusOneRows.length) {
       const { error: poErr } = await supabaseAdmin.from('wedding_guests').insert(plusOneRows);
       // The guests are already in. Say loudly that their plus ones are not,
@@ -13113,6 +13831,9 @@ app.post('/api/guests/bulk', async (req, res) => {
         console.error('[guests] imported guests but not their plus ones:', poErr.message);
         return res.json({
           guests: data,
+          added: data.length,
+          updated,
+          skipped,
           imported: data.length,
           duplicates,
           duplicateWarning: `Imported ${data.length} guests, but their plus ones could not be added: ${poErr.message}. Check the list before relying on the numbers.`,
@@ -13122,12 +13843,19 @@ app.post('/api/guests/bulk', async (req, res) => {
 
     res.json({
       guests: data,
+      added: data.length,
+      updated,
+      skipped,
+      // The name the old client reads. Kept so an un-updated browser still
+      // shows a number rather than "undefined guests imported".
       imported: data.length,
       plusOnesCreated: plusOneRows.length,
       duplicates,
-      // Two people can genuinely share a name, so this reports rather than
-      // decides. The couple knows which it is; the server does not.
-      duplicateWarning: duplicates.length
+      // Two people can genuinely share a name, so in add mode this reports
+      // rather than decides. The couple knows which it is; the server does not.
+      // In update mode the same names are what was matched on, so saying they
+      // are now listed twice would be false.
+      duplicateWarning: (mode === 'add' && duplicates.length)
         ? `${duplicates.length} of these ${duplicates.length === 1 ? 'name was' : 'names were'} already on the guest list, so ${duplicates.length === 1 ? 'it is' : 'they are'} now listed twice. Check for duplicates if this was a re-import.`
         : null,
     });
@@ -13393,6 +14121,44 @@ async function readCapped(response, cap) {
   return out;
 }
 
+/**
+ * Write a bar recipe, or answer the request explaining why not.
+ *
+ * Returns the saved row, or null having already sent a response — the two
+ * extraction routes check for null and stop. Doing it this way keeps the error
+ * wording in one place: a caller that forgets weddingId should be told that
+ * rather than getting a 500 out of PostgREST.
+ *
+ * servings_basis is not asked for. The old two-step flow set it on the second
+ * request from a field the extraction never saw, and the model is told to
+ * quote quantities per serving, so 1 is the honest default.
+ */
+async function saveBarRecipe(req, res, { name, source_type, source_url, ingredients }) {
+  const weddingId = req.body?.weddingId || req.body?.wedding_id;
+  if (!weddingId) {
+    res.status(400).json({ error: 'weddingId required' });
+    return null;
+  }
+  const { data, error } = await supabaseAdmin.from('bar_recipes')
+    .insert({
+      wedding_id: weddingId,
+      name: name || 'Untitled recipe',
+      source_type,
+      source_url: source_url || null,
+      ingredients,
+      servings_basis: 1,
+    })
+    .select().single();
+  if (error) {
+    // The read has already been paid for, so say plainly that it could not be
+    // kept rather than returning the ingredients as though they were filed.
+    console.error('[bar-recipes] extracted but could not save:', error.message);
+    res.status(500).json({ error: `Read the recipe but could not save it: ${error.message}` });
+    return null;
+  }
+  return data;
+}
+
 // Extract ingredients from a URL using Claude
 //
 // Signed in only, and the URL is checked before anything is fetched. This used
@@ -13455,7 +14221,19 @@ app.post('/api/bar-recipes/extract-url', requireAuth, async (req, res) => {
     const raw = message.content[0].text.trim();
     const match = raw.match(/\[[\s\S]*\]/);
     if (!match) return res.status(422).json({ error: 'Could not parse ingredients from that page.' });
-    res.json({ ingredients: JSON.parse(match[0]) });
+    const ingredients = JSON.parse(match[0]);
+
+    // Save it here rather than trusting a second request.
+    //
+    // This used to answer with the ingredients and nothing else, and the
+    // browser was expected to post them straight back to the save route. Close
+    // the tab in between, or lose the connection, and a paid Claude read of a
+    // recipe page is simply gone. Reading and saving are one act.
+    const saved = await saveBarRecipe(req, res, {
+      name, source_type: 'url', source_url: url, ingredients,
+    });
+    if (!saved) return;   // saveBarRecipe has answered
+    res.json({ recipe: saved, saved: true, ingredients });
   } catch (err) {
     console.error('Recipe URL extract error:', err);
     res.status(500).json({ error: err.message });
@@ -13465,9 +14243,17 @@ app.post('/api/bar-recipes/extract-url', requireAuth, async (req, res) => {
 // Extract ingredients from an uploaded image/PDF using Claude Vision
 app.post('/api/bar-recipes/extract-upload', requireAuth, upload.single('file'), async (req, res) => {
   try {
-    const { name } = req.body;
+    const { name, weddingId } = req.body;
     const file = req.file;
     if (!file) return res.status(400).json({ error: 'No file provided' });
+
+    // weddingAccess runs before multer, so on a multipart request it saw a body
+    // with no wedding in it and let this through. Same hand-check as the other
+    // upload routes, on the first line after the form is parsed.
+    if (weddingId) {
+      const allowed = await assertWeddingMember(supabaseAdmin, req, weddingId);
+      if (!allowed.ok) return res.status(allowed.status).json({ error: 'You do not have access to this wedding' });
+    }
 
     const base64   = file.buffer.toString('base64');
     const isPdf    = file.mimetype === 'application/pdf';
@@ -13494,7 +14280,13 @@ app.post('/api/bar-recipes/extract-upload', requireAuth, upload.single('file'), 
     const raw = message.content[0].text.trim();
     const match = raw.match(/\[[\s\S]*\]/);
     if (!match) return res.status(422).json({ error: 'Could not parse ingredients from that image.' });
-    res.json({ ingredients: JSON.parse(match[0]) });
+    const ingredients = JSON.parse(match[0]);
+
+    const saved = await saveBarRecipe(req, res, {
+      name, source_type: 'upload', source_url: null, ingredients,
+    });
+    if (!saved) return;
+    res.json({ recipe: saved, saved: true, ingredients });
   } catch (err) {
     console.error('Recipe upload extract error:', err);
     res.status(500).json({ error: err.message });
@@ -14552,18 +15344,34 @@ app.get('/api/admin/documents/:weddingId', requireAdmin, async (req, res) => {
       .from('wedding_documents')
       // extracted_text is deliberately not selected — it is up to 30k characters
       // and the list only needs to say what exists.
-      .select('id, wedding_id, filename, kind, byte_size, page_count, text_hash, parsed_at, parse_error, version, supersedes_id, created_at, sections')
+      .select('id, wedding_id, filename, kind, byte_size, page_count, text_hash, parsed_at, parse_error, version, supersedes_id, created_at, sections, storage_path')
       .eq('wedding_id', req.params.weddingId)
       .order('created_at', { ascending: false });
     if (error) throw error;
-    // Report only whether each section found anything, not the contents.
-    res.json((data || []).map(d => ({
-      ...d,
-      sections: undefined,
-      sectionCounts: d.sections
-        ? Object.fromEntries(Object.entries(d.sections).map(([k, v]) => [k, Array.isArray(v) ? v.length : 0]))
-        : null,
-    })));
+    // Report only whether each section found anything, not the contents, and
+    // hand back a link to the file.
+    //
+    // The couple could download their own documents and the venue, who
+    // uploaded them, could not — the one-hour signed link was on the couple
+    // route only. Same bucket, same life, same shape of answer.
+    const docs = await Promise.all((data || []).map(async d => {
+      let download_url = null;
+      if (d.storage_path) {
+        const { data: signed, error: signErr } = await supabaseAdmin.storage
+          .from('day-of-media').createSignedUrl(d.storage_path, 60 * 60);
+        if (signErr) console.error('[doc-sync] could not sign a link:', signErr.message);
+        download_url = signed?.signedUrl || null;
+      }
+      return {
+        ...d,
+        sections: undefined,
+        sectionCounts: d.sections
+          ? Object.fromEntries(Object.entries(d.sections).map(([k, v]) => [k, Array.isArray(v) ? v.length : 0]))
+          : null,
+        download_url,
+      };
+    }));
+    res.json(docs);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -15076,6 +15884,12 @@ app.post('/api/admin/documents/:id/apply', requireAdmin, async (req, res) => {
       weddingId: doc.wedding_id,
       decisions,
       appliedBy: req.userId || null,
+      // The audit row is the only thing that says a document import happened
+      // at all, and until 036 it looked exactly like a sheet one — which is
+      // how the Sheet Sync panel came to show a document import as the last
+      // time the sheet was synced.
+      source: 'document',
+      recordSource: has036('syncSource'),
     });
     await logActivity(doc.wedding_id, req.userId || null, 'document_imported',
       `${result.appliedCount} item${result.appliedCount === 1 ? '' : 's'} from ${doc.filename}`);
@@ -15187,13 +16001,24 @@ app.delete('/api/admin/walkthroughs/:id', requireAdmin, async (req, res) => {
 
 // Photos and voice notes. Stored under the existing day-of-media bucket with a
 // walkthroughs/ prefix so no new bucket has to be created before this works.
+// select('*') on purpose, so transcript_error comes back the moment migration
+// 035 lands without this line needing to change. It is the column that tells a
+// failed transcription apart from one still running, and with it missing the
+// panel polled a null transcript for ever. Where 035 has not been applied the
+// column is simply absent from the rows, which the client reads as unknown.
 app.get('/api/admin/walkthroughs/:id/media', requireAdmin, async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
       .from('walkthrough_media').select('*')
       .eq('walkthrough_id', req.params.id).order('created_at');
     if (error) throw error;
-    res.json(data || []);
+    // Named rather than left implicit: W2 renders transcript_error and needs to
+    // know the difference between "no error" and "this build cannot say".
+    res.json((data || []).map(m => ({
+      ...m,
+      transcript_error: has035('transcript') ? (m.transcript_error || null) : null,
+      transcriptErrorKnown: has035('transcript'),
+    })));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -15279,13 +16104,26 @@ app.post('/api/admin/walkthroughs/:id/media', requireAdmin, dayOfMediaUpload.sin
 
 app.delete('/api/admin/walkthrough-media/:id', requireAdmin, async (req, res) => {
   try {
-    const { data: row } = await supabaseAdmin
+    const { data: row, error: readErr } = await supabaseAdmin
       .from('walkthrough_media').select('storage_path').eq('id', req.params.id).maybeSingle();
-    // Remove the file too, and do not report success if that fails: a deleted
-    // row with an orphaned file is how storage quietly fills up.
+    // Not knowing whether there is a file means not deleting the row. Carrying
+    // on would orphan whatever is in the bucket with nothing left pointing at it.
+    if (readErr) throw new Error(`Could not read the recording: ${readErr.message}`);
+
+    // The file first, and stop if it will not go.
+    //
+    // The comment here already said "do not report success if that fails" and
+    // then the code logged the failure and reported success anyway. The row
+    // went, the audio stayed, and nothing on any screen knew it was there: the
+    // bucket fills up with recordings of walkthroughs nobody can find.
     if (row?.storage_path) {
       const { error: rmErr } = await supabaseAdmin.storage.from('day-of-media').remove([row.storage_path]);
-      if (rmErr) console.error('Walkthrough media file remove failed:', rmErr.message);
+      if (rmErr) {
+        console.error('Walkthrough media file remove failed:', rmErr.message);
+        return res.status(500).json({
+          error: `The recording itself could not be deleted (${rmErr.message}), so it has been left alone. Nothing was removed.`,
+        });
+      }
     }
     const { error } = await supabaseAdmin.from('walkthrough_media').delete().eq('id', req.params.id);
     if (error) throw error;
@@ -15539,10 +16377,35 @@ app.get('/api/finalisations/:weddingId', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+/**
+ * Sign a section off, as the couple or as Rixey.
+ *
+ * staff_finalised has been a column since the table was created and had no
+ * writer: SectionFinaliser was mounted with role="couple" hardcoded, so the
+ * venue's own "we have checked this" was unreachable and every sign-off in the
+ * database is a couple's.
+ *
+ * Body: { section, role | party, value }. `role` is the name the client
+ * component uses and `party` is what this route has always taken; both work,
+ * because the two are the same thing and renaming one of them would only move
+ * the mismatch.
+ *
+ * Staff is admin-only. Without that check any couple could tick Rixey's own
+ * sign-off on their file, which is the one mark on the screen that is supposed
+ * to mean somebody at the venue looked.
+ */
 app.post('/api/finalisations/:weddingId', async (req, res) => {
   try {
-    const { section, party, value } = req.body; // party: 'couple' | 'staff'
-    if (!section || !party) return res.status(400).json({ error: 'section and party required' });
+    const { section, value } = req.body;
+    const party = req.body.role || req.body.party;   // 'couple' | 'staff'
+    if (!section || !party) return res.status(400).json({ error: 'section and role required' });
+    if (party !== 'couple' && party !== 'staff') {
+      return res.status(400).json({ error: "role must be 'couple' or 'staff'" });
+    }
+
+    if (party === 'staff' && !(await isAdminUser(req.userId))) {
+      return res.status(403).json({ error: 'Only Rixey can sign a section off' });
+    }
 
     const field     = party === 'couple' ? 'couple_finalised' : 'staff_finalised';
     const fieldAt   = party === 'couple' ? 'couple_finalised_at' : 'staff_finalised_at';
@@ -15895,7 +16758,7 @@ async function runScheduledSync(kind, runner, body = {}) {
         finished_at: new Date().toISOString(),
         processed: summary.processed || 0,
         matched: summary.matched || 0,
-        needs_review: summary.needsReview || 0,
+        needs_review: reviewCount(summary),
         failed: summary.failed || 0,
         detail: summary.detail || {},
       });
@@ -16017,11 +16880,37 @@ cron.schedule('35 * * * *', async () => {
   await runScheduledSync('quo', runQuoSync, { sinceDays: 30, trigger: 'scheduled' });
 }, { timezone: VENUE_TZ });
 
+/**
+ * Calendly at ten to, the last of the four.
+ *
+ * The other three syncs have been hourly since August and this one was still a
+ * button, so a tour booked on Saturday sat outside the portal until somebody
+ * pressed sync on Monday — and a venue tour is the conversation that decides
+ * whether anyone books at all. Nobody presses sync on the off-chance; that is
+ * the whole finding.
+ *
+ * Fourteen days back rather than thirty: Calendly holds the diary, the portal
+ * only needs the recent end of it, and every booking is upserted on its event
+ * URI so a repeat costs an update rather than a duplicate.
+ */
+cron.schedule('50 * * * *', async () => {
+  if (!process.env.CALENDLY_API_TOKEN) {
+    console.log('[calendly cron] no Calendly token, nothing to do');
+    return;
+  }
+  await runScheduledSync('calendly', runCalendlySync, { sinceDays: 14, trigger: 'scheduled' });
+}, { timezone: VENUE_TZ });
+
 // Ask the database once, at boot, which of migration 035's columns exist. Every
 // behaviour that needs one is gated on the answer, so the syncs and the crons
 // run either way and say clearly what is switched off.
 detectMigration035(supabaseAdmin).catch(err => {
   console.error('[035] could not probe for the new columns:', err.message);
+});
+
+// And the same for 036: sheet_sync_log.source and vendors.logo_url.
+detectMigration036(supabaseAdmin).catch(err => {
+  console.error('[036] could not probe for the new columns:', err.message);
 });
 
 // Look at today's memo without waiting until 8am, and without sending it.

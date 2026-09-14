@@ -13,12 +13,22 @@
  *   - 'use-portal' for a conflict where the user prefers portal → we could write portal back
  *     to sheet, but we don't have write scope. So 'use-portal' = noop and is logged as "resolved
  *     in favor of portal" (decision audit only)
+ *
+ * `source` says which importer is calling: 'sheet' for the Google Sheet diff,
+ * 'document' for the document one, which reuses this executor wholesale. The
+ * rows were indistinguishable before, so the Sheet Sync panel read a document
+ * import as the last time the sheet was synced. Written only when migration
+ * 036 has been applied; see lib/migration-036.js.
  */
-export async function applyChoices({ supabase, weddingId, decisions, appliedBy }) {
+export async function applyChoices({ supabase, weddingId, decisions, appliedBy, source = 'sheet', recordSource = false }) {
   const results = [];
   let appliedCount = 0;
   const auditRows = [];
   const appliedAt = new Date().toISOString();
+  // Either { source: 'sheet' } or nothing at all. Merging in a key the table
+  // does not have would make PostgREST refuse the whole audit insert, so the
+  // caller passes the answer to the boot probe rather than the value alone.
+  const sourceFields = recordSource && source ? { source } : {};
 
   for (const d of decisions || []) {
     const { entryId, choice, op } = d;
@@ -37,7 +47,8 @@ export async function applyChoices({ supabase, weddingId, decisions, appliedBy }
         table_name: op.table || null,
         executed: false,
         applied_by: appliedBy || null,
-        applied_at: appliedAt
+        applied_at: appliedAt,
+        ...sourceFields
       });
       continue;
     }
@@ -61,7 +72,8 @@ export async function applyChoices({ supabase, weddingId, decisions, appliedBy }
         table_name: op.table || null,
         executed: true,
         applied_by: appliedBy || null,
-        applied_at: appliedAt
+        applied_at: appliedAt,
+        ...sourceFields
       });
     } catch (err) {
       const msg = err?.message || String(err);
@@ -75,7 +87,8 @@ export async function applyChoices({ supabase, weddingId, decisions, appliedBy }
         executed: false,
         error: msg,
         applied_by: appliedBy || null,
-        applied_at: appliedAt
+        applied_at: appliedAt,
+        ...sourceFields
       });
     }
   }

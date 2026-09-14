@@ -264,3 +264,220 @@ curl -sI $API/api/health | grep -i ratelimit
 `RateLimit-Remaining` should now fall as *you* make requests and should not
 already be low on a quiet morning. Two different networks hitting the API at
 once must each have their own remaining count.
+
+---
+
+# Ingestion-gap routes, 14 September 2026
+
+The W1 routes from `PLAN-INGEST-GAPS.md`. `scripts/smoke-security.mjs` cannot
+be run from a worktree against production, so these are the lines to paste.
+Same variables as the top of this file, plus:
+
+```sh
+ERR_ID=…        # id of any row in client_errors
+VENDOR_TOKEN=…  # edit_token of any vendor
+ACCOM_ID=…      # id of any row in accommodations
+MEDIA_ID=…      # id of any row in walkthrough_media
+```
+
+## Couple notes — `GET /api/planning-notes/couple/:weddingId`
+
+```sh
+# 200, and every note must be status confirmed or added, with no
+# source_message key anywhere in the payload
+curl -s $API/api/planning-notes/couple/$OURS -H "Authorization: Bearer $COUPLE" \
+  | grep -c source_message        # must print 0
+
+# 403 — another couple's notes
+curl -s -o /dev/null -w '%{http_code}\n' $API/api/planning-notes/couple/$THEIRS \
+  -H "Authorization: Bearer $COUPLE"
+
+# 403 — no token at all
+curl -s -o /dev/null -w '%{http_code}\n' $API/api/planning-notes/couple/$OURS
+```
+
+## Contract and document download links
+
+```sh
+# 200; every contract with a storage_path must carry a download_url, and that
+# URL must stop working after an hour
+curl -s $API/api/contracts/$OURS -H "Authorization: Bearer $COUPLE" | head -c 400
+
+# 403 — another couple's contracts
+curl -s -o /dev/null -w '%{http_code}\n' $API/api/contracts/$THEIRS \
+  -H "Authorization: Bearer $COUPLE"
+
+# 200 for the venue, 403 for a couple: the admin document list now carries the
+# same signed download_url the couple route does
+curl -s $API/api/admin/documents/$OURS -H "Authorization: Bearer $ADMIN" | head -c 400
+curl -s -o /dev/null -w '%{http_code}\n' $API/api/admin/documents/$OURS \
+  -H "Authorization: Bearer $COUPLE"
+```
+
+Then upload a contract through the admin panel and check `contracts.storage_path`
+is set on the new row. Before this it was null on every row either upload path
+wrote, which is the whole point of the change.
+
+## Sync log — `GET /api/admin/sync-log/:weddingId`
+
+```sh
+# 200 for the venue; sourceKnown is false until migration 036 is applied, and
+# every row's source is null in that state
+curl -s "$API/api/admin/sync-log/$OURS?limit=5" -H "Authorization: Bearer $ADMIN"
+
+# after 036: a document import must come back as source document
+curl -s "$API/api/admin/sync-log/$OURS?source=document" -H "Authorization: Bearer $ADMIN"
+
+# 403 — a couple reading their own sync log
+curl -s -o /dev/null -w '%{http_code}\n' $API/api/admin/sync-log/$OURS \
+  -H "Authorization: Bearer $COUPLE"
+```
+
+## Onboarding, accommodations, crash notes
+
+```sh
+# 200 venue / 403 couple. Must NOT create a row: run it against a wedding with
+# no onboarding_progress row and check the table afterwards
+curl -s $API/api/admin/onboarding/$OURS -H "Authorization: Bearer $ADMIN"
+curl -s -o /dev/null -w '%{http_code}\n' $API/api/admin/onboarding/$OURS \
+  -H "Authorization: Bearer $COUPLE"
+
+# 200 venue / 403 couple on all four accommodation verbs
+curl -s $API/api/admin/accommodations -H "Authorization: Bearer $ADMIN" | head -c 200
+curl -s -o /dev/null -w '%{http_code}\n' -X POST $API/api/admin/accommodations \
+  -H "Authorization: Bearer $COUPLE" -H 'Content-Type: application/json' \
+  -d '{"name":"nope"}'
+curl -s -o /dev/null -w '%{http_code}\n' -X DELETE $API/api/admin/accommodations/$ACCOM_ID \
+  -H "Authorization: Bearer $COUPLE"
+
+# 200 venue / 403 couple — the crash-report note
+curl -s -X PATCH $API/api/client-errors/$ERR_ID \
+  -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
+  -d '{"status":"done","notes":"was the toast loop"}'
+curl -s -o /dev/null -w '%{http_code}\n' -X PATCH $API/api/client-errors/$ERR_ID \
+  -H "Authorization: Bearer $COUPLE" -H 'Content-Type: application/json' -d '{"notes":"x"}'
+
+# 200 still — reporting a crash stays open to anyone, including a signed-out browser
+curl -s -o /dev/null -w '%{http_code}\n' -X POST $API/api/client-errors \
+  -H 'Content-Type: application/json' -d '{"message":"smoke test","url":"/"}'
+```
+
+## Staff sign-off — `POST /api/finalisations/:weddingId`
+
+```sh
+# 403 — a couple must not be able to tick Rixey's own sign-off
+curl -s -o /dev/null -w '%{http_code}\n' -X POST $API/api/finalisations/$OURS \
+  -H "Authorization: Bearer $COUPLE" -H 'Content-Type: application/json' \
+  -d '{"section":"guests","role":"staff","value":true}'
+
+# 200 — the couple's own mark still works
+curl -s -o /dev/null -w '%{http_code}\n' -X POST $API/api/finalisations/$OURS \
+  -H "Authorization: Bearer $COUPLE" -H 'Content-Type: application/json' \
+  -d '{"section":"guests","role":"couple","value":true}'
+
+# 200 — the venue's, and section_finalisations.staff_finalised is true after it
+curl -s -o /dev/null -w '%{http_code}\n' -X POST $API/api/finalisations/$OURS \
+  -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
+  -d '{"section":"guests","role":"staff","value":true}'
+```
+
+## Guest import modes — `POST /api/guests/bulk`
+
+```sh
+# Run this twice with mode add, then twice with mode update, against a test
+# wedding. add doubles the list and warns; update reports updated 1, added 0.
+curl -s -X POST $API/api/guests/bulk -H "Authorization: Bearer $COUPLE" \
+  -H 'Content-Type: application/json' \
+  -d "{\"weddingId\":\"$OURS\",\"mode\":\"update\",\"guests\":[{\"first_name\":\"Test\",\"last_name\":\"Person\",\"email\":\"t@example.com\"}]}"
+
+# 403 — importing into somebody else's wedding
+curl -s -o /dev/null -w '%{http_code}\n' -X POST $API/api/guests/bulk \
+  -H "Authorization: Bearer $COUPLE" -H 'Content-Type: application/json' \
+  -d "{\"weddingId\":\"$THEIRS\",\"mode\":\"add\",\"guests\":[{\"first_name\":\"No\"}]}"
+```
+
+## Bar recipes save on extract
+
+```sh
+# 200 with { recipe, saved: true }, and exactly ONE new row in bar_recipes
+curl -s -X POST $API/api/bar-recipes/extract-url -H "Authorization: Bearer $COUPLE" \
+  -H 'Content-Type: application/json' \
+  -d "{\"weddingId\":\"$OURS\",\"name\":\"Negroni\",\"url\":\"https://www.liquor.com/recipes/negroni/\"}"
+
+# 400 — no weddingId means nothing is written
+curl -s -X POST $API/api/bar-recipes/extract-url -H "Authorization: Bearer $COUPLE" \
+  -H 'Content-Type: application/json' -d '{"name":"x","url":"https://example.com"}'
+
+# 403 — an upload aimed at another couple's wedding
+curl -s -o /dev/null -w '%{http_code}\n' -X POST $API/api/bar-recipes/extract-upload \
+  -H "Authorization: Bearer $COUPLE" -F weddingId=$THEIRS -F name=x -F file=@recipe.jpg
+```
+
+## Vendor portal — logo up, photos down
+
+```sh
+# 200 and vendors.logo_url set, once migration 036 is applied; 503 with a plain
+# sentence before that, never a 42703
+curl -s -X POST $API/api/vendor-portal/$VENDOR_TOKEN/logo -F logo=@logo.png
+
+# 415 — a logo has to be an image
+curl -s -X POST $API/api/vendor-portal/$VENDOR_TOKEN/logo -F logo=@notes.pdf
+
+# 429 on the 31st in ten minutes, and a [vendor-portal] photo delete line in
+# the Railway log for every one of the first thirty
+for i in $(seq 1 31); do
+  curl -s -o /dev/null -w '%{http_code} ' -X DELETE $API/api/vendor-portal/$VENDOR_TOKEN/photos \
+    -H 'Content-Type: application/json' -d '{"url":"https://example.com/nope.jpg"}'
+done; echo
+```
+
+## Zoom transcripts
+
+```sh
+# 200 venue / 401 or 403 otherwise. Every row must carry match_reason,
+# match_confidence, matched_by and participant_names, and no transcript_text
+# longer than 20000 characters.
+curl -s "$API/api/zoom/transcripts?weddingId=$OURS&limit=3" -H "Authorization: Bearer $ADMIN" \
+  | python -c "import json,sys; d=json.load(sys.stdin); print([len(m['transcript_text'] or '') for m in d['meetings']])"
+
+curl -s -o /dev/null -w '%{http_code}\n' $API/api/zoom/transcripts -H "Authorization: Bearer $COUPLE"
+```
+
+## Routes that must now be gone or guarded
+
+```sh
+# 404 — removed
+curl -s -o /dev/null -w '%{http_code}\n' $API/api/google-debug -H "Authorization: Bearer $ADMIN"
+curl -s -o /dev/null -w '%{http_code}\n' $API/api/sheet-sync-apply-debug -H "Authorization: Bearer $ADMIN"
+
+# 400 — the Quo clear refuses without an explicit confirmation
+curl -s -X POST $API/api/quo/clear-processed -H "Authorization: Bearer $ADMIN" \
+  -H 'Content-Type: application/json' -d '{}'
+
+# 200, and a [quo] clearing N markers line in the log naming who asked.
+# This one really does clear the table, so only run it when you mean to.
+curl -s -X POST $API/api/quo/clear-processed -H "Authorization: Bearer $ADMIN" \
+  -H 'Content-Type: application/json' -d '{"confirm":true}'
+```
+
+## Walkthrough media delete
+
+```sh
+# Point the row's storage_path at a key that is not in the bucket, then:
+# 500 with a sentence saying nothing was removed, and the row still there.
+curl -s -X DELETE $API/api/admin/walkthrough-media/$MEDIA_ID -H "Authorization: Bearer $ADMIN"
+```
+
+## Calendly cron
+
+Not a curl. After the next hour turns over, `sync_jobs` must hold a row with
+kind `calendly` and trigger `scheduled`, at ten to the hour, venue time. With
+`CALENDLY_API_TOKEN` unset there must be no row at all and one
+`[calendly cron] no Calendly token, nothing to do` line.
+
+## Notification email state
+
+Not a curl either. `GET /api/notifications/client/:weddingId` and
+`GET /api/admin/notifications` must both carry `email_sent`. Disconnect Gmail,
+trigger a couple-facing notification, and the row must come back with
+`email_sent` false rather than looking delivered.

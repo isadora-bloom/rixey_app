@@ -40,3 +40,4 @@ All migrations are applied manually via `run-migration.ts` (never auto-applied o
 | 033_notification_refactor.sql | | applied |
 | 034_couple_profile_fix.sql | | applied |
 | 035_extraction_markers.sql | 2026-09-14 | **pending: needs running by Isadora**. The server boots without it and logs one `[035] migration 035 not applied` line per gated behaviour (extraction markers, source-keyed note dedup, transcript_error, parsed_with_model, messages.flagged). |
+| 036_ingestion_gaps.sql | 2026-09-14 | **pending: needs running by Isadora**. Adds `sheet_sync_log.source`, `vendors.logo_url` (already on production), an index on `sheet_sync_log (wedding_id, applied_at DESC)`, and drops the three dead tables. The server boots without it and logs one `[036] migration 036 not applied` line per gated behaviour: the sync log returns every row with a null source and `sourceKnown: false`, and the vendor logo upload answers 503 rather than 42703. |
