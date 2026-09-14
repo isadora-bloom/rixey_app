@@ -2513,7 +2513,13 @@ async function saveContract({
 }
 
 // Contract upload and extraction endpoint
-app.post('/api/extract-contract', upload.single('contract'), async (req, res) => {
+//
+// weddingAccess is mounted on /api and therefore runs before multer. On a
+// multipart request req.body is still empty at that point, so this route
+// looked to it like a request about no wedding at all and went straight
+// through with no token. The membership check has to happen here, on the first
+// line after multer has parsed the form.
+app.post('/api/extract-contract', requireAuth, upload.single('contract'), async (req, res) => {
   try {
     const { weddingId } = req.body;
     const file = req.file;
@@ -2525,6 +2531,9 @@ app.post('/api/extract-contract', upload.single('contract'), async (req, res) =>
     if (!weddingId) {
       return res.status(400).json({ error: 'Wedding ID required' });
     }
+
+    const allowed = await assertWeddingMember(supabaseAdmin, req, weddingId);
+    if (!allowed.ok) return res.status(allowed.status).json({ error: 'You do not have access to this wedding' });
 
     console.log(`Processing contract for wedding ${weddingId}: ${file.originalname}`);
 
@@ -7086,7 +7095,9 @@ app.get('/api/inspo/:weddingId', async (req, res) => {
 });
 
 // Upload inspo image
-app.post('/api/inspo', upload.single('image'), async (req, res) => {
+// Multipart, so weddingAccess saw an empty body and could not scope it. See
+// the note on /api/extract-contract.
+app.post('/api/inspo', requireAuth, upload.single('image'), async (req, res) => {
   try {
     const { weddingId, caption, uploadedBy, category } = req.body;
     const file = req.file;
@@ -7094,6 +7105,9 @@ app.post('/api/inspo', upload.single('image'), async (req, res) => {
     if (!file || !weddingId) {
       return res.status(400).json({ error: 'File and wedding ID required' });
     }
+
+    const allowed = await assertWeddingMember(supabaseAdmin, req, weddingId);
+    if (!allowed.ok) return res.status(allowed.status).json({ error: 'You do not have access to this wedding' });
 
     // Check count limit
     const { count } = await supabaseAdmin
@@ -7298,7 +7312,9 @@ app.get('/api/couple-photo/:weddingId', async (req, res) => {
 });
 
 // Upload/replace couple photo
-app.post('/api/couple-photo', upload.single('photo'), async (req, res) => {
+// Multipart, so weddingAccess saw an empty body and could not scope it. See
+// the note on /api/extract-contract.
+app.post('/api/couple-photo', requireAuth, upload.single('photo'), async (req, res) => {
   try {
     const { weddingId, uploadedBy } = req.body;
     const file = req.file;
@@ -7306,6 +7322,9 @@ app.post('/api/couple-photo', upload.single('photo'), async (req, res) => {
     if (!file || !weddingId) {
       return res.status(400).json({ error: 'File and wedding ID required' });
     }
+
+    const allowed = await assertWeddingMember(supabaseAdmin, req, weddingId);
+    if (!allowed.ok) return res.status(allowed.status).json({ error: 'You do not have access to this wedding' });
 
     // Check if photo already exists.
     //
@@ -14441,12 +14460,18 @@ async function commitSeatingToGuests(weddingId, tables, replaceExisting) {
 }
 
 // POST /api/seating/import — parse (action=parse) or commit (action=commit)
-app.post('/api/seating/import', spreadsheetUpload.single('file'), async (req, res) => {
+// Multipart, so weddingAccess saw an empty body and could not scope it. A
+// commit rewrites a whole guest list, which makes this the most expensive of
+// the four to have left open. See the note on /api/extract-contract.
+app.post('/api/seating/import', requireAuth, spreadsheetUpload.single('file'), async (req, res) => {
   try {
     const action = req.body.action || 'parse';
     const weddingId = req.body.weddingId;
 
     if (!weddingId) return res.status(400).json({ error: 'weddingId required' });
+
+    const allowed = await assertWeddingMember(supabaseAdmin, req, weddingId);
+    if (!allowed.ok) return res.status(allowed.status).json({ error: 'You do not have access to this wedding' });
 
     if (action === 'parse') {
       if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
