@@ -43,75 +43,83 @@ export const GROUP_ORDER = [
  * wedding profile in admin. `icon` is a lucide icon name, resolved to a
  * component by src/components/ui/SectionIcon.jsx. `finalisable` marks the
  * sections that carry a couple/venue sign-off in the last six weeks.
+ *
+ * `noteCategories` names the `planning_notes.category` values (see the
+ * extraction prompts in server/index.js: vendor, vendor_contact, timeline,
+ * cost, allergy, guest_count, colors, decor, plus note/email/sms_message/
+ * call_transcript/zoom_transcript, which are logs rather than facts about a
+ * section and so claim nothing here) that count as work waiting on the venue
+ * for that section. Most sections claim none: a category with nowhere
+ * obvious to go counts toward nothing, same as an unresolved section key.
  */
 export const SECTIONS = [
   // Get Started. Three things only. Wedding Details and Walkthrough Notes used
   // to sit here and made it the longest group in the menu, which is a strange
   // shape for the group a couple sees on their first morning.
-  { key: 'chat', label: 'Chat with Sage', group: 'Get Started', icon: 'MessageCircle', sides: ['couple'], aliases: [] },
-  { key: 'worksheets', label: 'Worksheets', group: 'Get Started', icon: 'ClipboardList', sides: ['couple', 'venue'], aliases: [] },
-  { key: 'checklist', label: 'Checklist', group: 'Get Started', icon: 'ListChecks', sides: ['couple', 'venue'], aliases: [] },
+  { key: 'chat', label: 'Chat with Sage', group: 'Get Started', icon: 'MessageCircle', sides: ['couple'], aliases: [], noteCategories: [] },
+  { key: 'worksheets', label: 'Worksheets', group: 'Get Started', icon: 'ClipboardList', sides: ['couple', 'venue'], aliases: [], noteCategories: [] },
+  { key: 'checklist', label: 'Checklist', group: 'Get Started', icon: 'ListChecks', sides: ['couple', 'venue'], aliases: [], noteCategories: [] },
 
   // Plan
-  { key: 'wedding-details', label: 'Wedding Details', group: 'Plan', icon: 'Heart', sides: ['couple', 'venue'], aliases: [] },
-  { key: 'walkthrough', label: 'Walkthrough Notes', group: 'Plan', icon: 'Footprints', sides: ['couple', 'venue'], aliases: [] },
-  { key: 'budget', label: 'Budget', group: 'Plan', icon: 'Wallet', sides: ['couple', 'venue'], aliases: [] },
-  { key: 'guests', label: 'Guest List', group: 'Plan', icon: 'Users', sides: ['couple', 'venue'], aliases: [], finalisable: true },
-  { key: 'vendors', label: 'Vendors', group: 'Plan', icon: 'Briefcase', sides: ['couple', 'venue'], aliases: ['vendor'], finalisable: true },
-  { key: 'vendor-directory', label: 'Vendor Directory', group: 'Plan', icon: 'BookUser', sides: ['couple'], aliases: ['preferred-vendors'] },
-  { key: 'timeline', label: 'Timeline', group: 'Plan', icon: 'CalendarClock', sides: ['couple', 'venue'], aliases: [], finalisable: true },
-  { key: 'tables', label: 'Tables', group: 'Plan', icon: 'LayoutGrid', sides: ['couple', 'venue'], aliases: [], finalisable: true },
-  { key: 'documents', label: 'Documents', group: 'Plan', icon: 'FileText', sides: ['couple', 'venue'], aliases: [] },
-  { key: 'completeness', label: 'Completeness', group: 'Plan', icon: 'Gauge', sides: ['couple', 'venue'], aliases: [] },
+  { key: 'wedding-details', label: 'Wedding Details', group: 'Plan', icon: 'Heart', sides: ['couple', 'venue'], aliases: [], noteCategories: [] },
+  { key: 'walkthrough', label: 'Walkthrough Notes', group: 'Plan', icon: 'Footprints', sides: ['couple', 'venue'], aliases: [], noteCategories: [] },
+  { key: 'budget', label: 'Budget', group: 'Plan', icon: 'Wallet', sides: ['couple', 'venue'], aliases: [], noteCategories: ['cost'] },
+  { key: 'guests', label: 'Guest List', group: 'Plan', icon: 'Users', sides: ['couple', 'venue'], aliases: [], finalisable: true, noteCategories: ['guest_count'] },
+  { key: 'vendors', label: 'Vendors', group: 'Plan', icon: 'Briefcase', sides: ['couple', 'venue'], aliases: ['vendor'], finalisable: true, noteCategories: ['vendor', 'vendor_contact'] },
+  { key: 'vendor-directory', label: 'Vendor Directory', group: 'Plan', icon: 'BookUser', sides: ['couple'], aliases: ['preferred-vendors'], noteCategories: [] },
+  { key: 'timeline', label: 'Timeline', group: 'Plan', icon: 'CalendarClock', sides: ['couple', 'venue'], aliases: [], finalisable: true, noteCategories: ['timeline'] },
+  { key: 'tables', label: 'Tables', group: 'Plan', icon: 'LayoutGrid', sides: ['couple', 'venue'], aliases: [], finalisable: true, noteCategories: [] },
+  { key: 'documents', label: 'Documents', group: 'Plan', icon: 'FileText', sides: ['couple', 'venue'], aliases: [], noteCategories: [] },
+  { key: 'completeness', label: 'Completeness', group: 'Plan', icon: 'Gauge', sides: ['couple', 'venue'], aliases: [], noteCategories: [] },
 
   // Day Of
-  { key: 'ceremony-order', label: 'Ceremony Order', group: 'Day Of', icon: 'ScrollText', sides: ['couple', 'venue'], aliases: [], finalisable: true },
-  { key: 'ceremony-chairs', label: 'Ceremony Chairs', group: 'Day Of', icon: 'Armchair', sides: ['couple', 'venue'], aliases: [] },
-  { key: 'table-map', label: 'Table Map', group: 'Day Of', icon: 'Map', sides: ['couple', 'venue'], aliases: [], finalisable: true },
-  { key: 'staffing', label: 'Staffing Guide', group: 'Day Of', icon: 'UserCog', sides: ['couple', 'venue'], aliases: [], finalisable: true },
-  { key: 'bar', label: 'Bar Planner', group: 'Day Of', icon: 'Wine', sides: ['couple', 'venue'], aliases: [], finalisable: true },
-  { key: 'makeup', label: 'Hair & Makeup', group: 'Day Of', icon: 'Scissors', sides: ['couple', 'venue'], aliases: [], finalisable: true },
-  { key: 'shuttle', label: 'Shuttle Schedule', group: 'Day Of', icon: 'Bus', sides: ['couple', 'venue'], aliases: [], finalisable: true },
-  { key: 'rehearsal', label: 'Rehearsal Dinner', group: 'Day Of', icon: 'Utensils', sides: ['couple', 'venue'], aliases: [], finalisable: true },
-  { key: 'bedrooms', label: 'Bedroom Assignments', group: 'Day Of', icon: 'Bed', sides: ['couple', 'venue'], aliases: [], finalisable: true },
-  { key: 'decor', label: 'Decor Inventory', group: 'Day Of', icon: 'Flower2', sides: ['couple', 'venue'], aliases: [], finalisable: true },
+  { key: 'ceremony-order', label: 'Ceremony Order', group: 'Day Of', icon: 'ScrollText', sides: ['couple', 'venue'], aliases: [], finalisable: true, noteCategories: [] },
+  { key: 'ceremony-chairs', label: 'Ceremony Chairs', group: 'Day Of', icon: 'Armchair', sides: ['couple', 'venue'], aliases: [], noteCategories: [] },
+  { key: 'table-map', label: 'Table Map', group: 'Day Of', icon: 'Map', sides: ['couple', 'venue'], aliases: [], finalisable: true, noteCategories: [] },
+  { key: 'staffing', label: 'Staffing Guide', group: 'Day Of', icon: 'UserCog', sides: ['couple', 'venue'], aliases: [], finalisable: true, noteCategories: [] },
+  { key: 'bar', label: 'Bar Planner', group: 'Day Of', icon: 'Wine', sides: ['couple', 'venue'], aliases: [], finalisable: true, noteCategories: [] },
+  { key: 'makeup', label: 'Hair & Makeup', group: 'Day Of', icon: 'Scissors', sides: ['couple', 'venue'], aliases: [], finalisable: true, noteCategories: [] },
+  { key: 'shuttle', label: 'Shuttle Schedule', group: 'Day Of', icon: 'Bus', sides: ['couple', 'venue'], aliases: [], finalisable: true, noteCategories: [] },
+  { key: 'rehearsal', label: 'Rehearsal Dinner', group: 'Day Of', icon: 'Utensils', sides: ['couple', 'venue'], aliases: [], finalisable: true, noteCategories: [] },
+  { key: 'bedrooms', label: 'Bedroom Assignments', group: 'Day Of', icon: 'Bed', sides: ['couple', 'venue'], aliases: [], finalisable: true, noteCategories: [] },
+  { key: 'decor', label: 'Decor Inventory', group: 'Day Of', icon: 'Flower2', sides: ['couple', 'venue'], aliases: [], finalisable: true, noteCategories: ['colors', 'decor'] },
 
   // Guests
-  { key: 'rsvp-settings', label: 'RSVP Settings', group: 'Guests', icon: 'MailCheck', sides: ['couple', 'venue'], aliases: [] },
-  { key: 'allergies', label: 'Allergy Registry', group: 'Guests', icon: 'HeartPulse', sides: ['couple', 'venue'], aliases: [], finalisable: true },
-  { key: 'guest-care', label: 'Guest Care Notes', group: 'Guests', icon: 'HandHeart', sides: ['couple', 'venue'], aliases: ['guestcare'], finalisable: true },
+  { key: 'rsvp-settings', label: 'RSVP Settings', group: 'Guests', icon: 'MailCheck', sides: ['couple', 'venue'], aliases: [], noteCategories: [] },
+  { key: 'allergies', label: 'Allergy Registry', group: 'Guests', icon: 'HeartPulse', sides: ['couple', 'venue'], aliases: [], finalisable: true, noteCategories: ['allergy'] },
+  { key: 'guest-care', label: 'Guest Care Notes', group: 'Guests', icon: 'HandHeart', sides: ['couple', 'venue'], aliases: ['guestcare'], finalisable: true, noteCategories: [] },
 
   // Website
-  { key: 'website-builder', label: 'Website Builder', group: 'Website', icon: 'Globe', sides: ['couple', 'venue'], aliases: [] },
-  { key: 'photo-library', label: 'Photo Library', group: 'Website', icon: 'Images', sides: ['couple', 'venue'], aliases: ['photos'] },
-  { key: 'wedding-party', label: 'Wedding Party', group: 'Website', icon: 'PartyPopper', sides: ['couple', 'venue'], aliases: [] },
+  { key: 'website-builder', label: 'Website Builder', group: 'Website', icon: 'Globe', sides: ['couple', 'venue'], aliases: [], noteCategories: [] },
+  { key: 'photo-library', label: 'Photo Library', group: 'Website', icon: 'Images', sides: ['couple', 'venue'], aliases: ['photos'], noteCategories: [] },
+  { key: 'wedding-party', label: 'Wedding Party', group: 'Website', icon: 'PartyPopper', sides: ['couple', 'venue'], aliases: [], noteCategories: [] },
 
   // Rixey
-  { key: 'inspo', label: 'Inspiration', group: 'Rixey', icon: 'Lightbulb', sides: ['couple', 'venue'], aliases: [] },
-  { key: 'borrow', label: 'Borrow Brochure', group: 'Rixey', icon: 'Package', sides: ['couple', 'venue'], aliases: [] },
-  { key: 'picks', label: 'Rixey Picks', group: 'Rixey', icon: 'ShoppingBag', sides: ['couple'], aliases: [] },
-  { key: 'downloads', label: 'Manor Downloads', group: 'Rixey', icon: 'Download', sides: ['couple'], aliases: [] },
+  { key: 'inspo', label: 'Inspiration', group: 'Rixey', icon: 'Lightbulb', sides: ['couple', 'venue'], aliases: [], noteCategories: [] },
+  { key: 'borrow', label: 'Borrow Brochure', group: 'Rixey', icon: 'Package', sides: ['couple', 'venue'], aliases: [], noteCategories: [] },
+  { key: 'picks', label: 'Rixey Picks', group: 'Rixey', icon: 'ShoppingBag', sides: ['couple'], aliases: [], noteCategories: [] },
+  { key: 'downloads', label: 'Manor Downloads', group: 'Rixey', icon: 'Download', sides: ['couple'], aliases: [], noteCategories: [] },
 
   // After the Day
-  { key: 'day-of-memories', label: 'Day-of Memories', group: 'After the Day', icon: 'Camera', sides: ['couple', 'venue'], aliases: [] },
+  { key: 'day-of-memories', label: 'Day-of Memories', group: 'After the Day', icon: 'Camera', sides: ['couple', 'venue'], aliases: [], noteCategories: [] },
 
   // Connect
-  { key: 'inbox', label: 'Inbox', group: 'Connect', icon: 'Inbox', sides: ['couple', 'venue'], aliases: ['direct-messages'] },
-  { key: 'booking', label: 'Book a Meeting', group: 'Connect', icon: 'CalendarPlus', sides: ['couple'], aliases: [] },
-  { key: 'resources', label: 'Resources', group: 'Connect', icon: 'Link', sides: ['couple'], aliases: [] },
+  { key: 'inbox', label: 'Inbox', group: 'Connect', icon: 'Inbox', sides: ['couple', 'venue'], aliases: ['direct-messages'], noteCategories: [] },
+  { key: 'booking', label: 'Book a Meeting', group: 'Connect', icon: 'CalendarPlus', sides: ['couple'], aliases: [], noteCategories: [] },
+  { key: 'resources', label: 'Resources', group: 'Connect', icon: 'Link', sides: ['couple'], aliases: [], noteCategories: [] },
 
   // Venue only
-  { key: 'overview', label: 'Overview', group: 'Home', icon: 'LayoutDashboard', sides: ['venue'], aliases: [] },
-  { key: 'notes', label: 'Planning Notes', group: 'Venue only', icon: 'NotebookPen', sides: ['venue'], aliases: [] },
-  { key: 'conversations', label: 'Sage Conversations', group: 'Venue only', icon: 'MessagesSquare', sides: ['venue'], aliases: ['messages'] },
-  { key: 'contacts', label: 'Family & Contacts', group: 'Venue only', icon: 'Contact', sides: ['venue'], aliases: [] },
-  { key: 'uncertain', label: "Uncertain Q's", group: 'Venue only', icon: 'CircleHelp', sides: ['venue'], aliases: [] },
-  { key: 'meetings', label: 'Meetings', group: 'Venue only', icon: 'CalendarDays', sides: ['venue'], aliases: [] },
-  { key: 'activity', label: 'Recent Activity', group: 'Venue only', icon: 'Activity', sides: ['venue'], aliases: [] },
-  { key: 'sheet-sync', label: 'Sync from Sheet', group: 'Venue only', icon: 'RefreshCw', sides: ['venue'], aliases: [] },
-  { key: 'contract-upload', label: 'Upload Contract', group: 'Venue only', icon: 'FileUp', sides: ['venue'], aliases: [] },
-  { key: 'ask', label: 'Ask About Wedding', group: 'Venue only', icon: 'Sparkles', sides: ['venue'], aliases: [] },
-  { key: 'api-usage', label: 'API Usage', group: 'Venue only', icon: 'BarChart3', sides: ['venue'], aliases: [] },
+  { key: 'overview', label: 'Overview', group: 'Home', icon: 'LayoutDashboard', sides: ['venue'], aliases: [], noteCategories: [] },
+  { key: 'notes', label: 'Planning Notes', group: 'Venue only', icon: 'NotebookPen', sides: ['venue'], aliases: [], noteCategories: [] },
+  { key: 'conversations', label: 'Sage Conversations', group: 'Venue only', icon: 'MessagesSquare', sides: ['venue'], aliases: ['messages'], noteCategories: [] },
+  { key: 'contacts', label: 'Family & Contacts', group: 'Venue only', icon: 'Contact', sides: ['venue'], aliases: [], noteCategories: [] },
+  { key: 'uncertain', label: "Uncertain Q's", group: 'Venue only', icon: 'CircleHelp', sides: ['venue'], aliases: [], noteCategories: [] },
+  { key: 'meetings', label: 'Meetings', group: 'Venue only', icon: 'CalendarDays', sides: ['venue'], aliases: [], noteCategories: [] },
+  { key: 'activity', label: 'Recent Activity', group: 'Venue only', icon: 'Activity', sides: ['venue'], aliases: [], noteCategories: [] },
+  { key: 'sheet-sync', label: 'Sync from Sheet', group: 'Venue only', icon: 'RefreshCw', sides: ['venue'], aliases: [], noteCategories: [] },
+  { key: 'contract-upload', label: 'Upload Contract', group: 'Venue only', icon: 'FileUp', sides: ['venue'], aliases: [], noteCategories: [] },
+  { key: 'ask', label: 'Ask About Wedding', group: 'Venue only', icon: 'Sparkles', sides: ['venue'], aliases: [], noteCategories: [] },
+  { key: 'api-usage', label: 'API Usage', group: 'Venue only', icon: 'BarChart3', sides: ['venue'], aliases: [], noteCategories: [] },
 ]
 
 const BY_KEY = new Map(SECTIONS.map(s => [s.key, s]))
