@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import { useToast } from './ui/Toast'
+import LoadError from './ui/LoadError'
 
 
 const CATEGORIES = [
@@ -23,6 +24,7 @@ export default function BorrowCatalog({ onAskSage, weddingId, isAdmin, refreshKe
   const { error: toastError } = useToast()
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
   const [activeCategory, setActiveCategory] = useState('All')
   const [hoveredItem, setHoveredItem] = useState(null)
   // The item being viewed full size. Same pattern as InspoGallery's lightbox.
@@ -43,20 +45,20 @@ export default function BorrowCatalog({ onAskSage, weddingId, isAdmin, refreshKe
 
   const loadItems = async () => {
     setLoading(true)
+    setLoadError(null)
     try {
-      const res = await fetch(`${API_URL}/api/borrow-catalog`, { headers: await authHeaders() })
-      const data = await res.json()
+      const data = await loadJson(`${API_URL}/api/borrow-catalog`)
       setItems(data.items || data || [])
     } catch (err) {
       console.error('Failed to load borrow catalog:', err)
+      setLoadError(err)
     }
     setLoading(false)
   }
 
   const loadSelections = async () => {
     try {
-      const res = await fetch(`${API_URL}/api/borrow-selections/${weddingId}`, { headers: await authHeaders() })
-      const data = await res.json()
+      const data = await loadJson(`${API_URL}/api/borrow-selections/${weddingId}`)
       setSelectedIds(new Set((data.selections || []).map(s => s.item_id)))
     } catch (err) {
       console.error('Failed to load borrow selections:', err)
@@ -127,6 +129,10 @@ export default function BorrowCatalog({ onAskSage, weddingId, isAdmin, refreshKe
         </div>
       </div>
     )
+  }
+
+  if (loadError) {
+    return <LoadError what="the borrow catalogue" error={loadError} onRetry={loadItems} />
   }
 
   return (

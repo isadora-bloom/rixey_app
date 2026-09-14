@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import { Button, Input, ConfirmDialog } from './ui'
 import { useToast } from './ui/Toast'
+import LoadError from './ui/LoadError'
 import { dietaryNotInRegistry } from '../../shared/guest-names'
 const PlusIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
 const PencilIcon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
@@ -54,6 +55,7 @@ function CheckToggle({ value, onChange }) {
 export default function AllergyRegistry({ weddingId, userId }) {
   const [allergies, setAllergies] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
   const [showForm, setShowForm] = useState(false)
   const [formData, setFormData] = useState(emptyForm)
   const [editingId, setEditingId] = useState(null)
@@ -92,14 +94,13 @@ export default function AllergyRegistry({ weddingId, userId }) {
 
   const fetchAllergies = async () => {
     setLoading(true)
+    setLoadError(null)
     try {
-      const res = await fetch(`${API_URL}/api/allergies/${weddingId}`, {
-        headers: await authHeaders()
-      })
-      const data = await res.json()
+      const data = await loadJson(`${API_URL}/api/allergies/${weddingId}`)
       if (Array.isArray(data)) setAllergies(data)
     } catch (err) {
       console.error(err)
+      setLoadError(err)
     } finally {
       setLoading(false)
     }
@@ -196,6 +197,10 @@ export default function AllergyRegistry({ weddingId, userId }) {
         Loading allergy registry…
       </div>
     )
+  }
+
+  if (loadError) {
+    return <LoadError what="the allergy registry" error={loadError} onRetry={fetchAllergies} />
   }
 
   const unregistered = dietaryNotInRegistry(guests, allergies)

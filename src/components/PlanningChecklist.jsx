@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import SaveIndicator from './ui/SaveIndicator'
 import { useToast } from './ui/Toast'
+import LoadError from './ui/LoadError'
 
 
 const CATEGORIES = ['Venue', 'Vendors', 'Attire & Beauty', 'Decor', 'Timeline', 'Guests', 'Other']
@@ -10,6 +11,7 @@ const CATEGORIES = ['Venue', 'Vendors', 'Attire & Beauty', 'Decor', 'Timeline', 
 export default function PlanningChecklist({ weddingId, userId, compact = false, isAdmin = false }) {
   const [tasks, setTasks] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
   const [showAddForm, setShowAddForm] = useState(false)
   const [newTask, setNewTask] = useState({ text: '', category: 'Other', dueDate: '' })
   const [saving, setSaving] = useState(false)
@@ -25,11 +27,9 @@ export default function PlanningChecklist({ weddingId, userId, compact = false, 
   }, [weddingId])
 
   const loadChecklist = async () => {
+    setLoadError(null)
     try {
-      const response = await fetch(`${API_URL}/api/checklist/${weddingId}`, {
-        headers: await authHeaders()
-      })
-      const data = await response.json()
+      const data = await loadJson(`${API_URL}/api/checklist/${weddingId}`)
 
       if (data.tasks && data.tasks.length === 0) {
         // Initialize default checklist if empty
@@ -46,6 +46,7 @@ export default function PlanningChecklist({ weddingId, userId, compact = false, 
       }
     } catch (error) {
       console.error('Error loading checklist:', error)
+      setLoadError(error)
     }
     setLoading(false)
   }
@@ -137,6 +138,10 @@ export default function PlanningChecklist({ weddingId, userId, compact = false, 
 
   if (loading) {
     return <div className="text-sage-400 text-center py-4">Loading checklist...</div>
+  }
+
+  if (loadError) {
+    return <LoadError what="the checklist" error={loadError} onRetry={loadChecklist} />
   }
 
   // Compact view (for sidebar preview)

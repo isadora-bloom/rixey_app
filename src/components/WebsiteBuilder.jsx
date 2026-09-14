@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import { QRCodeCanvas } from 'qrcode.react'
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import { Input } from './ui'
 import { useToast } from './ui/Toast'
+import LoadError from './ui/LoadError'
 import { useAutosave } from '../hooks/useAutosave'
 import SaveIndicator from './ui/SaveIndicator'
 import { headcount } from '../../shared/guest-names'
@@ -100,9 +101,16 @@ function CollapsibleSection({ title, hint, children, defaultOpen = false }) {
 export default function WebsiteBuilder({ weddingId, coupleNames }) {
   const [settings, setSettings] = useState(null)
   const [loading, setLoading]   = useState(true)
+  const [loadError, setLoadError] = useState(null)
   const [copied, setCopied]     = useState(false)
   const [showQr, setShowQr]     = useState(false)
+  // True only once a load has actually succeeded. The autosave effect below
+  // refuses to run at all until this is set, so a failed load can never PUT
+  // blank defaults back over real settings.
   const hasLoadedRef = useRef(false)
+  // Skips the one autosave-effect run that follows a successful load (state
+  // is freshly populated from the server, there is nothing new to save yet).
+  const skipNextAutosaveRef = useRef(true)
   const qrRef = useRef(null)
 
   // RSVP analytics
@@ -159,16 +167,16 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
     if (!weddingId) return
     ;(async () => {
       try {
-        const hdrs = await authHeaders()
-        const [guestsRes, partyRes, shuttleRes, photosRes] = await Promise.all([
-          fetch(`${API_URL}/api/guests/${weddingId}`, { headers: hdrs }),
-          fetch(`${API_URL}/api/wedding-party/${weddingId}`, { headers: hdrs }),
-          fetch(`${API_URL}/api/shuttle/${weddingId}`, { headers: hdrs }),
-          fetch(`${API_URL}/api/wedding-photos/${weddingId}`, { headers: hdrs }),
-        ])
-        const safeJson = async (r) => { try { return r.ok ? await r.json() : null } catch { return null } }
+        // Best-effort readiness counts. A failure on any one of these must
+        // not stop the others rendering, so each is caught individually.
+        const safeLoad = async (url) => {
+          try { return await loadJson(url) } catch { return null }
+        }
         const [gData, pData, sData, phData] = await Promise.all([
-          safeJson(guestsRes), safeJson(partyRes), safeJson(shuttleRes), safeJson(photosRes),
+          safeLoad(`${API_URL}/api/guests/${weddingId}`),
+          safeLoad(`${API_URL}/api/wedding-party/${weddingId}`),
+          safeLoad(`${API_URL}/api/shuttle/${weddingId}`),
+          safeLoad(`${API_URL}/api/wedding-photos/${weddingId}`),
         ])
         const guests = gData?.guests || gData || []
         const party = Array.isArray(pData) ? pData : []
@@ -196,8 +204,7 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
     setSlugStatus('checking')
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(`${API_URL}/api/wedding-website/check-slug/${encodeURIComponent(slug)}?exclude=${weddingId}`, { headers: await authHeaders() })
-        const data = await res.json()
+        const data = await loadJson(`${API_URL}/api/wedding-website/check-slug/${encodeURIComponent(slug)}?exclude=${weddingId}`)
         setSlugStatus(data.available ? 'available' : 'taken')
       } catch {
         setSlugStatus('idle')
@@ -207,9 +214,10 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
   }, [slug, weddingId])
 
   const loadSettings = async () => {
+    setLoading(true)
+    setLoadError(null)
     try {
-      const res  = await fetch(`${API_URL}/api/wedding-website/${weddingId}`, { headers: await authHeaders() })
-      const data = await res.json()
+      const data = await loadJson(`${API_URL}/api/wedding-website/${weddingId}`)
       if (data && data.wedding_id) {
         setSettings(data)
         setTheme(data.theme || 'warm')
@@ -245,8 +253,16 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
         // First time — auto-generate slug from couple names
         setSlug(slugify(coupleNames || ''))
       }
+      // Only a real, successful response arms the autosave effect. Before this,
+      // a failed load with no res.ok check fell into the "first time" branch
+      // above (an error body has no wedding_id either), the slug check flipped
+      // slugStatus a moment later, and the autosave effect PUT blank defaults
+      // with published:false over whatever the couple had actually saved.
+      hasLoadedRef.current = true
+      skipNextAutosaveRef.current = true
     } catch (err) {
       console.error('Failed to load website settings:', err)
+      setLoadError(err)
     }
     setLoading(false)
   }
@@ -263,9 +279,11 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
 
   useEffect(() => {
     if (loading) return
+    // Never autosave until a load has actually succeeded — see loadSettings.
+    if (!hasLoadedRef.current) return
     if (slugStatus === 'taken') return
-    if (!hasLoadedRef.current) {
-      hasLoadedRef.current = true
+    if (skipNextAutosaveRef.current) {
+      skipNextAutosaveRef.current = false
       return
     }
     scheduleSave({
@@ -329,6 +347,10 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
   }
 
   if (loading) return <p className="text-sage-400 text-center py-8">Loading website settings…</p>
+
+  if (loadError) {
+    return <LoadError what="your website settings" error={loadError} onRetry={loadSettings} />
+  }
 
   return (
     <div className="space-y-5 max-w-2xl">

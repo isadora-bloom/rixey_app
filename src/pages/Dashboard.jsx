@@ -39,7 +39,7 @@ import BarPlanner from '../components/BarPlanner'
 import SectionFinaliser from '../components/SectionFinaliser'
 import WalkthroughSummaries from '../components/WalkthroughSummaries'
 import { API_URL } from '../config/api'
-import { apiFetch, authHeaders } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import { useToast } from '../components/ui/Toast'
 import DashboardChat from './dashboard/DashboardChat'
 import FloatingSage from '../components/FloatingSage'
@@ -255,37 +255,26 @@ export default function Dashboard() {
         // Check if couple photo has been uploaded — require it if not
         if (data.role?.startsWith('couple')) {
           try {
-            const photoRes = await fetch(`${API_URL}/api/couple-photo/${data.wedding_id}`, {
-              headers: await authHeaders()
-            })
-            const photoData = await photoRes.json()
+            const photoData = await loadJson(`${API_URL}/api/couple-photo/${data.wedding_id}`)
             if (!photoData.photo) setNeedsPhoto(true)
           } catch {}
         }
 
         // Load finalisations
         try {
-          const finRes = await fetch(`${API_URL}/api/finalisations/${data.wedding_id}`, {
-            headers: await authHeaders()
-          })
-          if (finRes.ok) setFinalisations(await finRes.json())
+          setFinalisations(await loadJson(`${API_URL}/api/finalisations/${data.wedding_id}`))
         } catch {}
 
         // Load budget summary
         try {
-          const budgetRes = await fetch(`${API_URL}/api/budget/${data.wedding_id}`, {
-            headers: await authHeaders()
-          })
-          if (budgetRes.ok) {
-            const budgetData = await budgetRes.json()
-            if (budgetData.budget) {
-              const cats = budgetData.budget.categories || {}
-              const totalCommitted = Object.values(cats).reduce((s, c) => s + (c.committed || 0), 0)
-              setBudgetSummary({
-                totalBudget: budgetData.budget.total_budget,
-                totalCommitted
-              })
-            }
+          const budgetData = await loadJson(`${API_URL}/api/budget/${data.wedding_id}`)
+          if (budgetData.budget) {
+            const cats = budgetData.budget.categories || {}
+            const totalCommitted = Object.values(cats).reduce((s, c) => s + (c.committed || 0), 0)
+            setBudgetSummary({
+              totalBudget: budgetData.budget.total_budget,
+              totalCommitted
+            })
           }
         } catch (err) {
           console.error('Failed to load budget summary:', err)
@@ -293,10 +282,7 @@ export default function Dashboard() {
 
         // Load timeline summary
         try {
-          const timelineRes = await fetch(`${API_URL}/api/timeline/${data.wedding_id}`, {
-            headers: await authHeaders()
-          })
-          const timelineData = await timelineRes.json()
+          const timelineData = await loadJson(`${API_URL}/api/timeline/${data.wedding_id}`)
           if (timelineData.timeline) {
             const tl = timelineData.timeline
             const events = tl.timeline_data?.events || {}
@@ -316,10 +302,7 @@ export default function Dashboard() {
 
         // Load table summary
         try {
-          const tablesRes = await fetch(`${API_URL}/api/tables/${data.wedding_id}`, {
-            headers: await authHeaders()
-          })
-          const tablesData = await tablesRes.json()
+          const tablesData = await loadJson(`${API_URL}/api/tables/${data.wedding_id}`)
           if (tablesData.tables) {
             const tb = tablesData.tables
             const guestsPerTable = tb.guests_per_table || 8
@@ -349,10 +332,7 @@ export default function Dashboard() {
 
     // Refresh timeline summary
     try {
-      const timelineRes = await fetch(`${API_URL}/api/timeline/${profile.wedding_id}`, {
-        headers: await authHeaders()
-      })
-      const timelineData = await timelineRes.json()
+      const timelineData = await loadJson(`${API_URL}/api/timeline/${profile.wedding_id}`)
       if (timelineData.timeline) {
         const tl = timelineData.timeline
         const events = tl.timeline_data?.events || {}
@@ -372,10 +352,7 @@ export default function Dashboard() {
 
     // Refresh table summary
     try {
-      const tablesRes = await fetch(`${API_URL}/api/tables/${profile.wedding_id}`, {
-        headers: await authHeaders()
-      })
-      const tablesData = await tablesRes.json()
+      const tablesData = await loadJson(`${API_URL}/api/tables/${profile.wedding_id}`)
       if (tablesData.tables) {
         const tb = tablesData.tables
         const guestsPerTable = tb.guests_per_table || 8
@@ -491,10 +468,7 @@ export default function Dashboard() {
 
   const loadMessages = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/sage-messages/user/${user.id}`, {
-        headers: await authHeaders()
-      })
-      const data = await response.json()
+      const data = await loadJson(`${API_URL}/api/sage-messages/user/${user.id}`)
       setMessages(data.messages || [])
     } catch (error) {
       console.error('Error loading messages:', error)

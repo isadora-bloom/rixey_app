@@ -140,3 +140,31 @@ export async function apiFetch(url, options = {}) {
   if (!contentType.includes('application/json')) return null
   return res.json()
 }
+
+/**
+ * Wrapper around fetch for reads, built the same way as apiFetch:
+ * auth headers included, throws ApiError on a non-2xx response instead of
+ * letting the caller treat a 401 or 500 as "no data yet", returns parsed JSON.
+ *
+ * Every raw `fetch(\`${API_URL}...\`)` read used to swallow its own failures:
+ * the component just saw an empty array and rendered the empty state, so a
+ * couple whose session had lapsed saw "no guests yet" instead of a reason to
+ * sign in again. Use this for every GET; use apiFetch for writes.
+ */
+export async function loadJson(url, opts = {}) {
+  const headers = await authHeaders(opts.headers)
+  const res = await fetch(url, { ...opts, headers })
+  if (!res.ok) {
+    let msg
+    try { msg = (await res.json()).error } catch { msg = res.statusText }
+    const isPublicPath = PUBLIC_PATHS.some(p => url.includes(p))
+    if ((res.status === 401 || res.status === 403) && !isPublicPath) {
+      throw new ApiError(SIGNED_OUT_MESSAGE, { status: res.status, url, signedOut: true })
+    }
+    throw new ApiError(msg || `HTTP ${res.status}`, { status: res.status, url })
+  }
+  if (res.status === 204) return null
+  const contentType = res.headers.get('content-type') || ''
+  if (!contentType.includes('application/json')) return null
+  return res.json()
+}

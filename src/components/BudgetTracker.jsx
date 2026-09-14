@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import { useToast } from './ui/Toast'
+import LoadError from './ui/LoadError'
 import { useAutosave } from '../hooks/useAutosave'
 import SaveIndicator from './ui/SaveIndicator'
 
@@ -36,7 +37,13 @@ export default function BudgetTracker({ weddingId }) {
   const [isShared, setIsShared] = useState(false)
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
+  // True only once a load has actually succeeded (including a genuine 404,
+  // meaning no budget saved yet). The autosave effect refuses to run until
+  // this is set, so a failed load can never PUT blank defaults back.
   const hasLoadedRef = useRef(false)
+  // Skips the one autosave-effect run that follows a successful load.
+  const skipNextAutosaveRef = useRef(true)
   const { error: toastError } = useToast()
 
   const { schedule: scheduleSave, state: saveState } = useAutosave(
@@ -51,8 +58,9 @@ export default function BudgetTracker({ weddingId }) {
 
   useEffect(() => {
     if (loading) return
-    if (!hasLoadedRef.current) {
-      hasLoadedRef.current = true
+    if (!hasLoadedRef.current) return
+    if (skipNextAutosaveRef.current) {
+      skipNextAutosaveRef.current = false
       return
     }
     scheduleSave({ weddingId, totalBudget, isShared, categories })
@@ -63,15 +71,10 @@ export default function BudgetTracker({ weddingId }) {
   }, [weddingId])
 
   const loadBudget = async () => {
+    setLoading(true)
+    setLoadError(null)
     try {
-      const res = await fetch(`${API_URL}/api/budget/${weddingId}`, {
-        headers: await authHeaders()
-      })
-      if (res.status === 404) {
-        setLoading(false)
-        return
-      }
-      const data = await res.json()
+      const data = await loadJson(`${API_URL}/api/budget/${weddingId}`)
       if (data.budget) {
         setTotalBudget(data.budget.total_budget || 0)
         setIsShared(data.budget.is_shared || false)
@@ -87,8 +90,17 @@ export default function BudgetTracker({ weddingId }) {
         })
         setCategories(merged)
       }
+      hasLoadedRef.current = true
+      skipNextAutosaveRef.current = true
     } catch (err) {
-      console.error('Failed to load budget:', err)
+      if (err.status === 404) {
+        // No budget saved yet — a genuine first-time state, not a failure.
+        hasLoadedRef.current = true
+        skipNextAutosaveRef.current = true
+      } else {
+        console.error('Failed to load budget:', err)
+        setLoadError(err)
+      }
     }
     setLoading(false)
   }
@@ -142,6 +154,10 @@ export default function BudgetTracker({ weddingId }) {
         ))}
       </div>
     )
+  }
+
+  if (loadError) {
+    return <LoadError what="the budget" error={loadError} onRetry={loadBudget} />
   }
 
   return (
