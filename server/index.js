@@ -46,17 +46,42 @@ import { buildDirectory, matchMeeting } from '../shared/meeting-match.js';
 import { readMessageBody, readAttachments } from '../shared/gmail-body.js';
 import { placeNewContract, groupByVendor, currentAndHistory } from '../shared/contract-versions.js';
 import { buildPortalSnapshot } from './lib/sheet-diff/portal-snapshot.js';
+import { safeStorageKey } from './lib/storage-key.js';
 import cron from 'node-cron';
 import * as XLSX from 'xlsx';
 // PDF parsing removed - using Claude vision for all documents
 
 // Configure multer for file uploads
+//
+// No SVG. An SVG is a document, not a picture: it can carry script, and four of
+// the routes behind this filter write into buckets served publicly off Rixey's
+// own origin — vendor-photos, borrow-catalog, wedding-photos, manor-assets — so
+// an uploaded SVG is a page on the venue's domain running whatever it says.
+// Couples and vendors upload photographs; nothing on those routes needs it.
+// The one place it is genuinely wanted is the brand downloads, which get their
+// own filter below and are admin-only.
+const IMAGE_MIME_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 }, // 50MB limit
   fileFilter: (req, file, cb) => {
-    const allowed = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/svg+xml', 'image/gif'];
-    if (allowed.includes(file.mimetype)) {
+    if (IMAGE_MIME_TYPES.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`File type not allowed: ${file.mimetype}`));
+    }
+  }
+});
+
+// Manor brand assets: logos and crests, which really are SVGs, uploaded by an
+// admin and by nobody else. The file picker in ManorDownloads has offered .svg
+// since it shipped.
+const brandAssetUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if ([...IMAGE_MIME_TYPES, 'image/svg+xml'].includes(file.mimetype)) {
       cb(null, true);
     } else {
       cb(new Error(`File type not allowed: ${file.mimetype}`));
@@ -2844,7 +2869,7 @@ app.post('/api/chat-with-file', requireAuth, upload.single('file'), async (req, 
 
           if (count < 20) {
             // Upload to inspo-gallery bucket
-            const fileName = `${weddingId}/${Date.now()}_${file.originalname}`;
+            const fileName = `${weddingId}/${safeStorageKey(file.originalname)}`;
             const { error: uploadError } = await supabaseAdmin.storage
               .from('inspo-gallery')
               .upload(fileName, file.buffer, { contentType: file.mimetype });
@@ -7131,7 +7156,7 @@ app.post('/api/inspo', requireAuth, upload.single('image'), async (req, res) => 
     }
 
     // Upload to storage
-    const fileName = `${weddingId}/${Date.now()}_${file.originalname}`;
+    const fileName = `${weddingId}/${safeStorageKey(file.originalname)}`;
     const { error: uploadError } = await supabaseAdmin.storage
       .from('inspo-gallery')
       .upload(fileName, file.buffer, {
@@ -10913,14 +10938,15 @@ app.get('/api/manor-assets', async (req, res) => {
 });
 
 // Upload new asset (admin only — multipart/form-data)
-app.post('/api/manor-assets', upload.single('file'), async (req, res) => {
+app.post('/api/manor-assets', brandAssetUpload.single('file'), async (req, res) => {
   try {
     const { title, description, sort_order } = req.body;
     const file = req.file;
     if (!file || !title) return res.status(400).json({ error: 'file and title required' });
 
-    const ext          = file.originalname.split('.').pop();
-    const storagePath  = `${Date.now()}-${file.originalname.replace(/\s+/g, '-')}`;
+    // Public bucket, so the key is guessable from the outside if it is only a
+    // timestamp and the name the uploader chose.
+    const storagePath = safeStorageKey(file.originalname);
 
     const { error: upErr } = await supabaseAdmin.storage
       .from('manor-assets')
