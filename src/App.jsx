@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { lazy, Suspense } from 'react'
 import { AuthProvider } from './context/AuthContext'
 import { ToastProvider } from './components/ui/Toast'
 import { RecorderProvider } from './context/RecorderContext'
@@ -11,14 +12,31 @@ import AdminLogin from './pages/AdminLogin'
 import ResetPassword from './pages/ResetPassword'
 import Dashboard from './pages/Dashboard'
 import Accommodations from './pages/Accommodations'
-import Admin from './pages/Admin'
-import GmailCallback from './pages/GmailCallback'
-import ZoomCallback from './pages/ZoomCallback'
 import Preview from './pages/Preview'
-import PrintView from './pages/PrintView'
 import VendorPortal from './pages/VendorPortal'
 import WeddingWebsite from './pages/WeddingWebsite'
 import NotFound from './pages/NotFound'
+
+// Lazy-load admin routes to keep couples' bundle smaller
+const Admin = lazy(() => import('./pages/Admin'))
+const GmailCallback = lazy(() => import('./pages/GmailCallback'))
+const ZoomCallback = lazy(() => import('./pages/ZoomCallback'))
+const PrintView = lazy(() => import('./pages/PrintView'))
+
+// Loading fallback for lazy routes
+function AdminLoadingFallback() {
+  return (
+    <div className="flex items-center justify-center min-h-screen bg-slate-50">
+      <div className="flex flex-col items-center gap-4">
+        <svg className="w-8 h-8 animate-spin text-slate-600" fill="none" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+        </svg>
+        <p className="text-slate-600">Loading...</p>
+      </div>
+    </div>
+  )
+}
 
 function App() {
   return (
@@ -72,7 +90,9 @@ function App() {
                 path="/admin"
                 element={
                   <AdminRoute>
-                    <Admin />
+                    <Suspense fallback={<AdminLoadingFallback />}>
+                      <Admin />
+                    </Suspense>
                   </AdminRoute>
                 }
               />
@@ -80,7 +100,9 @@ function App() {
                 path="/admin/gmail-callback"
                 element={
                   <AdminRoute>
-                    <GmailCallback />
+                    <Suspense fallback={<AdminLoadingFallback />}>
+                      <GmailCallback />
+                    </Suspense>
                   </AdminRoute>
                 }
               />
@@ -88,7 +110,9 @@ function App() {
                 path="/admin/zoom-callback"
                 element={
                   <AdminRoute>
-                    <ZoomCallback />
+                    <Suspense fallback={<AdminLoadingFallback />}>
+                      <ZoomCallback />
+                    </Suspense>
                   </AdminRoute>
                 }
               />
@@ -96,7 +120,9 @@ function App() {
                 path="/admin/print/:weddingId"
                 element={
                   <AdminRoute>
-                    <PrintView />
+                    <Suspense fallback={<AdminLoadingFallback />}>
+                      <PrintView />
+                    </Suspense>
                   </AdminRoute>
                 }
               />
