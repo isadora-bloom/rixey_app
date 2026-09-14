@@ -15813,7 +15813,22 @@ cron.schedule('5 * * * *', async () => {
     return;
   }
   if (!tokens) {
-    console.log('[gmail cron] Gmail is not connected, nothing to do');
+    // loadAndRefreshGmailTokens answers null for two different things: no
+    // grant was ever stored, and a stored grant whose refresh just failed.
+    // The first is nothing to do. The second is the outage this cron exists
+    // to report, and on 14 Sep it went by as "not connected, nothing to do".
+    const { count, error: countErr } = await supabaseAdmin
+      .from('gmail_tokens').select('id', { count: 'exact', head: true });
+    if (countErr) {
+      console.error('[gmail cron] could not tell whether Gmail is connected:', countErr.message);
+      return;
+    }
+    if (!count) {
+      console.log('[gmail cron] Gmail is not connected, nothing to do');
+      return;
+    }
+    console.error('[gmail cron] a Gmail grant is stored but could not be refreshed; recording the failure');
+    await runScheduledSync('gmail', runGmailSync, { sinceDays: 30, trigger: 'scheduled' });
     return;
   }
   await runScheduledSync('gmail', runGmailSync, { sinceDays: 30, trigger: 'scheduled' });
