@@ -7753,12 +7753,25 @@ app.post('/api/checklist/find-match', async (req, res) => {
 // Get usage stats for all weddings
 app.get('/api/usage/stats', async (req, res) => {
   try {
-    // Get usage grouped by wedding
-    const { data: usage, error } = await supabaseAdmin
-      .from('usage_logs')
-      .select('wedding_id, input_tokens, output_tokens, endpoint, created_at');
+    // usage_logs only grows, and this was loading every row ever written.
+    // Default to a trailing window; ?since=<ISO> or ?days=N can widen it.
+    // Still paged underneath, in case the window itself holds more than 1000
+    // rows (see the same pattern at runQuoBackfillExtraction above).
+    const days = Number(req.query.days) > 0 ? Number(req.query.days) : 90;
+    const since = req.query.since || new Date(Date.now() - days * 86400000).toISOString();
 
-    if (error) throw error;
+    const usage = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin
+        .from('usage_logs')
+        .select('wedding_id, input_tokens, output_tokens, endpoint, created_at')
+        .gte('created_at', since)
+        .order('created_at', { ascending: true })
+        .range(from, from + 999);
+      if (error) throw error;
+      usage.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
 
     // Group by wedding and calculate totals
     const weddingStats = {};
