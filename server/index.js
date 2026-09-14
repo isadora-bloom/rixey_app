@@ -46,6 +46,10 @@ import { buildDirectory, matchMeeting } from '../shared/meeting-match.js';
 import { readMessageBody, readAttachments } from '../shared/gmail-body.js';
 import { placeNewContract, groupByVendor, currentAndHistory } from '../shared/contract-versions.js';
 import { buildPortalSnapshot } from './lib/sheet-diff/portal-snapshot.js';
+import {
+  detectMigration035, has035, markerExtractionPatch, withSource,
+  importWithMarker, normaliseConfidence,
+} from './lib/extraction-markers.js';
 import { safeStorageKey } from './lib/storage-key.js';
 import cron from 'node-cron';
 import { parseSpreadsheet } from './lib/spreadsheet.js';
@@ -1395,9 +1399,19 @@ function chunkForExtraction(text, size = TRANSCRIPT_WINDOW, overlap = TRANSCRIPT
 }
 
 // Unified AI-powered planning note extractor — used for all sources
-async function extractPlanningNotesAI(text, weddingId, source, sourceType = 'message') {
+//
+// Returns { notes, error }, not a bare array. It used to catch everything and
+// return [], so a 429 or a 529 was indistinguishable from a message with
+// nothing in it — and because the processed-marker row is written first, the
+// item was marked done and never looked at again. Callers record the error on
+// the marker row (migration 035) or count it into the sync job's detail.
+//
+// A partial failure still returns what it got. Half a meeting is worth having;
+// the error rides along beside it so a human knows the other half is missing.
+async function extractPlanningNotesAI(text, weddingId, source, sourceType = 'message', opts = {}) {
+  const { sourceKind = null, sourceId = null } = opts;
   const cleanText = sourceType === 'transcript' ? parseVttToText(text) : text;
-  if (!cleanText || cleanText.length < 20) return [];
+  if (!cleanText || cleanText.length < 20) return { notes: [], error: null };
 
   const isTranscript = sourceType === 'transcript' || sourceType === 'email';
   // A text message is not a small meeting. It is one turn of a conversation,
@@ -1428,8 +1442,10 @@ Capture the specifics that make a note usable later: names, numbers, dates, quan
 Allergies and emotional signals are the highest priority — never skip these.`;
 
   const SHORT_MESSAGE_TAIL = `Record what was said, in fewer words than they used. Names, numbers, dates, quantities, and what was actually asked or agreed.
-Do not describe how anyone feels, or what a message suggests about their health, their finances, their family or their state of mind, unless they said it themselves. "Jake's dad uses a wheelchair" is a fact they told you. "This suggests someone close to them has access needs" is a guess about strangers, and it goes in their file as though somebody checked it.
-Record an allergy, a disability or a worry when it is stated. Do not infer one.
+Only what the couple themselves stated in this message. Nothing about how anyone feels, and nothing about what the message suggests about their health, their finances, their family or their state of mind, unless they said it outright. "Jake's dad uses a wheelchair" is a fact they told you. "This suggests someone close to them has access needs" is a guess about strangers, and it goes in their file as though somebody checked it.
+Record an allergy, a disability or a worry when it is stated. Never infer one.
+Never infer a headcount. A number in a text is a number in a text; it is not the guest count unless they said it was.
+Two notes is the ceiling and zero is the usual answer.
 Do not add what somebody should do next. The person reading this can see that for themselves.`;
 
   const instruction = isTranscript
@@ -1447,6 +1463,7 @@ Do not assume what a number refers to. A headcount in a text is usually for a ta
 At most two notes, and one is usually too many. Keep each under about two lines.`;
 
   const collected = [];
+  const failures = [];
 
   for (let i = 0; i < chunks.length; i++) {
     const partLabel = chunks.length > 1 ? ` (part ${i + 1} of ${chunks.length})` : '';
@@ -1462,7 +1479,8 @@ At most two notes, and one is usually too many. Keep each under about two lines.
 
 ${instruction}${chunks.length > 1 ? `\n\nThis is part ${i + 1} of ${chunks.length} of a longer conversation. Extract only what is in this part; the other parts are handled separately. The start and end may cut mid-sentence — ignore fragments you cannot understand.` : ''}
 
-Return a JSON array. Each item: {"category": "<category>", "content": "<concise coordinator note>"}
+Return a JSON array. Each item: {"category": "<category>", "content": "<concise coordinator note>", "confidence": <0 to 1>}
+confidence is how firmly the source states the note, not how likely you think it is to be true. Something written down plainly is 0.9 or above; something you have read between the lines is below 0.5 and probably should not be a note at all.
 ${isShortMessage ? SHORT_MESSAGE_TAIL : TRANSCRIPT_TAIL}
 If nothing noteworthy was said, return [].
 Return ONLY the JSON array.
@@ -1479,14 +1497,19 @@ ${chunks[i]}`
       const items = JSON.parse(jsonMatch[0]);
       collected.push(...items.filter(item => item.category && item.content && item.content.length > 5));
     } catch (err) {
+      // Recorded, not swallowed. This catch is where every lost extraction went:
+      // a rate limit here meant the item was marked imported with no notes and
+      // nothing said so. The message goes back to the caller, which writes it
+      // onto the marker row so a backfill can come and pick it up.
       console.error(`AI extraction error (${sourceType}${partLabel}):`, err.message);
+      failures.push(`${partLabel.trim() || sourceType}: ${err.message}`);
     }
   }
 
   // Overlapping windows mean the same point can come back twice, worded almost
   // identically. Drop near-duplicates before they reach the notes list.
   const seen = new Set();
-  return collected
+  let notes = collected
     .filter(item => {
       const key = `${item.category}|${item.content.toLowerCase().replace(/[^a-z0-9 ]/g, '').slice(0, 80)}`;
       if (seen.has(key)) return false;
@@ -1499,13 +1522,43 @@ ${chunks[i]}`
       category: item.category,
       content: item.content.trim(),
       source_message: source || `Extracted from ${sourceType}`,
-      status: 'pending'
+      status: 'pending',
+      confidence: normaliseConfidence(item.confidence),
     }));
+
+  // The two-note ceiling is in the prompt and the prompt is not a guarantee.
+  // A two-line text came back as five notes often enough to be worth enforcing
+  // here, where it cannot be argued with. Highest confidence first, so the cut
+  // takes the guesses rather than the facts.
+  if (isShortMessage && notes.length > 2) {
+    console.log(`[extract] ${sourceType} returned ${notes.length} notes, keeping the 2 best`);
+    notes = [...notes].sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0)).slice(0, 2);
+  }
+
+  // Where each note came from, so dedup is a lookup rather than a scan of the
+  // whole wedding, and so a wrong note can be traced back to the email it was
+  // read out of. Dropped when 035 has not been applied: PostgREST refuses the
+  // whole insert over a column that is not there.
+  notes = withSource(notes, sourceKind || sourceType, sourceId);
+  if (!has035('noteSource')) {
+    notes = notes.map(n => {
+      const copy = { ...n };
+      delete copy.confidence;
+      return copy;
+    });
+  }
+
+  return {
+    notes,
+    error: failures.length
+      ? `${failures.length} of ${chunks.length} extraction call(s) failed — ${failures[0]}`
+      : null,
+  };
 }
 
 // Legacy alias used by chat endpoint (short user messages)
 async function extractPlanningNotes(message, userId, weddingId) {
-  const notes = await extractPlanningNotesAI(message, weddingId, message.substring(0, 200), 'message');
+  const { notes } = await extractPlanningNotesAI(message, weddingId, message.substring(0, 200), 'message');
   // Restore userId on notes from chat (userId may be set)
   return notes.map(n => ({ ...n, user_id: userId }));
 }
@@ -1513,6 +1566,19 @@ async function extractPlanningNotes(message, userId, weddingId) {
 // Save planning notes to database
 async function savePlanningNotes(notes) {
   if (notes.length === 0) return;
+
+  // With migration 035 every note knows which item it was read out of, so the
+  // question "have I saved this already" is a lookup on three indexed columns
+  // instead of a paged scan of every note the wedding has. The unique index
+  // behind it is the real guard; this read only saves the round trip.
+  //
+  // Not an upsert. The index is partial AND on md5(content) — it has to be,
+  // because a zoom_transcript note is longer than a btree entry is allowed to
+  // be — and PostgREST cannot infer an expression index for onConflict. It
+  // answers 42P10. See the migration for the whole story.
+  if (has035('noteSource') && notes.every(n => n.source_id)) {
+    return saveNotesBySource(notes);
+  }
 
   try {
     // Second line of defence against re-imports. Source-level dedup (the
@@ -1576,6 +1642,112 @@ async function savePlanningNotes(notes) {
   } catch (err) {
     console.error('Error saving planning notes:', err);
   }
+}
+
+/**
+ * Save notes that know their source, checking only that source's own notes.
+ *
+ * One read per (wedding, kind, id) group — in practice one, because a batch
+ * comes out of a single email or meeting. The 23505 fallback exists for the
+ * case this read cannot see: two syncs racing on the same item. A conflict
+ * there is the index doing exactly what it is for, so it is counted, not
+ * logged as an error.
+ */
+async function saveNotesBySource(notes) {
+  const groups = new Map();
+  for (const note of notes) {
+    const key = `${note.wedding_id}|${note.source_kind}|${note.source_id}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(note);
+  }
+
+  let saved = 0, dropped = 0;
+
+  for (const group of groups.values()) {
+    const { wedding_id, source_kind, source_id } = group[0];
+    const { data: prior, error: priorErr } = await supabaseAdmin
+      .from('planning_notes')
+      .select('category, content')
+      .eq('wedding_id', wedding_id)
+      .eq('source_kind', source_kind)
+      .eq('source_id', source_id);
+
+    // A guard that cannot answer is not a guard, and this one has the index
+    // behind it, so falling through to the insert is safe rather than reckless.
+    if (priorErr) {
+      console.error(`[notes] could not read this source's existing notes (${priorErr.message}); relying on the unique index`);
+    }
+
+    const existing = new Set((prior || []).map(p => `${p.category}|${p.content}`));
+    const fresh = [];
+    for (const note of group) {
+      const key = `${note.category}|${note.content}`;
+      if (existing.has(key)) { dropped++; continue; }
+      existing.add(key);
+      fresh.push(note);
+    }
+    if (!fresh.length) continue;
+
+    const { error } = await supabaseAdmin.from('planning_notes').insert(fresh);
+    if (!error) { saved += fresh.length; continue; }
+
+    if (error.code !== '23505') {
+      console.error('Error saving planning notes:', error.message);
+      continue;
+    }
+
+    // One row in the batch collided, which fails the whole insert. Retry them
+    // one at a time so the rest still land.
+    for (const note of fresh) {
+      const { error: rowErr } = await supabaseAdmin.from('planning_notes').insert(note);
+      if (!rowErr) saved++;
+      else if (rowErr.code === '23505') dropped++;
+      else console.error('Error saving planning note:', rowErr.message);
+    }
+  }
+
+  if (dropped) console.log(`Skipped ${dropped} planning note(s) already held for the same source`);
+  if (saved) console.log(`Saved ${saved} planning note(s)`);
+}
+
+/**
+ * Has this source already been read for planning notes?
+ *
+ * The question a reprocess has to ask before spending money on Claude a second
+ * time. With 035 it is answered off source_kind/source_id; without it, off the
+ * source_message label, which is the same check the Quo backfill has always
+ * done by prefix.
+ */
+async function sourceAlreadyExtracted({ weddingId, sourceKind, sourceId, sourceMessage }) {
+  if (has035('noteSource') && sourceId) {
+    const { data, error } = await supabaseAdmin
+      .from('planning_notes')
+      .select('id')
+      .eq('wedding_id', weddingId)
+      .eq('source_kind', sourceKind)
+      .eq('source_id', String(sourceId))
+      .limit(1);
+    // Cannot tell means do not spend. A second extraction of the same meeting
+    // is what produced 855 notes from 341 texts.
+    if (error) {
+      console.error(`[notes] could not check whether this source was already read (${error.message}); leaving it alone`);
+      return true;
+    }
+    return !!data?.length;
+  }
+
+  if (!sourceMessage) return false;
+  const { data, error } = await supabaseAdmin
+    .from('planning_notes')
+    .select('id')
+    .eq('wedding_id', weddingId)
+    .eq('source_message', sourceMessage)
+    .limit(1);
+  if (error) {
+    console.error(`[notes] could not check whether this source was already read (${error.message}); leaving it alone`);
+    return true;
+  }
+  return !!data?.length;
 }
 
 // Get wedding ID for a user
@@ -1665,14 +1837,27 @@ app.post('/api/chat', requireAuth, async (req, res) => {
           });
         }
 
-        // Get recent planning notes (confirmed details from all sources)
-        const { data: notes } = await supabaseAdmin
+        // Planning notes a human has actually agreed to.
+        //
+        // This used to include `pending` and print the lot under the heading
+        // CONFIRMED PLANNING DETAILS. Pending is the status an extraction gets:
+        // a guess Claude made off an email, never reviewed, sitting in the
+        // approval queue. Sage read them out to the couple as settled fact,
+        // including guesses made off an outsider's email that happened to be
+        // filed against their wedding.
+        //
+        // The cap went with it. Thirty newest meant one Zoom import could evict
+        // every confirmed fact the couple has, quietly, on the day of the
+        // import.
+        const { data: notes, error: notesErr } = await supabaseAdmin
           .from('planning_notes')
           .select('category, content')
           .eq('wedding_id', weddingId)
-          .in('status', ['added', 'confirmed', 'pending'])
+          .in('status', ['added', 'confirmed'])
           .order('created_at', { ascending: false })
-          .limit(30);
+          .limit(150);
+
+        if (notesErr) console.error('[chat] could not read planning notes for context:', notesErr.message);
 
         if (notes && notes.length > 0) {
           weddingContext += '\nCONFIRMED PLANNING DETAILS:\n';
@@ -3790,7 +3975,11 @@ async function runGmailSync(body, { bump }) {
     const emailToWedding = {};
     const clientEmails = [];
     const skippedVenueAddresses = [];
+    // Names, so a review-queue question can say which two couples are on the
+    // email rather than printing a pair of uuids at somebody.
+    const weddingNames = {};
     for (const wedding of weddings) {
+      weddingNames[wedding.id] = wedding.couple_names || 'Unknown couple';
       for (const profile of (wedding.profiles || [])) {
         if (!profile.email) continue;
         const email = profile.email.toLowerCase().trim();
@@ -3867,26 +4056,81 @@ async function runGmailSync(body, { bump }) {
     // Emails from family and other contacts, filed venue-side rather than into
     // planning_notes. Counted separately so a run can say so.
     let contactEmailsImported = 0;
+    // Emails with more than one couple's address on them. Filed to nobody and
+    // asked about, rather than filed to whoever was being searched for.
+    let multiClient = 0;
+    // Extractions that were attempted and failed. Without 035 this is the only
+    // place the loss is recorded, so it goes in the job detail either way.
+    let extractFailed = 0;
+    // Per-query outcomes. A run where every search threw used to finish
+    // "processed: 0", which reads as a quiet inbox rather than a dead grant.
+    let queriesRun = 0;
+    let queriesFailed = 0;
+    let authFailure = null;
+    const queryErrors = [];
+
+    // How far back to go. Absent, the paging below walks until Gmail stops
+    // offering pages or the cap is hit, which is what a first proper run after
+    // months of 20-results-per-query needs to do.
+    const sinceDays = Number(body?.sinceDays) > 0 ? Number(body.sinceDays) : null;
+    const dateFloor = sinceDays ? new Date(Date.now() - sinceDays * 86400000) : null;
+    // Gmail wants YYYY/MM/DD and treats it as an inclusive whole day.
+    const afterClause = dateFloor
+      ? ` after:${dateFloor.getFullYear()}/${dateFloor.getMonth() + 1}/${dateFloor.getDate()}`
+      : '';
+    // Twenty pages of a hundred is two thousand hits per query, which is far
+    // past any real backlog. The cap is here so a pathological query cannot
+    // turn one client into an all-night run.
+    const MAX_PAGES = 20;
 
     // Search for emails from each client AND emails containing their email (form submissions)
     await bump({ total: clientEmails.length });
 
     for (const clientEmail of clientEmails) {
+      // A revoked grant answers 401 to all 146 searches. Stop at the first one
+      // rather than spending ten minutes proving it.
+      if (authFailure) break;
+
       // Two searches: emails FROM client, and emails CONTAINING client email (pricing calculator, etc.)
       const searchQueries = [
-        `from:${clientEmail}`,
-        `"${clientEmail}"` // Search for email address in body
+        `from:${clientEmail}${afterClause}`,
+        `"${clientEmail}"${afterClause}` // Search for email address in body
       ];
 
       for (const searchQuery of searchQueries) {
+      queriesRun++;
       try {
-        const messagesResponse = await gmail.users.messages.list({
-          userId: 'me',
-          q: searchQuery,
-          maxResults: 20 // Limit per query to avoid rate limits
-        });
+        // Page until the backlog runs out, not until the first twenty.
+        //
+        // This asked for maxResults: 20 and never looked at nextPageToken, so
+        // anything older than the twentieth hit for a given address was
+        // unreachable for ever. Not slow to arrive: unreachable. Gmail returns
+        // newest first, so a page containing nothing new means everything below
+        // it is already imported and there is no reason to keep paying for
+        // pages.
+        const messageIds = [];
+        let pageToken = null;
+        for (let page = 0; page < MAX_PAGES; page++) {
+          const messagesResponse = await gmail.users.messages.list({
+            userId: 'me',
+            q: searchQuery,
+            maxResults: 100,
+            ...(pageToken ? { pageToken } : {}),
+          });
 
-        const messageIds = messagesResponse.data.messages || [];
+          const pageIds = messagesResponse.data.messages || [];
+          const fresh = pageIds.filter(m => !processedIds.has(m.id));
+          messageIds.push(...fresh);
+
+          pageToken = messagesResponse.data.nextPageToken || null;
+          if (!pageToken) break;
+          // Every hit on this page is already on file, and the next page is
+          // older still.
+          if (pageIds.length && fresh.length === 0) break;
+          if (page === MAX_PAGES - 1) {
+            console.log(`[gmail] stopped at ${MAX_PAGES} pages for "${searchQuery}" — run it again to go further back`);
+          }
+        }
 
         for (const msg of messageIds) {
           if (processedIds.has(msg.id)) continue;
@@ -3962,6 +4206,57 @@ async function runGmailSync(body, { bump }) {
             // The address really is in this email, not merely matched by Gmail.
             weddingId = emailToWedding[clientEmail];
             attribution = 'client address appears in the message';
+          }
+
+          // More than one couple on the same email.
+          //
+          // The last matcher in this file that guessed. A group email to two
+          // couples, or a forward that quotes another couple's address in the
+          // headers, was filed to whichever of them the search happened to be
+          // running for, and the other one was never told. Two weddings named
+          // in one thread is a question, and the review queue is where the
+          // questions go. Counted by wedding rather than by address, because
+          // both halves of one couple on the same email is not a conflict, it
+          // is a couple.
+          const headerHay = `${fromHeader} ${toHeader} ${ccHeader}`.toLowerCase();
+          const weddingsOnHeaders = new Set();
+          for (const [addr, wid] of Object.entries(emailToWedding)) {
+            if (headerHay.includes(addr)) weddingsOnHeaders.add(wid);
+          }
+
+          if (weddingsOnHeaders.size > 1) {
+            const candidates = [...weddingsOnHeaders].map(wid => ({
+              weddingId: wid,
+              name: weddingNames[wid] || 'Unknown couple',
+            }));
+            processedIds.add(msg.id);
+            const { error: markerErr } = await supabaseAdmin.from('processed_emails').insert({
+              gmail_message_id: msg.id,
+              wedding_id: null,
+              from_email: fromEmail,
+              subject,
+              body_text: bodyText.substring(0, 10000),
+            });
+            if (markerErr && markerErr.code !== '23505') {
+              console.error(`[gmail] marker failed for ${msg.id}, skipping it: ${markerErr.message}`);
+              continue;
+            }
+            const { error: reviewErr } = await supabaseAdmin.from('ingest_review').upsert({
+              source: 'gmail',
+              external_id: msg.id,
+              title: subject || '(no subject)',
+              occurred_at: dateHeader ? new Date(dateHeader).toISOString() : null,
+              excerpt: bodyText.replace(/\s+/g, ' ').slice(0, 600),
+              suggested_wedding_id: weddingId || null,
+              confidence: 0,
+              reason: `multiple clients on one email — ${candidates.map(c => c.name).join(' and ')} both appear in the headers, so filing it to one of them would be a guess.`,
+              candidates,
+              status: 'open',
+            }, { onConflict: 'source,external_id' });
+            if (reviewErr) console.error('[gmail] could not queue a multi-client email for review:', reviewErr.message);
+            newlyProcessed++;
+            multiClient++;
+            continue;
           }
 
           // A family address, checked before the unattributable branch below.
@@ -4116,11 +4411,30 @@ async function runGmailSync(body, { bump }) {
               console.error('Error saving email to planning_notes:', noteError);
             }
 
-            // AI extraction of planning details from email body
-            const notes = await extractPlanningNotesAI(bodyText, weddingId, `Email: "${subject}" (${dateHeader})`, 'email');
-            if (notes.length > 0) {
-              await savePlanningNotes(notes);
-              notesExtracted += notes.length;
+            // AI extraction of planning details from email body.
+            //
+            // The marker is already written, three statements up, and that
+            // order is deliberate. What is new is that a failure here is
+            // recorded rather than thrown away: extract_error on the marker row
+            // when 035 is applied, the job's extractFailed count either way.
+            const outcome = await importWithMarker({
+              extract: () => extractPlanningNotesAI(
+                bodyText, weddingId, `Email: "${subject}" (${dateHeader})`, 'email',
+                { sourceKind: 'email', sourceId: msg.id },
+              ),
+              save: savePlanningNotes,
+              recordOutcome: async ({ error }) => {
+                const patch = markerExtractionPatch({ error });
+                if (!patch) return;
+                const { error: patchErr } = await supabaseAdmin
+                  .from('processed_emails').update(patch).eq('gmail_message_id', msg.id);
+                if (patchErr) console.error(`[gmail] could not record the extraction outcome for ${msg.id}: ${patchErr.message}`);
+              },
+            });
+            notesExtracted += outcome.notes;
+            if (outcome.status === 'extract-failed') {
+              extractFailed++;
+              console.error(`[gmail] extraction failed for "${subject}" (${msg.id}): ${outcome.error}`);
             }
           }
 
@@ -4128,6 +4442,13 @@ async function runGmailSync(body, { bump }) {
           processedIds.add(msg.id); // Track within this sync
         }
       } catch (searchErr) {
+        // A search that threw is a search that found nothing, and the two used
+        // to be indistinguishable in the result. A dead Gmail grant answered
+        // 401 on all 146 queries and the run finished "processed: 0", green.
+        queriesFailed++;
+        const status = searchErr?.code || searchErr?.status || searchErr?.response?.status || null;
+        if (status === 401 || status === 403) authFailure = status;
+        if (queryErrors.length < 5) queryErrors.push(`${searchQuery}: ${searchErr.message}`);
         console.error(`Error searching "${searchQuery}":`, searchErr.message);
       }
       } // end searchQueries loop
@@ -4137,13 +4458,39 @@ async function runGmailSync(body, { bump }) {
       await bump({ processed: newlyProcessed, last_item: clientEmail });
     } // end clientEmails loop
 
+    // A run where the searches all failed is a failed run, whatever the
+    // counters say. Gmail answers 401 for a revoked grant on every query, and
+    // this used to finish "finished, 0 processed" — the same output as a quiet
+    // week. The status code goes in the message so the panel says what to fix.
+    if (authFailure) {
+      throw new Error(
+        `Gmail refused the search with ${authFailure} on ${queriesFailed} of ${queriesRun} queries. ` +
+        `The grant has been revoked or has expired — reconnect Gmail in the admin panel.`
+      );
+    }
+    if (queriesRun > 0 && queriesFailed === queriesRun) {
+      throw new Error(
+        `All ${queriesRun} Gmail searches failed, so nothing was read. First error: ${queryErrors[0] || 'unknown'}`
+      );
+    }
+
     console.log(`Processed ${newlyProcessed} new emails (${unattributed} unattributed), extracted ${notesExtracted} planning notes`);
     return {
       processed: newlyProcessed,
       matched: newlyProcessed - unattributed,
-      needsReview: unattributed,
+      needsReview: unattributed + multiClient,
+      failed: queriesFailed,
       detail: {
         notesExtracted,
+        // Attempted and lost. Zero is the answer you want; anything else is
+        // reading somebody's email and getting nothing out of it.
+        extractFailed,
+        // Emails naming two couples. Filed to nobody on purpose.
+        multiClient,
+        queriesRun,
+        queriesFailed,
+        queryErrors,
+        sinceDays: sinceDays || 'all history',
         clientsSearched: clientEmails.length,
         // Named rather than counted, because a venue address on a couple's
         // profile is a data problem somebody has to go and fix.
@@ -4153,13 +4500,19 @@ async function runGmailSync(body, { bump }) {
         // that way on the panel.
         contactAddressesSearched: contactByEmail.size,
         contactEmailsImported,
-        attributed: newlyProcessed - unattributed,
+        attributed: newlyProcessed - unattributed - multiClient,
         // Said out loud rather than left as a gap between two numbers. These
         // used to be filed against whoever the search was for, which is how ten
         // WeddingWire prospects ended up on a test wedding.
         unattributed,
         unattributedNote: unattributed
           ? `${unattributed} email(s) could not be tied to a couple and are waiting in the review list.`
+          : 'ok',
+        multiClientNote: multiClient
+          ? `${multiClient} email(s) name more than one couple and are waiting in the review list.`
+          : 'ok',
+        extractFailedNote: extractFailed
+          ? `${extractFailed} email(s) were imported but could not be read for planning notes.${has035('markers') ? ' Each one has extract_error set; run the extraction backfill to retry them.' : ' Migration 035 is not applied, so which ones is only in the log.'}`
           : 'ok',
       },
     };
@@ -4225,7 +4578,12 @@ async function fileEmailAttachments({ messageId, payload, weddingId, subject }) 
 
       // Keep the file, not only what Claude read out of it. A contract you
       // cannot open is half a contract.
-      const path = `${weddingId}/${messageId}_${att.filename}`;
+      //
+      // The filename is whatever the sender called it, which is the one input
+      // on this path that a stranger controls. safeStorageKey keeps the
+      // readable part and drops the separators and control characters, so
+      // "../../public/logo.png" cannot be a key.
+      const path = `${weddingId}/${messageId}_${safeStorageKey(att.filename)}`;
       const { error: storeErr } = await supabaseAdmin.storage
         .from('vendor-contracts')
         .upload(path, buffer, { contentType: att.mimeType, upsert: true });
@@ -4312,7 +4670,7 @@ async function runEmailBodyBackfill(body, { bump }) {
 
   const summary = {
     looked: empty.length, recovered: 0, stillEmpty: 0, gone: 0,
-    notesExtracted: 0, documentsFiled: 0, failed: 0,
+    notesExtracted: 0, documentsFiled: 0, failed: 0, extractFailed: 0,
   };
   const examples = [];
 
@@ -4360,11 +4718,27 @@ async function runEmailBodyBackfill(body, { bump }) {
       // stays in the review queue where it is.
       if (row.wedding_id) {
         if (apply) {
-          const notes = await extractPlanningNotesAI(
+          const { notes, error: extractErr } = await extractPlanningNotesAI(
             text, row.wedding_id, `Email: ${row.subject || '(no subject)'}`, 'email',
+            { sourceKind: 'email', sourceId: row.gmail_message_id },
           );
           if (notes.length) await savePlanningNotes(notes);
           summary.notesExtracted += notes.length;
+          if (extractErr) {
+            summary.extractFailed = (summary.extractFailed || 0) + 1;
+            const patch = markerExtractionPatch({ error: extractErr });
+            if (patch) {
+              await supabaseAdmin.from('processed_emails').update(patch)
+                .eq('gmail_message_id', row.gmail_message_id);
+            }
+            console.error(`[gmail-backfill] extraction failed for ${row.gmail_message_id}: ${extractErr}`);
+          } else {
+            const patch = markerExtractionPatch({ error: null });
+            if (patch) {
+              await supabaseAdmin.from('processed_emails').update(patch)
+                .eq('gmail_message_id', row.gmail_message_id);
+            }
+          }
         } else {
           // Dry run says what it would read, not what it would find.
           summary.notesExtracted += 0;
@@ -4579,9 +4953,50 @@ function normaliseDirection(raw) {
 // matching on numbers too. Two definitions of "the same number" is how a
 // mother's call ends up filed under nobody.
 
+/**
+ * The last thing this kind of sync did, for the status lights.
+ *
+ * "Connected" was `!!QUO_API_KEY` and `!!token`: it said whether the venue had
+ * ever typed a key in, not whether anything had worked since. A grant revoked
+ * in August showed green for a fortnight. This is the other half of the
+ * answer — when it last ran, how it went, and what it said if it went badly.
+ */
+async function lastSyncJob(kind) {
+  const kinds = Array.isArray(kind) ? kind : [kind];
+  const { data, error } = await supabaseAdmin
+    .from('sync_jobs')
+    .select('status, started_at, finished_at, last_error, heartbeat_at, trigger')
+    .in('kind', kinds)
+    .order('started_at', { ascending: false })
+    .limit(1);
+
+  if (error) {
+    console.error(`[status] could not read the last ${kinds.join('/')} job:`, error.message);
+    return { last_status: null, last_finished_at: null, last_error: null, running: false, statusUnknown: true };
+  }
+
+  const job = data?.[0] || null;
+  if (!job) return { last_status: null, last_finished_at: null, last_error: null, running: false };
+
+  // A "running" row whose heartbeat stopped fifteen minutes ago is a job that
+  // was killed, not a job that is working. Saying "running" for ever is how the
+  // 14 August Zoom run stayed invisible.
+  const beat = job.heartbeat_at ? new Date(job.heartbeat_at).getTime() : 0;
+  const live = job.status === 'running' && Date.now() - beat < 15 * 60 * 1000;
+
+  return {
+    last_status: job.status === 'running' && !live ? 'stalled' : job.status,
+    last_started_at: job.started_at,
+    last_finished_at: job.finished_at,
+    last_error: job.last_error || null,
+    last_trigger: job.trigger || null,
+    running: live,
+  };
+}
+
 // Check Quo connection status
-app.get('/api/quo/status', (req, res) => {
-  res.json({ connected: !!QUO_API_KEY });
+app.get('/api/quo/status', async (req, res) => {
+  res.json({ connected: !!QUO_API_KEY, ...(await lastSyncJob(['quo', 'quo-backfill', 'quo-callers'])) });
 });
 
 // Clear processed Quo messages (to allow reprocessing)
@@ -4593,7 +5008,14 @@ app.post('/api/quo/clear-processed', async (req, res) => {
       .neq('id', '00000000-0000-0000-0000-000000000000');
 
     if (error) throw error;
-    res.json({ success: true, message: 'Cleared all processed messages. Run sync again to reprocess.' });
+    res.json({
+      success: true,
+      // Said out loud because it used to be a surprise. Clearing the markers
+      // re-imports the raw texts and calls, but the sync will not pay Claude to
+      // read a message whose notes are already on file, so a reprocess restores
+      // the record without doubling the extracted notes.
+      message: 'Cleared all processed messages. Run sync again to reprocess. Messages that have already been read for planning notes will not be read again.',
+    });
   } catch (error) {
     console.error('Clear processed error:', error);
     res.status(500).json({ error: 'Failed to clear: ' + error.message });
@@ -4723,6 +5145,122 @@ async function assertNoOverlappingJob(kinds, ownJobId) {
   }
 }
 
+/** Write an extraction outcome onto a processed_quo_messages row. No-op without 035. */
+async function recordQuoExtraction(rowId, error) {
+  const patch = markerExtractionPatch({ error });
+  if (!patch) return;
+  const { error: patchErr } = await supabaseAdmin
+    .from('processed_quo_messages').update(patch).eq('id', rowId);
+  if (patchErr) console.error(`[quo] could not record the extraction outcome for ${rowId}: ${patchErr.message}`);
+}
+
+/** The same thing keyed by OpenPhone's id, which is what the sync has to hand. */
+async function recordQuoMarkerExtraction(quoMessageId, error) {
+  const patch = markerExtractionPatch({ error });
+  if (!patch) return;
+  const { error: patchErr } = await supabaseAdmin
+    .from('processed_quo_messages').update(patch).eq('quo_message_id', quoMessageId);
+  if (patchErr) console.error(`[quo] could not record the extraction outcome for ${quoMessageId}: ${patchErr.message}`);
+}
+
+/**
+ * Go back for the extractions that failed rather than found nothing.
+ *
+ * Only possible with migration 035, because before it there was no way to tell
+ * the two apart: both left an item marked imported with no notes. Now a 429 in
+ * the middle of a Tuesday sync leaves extract_error set, and this walks those
+ * rows across all three sources and asks again.
+ *
+ * Dry run unless { apply: true }. A partially extracted item — some chunks
+ * worked, one failed — can come back worded differently on a second reading, so
+ * this is a deliberate act rather than something a cron does behind you.
+ */
+async function runExtractionRetry(body, { jobId, bump }) {
+  await assertNoOverlappingJob(['quo', 'quo-backfill', 'quo-callers', 'extract-retry'], jobId);
+
+  if (!has035('markers')) {
+    throw new Error(
+      'Migration 035 has not been applied, so no failed extraction has been recorded and there is nothing to retry.'
+    );
+  }
+
+  const apply = body?.apply === true;
+  const limit = Number(body?.limit) > 0 ? Number(body.limit) : 200;
+
+  const SOURCES = [
+    { table: 'processed_emails',        idCol: 'gmail_message_id', textCol: 'body_text',       kind: 'email', type: 'email',      label: r => `Email: ${r.subject || '(no subject)'}` },
+    { table: 'processed_quo_messages',  idCol: 'quo_message_id',   textCol: 'body_text',       kind: 'sms',   type: 'sms',        label: r => `SMS: ${String(r.body_text || '').substring(0, 120)}` },
+    { table: 'processed_zoom_meetings', idCol: 'zoom_meeting_id',  textCol: 'transcript_text', kind: 'zoom',  type: 'transcript', label: r => `Zoom meeting: ${r.meeting_topic || 'Untitled'}` },
+  ];
+
+  const rows = [];
+  for (const src of SOURCES) {
+    const extra = src.table === 'processed_emails' ? ', subject'
+      : src.table === 'processed_zoom_meetings' ? ', meeting_topic' : '';
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin
+        .from(src.table)
+        .select(`id, wedding_id, ${src.idCol}, ${src.textCol}${extra}`)
+        .is('extracted_at', null)
+        .not('extract_error', 'is', null)
+        .not('wedding_id', 'is', null)
+        .range(from, from + 999);
+      if (error) throw new Error(`Could not read ${src.table}: ${error.message}`);
+      rows.push(...data.map(r => ({ ...r, src })));
+      if (data.length < 1000) break;
+    }
+  }
+
+  const queue = rows.slice(0, limit);
+  await bump({ total: queue.length, detail: { found: rows.length, queued: queue.length, mode: apply ? 'applying' : 'dry run' } });
+
+  let processed = 0, notesMade = 0, stillFailing = 0;
+
+  for (const row of queue) {
+    const { src } = row;
+    const text = String(row[src.textCol] || '');
+    if (!apply) { processed++; continue; }
+
+    const outcome = await importWithMarker({
+      extract: () => extractPlanningNotesAI(
+        text, row.wedding_id, src.label(row), src.type,
+        { sourceKind: src.kind, sourceId: row[src.idCol] },
+      ),
+      save: savePlanningNotes,
+      recordOutcome: async ({ error }) => {
+        const patch = markerExtractionPatch({ error });
+        if (!patch) return;
+        const { error: patchErr } = await supabaseAdmin.from(src.table).update(patch).eq('id', row.id);
+        if (patchErr) console.error(`[extract-retry] could not record the outcome for ${row.id}: ${patchErr.message}`);
+      },
+    });
+    notesMade += outcome.notes;
+    if (outcome.status === 'extract-failed') stillFailing++;
+    processed++;
+    if (processed % 20 === 0 || processed === queue.length) {
+      await bump({ processed, matched: notesMade, failed: stillFailing });
+    }
+  }
+
+  return {
+    processed,
+    matched: notesMade,
+    failed: stillFailing,
+    detail: {
+      mode: apply ? 'applied' : 'dry run — nothing was written',
+      waiting: rows.length,
+      queued: queue.length,
+      notesRecovered: notesMade,
+      stillFailing,
+      note: apply
+        ? `${notesMade} note(s) recovered, ${stillFailing} item(s) still failing.`
+        : `${rows.length} item(s) have a recorded extraction failure. Run it again with { "apply": true } to read them.`,
+    },
+  };
+}
+
+app.post('/api/admin/retry-extractions', requireAdmin, backgroundSync('extract-retry', runExtractionRetry));
+
 async function runQuoBackfillExtraction(body, { jobId, bump }) {
   await assertNoOverlappingJob(['quo', 'quo-backfill', 'quo-callers'], jobId);
   const limit = Number(body?.limit) > 0 ? Number(body.limit) : null;
@@ -4732,7 +5270,7 @@ async function runQuoBackfillExtraction(body, { jobId, bump }) {
   for (let from = 0; ; from += 1000) {
     const { data, error } = await supabaseAdmin
       .from('processed_quo_messages')
-      .select('id, wedding_id, body_text, processed_at')
+      .select('id, quo_message_id, wedding_id, body_text, processed_at')
       .eq('direction', 'inbound')
       .not('wedding_id', 'is', null)
       .order('processed_at', { ascending: true })
@@ -4782,15 +5320,18 @@ async function runQuoBackfillExtraction(body, { jobId, bump }) {
 
   for (const m of queue) {
     const text = String(m.body_text || '');
-    try {
-      const notes = await extractPlanningNotesAI(text, m.wedding_id, `SMS: ${text.substring(0, 120)}`, 'sms');
-      if (notes.length) {
-        await savePlanningNotes(notes);
-        notesMade += notes.length;
-      }
-    } catch (err) {
+    const outcome = await importWithMarker({
+      extract: () => extractPlanningNotesAI(
+        text, m.wedding_id, `SMS: ${text.substring(0, 120)}`, 'sms',
+        { sourceKind: 'sms', sourceId: m.quo_message_id },
+      ),
+      save: savePlanningNotes,
+      recordOutcome: ({ error }) => recordQuoExtraction(m.id, error),
+    });
+    notesMade += outcome.notes;
+    if (outcome.status === 'extract-failed') {
       failed++;
-      console.error(`[quo-backfill] ${m.id}: ${err.message}`);
+      console.error(`[quo-backfill] ${m.id}: ${outcome.error}`);
     }
     processed++;
     if (processed % 20 === 0 || processed === queue.length) {
@@ -4830,12 +5371,44 @@ async function runQuoSync(body, { jobId, bump }) {
 
     // If force reprocess, clear the processed table first
     if (forceReprocess) {
-      await supabaseAdmin
+      const { error: clearErr } = await supabaseAdmin
         .from('processed_quo_messages')
         .delete()
         .neq('id', '00000000-0000-0000-0000-000000000000');
+      // Half-cleared is the worst of both: some messages re-import and some do
+      // not, and which is which is unknowable afterwards.
+      if (clearErr) throw new Error(`Could not clear the processed markers: ${clearErr.message}`);
       console.log('Force reprocess: cleared processed_quo_messages');
     }
+
+    // What has already been read for planning notes, by source label.
+    //
+    // Loaded on every run, not only a reprocess. The marker table is the guard
+    // for a normal sync, but forceReprocess deletes it and so does the
+    // clear-processed button, and after either of those the sync would pay
+    // Claude to read every text and call again — which is how 341 texts turned
+    // into 855 notes, half of them the same observation in different words.
+    // Re-importing the raw record is cheap and idempotent. Re-extracting is
+    // neither.
+    const extractedSources = new Set();
+    for (const prefix of ['SMS: ', 'Phone call ']) {
+      for (let from = 0; ; from += 1000) {
+        const { data, error } = await supabaseAdmin
+          .from('planning_notes')
+          .select('source_message')
+          .like('source_message', `${prefix}%`)
+          .range(from, from + 999);
+        // Not fatal, but say so: without this set the run may re-read messages
+        // it has already read.
+        if (error) {
+          console.error(`[quo] could not read which messages have been extracted (${error.message}); they may be read twice`);
+          break;
+        }
+        for (const r of data) extractedSources.add(r.source_message);
+        if (data.length < 1000) break;
+      }
+    }
+    console.log(`[quo] ${extractedSources.size} message(s) already read for planning notes`);
 
     // Get all profiles with phone numbers (use admin to bypass RLS)
     const { data: profiles, error: profilesErr } = await supabaseAdmin
@@ -4958,6 +5531,26 @@ async function runQuoSync(body, { jobId, bump }) {
 
     let newlyProcessed = 0;
     let notesExtracted = 0;
+    // Extractions attempted and lost. Recorded on the marker row with 035, and
+    // in the job detail either way.
+    let extractFailed = 0;
+    // Pages OpenPhone refused. Silently skipping a client used to look like a
+    // client with nothing to say.
+    let messageFetchFailures = 0;
+    let callFetchFailures = 0;
+
+    // Twenty pages of a hundred is two thousand messages for one couple, which
+    // no wedding has ever come close to. The cap exists so a paging bug cannot
+    // turn into an all-night run.
+    const QUO_MAX_PAGES = 20;
+    const quoSinceDays = Number(body?.sinceDays) > 0 ? Number(body.sinceDays) : null;
+    const quoFloor = quoSinceDays ? Date.now() - quoSinceDays * 86400000 : null;
+    // OpenPhone calls it createdAt on a message and createdAt or answeredAt on
+    // a call, and older records have neither. No timestamp means do not stop.
+    const msgTime = (m) => {
+      const t = Date.parse(m?.createdAt || m?.created_at || m?.answeredAt || m?.completedAt || '');
+      return Number.isFinite(t) ? t : null;
+    };
 
     // Fetch phone numbers from Quo to get phoneNumberIds
     const phoneNumbersResponse = await fetch(`${QUO_API_BASE}/phone-numbers`, {
@@ -5005,20 +5598,48 @@ async function runQuoSync(body, { jobId, bump }) {
 
         if (!weddingId) continue;
 
-        // Fetch messages for this specific conversation (Quo API requires participants param)
-        const messagesUrl = `${QUO_API_BASE}/messages?phoneNumberId=${phoneNumberId}&participants=${encodeURIComponent(clientPhoneE164)}&maxResults=100`;
+        // Fetch messages for this specific conversation, all of them.
+        //
+        // One page of 100, newest first, and no pageToken: a couple who has
+        // texted more than a hundred times had their older conversation
+        // permanently out of reach. OpenPhone pages with pageToken /
+        // nextPageToken, the same way the conversations sweep in
+        // lib/quo-calls.js already does.
+        const messages = [];
+        {
+          let pageToken = null;
+          let fetchFailed = false;
+          for (let page = 0; page < QUO_MAX_PAGES; page++) {
+            const messagesUrl = `${QUO_API_BASE}/messages?phoneNumberId=${phoneNumberId}&participants=${encodeURIComponent(clientPhoneE164)}&maxResults=100${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`;
 
-        const messagesResponse = await fetch(messagesUrl, {
-          headers: { 'Authorization': QUO_API_KEY }
-        });
+            const messagesResponse = await fetch(messagesUrl, {
+              headers: { 'Authorization': QUO_API_KEY }
+            });
 
-        if (!messagesResponse.ok) {
-          const errText = await messagesResponse.text();
-          continue;
+            if (!messagesResponse.ok) {
+              const errText = await messagesResponse.text();
+              console.error(`[quo] messages ${messagesResponse.status} for ${clientPhoneE164}: ${errText.slice(0, 200)}`);
+              messageFetchFailures++;
+              fetchFailed = true;
+              break;
+            }
+
+            const messagesData = await messagesResponse.json();
+            const pageItems = messagesData.data || messagesData.messages || [];
+            if (!Array.isArray(pageItems)) break;
+            messages.push(...pageItems);
+
+            pageToken = messagesData.nextPageToken || null;
+            if (!pageToken) break;
+            // Every message on this page is on file already, and the page below
+            // it is older still.
+            if (pageItems.length && pageItems.every(m => processedIds.has(m.id))) break;
+            // A date floor, so a routine hourly run does not walk five years of
+            // conversation to find the one text that arrived since :35.
+            if (quoFloor && pageItems.length && pageItems.every(m => msgTime(m) && msgTime(m) < quoFloor)) break;
+          }
+          if (fetchFailed && messages.length === 0) continue;
         }
-
-        const messagesData = await messagesResponse.json();
-        const messages = messagesData.data || messagesData.messages || messagesData || [];
         totalMessagesFound += messages.length;
 
         // Capture sample for debugging
@@ -5117,13 +5738,31 @@ async function runQuoSync(body, { jobId, bump }) {
             }
           }
 
-          // AI extraction from inbound SMS messages
+          // AI extraction from inbound SMS messages.
+          //
+          // Skipped when this exact text has already been read, which is what
+          // makes a reprocess safe: the raw record is rewritten, the model is
+          // not asked a second time and cannot paraphrase itself into a
+          // duplicate note.
           if (direction === 'inbound' && messageBody) {
-            const notes = await extractPlanningNotesAI(messageBody, weddingId, `SMS: ${messageBody.substring(0, 120)}`, 'sms');
-            if (notes.length > 0) {
-              notes.forEach(n => { n.user_id = userId; });
-              await savePlanningNotes(notes);
-              notesExtracted += notes.length;
+            const smsSource = `SMS: ${messageBody.substring(0, 120)}`;
+            const outcome = await importWithMarker({
+              alreadyExtracted: extractedSources.has(smsSource),
+              extract: () => extractPlanningNotesAI(
+                messageBody, weddingId, smsSource, 'sms',
+                { sourceKind: 'sms', sourceId: msg.id },
+              ),
+              save: async (notes) => {
+                notes.forEach(n => { n.user_id = userId; });
+                await savePlanningNotes(notes);
+              },
+              recordOutcome: ({ error }) => recordQuoMarkerExtraction(msg.id, error),
+            });
+            notesExtracted += outcome.notes;
+            if (outcome.status === 'ok') extractedSources.add(smsSource);
+            if (outcome.status === 'extract-failed') {
+              extractFailed++;
+              console.error(`[quo] extraction failed for message ${msg.id}: ${outcome.error}`);
             }
           }
 
@@ -5160,20 +5799,36 @@ async function runQuoSync(body, { jobId, bump }) {
         if (!weddingId) continue;
 
         try {
-          // Fetch calls for this specific conversation
-          const callsUrl = `${QUO_API_BASE}/calls?phoneNumberId=${phoneNumberId}&participants=${encodeURIComponent(clientPhoneE164)}&maxResults=50`;
+          // Every call, not the newest fifty. Same paging as the messages pass
+          // above and the conversations sweep in lib/quo-calls.js.
+          const calls = [];
+          {
+            let pageToken = null;
+            for (let page = 0; page < QUO_MAX_PAGES; page++) {
+              const callsUrl = `${QUO_API_BASE}/calls?phoneNumberId=${phoneNumberId}&participants=${encodeURIComponent(clientPhoneE164)}&maxResults=50${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`;
 
-          const callsResponse = await fetch(callsUrl, {
-            headers: { 'Authorization': QUO_API_KEY }
-          });
+              const callsResponse = await fetch(callsUrl, {
+                headers: { 'Authorization': QUO_API_KEY }
+              });
 
-          if (!callsResponse.ok) {
-            const errText = await callsResponse.text();
-            continue;
+              if (!callsResponse.ok) {
+                const errText = await callsResponse.text();
+                console.error(`[quo] calls ${callsResponse.status} for ${clientPhoneE164}: ${errText.slice(0, 200)}`);
+                callFetchFailures++;
+                break;
+              }
+
+              const callsData = await callsResponse.json();
+              const pageItems = callsData.data || callsData.calls || [];
+              if (!Array.isArray(pageItems)) break;
+              calls.push(...pageItems);
+
+              pageToken = callsData.nextPageToken || null;
+              if (!pageToken) break;
+              if (pageItems.length && pageItems.every(c => processedIds.has(`call_${c.id}`))) break;
+              if (quoFloor && pageItems.length && pageItems.every(c => msgTime(c) && msgTime(c) < quoFloor)) break;
+            }
           }
-
-          const callsData = await callsResponse.json();
-          const calls = callsData.data || callsData.calls || callsData || [];
           totalCallsFound += calls.length;
 
           for (const call of calls) {
@@ -5199,34 +5854,78 @@ async function runQuoSync(body, { jobId, bump }) {
               body_text: `[CALL TRANSCRIPT] ${transcript.substring(0, 5000)}`
             });
 
-            if (insertError) {
-              console.error(`Error saving call to processed_quo_messages:`, insertError);
+            // Same rule the messages branch has had since August and this one
+            // never did: the marker is what stops the call being imported
+            // again, so if it did not save, skip the call. Carrying on wrote
+            // the transcript note and the extracted notes a second time on the
+            // next run. A unique-key collision is the expected case on a
+            // reprocess and is not a reason to skip.
+            if (insertError && insertError.code !== '23505') {
+              console.error(`[quo] marker failed for ${callId}, skipping it: ${insertError.message}`);
+              continue;
             }
 
-            // Also save transcript as a planning note so Sage can search it
-            const { data: savedCallNote, error: noteError } = await supabaseAdmin.from('planning_notes').insert({
-              wedding_id: weddingId,
-              user_id: userId,
-              category: 'call_transcript',
-              content: `[Call Transcript] ${transcript}`,
-              source_message: `From ${direction} call with: ${clientPhoneE164}`,
-              status: 'confirmed'
-            }).select();
+            // Also save transcript as a planning note so Sage can search it.
+            // Checked first, the same way the SMS branch checks: the marker is
+            // the real guard and this is what stops a gap in it reaching a
+            // couple as a second copy of a whole phone call.
+            const callNoteContent = `[Call Transcript] ${transcript}`;
+            const { data: priorCallNote, error: priorCallErr } = await supabaseAdmin
+              .from('planning_notes')
+              .select('id')
+              .eq('wedding_id', weddingId)
+              .eq('category', 'call_transcript')
+              .eq('content', callNoteContent)
+              .limit(1);
 
-            if (noteError) {
-              console.error(`Error saving call transcript to planning_notes:`, noteError);
-              planningNotesErrors.push({ type: 'call', error: noteError.message || JSON.stringify(noteError) });
-            } else {
-              planningNotesSaved++;
+            if (priorCallErr) {
+              console.error(`[quo] could not check for a duplicate call note, skipping ${callId}: ${priorCallErr.message}`);
+              continue;
             }
 
-            // AI extraction from call transcript
+            if (!priorCallNote?.length) {
+              const { error: noteError } = await supabaseAdmin.from('planning_notes').insert({
+                wedding_id: weddingId,
+                user_id: userId,
+                category: 'call_transcript',
+                content: callNoteContent,
+                source_message: `From ${direction} call with: ${clientPhoneE164}`,
+                status: 'confirmed'
+              });
+
+              if (noteError) {
+                console.error(`Error saving call transcript to planning_notes:`, noteError);
+                planningNotesErrors.push({ type: 'call', error: noteError.message || JSON.stringify(noteError) });
+              } else {
+                planningNotesSaved++;
+              }
+            }
+
+            // AI extraction from call transcript.
+            //
+            // The source label carries the call id. It used to be the constant
+            // string "Phone call transcript", so every call on the system
+            // shared one label and nothing could tell which call a note came
+            // from — or whether a given call had been read at all.
+            const callSource = `Phone call ${call.id}`;
             if (transcript) {
-              const notes = await extractPlanningNotesAI(transcript, weddingId, `Phone call transcript`, 'transcript');
-              if (notes.length > 0) {
-                notes.forEach(n => { n.user_id = userId; });
-                await savePlanningNotes(notes);
-                notesExtracted += notes.length;
+              const outcome = await importWithMarker({
+                alreadyExtracted: extractedSources.has(callSource),
+                extract: () => extractPlanningNotesAI(
+                  transcript, weddingId, callSource, 'transcript',
+                  { sourceKind: 'call', sourceId: call.id },
+                ),
+                save: async (notes) => {
+                  notes.forEach(n => { n.user_id = userId; });
+                  await savePlanningNotes(notes);
+                },
+                recordOutcome: ({ error }) => recordQuoMarkerExtraction(callId, error),
+              });
+              notesExtracted += outcome.notes;
+              if (outcome.status === 'ok') extractedSources.add(callSource);
+              if (outcome.status === 'extract-failed') {
+                extractFailed++;
+                console.error(`[quo] extraction failed for call ${call.id}: ${outcome.error}`);
               }
             }
 
@@ -5316,8 +6015,21 @@ async function runQuoSync(body, { jobId, bump }) {
       // The message and call counts are in detail, where they belong.
       processed: clientsDone,
       matched: newlyProcessed + callsProcessed,
+      failed: messageFetchFailures + callFetchFailures,
       detail: {
         messagesImported: newlyProcessed,
+        // Attempted and lost. A text or call that was imported and could not be
+        // read is a fact about this run, not a gap to be inferred from a zero.
+        extractFailed,
+        extractFailedNote: extractFailed
+          ? `${extractFailed} message(s) were imported but could not be read for planning notes.${has035('markers') ? ' Each one has extract_error set; run the extraction retry to pick them up.' : ' Migration 035 is not applied, so which ones is only in the log.'}`
+          : 'ok',
+        // Pages OpenPhone refused. Used to be a bare continue, so a client whose
+        // conversation could not be fetched looked like a client with nothing.
+        messageFetchFailures,
+        callFetchFailures,
+        pagingCap: QUO_MAX_PAGES,
+        sinceDays: quoSinceDays || 'all history',
         callsProcessed,
         callsFound: totalCallsFound,
         callsSkipped,
@@ -5507,18 +6219,44 @@ app.post('/api/zoom/callback', async (req, res) => {
   }
 });
 
-// Check Zoom connection status
+// Check Zoom connection status.
+//
+// "Connected" was a row in a table: it went green the moment somebody finished
+// the OAuth dance and stayed green after the grant was revoked, after the
+// refresh token rotated into a failed write, and through every 401 the sync
+// got. So it now spends one cheap API call actually asking Zoom, and reports
+// the last sync alongside — a light that says connected while the last four
+// runs failed is not telling you anything useful.
 app.get('/api/zoom/status', async (req, res) => {
+  const lastJob = await lastSyncJob('zoom');
   try {
-    const { data: tokens } = await supabaseAdmin
+    const { data: tokens, error } = await supabaseAdmin
       .from('zoom_tokens')
-      .select('*')
+      .select('access_token')
       .limit(1)
-      .single();
+      .maybeSingle();
 
-    res.json({ connected: !!tokens?.access_token });
+    if (error) return res.json({ connected: false, reason: `Could not read the stored Zoom token: ${error.message}`, ...lastJob });
+    if (!tokens?.access_token) return res.json({ connected: false, reason: 'Zoom has never been connected.', ...lastJob });
+
+    const accessToken = await getZoomAccessToken();
+    if (!accessToken) return res.json({ connected: false, reason: 'The stored Zoom token could not be refreshed. Reconnect Zoom.', ...lastJob });
+
+    const probe = await fetch('https://api.zoom.us/v2/users/me', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!probe.ok) {
+      const body = await probe.text().catch(() => '');
+      return res.json({
+        connected: false,
+        reason: `Zoom answered ${probe.status} when asked who we are${probe.status === 401 ? ' — the grant has been revoked, reconnect Zoom' : ''}. ${body.slice(0, 160)}`.trim(),
+        ...lastJob,
+      });
+    }
+
+    res.json({ connected: true, ...lastJob });
   } catch (error) {
-    res.json({ connected: false });
+    res.json({ connected: false, reason: error.message, ...lastJob });
   }
 });
 
@@ -5647,6 +6385,14 @@ async function runZoomSync({ jobId, sinceDays, reprocess }) {
   };
 
   {
+    // The same guard the Quo family has had since August. Two Zoom runs over
+    // the same meetings both download the transcript and both run a Claude
+    // extraction, and the model does not word a note the same way twice — so
+    // the second run does not collide with the first, it paraphrases it. The
+    // manual endpoint and the cron can now both be in flight at once, which is
+    // exactly the shape that turned 341 texts into 855 notes.
+    await assertNoOverlappingJob(['zoom'], jobId);
+
     const accessToken = await getZoomAccessToken();
     if (!accessToken) {
       return fail('Zoom is not connected. Reconnect it in the admin panel.');
@@ -5655,9 +6401,15 @@ async function runZoomSync({ jobId, sinceDays, reprocess }) {
     // wedding_date comes along because it is one of the three things allowed to
     // settle a match: a first and last name, both halves of the couple, or a
     // name with the wedding date.
-    const { data: weddings } = await supabaseAdmin
+    const { data: weddings, error: weddingsErr } = await supabaseAdmin
       .from('weddings')
       .select('id, couple_names, wedding_date, profiles(name, email)');
+
+    // A failed read here builds an empty directory, and an empty directory
+    // matches nothing — so every meeting in the run goes to the review queue
+    // as unattributable, which looks like a matching problem rather than a
+    // database one. Stop instead.
+    if (weddingsErr) throw new Error(`Could not read the wedding list to match against: ${weddingsErr.message}`);
 
     // Each wedding keeps its own names and is scored against the whole title,
     // rather than every wedding writing its first names into one shared map
@@ -5774,6 +6526,11 @@ async function runZoomSync({ jobId, sinceDays, reprocess }) {
     // way to tell them apart was to go and query Zoom by hand.
     let alreadyImported = 0;
     let noTranscript = 0;
+    // Transcripts Zoom would not hand over. Counted apart from noTranscript,
+    // because "not written yet" and "refused" want different reactions.
+    let transcriptFailed = 0;
+    // Extractions attempted and lost.
+    let extractFailed = 0;
 
     for (const meeting of meetings) {
       const meetingId = meeting.uuid;
@@ -5786,15 +6543,29 @@ async function runZoomSync({ jobId, sinceDays, reprocess }) {
 
       if (!transcriptFile) { noTranscript++; continue; }
 
-      // Download transcript
+      // Download transcript.
+      //
+      // The status was never checked, so Zoom's error body — a line of JSON
+      // saying the token had expired — was stored as the meeting transcript and
+      // then read by Claude as though it were a conversation. Checked before
+      // the marker row is written, so a failed download is retried on the next
+      // run rather than marked done for ever.
       let transcriptText = '';
       try {
         const transcriptResponse = await fetch(
           `${transcriptFile.download_url}?access_token=${accessToken}`
         );
+        if (!transcriptResponse.ok) {
+          console.error(`Zoom transcript download for "${meeting.topic}" returned ${transcriptResponse.status}; leaving the meeting for the next run`);
+          transcriptFailed++;
+          skipped++;
+          continue;
+        }
         transcriptText = await transcriptResponse.text();
       } catch (err) {
         console.error('Error downloading transcript:', err);
+        transcriptFailed++;
+        skipped++;
         continue;
       }
 
@@ -5858,12 +6629,28 @@ async function runZoomSync({ jobId, sinceDays, reprocess }) {
 
       // Save full transcript as a planning note so Sage can search it
       if (matchedWeddingId && transcriptText) {
-        notesExtracted += await fileZoomMeeting({
+        const filed = await fileZoomMeeting({
           weddingId: matchedWeddingId,
           topic: meeting.topic,
           startTime: meeting.start_time,
           transcriptText,
+          meetingId,
         });
+        notesExtracted += filed.notes;
+        if (filed.error) {
+          extractFailed++;
+          const patch = markerExtractionPatch({ error: filed.error });
+          if (patch) {
+            const { error: patchErr } = await supabaseAdmin
+              .from('processed_zoom_meetings').update(patch).eq('zoom_meeting_id', meetingId);
+            if (patchErr) console.error(`[zoom] could not record the extraction outcome for ${meetingId}: ${patchErr.message}`);
+          }
+        } else {
+          const patch = markerExtractionPatch({ error: null });
+          if (patch) {
+            await supabaseAdmin.from('processed_zoom_meetings').update(patch).eq('zoom_meeting_id', meetingId);
+          }
+        }
       }
 
       newlyProcessed++;
@@ -5909,6 +6696,13 @@ async function runZoomSync({ jobId, sinceDays, reprocess }) {
         recordingsFound: meetings.length,
         alreadyImported,
         noTranscript,
+        // Zoom had a transcript and would not give it to us. Different from
+        // noTranscript, which is Zoom still writing it.
+        transcriptFailed,
+        extractFailed,
+        extractFailedNote: extractFailed
+          ? `${extractFailed} meeting(s) were imported but could not be read for planning notes.${has035('markers') ? ' Each one has extract_error set; run the extraction retry to pick them up.' : ' Migration 035 is not applied, so which ones is only in the log.'}`
+          : 'ok',
       },
     });
   }
@@ -5922,13 +6716,29 @@ async function runZoomSync({ jobId, sinceDays, reprocess }) {
  * versions of this would drift, and the one used less often would be the one
  * that quietly stopped working.
  *
- * @returns {Promise<number>} how many planning notes were extracted
+ * A reprocess run refreshes the raw transcript note and stops there. The notes
+ * this meeting produced are already on file; asking Claude again does not find
+ * them again, it writes them again in slightly different words, and exact-string
+ * dedup cannot catch a paraphrase. That is how 341 texts became 855 notes.
+ *
+ * @returns {Promise<{ notes: number, error: string|null, skipped: boolean }>}
  */
-async function fileZoomMeeting({ weddingId, topic, startTime, transcriptText }) {
+async function fileZoomMeeting({ weddingId, topic, startTime, transcriptText, meetingId = null }) {
   const cleanTranscript = parseVttToText(transcriptText);
   const meetingLabel = topic || 'Untitled';
-  const meetingDate = startTime ? new Date(startTime).toLocaleDateString() : 'unknown date';
+  // venueDate, not the server's locale. toLocaleDateString on a Railway box in
+  // UTC rolls the date over at 7pm Virginia time, so an evening meeting got
+  // tomorrow's date in its source key and was filed as a second, different
+  // meeting on the next run.
+  const meetingDate = startTime ? venueDate(startTime) : 'unknown date';
   const transcriptSource = `Zoom meeting on ${meetingDate}`;
+  // Every transcript already on file was keyed with the server's own locale.
+  // Looked up alongside the new key so a meeting filed before this change is
+  // recognised rather than written a second time under a differently formatted
+  // date.
+  const legacySource = startTime
+    ? `Zoom meeting on ${new Date(startTime).toLocaleDateString()}`
+    : transcriptSource;
   const noteBody = `[Zoom Meeting: ${meetingLabel} — ${meetingDate}]\n${cleanTranscript}`;
 
   // Don't re-file a transcript we already hold for this meeting. If the copy on
@@ -5939,7 +6749,7 @@ async function fileZoomMeeting({ weddingId, topic, startTime, transcriptText }) 
     .select('id, content')
     .eq('wedding_id', weddingId)
     .eq('category', 'zoom_transcript')
-    .eq('source_message', transcriptSource)
+    .in('source_message', [...new Set([transcriptSource, legacySource])])
     .limit(1);
   // Unanswerable means do nothing, not write a second copy of a transcript.
   if (priorTranscriptErr) {
@@ -5972,12 +6782,36 @@ async function fileZoomMeeting({ weddingId, topic, startTime, transcriptText }) 
   // transcript, i.e. the greeting. Every meeting was being mined from its first
   // thirty seconds.
   const source = `Zoom meeting: ${meetingLabel} (${meetingDate})`;
-  const notes = await extractPlanningNotesAI(transcriptText, weddingId, source, 'transcript');
-  if (notes.length > 0) {
-    await savePlanningNotes(notes);
-    console.log(`  Extracted ${notes.length} planning notes from "${meetingLabel}"`);
+
+  // Has this meeting already been read? A reprocess run reaches here with the
+  // marker rows deliberately ignored, so without this check every meeting in
+  // the window is extracted again and the model paraphrases its own notes back
+  // into the couple's file.
+  const done = await sourceAlreadyExtracted({
+    weddingId,
+    sourceKind: 'zoom',
+    sourceId: meetingId,
+    sourceMessage: source,
+  });
+
+  const outcome = await importWithMarker({
+    alreadyExtracted: done,
+    extract: () => extractPlanningNotesAI(
+      transcriptText, weddingId, source, 'transcript',
+      { sourceKind: 'zoom', sourceId: meetingId },
+    ),
+    save: savePlanningNotes,
+  });
+
+  if (outcome.status === 'extraction-skipped') {
+    console.log(`  "${meetingLabel}" has already been read for planning notes, refreshing the transcript only`);
+  } else if (outcome.status === 'extract-failed') {
+    console.error(`  Could not read "${meetingLabel}" for planning notes: ${outcome.error}`);
+  } else if (outcome.notes > 0) {
+    console.log(`  Extracted ${outcome.notes} planning notes from "${meetingLabel}"`);
   }
-  return notes.length;
+
+  return { notes: outcome.notes, error: outcome.error || null, skipped: outcome.status === 'extraction-skipped' };
 }
 
 // ============ SYNC VISIBILITY ============
@@ -6332,13 +7166,15 @@ app.post('/api/admin/ingest-review/:id/assign', async (req, res) => {
         .update({ wedding_id: weddingId }).eq('gmail_message_id', item.external_id);
       if (updErr) throw updErr;
 
-      const notes = await extractPlanningNotesAI(
+      const { notes, error: extractErr } = await extractPlanningNotesAI(
         email.body_text || '',
         weddingId,
         `Email: ${email.subject || '(no subject)'}`,
         'email',
+        { sourceKind: 'email', sourceId: item.external_id },
       );
       if (notes.length) await savePlanningNotes(notes);
+      if (extractErr) console.error(`[review] extraction failed while filing ${item.external_id}: ${extractErr}`);
 
       await supabaseAdmin.from('ingest_review').update({
         status: 'resolved',
@@ -6346,7 +7182,9 @@ app.post('/api/admin/ingest-review/:id/assign', async (req, res) => {
         resolved_by: req.userId || null,
         resolved_at: new Date().toISOString(),
       }).eq('id', item.id);
-      return res.json({ ok: true, notesExtracted: notes.length });
+      // The email is filed either way; say so when the reading of it failed,
+      // rather than reporting zero notes as though there were none to find.
+      return res.json({ ok: true, notesExtracted: notes.length, extractError: extractErr || null });
     }
 
     const { data: meeting, error: mErr } = await supabaseAdmin
@@ -6361,11 +7199,12 @@ app.post('/api/admin/ingest-review/:id/assign', async (req, res) => {
     }).eq('zoom_meeting_id', item.external_id);
     if (updErr) throw updErr;
 
-    const notes = await fileZoomMeeting({
+    const filed = await fileZoomMeeting({
       weddingId,
       topic: meeting.meeting_topic,
       startTime: item.occurred_at,
       transcriptText: meeting.transcript_text || '',
+      meetingId: item.external_id,
     });
 
     await supabaseAdmin.from('ingest_review').update({
@@ -6375,7 +7214,7 @@ app.post('/api/admin/ingest-review/:id/assign', async (req, res) => {
       resolved_at: new Date().toISOString(),
     }).eq('id', item.id);
 
-    res.json({ ok: true, notesExtracted: notes });
+    res.json({ ok: true, notesExtracted: filed.notes, extractError: filed.error });
   } catch (error) {
     console.error('assign review item error:', error);
     res.status(500).json({ error: 'Could not file that meeting: ' + error.message });
@@ -6497,18 +7336,29 @@ app.post('/api/zoom/reextract', async (req, res) => {
     }
 
     let totalNotes = 0;
+    let failedSources = 0;
     for (const src of sources) {
-      const notes = await extractPlanningNotesAI(src.text, src.wedding_id, `Zoom meeting: ${src.label}`, 'transcript');
+      const { notes, error: extractErr } = await extractPlanningNotesAI(
+        src.text, src.wedding_id, `Zoom meeting: ${src.label}`, 'transcript',
+      );
+      if (extractErr) {
+        failedSources++;
+        console.error(`Re-extract failed for "${src.label}": ${extractErr}`);
+      }
       if (notes.length > 0) {
         await savePlanningNotes(notes);
         totalNotes += notes.length;
         console.log(`Re-extracted ${notes.length} notes from "${src.label}"`);
-      } else {
+      } else if (!extractErr) {
         console.log(`No notes extracted from "${src.label}" (text length: ${src.text?.length || 0})`);
       }
     }
 
-    res.json({ message: `Re-extracted ${totalNotes} planning notes from ${sources.length} transcript(s).` });
+    res.json({
+      message: `Re-extracted ${totalNotes} planning notes from ${sources.length} transcript(s).`
+        + (failedSources ? ` ${failedSources} transcript(s) could not be read.` : ''),
+      failedSources,
+    });
   } catch (error) {
     console.error('Re-extract error:', error);
     res.status(500).json({ error: 'Failed to re-extract: ' + error.message });
@@ -13863,10 +14713,40 @@ app.post('/api/admin/documents/:id/parse', requireAdmin, aiLimiter, async (req, 
     // response, marking progress as it goes, and the panel polls.
     await supabaseAdmin.from('wedding_documents')
       .update({ parse_error: null, parsed_at: null }).eq('id', doc.id);
-    res.json({ ok: true, started: true, chunks: chunks.length });
+
+    // A job row, like every other long-running read in this file.
+    //
+    // This was a bare IIFE. A redeploy in the middle of chunk four left the
+    // document with some sections, no parsed_at and no parse_error, which the
+    // panel draws as "not read yet" — so the only trace of eight minutes of
+    // Claude was a half-filled sections column nobody knew to distrust. Now the
+    // run has a row: how many chunks, how far it got, and what killed it.
+    const { data: parseJob, error: parseJobErr } = await supabaseAdmin.from('sync_jobs')
+      .insert({
+        kind: 'doc-parse',
+        trigger: 'manual',
+        total: chunks.length,
+        detail: { documentId: doc.id, filename: doc.filename, weddingId: doc.wedding_id },
+      })
+      .select()
+      .single();
+    // Not fatal. A document read with no job row is the old behaviour, which is
+    // worse but is not a reason to refuse to read the document.
+    if (parseJobErr) console.error('[doc-parse] could not open a job row:', parseJobErr.message);
+
+    const parseBump = parseJob
+      ? (fields) => supabaseAdmin.from('sync_jobs')
+        .update({ ...fields, heartbeat_at: new Date().toISOString() }).eq('id', parseJob.id)
+      : async () => {};
+
+    res.json({ ok: true, started: true, chunks: chunks.length, jobId: parseJob?.id || null });
 
     (async () => {
       const results = [];
+      // Which model actually read it. The 529 fallback to Haiku happened
+      // silently, so a document read by the cheaper model looked identical to
+      // one read properly, and "why is this section thin" had no answer.
+      const modelsUsed = new Set();
       try {
         for (let i = 0; i < chunks.length; i++) {
           const prompt = sectionsPrompt({
@@ -13882,13 +14762,16 @@ app.post('/api/admin/documents/:id/parse', requireAdmin, aiLimiter, async (req, 
               model: MODEL_SONNET, max_tokens: 8000, temperature: 0.1,
               messages: [{ role: 'user', content: prompt }],
             });
+            modelsUsed.add(MODEL_SONNET);
           } catch (err) {
             const overloaded = err.status === 529 || err.status === 503 || err.status === 429;
             if (!overloaded) throw err;
+            console.warn(`[doc-parse] ${doc.id}: chunk ${i + 1} fell back to Haiku (${err.status})`);
             response = await anthropic.messages.create({
               model: MODEL_HAIKU, max_tokens: 8000, temperature: 0.1,
               messages: [{ role: 'user', content: prompt }],
             });
+            modelsUsed.add(MODEL_HAIKU);
           }
           await logUsage(doc.wedding_id, null, 'document_parse', response);
           results.push(parseSectionsResponse(response.content[0].text));
@@ -13897,14 +14780,26 @@ app.post('/api/admin/documents/:id/parse', requireAdmin, aiLimiter, async (req, 
           // still readable rather than the whole read being lost.
           await supabaseAdmin.from('wedding_documents')
             .update({ sections: mergeSections(results) }).eq('id', doc.id);
+          await parseBump({ processed: i + 1, last_item: `chunk ${i + 1} of ${chunks.length}` });
           console.log(`[doc-parse] ${doc.id}: chunk ${i + 1}/${chunks.length}`);
         }
         const merged = mergeSections(results);
         await supabaseAdmin.from('wedding_documents')
-          .update({ sections: merged, parsed_at: new Date().toISOString(), parse_error: null })
+          .update({
+            sections: merged,
+            parsed_at: new Date().toISOString(),
+            parse_error: null,
+            ...(has035('docModel') ? { parsed_with_model: [...modelsUsed].join(', ') } : {}),
+          })
           .eq('id', doc.id);
         await fileOpenQuestions(doc, merged);
-        console.log(`[doc-parse] ${doc.id}: done`);
+        await parseBump({
+          status: 'finished',
+          finished_at: new Date().toISOString(),
+          processed: chunks.length,
+          detail: { documentId: doc.id, filename: doc.filename, models: [...modelsUsed] },
+        });
+        console.log(`[doc-parse] ${doc.id}: done, read by ${[...modelsUsed].join(', ')}`);
       } catch (err) {
         console.error(`[doc-parse] ${doc.id} failed:`, err.message);
         await supabaseAdmin.from('wedding_documents').update({
@@ -13913,7 +14808,14 @@ app.post('/api/admin/documents/:id/parse', requireAdmin, aiLimiter, async (req, 
           sections: results.length ? mergeSections(results) : null,
           parsed_at: results.length ? new Date().toISOString() : null,
           parse_error: String(err.message).slice(0, 500),
+          ...(has035('docModel') && modelsUsed.size ? { parsed_with_model: [...modelsUsed].join(', ') } : {}),
         }).eq('id', doc.id);
+        await parseBump({
+          status: 'failed',
+          finished_at: new Date().toISOString(),
+          processed: results.length,
+          last_error: String(err.message).slice(0, 500),
+        });
       }
     })();
   } catch (e) {
@@ -14163,18 +15065,36 @@ app.post('/api/admin/walkthroughs/:id/media', requireAdmin, dayOfMediaUpload.sin
       transcribeAudio(file.buffer, file.mimetype)
         .then(async (r) => {
           if (r.ok) {
-            await supabaseAdmin.from('walkthrough_media').update({
+            const { error: saveErr } = await supabaseAdmin.from('walkthrough_media').update({
               transcript: r.transcript,
               duration_secs: r.durationSecs || data.duration_secs || null,
+              ...(has035('transcript') ? { transcript_error: null } : {}),
             }).eq('id', data.id);
-            console.log(`[transcribe] ${data.id}: ${r.transcript.length} chars`);
+            if (saveErr) console.error(`[transcribe] ${data.id}: transcribed but could not be saved: ${saveErr.message}`);
+            else console.log(`[transcribe] ${data.id}: ${r.transcript.length} chars`);
           } else {
-            // Recorded but not readable. Left null so the UI keeps saying
-            // "not transcribed" rather than implying the recording was empty.
+            // Recorded but not readable, and now it says so.
+            //
+            // transcript stayed null, which is also what "queued" looks like
+            // and what "silent recording" looks like, so a dead Deepgram key
+            // read as a slow one for as long as nobody checked. The recording
+            // itself is safe either way; this is about the panel telling the
+            // truth about it.
             console.error(`[transcribe] ${data.id} failed: ${r.error}`);
+            if (has035('transcript')) {
+              const { error: errSaveErr } = await supabaseAdmin.from('walkthrough_media')
+                .update({ transcript_error: String(r.error).slice(0, 500) }).eq('id', data.id);
+              if (errSaveErr) console.error(`[transcribe] ${data.id}: could not record the failure: ${errSaveErr.message}`);
+            }
           }
         })
-        .catch(err => console.error('[transcribe] unexpected:', err.message));
+        .catch(async err => {
+          console.error(`[transcribe] ${data.id} unexpected:`, err.message);
+          if (has035('transcript')) {
+            await supabaseAdmin.from('walkthrough_media')
+              .update({ transcript_error: String(err.message).slice(0, 500) }).eq('id', data.id);
+          }
+        });
     }
   } catch (e) {
     console.error('Walkthrough media upload error:', e);
@@ -14505,7 +15425,43 @@ async function sendDailyDigest({ dryRun = false } = {}) {
     .select('id', { count: 'exact', head: true })
     .is('admin_answer', null);
 
-  if (weddingIds.length === 0 && !openQuestionCount) {
+  // The syncs, and the queue of things they could not place.
+  //
+  // Both sections render every day, including the days they have nothing to
+  // say. A brief that only speaks up when something is wrong teaches you to
+  // skim past it, and then the one morning it does speak up you skim past that
+  // too. "Syncs: all fine" is a sentence worth printing.
+  const { data: failedSyncs, error: failedSyncsErr } = await supabaseAdmin
+    .from('sync_jobs')
+    .select('kind, trigger, status, started_at, finished_at, last_error, heartbeat_at')
+    .in('status', ['failed', 'running'])
+    .gte('started_at', since)
+    .order('started_at', { ascending: false })
+    .limit(50);
+  if (failedSyncsErr) console.error('[Digest] could not read sync_jobs:', failedSyncsErr.message);
+
+  // A 'running' row whose heartbeat died is a killed run, and it belongs in
+  // this list. It is the exact shape of the 14 August Zoom sync that nothing
+  // ever reported.
+  const badSyncs = (failedSyncs || []).filter(j =>
+    j.status === 'failed'
+    || (j.status === 'running' && Date.now() - new Date(j.heartbeat_at || j.started_at).getTime() > 60 * 60 * 1000)
+  );
+
+  const { data: reviewQueue, error: reviewErr } = await supabaseAdmin
+    .from('ingest_review')
+    .select('created_at, source')
+    .eq('status', 'open')
+    .order('created_at', { ascending: true })
+    .limit(1000);
+  if (reviewErr) console.error('[Digest] could not read the review queue:', reviewErr.message);
+
+  const reviewCount = (reviewQueue || []).length;
+  const oldestReviewDays = reviewCount
+    ? Math.floor((Date.now() - new Date(reviewQueue[0].created_at).getTime()) / 86400000)
+    : 0;
+
+  if (weddingIds.length === 0 && !openQuestionCount && !badSyncs.length && !reviewCount) {
     console.log('[Digest] No portal activity in last 24h and nothing outstanding — skipping');
     return { skipped: true, reason: 'Nothing happened and nothing is outstanding' };
   }
@@ -14609,6 +15565,39 @@ async function sendDailyDigest({ dryRun = false } = {}) {
         ${openQuestions.length > 12 ? `<div style="font-size:12px;color:#b45309;margin-top:8px;">and ${openQuestions.length - 12} more</div>` : ''}
       </div>`;
 
+  // Escaped, because last_error is a database message and a subject line is a
+  // couple's own typing. lib/rsvp-confirmation.js has the same helper.
+  const esc = (s) => String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
+  const syncHtml = `
+      <div style="margin-bottom:20px;background:#fff;border-radius:8px;padding:16px;border:1px solid ${badSyncs.length ? '#fecaca' : '#e8e0d5'};">
+        <div style="font-size:15px;font-weight:bold;color:${badSyncs.length ? '#991b1b' : '#3d3d3d'};margin-bottom:8px;">Syncs that failed in the last 24h</div>
+        ${badSyncs.length === 0
+          ? `<div style="font-size:13px;color:#5c6b4f;">None. Every run in the last 24 hours finished.</div>`
+          : `<table style="width:100%;border-collapse:collapse;">${badSyncs.slice(0, 12).map(j => `
+          <tr>
+            <td style="padding:6px 0;border-bottom:1px solid #f0ebe3;vertical-align:top;">
+              <span style="font-size:13px;color:#991b1b;font-weight:bold;">${esc(j.kind)}</span>
+              <span style="font-size:11px;color:#999;margin-left:6px;">${esc(j.trigger)} · ${new Date(j.started_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' })}</span>
+              <div style="font-size:12px;color:#7c2d12;margin-top:2px;">${j.status === 'running' ? 'Stopped without finishing. ' : ''}${esc(String(j.last_error || 'No error was recorded.').slice(0, 200))}</div>
+            </td>
+          </tr>`).join('')}</table>
+          ${badSyncs.length > 12 ? `<div style="font-size:12px;color:#991b1b;margin-top:8px;">and ${badSyncs.length - 12} more</div>` : ''}`}
+      </div>`;
+
+  const queueHtml = `
+      <div style="margin-bottom:20px;background:#fff;border-radius:8px;padding:16px;border:1px solid #e8e0d5;">
+        <div style="font-size:15px;font-weight:bold;color:#3d3d3d;margin-bottom:8px;">Waiting in review</div>
+        <div style="font-size:13px;color:${reviewCount ? '#9a3412' : '#5c6b4f'};">
+          ${reviewCount === 0
+            ? 'Nothing. Every email, meeting and call that came in could be placed.'
+            : `${reviewCount} item${reviewCount === 1 ? '' : 's'}, oldest ${oldestReviewDays === 0 ? 'today' : oldestReviewDays === 1 ? '1 day' : `${oldestReviewDays} days`} old. These are emails, meetings and calls the ingestion could not tie to a couple.`}
+        </div>
+        ${reviewCount ? `<a href="${frontendUrl}/admin" style="display:inline-block;margin-top:8px;font-size:12px;color:#5C6B4F;">Place them in admin →</a>` : ''}
+      </div>`;
+
   const html = `
     <div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;padding:30px 20px;color:#3d3d3d;background:#fefbf7;">
       <div style="padding-bottom:16px;margin-bottom:8px;border-bottom:2px solid #7C9070;">
@@ -14617,6 +15606,8 @@ async function sendDailyDigest({ dryRun = false } = {}) {
       <h2 style="font-size:20px;color:#3d3d3d;margin:0 0 4px;font-weight:normal;">Daily Portal Memo</h2>
       <p style="font-size:13px;color:#999;margin:0 0 24px;">${dateStr}</p>
       ${needsYouHtml}
+      ${syncHtml}
+      ${queueHtml}
       ${coupleHtml}
       <a href="${frontendUrl}/admin" style="display:inline-block;background:#5C6B4F;color:white;padding:10px 20px;border-radius:6px;text-decoration:none;font-size:14px;">View all in admin →</a>
       <div style="margin-top:32px;padding-top:16px;border-top:1px solid #e8e0d5;">
@@ -14626,20 +15617,126 @@ async function sendDailyDigest({ dryRun = false } = {}) {
 
   const waiting = (openQuestions || []).length;
   const subject = portalSubject(
-    `Daily memo — ${dateStr}${waiting ? ` · ${waiting} waiting on you` : ''}`
+    `Daily memo — ${dateStr}${waiting ? ` · ${waiting} waiting on you` : ''}${badSyncs.length ? ` · ${badSyncs.length} sync failure${badSyncs.length === 1 ? '' : 's'}` : ''}`
   );
 
   if (dryRun) {
-    return { subject, html, to: adminEmail, waiting, couples: sections.length };
+    return { subject, html, to: adminEmail, waiting, couples: sections.length, failedSyncs: badSyncs.length, reviewQueue: reviewCount };
   }
 
   await sendEmail(adminEmail, subject, html);
-  console.log(`[Digest] Sent to ${adminEmail} (${waiting} open question(s))`);
-  return { subject, to: adminEmail, waiting, couples: sections.length };
+  console.log(`[Digest] Sent to ${adminEmail} (${waiting} open question(s), ${badSyncs.length} sync failure(s), ${reviewCount} in review)`);
+  return { subject, to: adminEmail, waiting, couples: sections.length, failedSyncs: badSyncs.length, reviewQueue: reviewCount };
 }
 
 // 8 AM ET daily
 cron.schedule('0 8 * * *', () => { sendDailyDigest().catch(err => console.error('[Digest] Error:', err.message)); }, { timezone: 'America/New_York' });
+
+/**
+ * Tell an admin a scheduled sync failed.
+ *
+ * A failure on a manual run has somebody watching the panel. A failure at 05
+ * past the hour has nobody, and until now it went to a Railway log. Deduped per
+ * kind per day, because a broken Gmail grant fails twenty-four times before
+ * anybody reads the first one.
+ */
+const syncFailureNotified = new Map();
+async function notifySyncFailure(kind, message) {
+  const today = venueToday();
+  if (syncFailureNotified.get(kind) === today) return;
+  syncFailureNotified.set(kind, today);
+
+  // The in-memory guard covers a single process; this covers a restart, which
+  // on Railway happens more often than a day. A rolling twenty hours rather
+  // than a calendar day, because "midnight" here would be parsed in the
+  // server's own timezone and Railway runs in UTC — four hours out from the
+  // venue, and quietly, which is the whole reason shared/venue-time.js exists.
+  const dayStart = new Date(Date.now() - 20 * 60 * 60 * 1000).toISOString();
+  const { data: already, error: dedupeErr } = await supabaseAdmin
+    .from('notifications')
+    .select('id')
+    .eq('recipient_type', 'admin')
+    .eq('type', 'sync_failed')
+    .ilike('title', `%${kind}%`)
+    .gte('created_at', dayStart)
+    .limit(1);
+  // Cannot tell means send it. A second copy of a failure notice is a nuisance;
+  // a missing one is the thing this whole audit is about.
+  if (dedupeErr) console.error('[sync] could not check for an existing failure notice:', dedupeErr.message);
+  if (already?.length) return;
+
+  await createNotification(
+    null, 'admin', 'sync_failed',
+    `The scheduled ${kind} sync failed`,
+    `${message}\n\nIt will try again on the next hour. If it keeps failing, the connection probably needs reconnecting in the admin panel.`,
+  );
+}
+
+/**
+ * Run an import on a timer, against a job row, without stacking.
+ *
+ * Zoom got a cron in August because a meeting went missing. Gmail and Quo never
+ * did, so emails and texts sat outside the portal until somebody remembered to
+ * press a button — which, being honest about it, nobody does on the off-chance.
+ * Same shape for all three: check nothing of that kind is live, open a row,
+ * run, and mark the row failed if it throws. A job left 'running' for ever is
+ * the failure mode this is meant to end, so the catch matters more than the
+ * body.
+ */
+async function runScheduledSync(kind, runner, body = {}) {
+  try {
+    // Don't stack runs. A long import is normal; two at once means duplicate
+    // Claude extractions and a race on the processed-marker rows.
+    const { data: running, error: runningErr } = await supabaseAdmin
+      .from('sync_jobs').select('id, heartbeat_at').eq('kind', kind).eq('status', 'running');
+    // This guard exists to stop two runs overlapping, and it failed open: a
+    // broken read produced an empty list, which reads as "nothing running", so
+    // it would start a second one. Skipping an hour costs nothing.
+    if (runningErr) {
+      console.error(`[${kind} cron] could not check for a running sync, skipping this hour:`, runningErr.message);
+      return;
+    }
+    const live = (running || []).filter(j => Date.now() - new Date(j.heartbeat_at).getTime() < 15 * 60 * 1000);
+    if (live.length) {
+      console.log(`[${kind} cron] a sync is already running, skipping this hour`);
+      return;
+    }
+
+    const { data: job, error } = await supabaseAdmin.from('sync_jobs')
+      .insert({ kind, trigger: 'scheduled', detail: body })
+      .select().single();
+    if (error) {
+      console.error(`[${kind} cron] could not open a job row, skipping this hour:`, error.message);
+      return;
+    }
+
+    const bump = (fields) => supabaseAdmin.from('sync_jobs')
+      .update({ ...fields, heartbeat_at: new Date().toISOString() }).eq('id', job.id);
+
+    try {
+      const summary = await runner(body, { jobId: job.id, bump }) || {};
+      await bump({
+        status: 'finished',
+        finished_at: new Date().toISOString(),
+        processed: summary.processed || 0,
+        matched: summary.matched || 0,
+        needs_review: summary.needsReview || 0,
+        failed: summary.failed || 0,
+        detail: summary.detail || {},
+      });
+      console.log(`[${kind} cron] finished: ${summary.processed || 0} processed`);
+    } catch (err) {
+      const message = String(err?.message || err);
+      console.error(`[${kind} cron] failed:`, message);
+      // The job row is the only record that this ran at all. Leaving it
+      // 'running' is how a dead sync looks identical to a busy one.
+      await bump({ status: 'failed', finished_at: new Date().toISOString(), last_error: message });
+      await notifySyncFailure(kind, message);
+    }
+  } catch (err) {
+    console.error(`[${kind} cron] Error:`, err.message);
+  }
+}
 
 /**
  * Pull Zoom on a timer instead of waiting for somebody to press a button.
@@ -14652,16 +15749,15 @@ cron.schedule('0 8 * * *', () => { sendDailyDigest().catch(err => console.error(
  *
  * Hourly at twenty past. Meetings already on file are skipped, so a run with
  * nothing new to do costs one API call.
+ *
+ * runZoomSync marks its own row finished and handles most failures itself, so
+ * this wrapper only has to own the ones that escape it — which it did not, and
+ * that is how a thrown error left a row saying 'running' for a fortnight.
  */
 cron.schedule('20 * * * *', async () => {
   try {
-    // Don't stack runs. A long import is normal; two at once means duplicate
-    // Claude extractions and a race on the processed-marker rows.
     const { data: running, error: runningErr } = await supabaseAdmin
       .from('sync_jobs').select('id, heartbeat_at').eq('kind', 'zoom').eq('status', 'running');
-    // This guard exists to stop two runs overlapping, and it failed open: a
-    // broken read produced an empty list, which reads as "nothing running", so
-    // it would start a second one. Skipping an hour costs nothing.
     if (runningErr) {
       console.error('[Zoom cron] could not check for a running sync, skipping this hour:', runningErr.message);
       return;
@@ -14677,10 +15773,65 @@ cron.schedule('20 * * * *', async () => {
       .select().single();
     if (error) throw error;
 
-    await runZoomSync({ jobId: job.id, sinceDays: 30, reprocess: false });
+    try {
+      await runZoomSync({ jobId: job.id, sinceDays: 30, reprocess: false });
+    } catch (runErr) {
+      const message = String(runErr?.message || runErr);
+      console.error('[Zoom cron] run failed:', message);
+      await supabaseAdmin.from('sync_jobs').update({
+        status: 'failed', finished_at: new Date().toISOString(),
+        heartbeat_at: new Date().toISOString(), last_error: message,
+      }).eq('id', job.id);
+      await notifySyncFailure('zoom', message);
+    }
   } catch (err) {
     console.error('[Zoom cron] Error:', err.message);
   }
+}, { timezone: VENUE_TZ });
+
+/**
+ * Gmail at five past, Quo at thirty-five past.
+ *
+ * Spread around the hour rather than all on the same minute: each of these
+ * walks every registered client and each one runs Claude per item, so three
+ * starting together would fight for the same rate limits and make all three
+ * slower. Zoom is already at twenty past.
+ *
+ * Both skip quietly when the integration is not set up. A venue that has not
+ * connected Gmail does not need an hourly log line telling it so.
+ */
+cron.schedule('5 * * * *', async () => {
+  let tokens = null;
+  try {
+    tokens = await loadAndRefreshGmailTokens();
+  } catch (err) {
+    // A refresh that throws is a grant that has gone, which is worth a job row
+    // saying so rather than a log line. runGmailSync asks again and turns it
+    // into the same error with the reconnect instruction on it.
+    console.error('[gmail cron] token refresh failed:', err.message);
+    await runScheduledSync('gmail', runGmailSync, { sinceDays: 30, trigger: 'scheduled' });
+    return;
+  }
+  if (!tokens) {
+    console.log('[gmail cron] Gmail is not connected, nothing to do');
+    return;
+  }
+  await runScheduledSync('gmail', runGmailSync, { sinceDays: 30, trigger: 'scheduled' });
+}, { timezone: VENUE_TZ });
+
+cron.schedule('35 * * * *', async () => {
+  if (!QUO_API_KEY) {
+    console.log('[quo cron] no Quo API key, nothing to do');
+    return;
+  }
+  await runScheduledSync('quo', runQuoSync, { sinceDays: 30, trigger: 'scheduled' });
+}, { timezone: VENUE_TZ });
+
+// Ask the database once, at boot, which of migration 035's columns exist. Every
+// behaviour that needs one is gated on the answer, so the syncs and the crons
+// run either way and say clearly what is switched off.
+detectMigration035(supabaseAdmin).catch(err => {
+  console.error('[035] could not probe for the new columns:', err.message);
 });
 
 // Look at today's memo without waiting until 8am, and without sending it.
