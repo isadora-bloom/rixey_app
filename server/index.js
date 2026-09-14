@@ -11631,6 +11631,34 @@ function getPulseStage(weddingDate, createdAt) {
   return { stage, min, max };
 }
 
+/**
+ * Is this couple talking to Rixey about as much as couples at this stage do?
+ *
+ * Counts every inbound channel over the last thirty days — emails, texts, Zoom
+ * meetings, Sage chat, direct messages, and portal activity at half weight —
+ * and compares the total against a range for how far off the wedding is. A
+ * quiet couple three weeks out is worth a phone call; a loud one twelve months
+ * out is normal and should not look like an alarm.
+ *
+ * Shape (binding, W2 renders it on the wedding Overview):
+ *   {
+ *     level: 'less' | 'typical' | 'more',
+ *     score: number,
+ *     expected: { min, max },
+ *     stage: string,            // e.g. '3-6 months out', 'Just booked'
+ *     breakdown: { emails, texts, zooms, sageChat, directMessages, portalActivity },
+ *     partial: boolean,         // true when a channel could not be counted
+ *     missing: string[]         // which ones, by breakdown key
+ *   }
+ *
+ * `partial` matters more than it looks. Each channel is counted on its own so
+ * one unreadable table does not fail the lot, and the old code turned every
+ * such failure into a zero — which does not read as "we could not count the
+ * texts", it reads as "they have not texted", and that is the answer that
+ * makes somebody ring a couple who has been in touch all week.
+ *
+ * The batch route below answers the same question for the whole list at once.
+ */
 app.get('/api/communication-pulse/:weddingId', async (req, res) => {
   try {
     const { weddingId } = req.params;
@@ -11649,23 +11677,45 @@ app.get('/api/communication-pulse/:weddingId', async (req, res) => {
     if (wProfilesErr) throw new Error(`Could not read the couple's profiles: ${wProfilesErr.message}`);
     const profileIds = wProfiles.map(p => p.id);
 
-    // Count all inbound communication channels in parallel — each query isolated so one bad table doesn't fail all
-    const safeCount = async (fn) => { try { const r = await fn(); return r.count || 0; } catch { return 0; } };
+    // Each channel counted on its own, so one unreadable table does not fail
+    // the lot. A failure is recorded rather than turned into a zero: these are
+    // counts, and every zero here is read as "they have not been in touch".
+    const missing = [];
+    const safeCount = async (key, fn) => {
+      try {
+        const r = await fn();
+        if (r?.error) {
+          console.error(`[Pulse] could not count ${key} for ${weddingId}: ${r.error.message}`);
+          missing.push(key);
+          return 0;
+        }
+        return r.count || 0;
+      } catch (err) {
+        console.error(`[Pulse] counting ${key} threw for ${weddingId}: ${err.message}`);
+        missing.push(key);
+        return 0;
+      }
+    };
 
+    // head:true with an exact count, so none of these can pass 1000 rows —
+    // the database does the counting and hands back a number.
     const [emailCt, textCt, zoomCt, sageCt, dmCt, actCt] = await Promise.all([
-      safeCount(() => supabaseAdmin.from('processed_emails').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).gte('processed_at', since)),
-      safeCount(() => supabaseAdmin.from('processed_quo_messages').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).eq('direction', 'inbound').gte('processed_at', since)),
-      safeCount(() => supabaseAdmin.from('processed_zoom_meetings').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).gte('processed_at', since)),
-      safeCount(() => profileIds.length ? supabaseAdmin.from('messages').select('id', { count: 'exact', head: true }).in('user_id', profileIds).eq('sender', 'user').gte('created_at', since) : Promise.resolve({ count: 0 })),
-      safeCount(() => supabaseAdmin.from('direct_messages').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).eq('sender_type', 'client').gte('created_at', since)),
-      safeCount(() => supabaseAdmin.from('activity_log').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).gte('created_at', since)),
+      safeCount('emails', () => supabaseAdmin.from('processed_emails').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).gte('processed_at', since)),
+      safeCount('texts', () => supabaseAdmin.from('processed_quo_messages').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).eq('direction', 'inbound').gte('processed_at', since)),
+      safeCount('zooms', () => supabaseAdmin.from('processed_zoom_meetings').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).gte('processed_at', since)),
+      safeCount('sageChat', () => profileIds.length ? supabaseAdmin.from('messages').select('id', { count: 'exact', head: true }).in('user_id', profileIds).eq('sender', 'user').gte('created_at', since) : Promise.resolve({ count: 0 })),
+      safeCount('directMessages', () => supabaseAdmin.from('direct_messages').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).eq('sender_type', 'client').gte('created_at', since)),
+      safeCount('portalActivity', () => supabaseAdmin.from('activity_log').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).gte('created_at', since)),
     ]);
 
     // Weight: direct comms count full, portal activity counts half
     const score = Math.round(emailCt + textCt + zoomCt + sageCt + dmCt + actCt * 0.5);
 
     const { stage, min, max } = getPulseStage(wedding.wedding_date, wedding.created_at);
-    const level = score < min ? 'less' : score > max ? 'more' : 'typical';
+    // An undercount can only push the level down, so a partial read is never
+    // allowed to say "less than usual" — that is the reading somebody acts on.
+    const rawLevel = score < min ? 'less' : score > max ? 'more' : 'typical';
+    const level = missing.length && rawLevel === 'less' ? 'typical' : rawLevel;
 
     res.json({
       level,
@@ -11679,7 +11729,9 @@ app.get('/api/communication-pulse/:weddingId', async (req, res) => {
         sageChat: sageCt,
         directMessages: dmCt,
         portalActivity: actCt,
-      }
+      },
+      partial: missing.length > 0,
+      missing,
     });
   } catch (error) {
     console.error('Communication pulse error:', error);
@@ -11688,6 +11740,9 @@ app.get('/api/communication-pulse/:weddingId', async (req, res) => {
 });
 
 // Batch pulse for all weddings (used by admin list view)
+//
+// Same answer as the route above, for every wedding at once:
+//   { pulses: { [weddingId]: { level, score, stage, partial } }, partial, missing }
 app.get('/api/communication-pulse', requireAdmin, async (req, res) => {
   try {
     const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
@@ -11695,23 +11750,51 @@ app.get('/api/communication-pulse', requireAdmin, async (req, res) => {
     const { data: weddings, error: wErr } = await supabaseAdmin
       .from('weddings')
       .select('id, wedding_date, created_at');
+    // This read was destructured and never looked at, so a failure came out as
+    // an empty pulse map: the admin list showed no pulse on any wedding and
+    // nothing said why.
+    if (wErr) throw new Error(`Could not read the wedding list: ${wErr.message}`);
 
-    if (!weddings?.length) return res.json({ pulses: {} });
+    if (!weddings?.length) return res.json({ pulses: {}, partial: false, missing: [] });
 
-    // Build user_id → wedding_id map via profiles table
-    const safeQ = async (fn) => { try { const r = await fn(); if (r.error) { console.warn('[Pulse] Query error:', r.error.message); } return r.data || []; } catch (e) { console.warn('[Pulse] Query threw:', e.message); return []; } };
+    // Build user_id → wedding_id map via profiles table.
+    //
+    // Paged. Thirty days of activity_log across forty-seven weddings passes
+    // 1000 rows on its own, and a select with no range stops there silently —
+    // so the busiest couples were the ones most likely to be undercounted,
+    // which is exactly backwards.
+    const missing = [];
+    const safeQ = async (key, build) => {
+      const rows = [];
+      try {
+        for (let from = 0; ; from += 1000) {
+          const r = await build().range(from, from + 999);
+          if (r.error) {
+            console.warn(`[Pulse] could not read ${key}: ${r.error.message}`);
+            missing.push(key);
+            return rows;
+          }
+          rows.push(...(r.data || []));
+          if (!r.data || r.data.length < 1000) break;
+        }
+      } catch (e) {
+        console.warn(`[Pulse] reading ${key} threw: ${e.message}`);
+        missing.push(key);
+      }
+      return rows;
+    };
 
-    const profiles = await safeQ(() => supabaseAdmin.from('profiles').select('id, wedding_id').eq('is_admin', false));
+    const profiles = await safeQ('profiles', () => supabaseAdmin.from('profiles').select('id, wedding_id').eq('is_admin', false));
     const userToWedding = {};
     profiles.forEach(p => { if (p.id && p.wedding_id) userToWedding[p.id] = p.wedding_id; });
 
     const [emails, texts, zooms, sageMsgs, directMsgs, activity] = await Promise.all([
-      safeQ(() => supabaseAdmin.from('processed_emails').select('wedding_id').gte('processed_at', since)),
-      safeQ(() => supabaseAdmin.from('processed_quo_messages').select('wedding_id').eq('direction', 'inbound').gte('processed_at', since)),
-      safeQ(() => supabaseAdmin.from('processed_zoom_meetings').select('wedding_id').gte('processed_at', since)),
-      safeQ(() => supabaseAdmin.from('messages').select('user_id').eq('sender', 'user').gte('created_at', since)),
-      safeQ(() => supabaseAdmin.from('direct_messages').select('wedding_id').eq('sender_type', 'client').gte('created_at', since)),
-      safeQ(() => supabaseAdmin.from('activity_log').select('wedding_id').gte('created_at', since)),
+      safeQ('emails', () => supabaseAdmin.from('processed_emails').select('wedding_id').gte('processed_at', since)),
+      safeQ('texts', () => supabaseAdmin.from('processed_quo_messages').select('wedding_id').eq('direction', 'inbound').gte('processed_at', since)),
+      safeQ('zooms', () => supabaseAdmin.from('processed_zoom_meetings').select('wedding_id').gte('processed_at', since)),
+      safeQ('sageChat', () => supabaseAdmin.from('messages').select('user_id').eq('sender', 'user').gte('created_at', since)),
+      safeQ('directMessages', () => supabaseAdmin.from('direct_messages').select('wedding_id').eq('sender_type', 'client').gte('created_at', since)),
+      safeQ('portalActivity', () => supabaseAdmin.from('activity_log').select('wedding_id').gte('created_at', since)),
     ]);
 
     // Count per wedding
@@ -11732,11 +11815,15 @@ app.get('/api/communication-pulse', requireAdmin, async (req, res) => {
       const c = counts[w.id];
       const score = Math.round(c.emails + c.texts + c.zooms + c.sage + c.dm + c.activity * 0.5);
       const { stage, min, max } = getPulseStage(w.wedding_date, w.created_at);
-      pulses[w.id] = { level: score < min ? 'less' : score > max ? 'more' : 'typical', score, stage };
+      const rawLevel = score < min ? 'less' : score > max ? 'more' : 'typical';
+      // As above: an undercount must never read as "quieter than usual".
+      const level = missing.length && rawLevel === 'less' ? 'typical' : rawLevel;
+      pulses[w.id] = { level, score, stage, partial: missing.length > 0 };
     });
 
-    console.log('[Pulse] returning pulses for', Object.keys(pulses).length, 'weddings');
-    res.json({ pulses });
+    console.log('[Pulse] returning pulses for', Object.keys(pulses).length, 'weddings'
+      + (missing.length ? `, without ${missing.join(', ')}` : ''));
+    res.json({ pulses, partial: missing.length > 0, missing });
   } catch (error) {
     console.error('Batch pulse error:', error);
     res.status(500).json({ error: 'Failed to calculate pulses' });
