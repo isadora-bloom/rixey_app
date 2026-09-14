@@ -1,5 +1,6 @@
 import { supabase } from '../../lib/supabase'
 import NotificationBell from '../../components/NotificationBell'
+import { sectionByKey } from '../../../shared/sections.js'
 
 /**
  * The top-level admin views, once.
@@ -8,6 +9,15 @@ import NotificationBell from '../../components/NotificationBell'
  * Downloads only ever existed in one of them. On a phone the tab was
  * unreachable, and because the select's value had no matching option whenever
  * that view was open, the dropdown also went blank and looked broken.
+ *
+ * These ids are NOT section keys and must not be run through
+ * resolveSectionKey. They are the venue's home screens, a level above any
+ * wedding, and several of them collide with section keys that mean something
+ * else: 'messages' here is the whole inbox across every wedding, 'meetings' the
+ * shared diary, 'vendors' the vendor directory, 'picks' the storefront admin.
+ * Resolving them would quietly swap a couple of the admin's front pages for
+ * panels that belong to one wedding. The one real section key in this file is
+ * the tab the logo button drops you on, below.
  */
 function views({ stats, unreadMessages, unansweredCount, tourCount, crashCount, reviewCount }) {
   return [
@@ -59,7 +69,11 @@ export default function AdminHeader({
     >
       <div className="max-w-7xl mx-auto px-3 sm:px-4">
         <div className="flex items-center justify-between py-3">
-          <button onClick={() => { setViewingWedding(null); setActiveTab('overview'); }} className="inline-block">
+          {/* Closing a wedding also parks its tab on Overview, so reopening one
+              does not land on whatever obscure panel was last looked at. The key
+              is read off the registry rather than typed, so a rename there
+              cannot leave this pointing at a tab that no longer exists. */}
+          <button onClick={() => { setViewingWedding(null); setActiveTab(sectionByKey('overview').key); }} className="inline-block">
             <img src="/icons/icon-192x192.png" alt="Rixey Manor" className="h-9 w-auto" />
           </button>
           <div className="flex items-center gap-3">

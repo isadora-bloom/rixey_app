@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 // Components still used directly in the main Admin view (not in profile)
@@ -17,6 +17,7 @@ import { apiFetch, authHeaders } from '../utils/api'
 import { useToast } from '../components/ui/Toast'
 import { ConfirmDialog } from '../components/ui'
 import { parseDateOnly } from '../utils/dates'
+import { resolveSectionKey } from '../../shared/sections.js'
 
 // Extracted sub-components
 import AdminHeader from './admin/AdminHeader'
@@ -57,10 +58,16 @@ export default function Admin() {
   // Wrapper around the tab setter: records the tab we're leaving so the
   // header Back button can step back through visited tabs, and scrolls the
   // new tab to the top instead of inheriting the previous tab's scroll position.
+  //
+  // Also the one place a tab key is resolved. Old keys still arrive here from
+  // notification bodies, from the wedding list's focusTab, and from ?section=
+  // in a link someone saved months ago, so 'messages' opens Sage Conversations
+  // and 'direct-messages' opens the Inbox rather than nothing at all.
   const setActiveTab = (tab) => {
+    const key = resolveSectionKey(tab) || 'overview'
     setActiveTabRaw((prev) => {
-      if (tab !== prev) setTabHistory((h) => [...h, prev])
-      return tab
+      if (key !== prev) setTabHistory((h) => [...h, prev])
+      return key
     })
     window.scrollTo(0, 0)
   }
@@ -992,7 +999,9 @@ export default function Admin() {
     // conversation (or the right tab for a non-Sage escalation); otherwise
     // start on the overview tab.
     setSelectedChatUser(focusUserId || null)
-    setActiveTabRaw(focusTab || (focusUserId ? 'messages' : 'overview'))
+    setActiveTabRaw(
+      resolveSectionKey(focusTab) || (focusUserId ? 'conversations' : 'overview')
+    )
     setTabHistory([])
 
     // PARALLELIZED: load all wedding data concurrently. apiFetch throws on a
@@ -1153,24 +1162,51 @@ export default function Admin() {
   // round trip, not ten.
   const retryWeddingProfile = () => { if (viewingWedding) viewWeddingProfile(viewingWedding) }
 
-  // ?wedding=<id> opens straight into that profile.
+  // ?wedding=<id>&section=<key> opens straight into that wedding, on that tab.
   //
   // There is no route for a single wedding — the profile is state on this page
   // — so anything that leaves and comes back used to land on the list. The
   // print pack opens in its own tab, and its way back was "← Admin", which is
   // a different place from where you were.
   //
-  // Runs once weddings have loaded, since it needs the row, and clears the
-  // parameter afterwards so a refresh does not keep reopening it.
+  // The section half is what makes "open Bar Planner" work down a phone line:
+  // the couple's link and Grace's link now carry the same key, so either of
+  // them can read theirs out and the other lands on the same panel.
+  //
+  // Read once, on the first render, before any effect gets the chance to strip
+  // it. Kept as a pending job until the wedding list has loaded, since matching
+  // the id needs the row.
+  const [initialUrlTarget] = useState(() => {
+    const params = new URLSearchParams(window.location.search)
+    return { weddingId: params.get('wedding'), section: params.get('section') }
+  })
+  const urlOpenPending = useRef(!!initialUrlTarget.weddingId)
+
   useEffect(() => {
-    if (!weddings.length || viewingWedding) return
-    const wanted = new URLSearchParams(window.location.search).get('wedding')
-    if (!wanted) return
-    const found = weddings.find(w => w.id === wanted)
-    if (found) viewWeddingProfile(found)
-    window.history.replaceState({}, '', '/admin')
+    if (!urlOpenPending.current || !weddings.length || viewingWedding) return
+    urlOpenPending.current = false
+    const found = weddings.find(w => w.id === initialUrlTarget.weddingId)
+    if (found) viewWeddingProfile(found, { focusTab: initialUrlTarget.section })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weddings])
+
+  // Keep the address bar on the wedding and tab actually open, so the link can
+  // be copied out of it. replaceState, not navigation: the profile is state on
+  // this page, and pushing would make Back walk every tab anyone opened.
+  useEffect(() => {
+    if (urlOpenPending.current) return
+    const url = new URL(window.location.href)
+    if (viewingWedding) {
+      url.searchParams.set('wedding', viewingWedding.id)
+      url.searchParams.set('section', activeTab)
+    } else {
+      url.searchParams.delete('wedding')
+      url.searchParams.delete('section')
+    }
+    const next = `${url.pathname}${url.search}${url.hash}`
+    const now = `${window.location.pathname}${window.location.search}${window.location.hash}`
+    if (next !== now) window.history.replaceState(window.history.state, '', next)
+  }, [viewingWedding, activeTab])
 
   const updateNoteStatus = async (noteId, newStatus) => {
     const snapshot = planningNotes
@@ -1761,7 +1797,7 @@ export default function Admin() {
                     key={w.id}
                     onClick={() => viewWeddingProfile(w, {
                       focusUserId: firstMessage?.user_id,
-                      focusTab: firstMessage?.source === 'direct' ? 'direct-messages' : undefined,
+                      focusTab: firstMessage?.source === 'direct' ? 'inbox' : undefined,
                     })}
                     className="text-left bg-white border border-red-200 rounded-lg px-3 py-2 hover:border-red-400 hover:shadow-sm transition-all"
                     title={firstMessage?.content

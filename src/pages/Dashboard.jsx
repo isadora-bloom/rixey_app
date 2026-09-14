@@ -43,9 +43,57 @@ import { apiFetch, loadJson } from '../utils/api'
 import { useToast } from '../components/ui/Toast'
 import DashboardChat from './dashboard/DashboardChat'
 import FloatingSage from '../components/FloatingSage'
-import DashboardNav, { FINALISABLE, NAV_ITEMS } from './dashboard/DashboardNav'
+import DashboardNav, { FINALISABLE } from './dashboard/DashboardNav'
 import DashboardHeader from './dashboard/DashboardHeader'
 import { shrinkImageForUpload } from '../utils/image'
+import { resolveSectionKey, sectionByKey } from '../../shared/sections.js'
+
+/**
+ * A section that is in the menu but whose panel is still being built.
+ *
+ * Registering the key now is what keeps the two sides the same shape, and a
+ * menu entry that opens a blank white box is the thing that makes people write
+ * in saying the portal is broken. So it says what it is and that it is coming.
+ */
+function ComingShortly({ sectionKey }) {
+  const label = sectionByKey(sectionKey)?.label || 'This section'
+  return (
+    <div className="p-8 text-center">
+      <p className="font-medium text-sage-700">{label}</p>
+      <p className="text-sage-400 text-sm mt-1">Coming shortly.</p>
+    </div>
+  )
+}
+
+// The five steps OnboardingChecklist walks a couple through.
+const ONBOARDING_STEP_KEYS = [
+  'couple_photo_uploaded',
+  'first_message_sent',
+  'vendor_added',
+  'inspo_uploaded',
+  'checklist_item_completed',
+]
+
+// Finished, or told us they were finished. Either way the Get Started group has
+// nothing left to offer, so it can start closed.
+function isOnboardingComplete(progress) {
+  if (!progress) return false
+  if (progress.onboarding_dismissed) return true
+  return ONBOARDING_STEP_KEYS.every(key => !!progress[key])
+}
+
+// section_finalisations rows keyed by whatever the section was called when they
+// were written, folded onto today's keys. Later writes win, so un-ticking a
+// section that also has an old row still reads as un-ticked.
+function canonicaliseFinalisations(rows) {
+  const map = {}
+  Object.entries(rows || {})
+    .map(([storedKey, row]) => [resolveSectionKey(storedKey), row])
+    .filter(([key]) => key)
+    .sort((a, b) => String(a[1]?.updated_at || '').localeCompare(String(b[1]?.updated_at || '')))
+    .forEach(([key, row]) => { map[key] = { ...(map[key] || {}), ...row } })
+  return map
+}
 
 // Countdown component
 function WeddingCountdown({ weddingDate }) {
@@ -145,12 +193,16 @@ export default function Dashboard() {
   const [selectedFile, setSelectedFile] = useState(null)
   const [uploadingFile, setUploadingFile] = useState(false)
   // ?section= opens a section directly, so a link in an email or the old
-  // /vendors URL lands on the right panel instead of the chat.
+  // /vendors URL lands on the right panel instead of the chat. Old keys still
+  // arrive here — ?section=vendor was in every link sent before the registry
+  // existed — so they are resolved rather than rejected.
   const [searchParams] = useSearchParams()
-  const [activeSection, setActiveSection] = useState(() => {
-    const wanted = searchParams.get('section')
-    return NAV_ITEMS.some(i => i.key === wanted) ? wanted : 'chat'
-  })
+  const [activeSection, setActiveSectionRaw] = useState(
+    () => resolveSectionKey(searchParams.get('section')) || 'chat'
+  )
+  // Every write of a section key goes through here, so an old key handed over
+  // by Sage's portal actions or a resource link lands on the canonical panel.
+  const setActiveSection = (key) => setActiveSectionRaw(resolveSectionKey(key) || 'chat')
   // Sage's "want me to put that in your Guest List?" offers, for the most
   // recent reply only. { messageId, actions: [{ section, label, detail }] }
   const [portalActions, setPortalActions] = useState(null)
@@ -161,6 +213,10 @@ export default function Dashboard() {
   const [tableSummary, setTableSummary] = useState(null)
   const [retryState, setRetryState] = useState(null) // { userMessage, baseMessages, secondsLeft }
   const [finalisations, setFinalisations] = useState({}) // { [sectionKey]: { couple_finalised, staff_finalised } }
+  // Whether the couple has worked through the five onboarding steps. Only used
+  // to decide whether the Get Started group opens closed, so a failed load
+  // leaving it false is the harmless way round.
+  const [onboardingComplete, setOnboardingComplete] = useState(false)
   const [profileLoading, setProfileLoading] = useState(true)
   const [needsPhoto, setNeedsPhoto] = useState(false)
   const [photoUploading, setPhotoUploading] = useState(false)
@@ -226,6 +282,17 @@ export default function Dashboard() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }, [activeSection]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Put the open section in the address bar, so a couple who rings up can be
+  // told "send me the link you're looking at" and it opens the same panel.
+  // replaceState, not a route change: the section is state on this page, and
+  // pushing would make Back walk through every panel they opened.
+  useEffect(() => {
+    const url = new URL(window.location.href)
+    if (url.searchParams.get('section') === activeSection) return
+    url.searchParams.set('section', activeSection)
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`)
+  }, [activeSection])
+
   useEffect(() => {
     if (user) {
       loadMessages()
@@ -269,10 +336,24 @@ export default function Dashboard() {
           } catch {}
         }
 
-        // Load finalisations
+        // Load finalisations.
+        //
+        // The rows are keyed by whatever section key was current when they were
+        // written, and a wedding signed off in July has a row saying 'vendor'
+        // where the menu now says 'vendors'. Nothing stored gets rewritten, so
+        // the keys are resolved on the way in instead. Where an old row and a
+        // new one both resolve to the same section, the later write wins, which
+        // is the only reading that survives someone un-ticking a section.
         try {
-          setFinalisations(await loadJson(`${API_URL}/api/finalisations/${data.wedding_id}`))
+          const rows = await loadJson(`${API_URL}/api/finalisations/${data.wedding_id}`)
+          setFinalisations(canonicaliseFinalisations(rows))
         } catch {}
+
+        // Onboarding. Only needed to decide whether Get Started opens closed.
+        try {
+          const onboarding = await loadJson(`${API_URL}/api/onboarding/${data.wedding_id}`)
+          setOnboardingComplete(isOnboardingComplete(onboarding?.progress))
+        } catch { /* a menu group's opening state is not worth a toast */ }
 
         // Load budget summary
         try {
@@ -713,7 +794,7 @@ export default function Dashboard() {
   }
 
   const resourceLinks = [
-    { name: 'Vendor Directory', section: 'preferred-vendors' },
+    { name: 'Vendor Directory', section: 'vendor-directory' },
     { name: 'Accommodations', href: '/accommodations' },
   ]
 
@@ -759,7 +840,7 @@ export default function Dashboard() {
               } else if (action === 'first_message_sent') {
                 document.getElementById('sage-input')?.focus()
               } else if (action === 'vendor_added') {
-                setActiveSection('vendor')
+                setActiveSection('vendors')
               } else if (action === 'inspo_uploaded') {
                 setActiveSection('inspo')
               } else if (action === 'checklist_item_completed') {
@@ -832,6 +913,7 @@ export default function Dashboard() {
             tableSummary={tableSummary}
             finalisations={finalisations}
             isPreWedding={isPreWedding}
+            onboardingComplete={onboardingComplete}
           />
 
           {/* Main Content */}
@@ -867,10 +949,20 @@ export default function Dashboard() {
 
 
               {/* Fallback: staff/admin account on the couple dashboard */}
-              {!['chat', 'photos', 'website-builder', 'wedding-party', 'preferred-vendors', 'downloads', 'picks', 'booking', 'resources'].includes(activeSection) && !profile?.wedding_id && !profileLoading && (
+              {!['chat', 'photo-library', 'website-builder', 'wedding-party', 'vendor-directory', 'downloads', 'picks', 'booking', 'resources'].includes(activeSection) && !profile?.wedding_id && !profileLoading && (
                 <div className="p-8 text-center">
                   <p className="text-sage-400 text-sm">This account isn't linked to a wedding — please sign in with your couple account.</p>
                 </div>
+              )}
+
+              {/* Documents and Completeness: the couple's read-only view of
+                  their planning file. U2 is building CoupleDocuments and
+                  CoupleCompleteness; the orchestrator swaps them in here. */}
+              {activeSection === 'documents' && profile?.wedding_id && (
+                <ComingShortly sectionKey="documents" />
+              )}
+              {activeSection === 'completeness' && profile?.wedding_id && (
+                <ComingShortly sectionKey="completeness" />
               )}
 
               {/* What the venue wrote up after walking the place with them */}
@@ -909,14 +1001,14 @@ export default function Dashboard() {
               )}
 
               {/* Vendors section */}
-              {activeSection === 'vendor' && profile?.wedding_id && (
+              {activeSection === 'vendors' && profile?.wedding_id && (
                 <div className="p-4 sm:p-6">
                   <VendorChecklist weddingId={profile.wedding_id} />
                 </div>
               )}
 
               {/* Photo Library */}
-              {activeSection === 'photos' && (
+              {activeSection === 'photo-library' && (
                 <div className="p-4 sm:p-6">
                   <PhotoBucket weddingId={wedding?.id} />
                 </div>
@@ -937,7 +1029,7 @@ export default function Dashboard() {
               )}
 
               {/* Preferred Vendors section */}
-              {activeSection === 'preferred-vendors' && (
+              {activeSection === 'vendor-directory' && (
                 <div className="p-4 sm:p-6">
                   <PreferredVendors />
                 </div>
@@ -1002,7 +1094,7 @@ export default function Dashboard() {
               )}
 
               {/* Guest Care section */}
-              {activeSection === 'guestcare' && profile?.wedding_id && (
+              {activeSection === 'guest-care' && profile?.wedding_id && (
                 <div className="p-4 sm:p-6">
                   <GuestCareNotes weddingId={profile.wedding_id} />
                 </div>
