@@ -10712,15 +10712,22 @@ app.get('/api/planning-notes/:weddingId', async (req, res) => {
   try {
     const { weddingId } = req.params;
 
-    const { data: notes, error } = await supabaseAdmin
-      .from('planning_notes')
-      .select('*')
-      .eq('wedding_id', weddingId)
-      .order('created_at', { ascending: false });
+    // A wedding fed by Gmail/Quo/Zoom extraction for a year can pass 1000
+    // notes; select() with no range silently dropped the rest.
+    const notes = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin
+        .from('planning_notes')
+        .select('*')
+        .eq('wedding_id', weddingId)
+        .order('created_at', { ascending: false })
+        .range(from, from + 999);
+      if (error) throw error;
+      notes.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
 
-    if (error) throw error;
-
-    res.json({ notes: notes || [] });
+    res.json({ notes });
   } catch (error) {
     console.error('Get planning notes error:', error);
     res.status(500).json({ error: 'Failed to fetch planning notes' });
