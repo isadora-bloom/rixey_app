@@ -13029,6 +13029,144 @@ app.post('/api/join/lookup', joinLimiter, async (req, res) => {
   }
 });
 
+/** The roles the sign-up form offers. Anything else is not a role. */
+const JOIN_ROLES = new Set([
+  'couple-bride', 'couple-groom', 'couple-custom',
+  'mother-bride', 'mother-groom', 'father-bride', 'father-groom',
+  'best-man', 'maid-of-honor', 'vip',
+]);
+
+/**
+ * Finish joining a wedding by event code.
+ *
+ * The browser used to do this insert itself, straight into `profiles` with the
+ * anon key, choosing its own wedding_id and role. Three things went wrong with
+ * that and all three were invisible: the insert's error was logged to a console
+ * nobody was reading, the page said "Account created!" either way, and the
+ * couple arrived at a dashboard telling them they were not linked to a wedding
+ * — with no way for anyone to link them, because nothing in the admin set
+ * profiles.wedding_id. See PATCH /api/admin/profiles/:id below for that half.
+ *
+ * The code decides the wedding here, on the server. A wedding_id in the body is
+ * ignored: it is the caller naming their own permissions.
+ */
+app.post('/api/join/complete', joinLimiter, requireAuth, async (req, res) => {
+  try {
+    const code = String(req.body?.event_code || '').trim().toUpperCase();
+    if (code.length < 4) return res.status(400).json({ error: 'Enter your event code' });
+
+    const { data: wedding, error: weddingErr } = await supabaseAdmin
+      .from('weddings')
+      .select('id, wedding_date, partner1_name, partner2_name')
+      .eq('event_code', code)
+      .maybeSingle();
+    if (weddingErr) throw weddingErr;
+    if (!wedding) return res.status(404).json({ error: 'Event code not found. Please check and try again.' });
+
+    const rawRole = String(req.body?.role || '').trim();
+    const role = JOIN_ROLES.has(rawRole) ? rawRole : 'couple';
+
+    const profileRow = {
+      id: req.userId,                       // the token, never the body
+      email: req.user?.email || null,       // ditto
+      wedding_id: wedding.id,               // the code, never the body
+      wedding_date: wedding.wedding_date || null,
+      name: String(req.body?.name || '').trim() || req.user?.email || null,
+      phone: String(req.body?.phone || '').trim() || null,
+      role,
+      custom_role_term: role === 'couple-custom'
+        ? (String(req.body?.custom_role_term || '').trim() || null)
+        : null,
+    };
+
+    // Every field above is set by hand, but run it through the column map
+    // anyway: profiles gains and loses columns, and a write that dies on a
+    // column name is the one failure mode this sign-up path cannot afford
+    // twice.
+    const { fields, ignored } = onlyColumns('profiles', profileRow);
+    if (ignored.length) console.log('[join] ignored non-columns:', ignored.join(', '));
+
+    // Upsert rather than insert: someone who signed up, failed at this step and
+    // came back already has a half-made profile row, and telling them their
+    // account exists is not help.
+    const { error: profileErr } = await supabaseAdmin
+      .from('profiles')
+      .upsert(fields, { onConflict: 'id' });
+    if (profileErr) throw profileErr;
+
+    // Partner names, if the wedding does not have them yet. Only when empty:
+    // whoever joins second should not be able to rename the couple, and the
+    // admin's version of the names is the one that has been checked.
+    const partner1 = String(req.body?.partner1_name || '').trim();
+    const partner2 = String(req.body?.partner2_name || '').trim();
+    const namePatch = {};
+    if (partner1 && !wedding.partner1_name) namePatch.partner1_name = partner1;
+    if (partner2 && !wedding.partner2_name) namePatch.partner2_name = partner2;
+    if (Object.keys(namePatch).length) {
+      const { error: nameErr } = await supabaseAdmin
+        .from('weddings').update(namePatch).eq('id', wedding.id);
+      // Not fatal. They are joined either way, and a missing partner name is
+      // something the admin can fill in; failing the whole join over it is not
+      // the trade.
+      if (nameErr) console.error('[join] could not save partner names:', nameErr.message);
+    }
+
+    res.json({ wedding_id: wedding.id });
+  } catch (e) {
+    console.error('Join complete error:', e);
+    res.status(500).json({ error: 'Could not finish joining that wedding' });
+  }
+});
+
+/**
+ * Link a login to a wedding, or unlink it.
+ *
+ * The gap this fills: a couple whose profile insert failed at sign-up lands on
+ * a banner telling staff to use an Access tab, and there was no Access tab and
+ * no route behind it. Nothing anywhere could set profiles.wedding_id, so the
+ * only fix was the Supabase console.
+ *
+ * Mounted under /api/admin, which requireAdmin already covers.
+ */
+app.patch('/api/admin/profiles/:id', async (req, res) => {
+  try {
+    const weddingId = req.body?.wedding_id ?? null;
+
+    if (weddingId !== null) {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(weddingId))) {
+        return res.status(400).json({ error: 'wedding_id must be a wedding id, or null to unlink' });
+      }
+      const { data: wedding, error: weddingErr } = await supabaseAdmin
+        .from('weddings').select('id, wedding_date').eq('id', weddingId).maybeSingle();
+      if (weddingErr) throw weddingErr;
+      if (!wedding) return res.status(404).json({ error: 'No such wedding' });
+
+      const { data, error } = await supabaseAdmin
+        .from('profiles')
+        .update({ wedding_id: wedding.id, wedding_date: wedding.wedding_date || null })
+        .eq('id', req.params.id)
+        .select('id, email, name, wedding_id')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) return res.status(404).json({ error: 'No such profile' });
+      return res.json(data);
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('profiles')
+      .update({ wedding_id: null })
+      .eq('id', req.params.id)
+      .select('id, email, name, wedding_id')
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such profile' });
+    res.json(data);
+  } catch (e) {
+    console.error('Link profile to wedding error:', e);
+    res.status(500).json({ error: 'Could not link that login to a wedding' });
+  }
+});
+
 // ── Public RSVP endpoints ─────────────────────────────────────────────────────
 
 /**
