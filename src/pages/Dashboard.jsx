@@ -132,6 +132,7 @@ export default function Dashboard() {
   const [messages, setMessages] = useState([])
   const [newMessage, setNewMessage] = useState('')
   const [loadingMessages, setLoadingMessages] = useState(true)
+  const [loadFailed, setLoadFailed] = useState(false)
   const [sending, setSending] = useState(false)
   const [welcomeSent, setWelcomeSent] = useState(false)
   const [profile, setProfile] = useState(null)
@@ -383,13 +384,15 @@ export default function Dashboard() {
     scrollToBottom()
   }, [messages])
 
-  // Trigger welcome message only if user has no messages in this session
+  // Trigger welcome message only if the load actually succeeded and found no
+  // messages. A failed load also leaves messages at [], but must not be
+  // mistaken for a couple with a genuinely empty history.
   useEffect(() => {
-    if (!loadingMessages && !welcomeSent && user && messages.length === 0) {
+    if (!loadingMessages && !loadFailed && !welcomeSent && user && messages.length === 0) {
       sendWelcomeMessage()
       setWelcomeSent(true)
     }
-  }, [loadingMessages, welcomeSent, user, messages.length])
+  }, [loadingMessages, loadFailed, welcomeSent, user, messages.length])
 
   const scrollToBottom = () => {
     if (chatContainerRef.current) {
@@ -472,11 +475,16 @@ export default function Dashboard() {
   }
 
   const loadMessages = async () => {
+    setLoadFailed(false)
     try {
       const data = await loadJson(`${API_URL}/api/sage-messages/user/${user.id}`)
       setMessages(data.messages || [])
     } catch (error) {
       console.error('Error loading messages:', error)
+      // Distinct from a genuine zero-messages load: a failed load must never
+      // look like "no messages yet", or the welcome-message effect below
+      // sends a second welcome on top of whatever the couple already has.
+      setLoadFailed(true)
       setMessages([])
     }
     setLoadingMessages(false)
