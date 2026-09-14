@@ -15,6 +15,7 @@ import ManorDownloads from '../components/ManorDownloads'
 import { API_URL } from '../config/api'
 import { apiFetch, authHeaders } from '../utils/api'
 import { useToast } from '../components/ui/Toast'
+import { ConfirmDialog } from '../components/ui'
 import { parseDateOnly } from '../utils/dates'
 
 // Extracted sub-components
@@ -22,7 +23,7 @@ import AdminHeader from './admin/AdminHeader'
 import CrashReports from '../components/CrashReports'
 import AdminWeddingList from './admin/AdminWeddingList'
 import AdminWeddingProfile from './admin/AdminWeddingProfile'
-import { detectEscalation } from './admin/adminUtils'
+import { detectEscalation, getLastActivityAt } from './admin/adminUtils'
 import { weddingName } from '../../shared/wedding-name.js'
 
 export default function Admin() {
@@ -45,6 +46,10 @@ export default function Admin() {
   const [listSearch, setListSearch] = useState('') // searches the admin wedding list by couple/vendor
   const [showArchived, setShowArchived] = useState(false)
   const [escalations, setEscalations] = useState({})
+  // Direct-message conversations keyed by wedding id — the "unread > 4h"
+  // escalation signal and the last-activity fallback both read this rather
+  // than re-fetching it themselves.
+  const [directConversations, setDirectConversations] = useState({})
   const [planningNotes, setPlanningNotes] = useState([])
   const [activeTab, setActiveTabRaw] = useState('overview')
   const [tabHistory, setTabHistory] = useState([])
@@ -132,6 +137,10 @@ export default function Admin() {
   const [staffingSummary, setStaffingSummary] = useState(null) // Quick view of staffing estimate
   const [sharedBudget, setSharedBudget] = useState(null) // Shared budget (only if is_shared=true)
   const [internalNotes, setInternalNotes] = useState([])
+  // Which of viewWeddingProfile's ten parallel loads failed, keyed the same
+  // way as PANEL_LABELS there — read by AdminWeddingProfile to swap an empty
+  // state for a "could not load, retry" line instead of a false "no data yet".
+  const [sectionLoadErrors, setSectionLoadErrors] = useState({})
   const [newNoteText, setNewNoteText] = useState('')
   const [savingNote, setSavingNote] = useState(false)
   const [showGuestCare, setShowGuestCare] = useState(false)
@@ -155,6 +164,7 @@ export default function Admin() {
   const [injecting, setInjecting] = useState(false)
   const [checkingIn, setCheckingIn] = useState(false)
   const [checkedIn, setCheckedIn] = useState(false)
+  const [confirmDeleteQuestionId, setConfirmDeleteQuestionId] = useState(null)
   const [last24h, setLast24h] = useState({ signups: [], activity: [] })
   const [last24hLoading, setLast24hLoading] = useState(true)
 
@@ -235,8 +245,9 @@ export default function Admin() {
     try {
       const data = await apiFetch(`${API_URL}/api/gmail/sync`, { method: 'POST' })
       setGmailStatus(data.message || data.error)
-      // Reload data to get any new planning notes
-      loadData()
+      // Only the review queue and the open wedding's notes can have changed —
+      // not every wedding's whole Sage history, which loadData would redo.
+      await refreshAfterSync()
     } catch (err) {
       setGmailStatus('Failed to sync emails')
       toastError(`Could not sync Gmail: ${err.message}`)
@@ -342,7 +353,7 @@ export default function Admin() {
         statusMsg += '\n(No debug info returned)'
       }
       setQuoStatus(statusMsg)
-      loadData()
+      await refreshAfterSync()
     } catch (err) {
       console.error('Quo sync error:', err)
       setQuoStatus('Failed to sync: ' + err.message + '\nCheck console for details')
@@ -442,7 +453,7 @@ export default function Admin() {
           ? `${data.callsFiled} call${data.callsFiled === 1 ? '' : 's'} filed${data.remembered ? ', and that number is saved to the wedding' : ''}`
           : `Filed, and pulled ${data.notesExtracted} planning notes out of it`
       )
-      loadData()
+      if (viewingWedding) await loadPlanningNotesForWedding(viewingWedding.id)
     } catch (err) {
       toastError(`Could not file that: ${err.message}`)
     }
@@ -526,8 +537,7 @@ export default function Admin() {
       } else {
         setZoomStatus('Started. Looking at Zoom…')
         await followSyncJob(data.jobId)
-        await loadReviewItems()
-        loadData()
+        await refreshAfterSync()
       }
     } catch (err) {
       setZoomStatus('Failed to sync Zoom meetings')
@@ -800,10 +810,25 @@ export default function Admin() {
         .finally(() => setLast24hLoading(false))
     )
 
-    // Load all Sage messages for escalation detection via server (bypasses RLS)
+    // Direct-message conversations — the "unread > 4h" escalation signal and
+    // the last-activity fallback for couples who only ever message directly.
+    let directConvByWedding = {}
+    try {
+      const convData = await apiFetch(`${API_URL}/api/messages/admin/conversations`)
+      ;(convData.conversations || []).forEach(c => { directConvByWedding[c.wedding_id] = c })
+    } catch (err) {
+      console.error('Failed to load direct-message conversations:', err)
+    }
+    setDirectConversations(directConvByWedding)
+
+    // Load Sage messages for escalation detection via server (bypasses RLS).
+    // Scoped to the last 30 days — escalation only ever looks at the last
+    // week anyway, and this is what stops one admin tab re-downloading the
+    // whole history of every wedding's chat after every sync and upload.
     if (weddingsData && weddingsData.length > 0) {
       try {
-        const messagesRes = await fetch(`${API_URL}/api/sage-messages/all`, {
+        const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+        const messagesRes = await fetch(`${API_URL}/api/sage-messages/all?since=${encodeURIComponent(since)}`, {
           headers: await authHeaders()
         })
         const messagesData = await messagesRes.json()
@@ -817,7 +842,7 @@ export default function Admin() {
           const userIds = wedding.profiles?.map(p => p.id) || []
           const weddingMsgs = messages.filter(m => userIds.includes(m.user_id))
           msgByWedding[wedding.id] = weddingMsgs
-          escalationByWedding[wedding.id] = detectEscalation(weddingMsgs, wedding.escalation_handled_at)
+          escalationByWedding[wedding.id] = detectEscalation(weddingMsgs, wedding.escalation_handled_at, directConvByWedding[wedding.id])
         })
 
         setAllMessages(msgByWedding)
@@ -828,6 +853,24 @@ export default function Admin() {
     }
 
     setLoading(false)
+  }
+
+  // Re-runs just the review queue and (if a profile is open) that wedding's
+  // planning notes, instead of loadData's full reload. A sync or upload can
+  // only ever touch those two things, so refetching everyone's Sage history
+  // and every wedding row again was wasted bandwidth on every button press.
+  const refreshAfterSync = async () => {
+    await loadReviewItems()
+    if (viewingWedding) await loadPlanningNotesForWedding(viewingWedding.id)
+  }
+
+  const loadPlanningNotesForWedding = async (weddingId) => {
+    try {
+      const data = await apiFetch(`${API_URL}/api/planning-notes/${weddingId}`)
+      setPlanningNotes(data.notes || [])
+    } catch (err) {
+      toastError(`Could not refresh planning notes: ${err.message}`)
+    }
   }
 
   const markAsRead = async (id) => {
@@ -930,20 +973,33 @@ export default function Admin() {
 
 
   const viewWeddingProfile = async (wedding, opts = {}) => {
-    const { focusUserId } = opts
+    const { focusUserId, focusTab } = opts
     setViewingWedding(wedding)
     setLoadingMessages(true)
     setSearchQuery('')
     setNotesSearchQuery('')
     setNotesHighlights('')
+    // Wiped on entry as well as on close: without this, opening a second
+    // wedding straight after the first could show its stale contract Q&A,
+    // its upload result, its collapsed note categories or a half-typed Sage
+    // injection, all belonging to whichever wedding was open before.
+    setContractQuestion('')
+    setContractAnswer('')
+    setUploadResult(null)
+    setCollapsedNoteCategories({})
+    setInjectText('')
     // When opened from a "needs attention" flag, land directly on that person's
-    // conversation; otherwise start on the overview tab.
+    // conversation (or the right tab for a non-Sage escalation); otherwise
+    // start on the overview tab.
     setSelectedChatUser(focusUserId || null)
-    setActiveTabRaw(focusUserId ? 'messages' : 'overview')
+    setActiveTabRaw(focusTab || (focusUserId ? 'messages' : 'overview'))
     setTabHistory([])
 
-    // PARALLELIZED: Load all wedding data concurrently with Promise.allSettled
-    const hdrs = await authHeaders()
+    // PARALLELIZED: load all wedding data concurrently. apiFetch throws on a
+    // non-2xx response instead of quietly handing back {}, so a 401 or 500
+    // here no longer reads as "this couple simply has no notes yet" — it
+    // shows up below as "Could not load" with a Retry, and once as one toast
+    // naming every panel that failed.
     const [
       couplePhotoResult,
       messagesResult,
@@ -956,112 +1012,146 @@ export default function Admin() {
       activitiesResult,
       internalNotesResult,
     ] = await Promise.allSettled([
-      // 0: Couple photo
-      fetch(`${API_URL}/api/couple-photo/${wedding.id}`, { headers: hdrs }).then(r => r.json()),
-      // 1: Sage chat messages
-      fetch(`${API_URL}/api/sage-messages/${wedding.id}`, { headers: hdrs }).then(r => r.json()),
-      // 2: Planning notes
-      fetch(`${API_URL}/api/planning-notes/${wedding.id}`, { headers: hdrs }).then(r => r.json()),
-      // 3: Timeline
-      fetch(`${API_URL}/api/timeline/${wedding.id}`, { headers: hdrs }).then(r => r.json()),
-      // 4: Tables
-      fetch(`${API_URL}/api/tables/${wedding.id}`, { headers: hdrs }).then(r => r.json()),
-      // 5: Staffing
-      fetch(`${API_URL}/api/staffing/${wedding.id}`, { headers: hdrs }).then(r => r.json()),
-      // 6: Budget
-      fetch(`${API_URL}/api/budget/${wedding.id}`, { headers: hdrs }).then(r => r.ok ? r.json() : null),
-      // 7: Borrow selections
-      fetch(`${API_URL}/api/borrow-selections/${wedding.id}`, { headers: hdrs }).then(r => r.json()),
-      // 8: Activities
-      fetch(`${API_URL}/api/activities/${wedding.id}?limit=20`, { headers: hdrs }).then(r => r.json()),
-      // 9: Internal notes
-      fetch(`${API_URL}/api/internal-notes/${wedding.id}`, { headers: hdrs }).then(r => r.json()),
+      apiFetch(`${API_URL}/api/couple-photo/${wedding.id}`),
+      apiFetch(`${API_URL}/api/sage-messages/${wedding.id}`),
+      apiFetch(`${API_URL}/api/planning-notes/${wedding.id}`),
+      apiFetch(`${API_URL}/api/timeline/${wedding.id}`),
+      apiFetch(`${API_URL}/api/tables/${wedding.id}`),
+      apiFetch(`${API_URL}/api/staffing/${wedding.id}`),
+      // A 404 here means "no budget yet", not a failure — the endpoint
+      // returns it deliberately when wedding_budget has no row.
+      apiFetch(`${API_URL}/api/budget/${wedding.id}`).catch(err => {
+        if (err.status === 404) return null
+        throw err
+      }),
+      apiFetch(`${API_URL}/api/borrow-selections/${wedding.id}`),
+      apiFetch(`${API_URL}/api/activities/${wedding.id}?limit=20`),
+      apiFetch(`${API_URL}/api/internal-notes/${wedding.id}`),
     ])
 
-    // Process results
-    if (couplePhotoResult.status === 'fulfilled' && couplePhotoResult.value?.photo) {
-      setCouplePhotos(prev => ({ ...prev, [wedding.id]: couplePhotoResult.value.photo.image_url }))
+    const PANEL_LABELS = {
+      photo: 'couple photo', messages: 'Sage conversation', notes: 'planning notes',
+      timeline: 'timeline', tables: 'tables', staffing: 'staffing', budget: 'budget',
+      borrow: 'borrow selections', activities: 'recent activity', internalNotes: 'internal notes',
     }
+    const failedPanels = {}
+    const failed = (key) => { failedPanels[key] = true }
+
+    // Process results
+    if (couplePhotoResult.status === 'fulfilled') {
+      if (couplePhotoResult.value?.photo) {
+        setCouplePhotos(prev => ({ ...prev, [wedding.id]: couplePhotoResult.value.photo.image_url }))
+      }
+    } else failed('photo')
 
     if (messagesResult.status === 'fulfilled') {
       setWeddingMessages(messagesResult.value.messages || [])
     } else {
       setWeddingMessages([])
+      failed('messages')
     }
 
     if (notesResult.status === 'fulfilled') {
       setPlanningNotes(notesResult.value.notes || [])
     } else {
       setPlanningNotes([])
+      failed('notes')
     }
 
-    if (timelineResult.status === 'fulfilled' && timelineResult.value?.timeline) {
-      const tl = timelineResult.value.timeline
-      const events = tl.timeline_data?.events || {}
-      const includedCount = Object.values(events).filter(e => e.included).length
-      setTimelineSummary({
-        ceremonyTime: tl.ceremony_start,
-        receptionEnd: tl.reception_end,
-        doingFirstLook: tl.timeline_data?.doingFirstLook,
-        dinnerType: tl.timeline_data?.dinnerType,
-        includedEvents: includedCount,
-        updatedAt: tl.updated_at
-      })
+    if (timelineResult.status === 'fulfilled') {
+      const tl = timelineResult.value?.timeline
+      if (tl) {
+        const events = tl.timeline_data?.events || {}
+        const includedCount = Object.values(events).filter(e => e.included).length
+        setTimelineSummary({
+          ceremonyTime: tl.ceremony_start,
+          receptionEnd: tl.reception_end,
+          doingFirstLook: tl.timeline_data?.doingFirstLook,
+          dinnerType: tl.timeline_data?.dinnerType,
+          includedEvents: includedCount,
+          updatedAt: tl.updated_at
+        })
+      } else {
+        setTimelineSummary(null)
+      }
     } else {
       setTimelineSummary(null)
+      failed('timeline')
     }
 
-    if (tablesResult.status === 'fulfilled' && tablesResult.value?.tables) {
-      const tb = tablesResult.value.tables
-      const guestsPerTable = tb.guests_per_table || 8
-      const baseGuests = tb.guest_count - (tb.head_table ? tb.head_table_size : 0) - (tb.sweetheart_table ? 2 : 0) - (tb.kids_count || 0)
-      const tablesNeeded = Math.ceil(baseGuests / guestsPerTable)
-      setTableSummary({
-        guestCount: tb.guest_count,
-        tableShape: tb.table_shape,
-        tablesNeeded,
-        headTable: tb.head_table,
-        sweetheartTable: tb.sweetheart_table,
-        linenColor: tb.linen_color,
-        napkinColor: tb.napkin_color,
-        updatedAt: tb.updated_at
-      })
+    if (tablesResult.status === 'fulfilled') {
+      const tb = tablesResult.value?.tables
+      if (tb) {
+        const guestsPerTable = tb.guests_per_table || 8
+        const baseGuests = tb.guest_count - (tb.head_table ? tb.head_table_size : 0) - (tb.sweetheart_table ? 2 : 0) - (tb.kids_count || 0)
+        const tablesNeeded = Math.ceil(baseGuests / guestsPerTable)
+        setTableSummary({
+          guestCount: tb.guest_count,
+          tableShape: tb.table_shape,
+          tablesNeeded,
+          headTable: tb.head_table,
+          sweetheartTable: tb.sweetheart_table,
+          linenColor: tb.linen_color,
+          napkinColor: tb.napkin_color,
+          updatedAt: tb.updated_at
+        })
+      } else {
+        setTableSummary(null)
+      }
     } else {
       setTableSummary(null)
+      failed('tables')
     }
 
-    if (staffingResult.status === 'fulfilled' && staffingResult.value?.staffing) {
-      setStaffingSummary(staffingResult.value.staffing)
+    if (staffingResult.status === 'fulfilled') {
+      setStaffingSummary(staffingResult.value?.staffing || null)
     } else {
       setStaffingSummary(null)
+      failed('staffing')
     }
 
-    if (budgetResult.status === 'fulfilled' && budgetResult.value?.budget?.is_shared) {
-      setSharedBudget(budgetResult.value.budget)
+    if (budgetResult.status === 'fulfilled') {
+      setSharedBudget(budgetResult.value?.budget?.is_shared ? budgetResult.value.budget : null)
     } else {
       setSharedBudget(null)
+      failed('budget')
     }
 
     if (borrowResult.status === 'fulfilled') {
       setBorrowSelections(borrowResult.value.selections || [])
     } else {
       setBorrowSelections([])
+      failed('borrow')
     }
 
     if (activitiesResult.status === 'fulfilled') {
       setActivities(activitiesResult.value.activities || [])
     } else {
       setActivities([])
+      failed('activities')
     }
 
     if (internalNotesResult.status === 'fulfilled') {
       setInternalNotes(internalNotesResult.value.notes || [])
     } else {
       setInternalNotes([])
+      failed('internalNotes')
+    }
+
+    setSectionLoadErrors(failedPanels)
+    const failedNames = Object.keys(failedPanels).map(k => PANEL_LABELS[k] || k)
+    if (failedNames.length > 0) {
+      toastError(`Could not load: ${failedNames.join(', ')}. See the panels below for Retry.`)
     }
 
     setLoadingMessages(false)
   }
+
+  // Re-runs viewWeddingProfile for whichever wedding is open. Simpler than
+  // threading a per-section retry through ten independent requests, and the
+  // whole load already runs in parallel, so pressing it again costs one
+  // round trip, not ten.
+  const retryWeddingProfile = () => { if (viewingWedding) viewWeddingProfile(viewingWedding) }
 
   // ?wedding=<id> opens straight into that profile.
   //
@@ -1148,12 +1238,7 @@ export default function Admin() {
         success: true,
         message: `Extracted ${data.notesExtracted} notes from contract`
       })
-      // Reload planning notes via server endpoint
-      const notesRes = await fetch(`${API_URL}/api/planning-notes/${viewingWedding.id}`, {
-        headers: await authHeaders()
-      })
-      const notesData = await notesRes.json()
-      setPlanningNotes(notesData.notes || [])
+      await loadPlanningNotesForWedding(viewingWedding.id)
     } catch (err) {
       console.error('Upload error:', err)
       setUploadResult({ success: false, message: err.message || 'Failed to upload contract' })
@@ -1222,6 +1307,7 @@ export default function Admin() {
     setNewItemCategory('')
     setNewItemDescription('')
     setNewItemImage(null)
+    setSectionLoadErrors({})
   }
 
   // Quick stats
@@ -1234,8 +1320,8 @@ export default function Admin() {
     weekAgo.setDate(weekAgo.getDate() - 7)
 
     const activeThisWeek = activeWeddings.filter(w => {
-      const msgs = allMessages[w.id] || []
-      return msgs.some(m => new Date(m.created_at) > weekAgo)
+      const lastActive = getLastActivityAt(w, allMessages[w.id], directConversations[w.id])
+      return lastActive && lastActive > weekAgo
     })
 
     // Weddings needing attention (escalations)
@@ -1296,21 +1382,18 @@ export default function Admin() {
     })
     .sort((a, b) => {
       if (sortBy === 'lastActivity') {
-        // Get last activity for each wedding
-        const aMessages = allMessages[a.id] || []
-        const bMessages = allMessages[b.id] || []
-        const aUserMsgs = aMessages.filter(m => m.sender === 'user')
-        const bUserMsgs = bMessages.filter(m => m.sender === 'user')
+        // Sage messages or direct messages, whichever is newer — a couple
+        // who only ever uses direct messages used to sort as if they had
+        // never said anything at all.
+        const aLast = getLastActivityAt(a, allMessages[a.id], directConversations[a.id])
+        const bLast = getLastActivityAt(b, allMessages[b.id], directConversations[b.id])
 
         // No activity goes to the bottom
-        if (aUserMsgs.length === 0 && bUserMsgs.length === 0) return 0
-        if (aUserMsgs.length === 0) return 1
-        if (bUserMsgs.length === 0) return -1
+        if (!aLast && !bLast) return 0
+        if (!aLast) return 1
+        if (!bLast) return -1
 
-        // Most recent first
-        const aLatest = Math.max(...aUserMsgs.map(m => new Date(m.created_at).getTime()))
-        const bLatest = Math.max(...bUserMsgs.map(m => new Date(m.created_at).getTime()))
-        return bLatest - aLatest
+        return bLast - aLast
       } else if (sortBy === 'weddingDate') {
         // Sort by wedding date (soonest first)
         if (!a.wedding_date && !b.wedding_date) return 0
@@ -1348,6 +1431,18 @@ export default function Admin() {
         setSearchQuery={setSearchQuery}
         escalations={escalations}
         markEscalationHandled={markEscalationHandled}
+        directConversation={directConversations[viewingWedding.id]}
+        sectionLoadErrors={sectionLoadErrors}
+        retryWeddingProfile={retryWeddingProfile}
+        editingWedding={editingWedding}
+        setEditingWedding={setEditingWedding}
+        honeybook={honeybook}
+        setHoneybook={setHoneybook}
+        googleSheets={googleSheets}
+        setGoogleSheets={setGoogleSheets}
+        saving={saving}
+        saveLinks={saveLinks}
+        startEditing={startEditing}
         couplePhotos={couplePhotos}
         setEnlargedPhoto={setEnlargedPhoto}
         setCouplePhotos={setCouplePhotos}
@@ -1441,7 +1536,7 @@ export default function Admin() {
                   </p>
                 </div>
                 <button
-                  onClick={() => deleteUncertainQuestion(q.id)}
+                  onClick={() => setConfirmDeleteQuestionId(q.id)}
                   className="text-sage-400 hover:text-red-500 p-1"
                   title="Delete question"
                 >
@@ -1528,7 +1623,7 @@ export default function Admin() {
                 <div className="space-y-3 mt-3 pt-3 border-t border-cream-200">
                   <div>
                     <p className="text-sm font-medium text-sage-700">
-                      Send the answer to {wedding?.couple_names || 'the couple'}
+                      Send the answer to {weddingName(wedding, 'the couple')}
                     </p>
                     <p className="text-xs text-sage-400 mt-0.5">
                       Sage told them the team would follow up. This goes to their Inbox as a message from Rixey Manor.
@@ -1620,6 +1715,7 @@ export default function Admin() {
         setActiveTab={setActiveTab}
         tourCount={tourCount}
         crashCount={crashCount}
+        reviewCount={reviewItems.length}
       />
 
       <main className="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
@@ -1663,7 +1759,10 @@ export default function Admin() {
                 return (
                   <button
                     key={w.id}
-                    onClick={() => viewWeddingProfile(w, { focusUserId: firstMessage?.user_id })}
+                    onClick={() => viewWeddingProfile(w, {
+                      focusUserId: firstMessage?.user_id,
+                      focusTab: firstMessage?.source === 'direct' ? 'direct-messages' : undefined,
+                    })}
                     className="text-left bg-white border border-red-200 rounded-lg px-3 py-2 hover:border-red-400 hover:shadow-sm transition-all"
                     title={firstMessage?.content
                       ? `Open the conversation: "${String(firstMessage.content).slice(0, 120)}"`
@@ -1681,6 +1780,95 @@ export default function Admin() {
                   </button>
                 )
               })}
+            </div>
+          </div>
+        )}
+
+        {/* Meetings the matcher would not guess at.
+            Sits above every view now, not just eleven of thirteen: a queue
+            nobody passes is a queue nobody answers, and the whole point is
+            that it asks rather than files a meeting on a shared first name. */}
+        {reviewItems.length > 0 && (
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 sm:p-6 mb-6">
+            <h3 className="font-serif text-lg text-amber-900">
+              {reviewItems.length === 1 ? 'One thing I can’t place' : `${reviewItems.length} things I can’t place`}
+            </h3>
+            <p className="text-amber-800 text-sm mt-1 mb-4">
+              I only file something when I’m sure: a first and last name, both partners, or a name with the
+              wedding date. An email has to actually be from the couple, or have their address in it. These
+              didn’t reach that, so I’ve left them for you rather than guessing.
+            </p>
+            <div className="space-y-3">
+              {reviewItems.map(item => (
+                <div key={item.id} className="bg-white rounded-xl border border-amber-200 p-3 sm:p-4">
+                  <div className="font-medium text-sage-700">
+                    {/* Emails and meetings share this list, so say which. It
+                        used to read "Untitled meeting" whatever it was. */}
+                    {item.source === 'gmail' && (
+                      <span className="mr-2 text-xs uppercase tracking-wide text-amber-700 bg-amber-100 rounded px-1.5 py-0.5">Email</span>
+                    )}
+                    {item.source === 'quo_call' && (
+                      <span className="mr-2 text-xs uppercase tracking-wide text-amber-700 bg-amber-100 rounded px-1.5 py-0.5">Call</span>
+                    )}
+                    {item.title || (item.source === 'gmail' ? 'No subject' : item.source === 'quo_call' ? 'Calls from an unknown number' : 'Untitled meeting')}
+                  </div>
+                  <div className="text-xs text-sage-500 mt-0.5">
+                    {item.occurred_at ? new Date(item.occurred_at).toLocaleString() : 'no date'}
+                    {item.reason ? ` · ${item.reason}` : ''}
+                  </div>
+                  {item.excerpt && (
+                    <p className="text-sm text-sage-600 mt-2 line-clamp-3 italic">“{item.excerpt.slice(0, 240)}…”</p>
+                  )}
+                  {/* A number filed once should file itself next time, so the
+                      answer to "whose is this?" can also save them to the
+                      wedding. Left blank, the calls are still filed. */}
+                  {item.source === 'quo_call' && (
+                    <div className="grid gap-2 sm:grid-cols-2 mt-3">
+                      <input
+                        value={reviewContact[item.id]?.name || item.payload?.callerName || ''}
+                        onChange={e => setReviewContact(prev => ({ ...prev, [item.id]: { ...prev[item.id], name: e.target.value } }))}
+                        placeholder="Who is this? e.g. Susan Miller"
+                        className="border border-cream-300 rounded-lg px-3 py-2 text-sm"
+                      />
+                      <input
+                        value={reviewContact[item.id]?.relationship || ''}
+                        onChange={e => setReviewContact(prev => ({ ...prev, [item.id]: { ...prev[item.id], relationship: e.target.value } }))}
+                        placeholder="Bride's mother"
+                        className="border border-cream-300 rounded-lg px-3 py-2 text-sm"
+                      />
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    <select
+                      value={reviewChoice[item.id] || item.suggested_wedding_id || ''}
+                      onChange={e => setReviewChoice(prev => ({ ...prev, [item.id]: e.target.value }))}
+                      className="flex-1 min-w-[200px] border border-cream-300 rounded-lg px-3 py-2 text-sm"
+                    >
+                      <option value="">Whose is this?</option>
+                      {weddings.map(w => (
+                        <option key={w.id} value={w.id}>
+                          {weddingName(w)}{w.wedding_date ? ` — ${w.wedding_date}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => assignReviewItem(item)}
+                      disabled={reviewBusy === item.id || !(reviewChoice[item.id] || item.suggested_wedding_id)}
+                      className="px-4 py-2 rounded-lg text-sm bg-sage-600 text-white disabled:opacity-40"
+                    >
+                      {reviewBusy === item.id ? 'Filing…' : 'File it'}
+                    </button>
+                    <button
+                      onClick={() => ignoreReviewItem(item)}
+                      disabled={reviewBusy === item.id}
+                      className="px-4 py-2 rounded-lg text-sm border border-cream-300 text-sage-600"
+                    >
+                      {item.source === 'quo_call' ? 'Not a client — stop asking' : 'Not a client meeting'}
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         )}
@@ -1859,95 +2047,6 @@ export default function Admin() {
           </div>
         )}
 
-        {/* Meetings the matcher would not guess at.
-            Sits above every view on purpose: a queue nobody passes is a queue
-            nobody answers, and the whole point is that it asks rather than
-            files a meeting on a shared first name. */}
-        {reviewItems.length > 0 && (
-          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 sm:p-6 mb-6">
-            <h3 className="font-serif text-lg text-amber-900">
-              {reviewItems.length === 1 ? 'One thing I can’t place' : `${reviewItems.length} things I can’t place`}
-            </h3>
-            <p className="text-amber-800 text-sm mt-1 mb-4">
-              I only file something when I’m sure: a first and last name, both partners, or a name with the
-              wedding date. An email has to actually be from the couple, or have their address in it. These
-              didn’t reach that, so I’ve left them for you rather than guessing.
-            </p>
-            <div className="space-y-3">
-              {reviewItems.map(item => (
-                <div key={item.id} className="bg-white rounded-xl border border-amber-200 p-3 sm:p-4">
-                  <div className="font-medium text-sage-700">
-                    {/* Emails and meetings share this list, so say which. It
-                        used to read "Untitled meeting" whatever it was. */}
-                    {item.source === 'gmail' && (
-                      <span className="mr-2 text-xs uppercase tracking-wide text-amber-700 bg-amber-100 rounded px-1.5 py-0.5">Email</span>
-                    )}
-                    {item.source === 'quo_call' && (
-                      <span className="mr-2 text-xs uppercase tracking-wide text-amber-700 bg-amber-100 rounded px-1.5 py-0.5">Call</span>
-                    )}
-                    {item.title || (item.source === 'gmail' ? 'No subject' : item.source === 'quo_call' ? 'Calls from an unknown number' : 'Untitled meeting')}
-                  </div>
-                  <div className="text-xs text-sage-500 mt-0.5">
-                    {item.occurred_at ? new Date(item.occurred_at).toLocaleString() : 'no date'}
-                    {item.reason ? ` · ${item.reason}` : ''}
-                  </div>
-                  {item.excerpt && (
-                    <p className="text-sm text-sage-600 mt-2 line-clamp-3 italic">“{item.excerpt.slice(0, 240)}…”</p>
-                  )}
-                  {/* A number filed once should file itself next time, so the
-                      answer to "whose is this?" can also save them to the
-                      wedding. Left blank, the calls are still filed. */}
-                  {item.source === 'quo_call' && (
-                    <div className="grid gap-2 sm:grid-cols-2 mt-3">
-                      <input
-                        value={reviewContact[item.id]?.name || item.payload?.callerName || ''}
-                        onChange={e => setReviewContact(prev => ({ ...prev, [item.id]: { ...prev[item.id], name: e.target.value } }))}
-                        placeholder="Who is this? e.g. Susan Miller"
-                        className="border border-cream-300 rounded-lg px-3 py-2 text-sm"
-                      />
-                      <input
-                        value={reviewContact[item.id]?.relationship || ''}
-                        onChange={e => setReviewContact(prev => ({ ...prev, [item.id]: { ...prev[item.id], relationship: e.target.value } }))}
-                        placeholder="Bride's mother"
-                        className="border border-cream-300 rounded-lg px-3 py-2 text-sm"
-                      />
-                    </div>
-                  )}
-
-                  <div className="flex flex-wrap gap-2 mt-3">
-                    <select
-                      value={reviewChoice[item.id] || item.suggested_wedding_id || ''}
-                      onChange={e => setReviewChoice(prev => ({ ...prev, [item.id]: e.target.value }))}
-                      className="flex-1 min-w-[200px] border border-cream-300 rounded-lg px-3 py-2 text-sm"
-                    >
-                      <option value="">Whose is this?</option>
-                      {weddings.map(w => (
-                        <option key={w.id} value={w.id}>
-                          {w.couple_names}{w.wedding_date ? ` — ${w.wedding_date}` : ''}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      onClick={() => assignReviewItem(item)}
-                      disabled={reviewBusy === item.id || !(reviewChoice[item.id] || item.suggested_wedding_id)}
-                      className="px-4 py-2 rounded-lg text-sm bg-sage-600 text-white disabled:opacity-40"
-                    >
-                      {reviewBusy === item.id ? 'Filing…' : 'File it'}
-                    </button>
-                    <button
-                      onClick={() => ignoreReviewItem(item)}
-                      disabled={reviewBusy === item.id}
-                      className="px-4 py-2 rounded-lg text-sm border border-cream-300 text-sage-600"
-                    >
-                      {item.source === 'quo_call' ? 'Not a client — stop asking' : 'Not a client meeting'}
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
         {/* Vendors View */}
         {mainView === 'vendors' && (
           <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
@@ -1960,8 +2059,10 @@ export default function Admin() {
           <AdminWeddingList
             weddings={weddings}
             unlinkedProfiles={unlinkedProfiles}
+            setUnlinkedProfiles={setUnlinkedProfiles}
             displayedWeddings={displayedWeddings}
             allMessages={allMessages}
+            directConversations={directConversations}
             escalations={escalations}
             couplePhotos={couplePhotos}
             showArchived={showArchived}
@@ -2067,6 +2168,16 @@ export default function Admin() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmDeleteQuestionId !== null}
+        onClose={() => setConfirmDeleteQuestionId(null)}
+        onConfirm={() => deleteUncertainQuestion(confirmDeleteQuestionId)}
+        title="Delete this question?"
+        message="This removes it from Sage Needs Help for everyone."
+        confirmLabel="Delete"
+        danger
+      />
     </div>
   )
 }
