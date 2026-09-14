@@ -92,6 +92,9 @@ const ROW_TABLES = {
   'bar-recipes': 'bar_recipes',
   'day-of-media': 'day_of_media',
   'wedding-party': 'wedding_party',
+  // PUT and DELETE /api/wedding-photos/:photoId edit a row by its own id and
+  // were missing from this map, so neither one was ever scoped to a wedding.
+  'wedding-photos': 'wedding_photos',
 };
 
 /** `/api/<thing>/<uuid>` → { table, id }, when <thing> is one we can resolve. */
@@ -118,6 +121,10 @@ function rowLookupFor(path) {
  * A uuid in the path is not necessarily a wedding id; it might be a vendor or
  * a note. Those are handled by the caller, which treats a uuid that matches no
  * membership as undetermined rather than hostile.
+ *
+ * Only consulted for routes with no row mapping, e.g. POST /api/guests, where
+ * the body is the only statement of which wedding the new row belongs to. Once
+ * rowLookupFor matches, the row wins and this is not called at all.
  */
 function weddingIdFrom(req) {
   const fromBody = req.body?.weddingId || req.body?.wedding_id || req.query?.weddingId;
@@ -140,8 +147,13 @@ export function createWeddingAccess(supabaseAdmin) {
   async function profileFor(userId) {
     const hit = cache.get(userId);
     if (hit && hit.at > Date.now() - TTL_MS) return hit.profile;
-    const { data } = await supabaseAdmin
+    const { data, error } = await supabaseAdmin
       .from('profiles').select('id, wedding_id, is_admin, role').eq('id', userId).maybeSingle();
+    // A failed read used to be cached as "no profile" for fifteen seconds, so
+    // one blip locked a real couple out for the rest of that window and there
+    // was nothing in the logs to say why. Throw instead: the caller decides,
+    // and nothing wrong gets remembered.
+    if (error) throw new Error(`profile read failed: ${error.message}`);
     cache.set(userId, { at: Date.now(), profile: data || null });
     return data || null;
   }
@@ -167,45 +179,75 @@ export function createWeddingAccess(supabaseAdmin) {
     if (PUBLIC_PREFIXES.some(p => fullPath.startsWith(p))) return next();
     if (ADMIN_PREFIXES.some(p => fullPath.startsWith(p))) return next();
 
+    // A lookup we could not complete. In audit mode it carries on as before; in
+    // enforce mode it stops the request, because the alternative is that a
+    // database blip silently turns authorisation off for as long as it lasts.
+    const unavailable = (why, err) => {
+      console.error(`[weddingAccess] ${why} on ${req.method} ${fullPath}: ${err?.message || err}`);
+      if (MODE() === 'enforce') {
+        return res.status(503).json({ error: 'access check unavailable' });
+      }
+      return next();
+    };
+
     // Work out which wedding this request is about, in order of certainty.
     //
-    // The order matters and getting it wrong is not theoretical: an earlier
-    // version took the uuid out of the path, asked "is that a wedding?", got
-    // no, and allowed the request — so an unauthenticated PUT to
-    // /api/guests/<guest id> renamed a real guest. The uuid in a row route is
-    // deliberately NOT a wedding id, so "not a wedding" must mean "look the
-    // row up", never "let it through".
+    // The ROW comes first and body/query are not consulted at all once a row
+    // route matches. That order is the whole fix: this used to take a wedding
+    // id out of the body or query string in preference to the row actually
+    // being edited, so a couple could send
+    // PUT /api/guests/<another couple's guest id>?weddingId=<their own>
+    // and the check passed on their own wedding while the write landed on
+    // someone else's guest. What a request SAYS it is about is never evidence.
+    //
+    // Most of these resources serve two route shapes on the same prefix:
+    // GET /api/guests/:weddingId lists, PUT /api/guests/:id edits one row. So a
+    // uuid sitting after a mapped resource is looked up as a row first and
+    // falls back to "is it a wedding" only when no such row exists. A uuid is
+    // never both.
     let weddingId = null;
 
-    const stated = weddingIdFrom(req);
-    if (stated && UUID.test(String(stated)) && await isWeddingId(stated)) {
-      weddingId = stated;                       // /api/thing/:weddingId, or in the body
+    const lookup = rowLookupFor(req.path);
+
+    if (lookup?.weddingId) {
+      weddingId = lookup.weddingId;               // /api/weddings/:id/...
+    } else if (lookup?.table) {
+      let row;
+      try {
+        const { data, error } = await supabaseAdmin
+          .from(lookup.table).select('wedding_id').eq('id', lookup.id).maybeSingle();
+        if (error) return unavailable('row lookup failed', error);
+        row = data;
+      } catch (err) {
+        return unavailable('row lookup threw', err);
+      }
+      if (row?.wedding_id) {
+        weddingId = row.wedding_id;
+      } else {
+        // No such row. Either the list-by-wedding shape of the same route, or
+        // a row that genuinely does not exist — which is the route's own 404
+        // to give, not ours.
+        const known = await isWeddingId(lookup.id);
+        if (known === null) return unavailable('weddings read failed', new Error('could not list weddings'));
+        if (!known) return next();
+        weddingId = lookup.id;
+      }
     } else {
-      const lookup = rowLookupFor(req.path);
-      if (lookup?.weddingId) {
-        weddingId = lookup.weddingId;           // /api/weddings/:id/...
-      } else if (lookup?.table) {
-        try {
-          const { data } = await supabaseAdmin
-            .from(lookup.table).select('wedding_id').eq('id', lookup.id).maybeSingle();
-          // A row that does not exist is the route's own 404 to give, not ours.
-          if (!data?.wedding_id) return next();
-          weddingId = data.wedding_id;
-        } catch (err) {
-          console.error('[weddingAccess] row lookup failed, allowing:', err.message);
-          return next();
-        }
-      } else if (stated && UUID.test(String(stated))) {
+      // No row mapping for this route, so the request's own statement of which
+      // wedding it concerns is all there is. Confirm it names a real wedding.
+      const stated = weddingIdFrom(req);
+      if (!stated || !UUID.test(String(stated))) return next();
+      const known = await isWeddingId(stated);
+      if (known === null) return unavailable('weddings read failed', new Error('could not list weddings'));
+      if (!known) {
         // A uuid we cannot attribute to any wedding, on a route we have no
         // mapping for. Logged so the gap is visible rather than silent.
         if (MODE() !== 'enforce') {
           console.warn(`[weddingAccess:audit] unresolved uuid on ${req.method} ${fullPath}`);
         }
         return next();
-      } else {
-        // No wedding, no resolvable row: nothing for this middleware to judge.
-        return next();
       }
+      weddingId = stated;
     }
 
     const decide = async () => {
@@ -227,10 +269,11 @@ export function createWeddingAccess(supabaseAdmin) {
     try {
       verdict = await decide();
     } catch (err) {
-      // Never let an auth lookup failure take down a request in audit mode,
-      // and fail open rather than locking a couple out over a blip.
-      console.error('[weddingAccess] lookup failed, allowing:', err.message);
-      return next();
+      // This used to fail open, on the reasoning that a blip should not lock a
+      // couple out. But failing open means a blip switches authorisation off
+      // for everybody at once, and nothing says so. 503 is honest and the
+      // client retries.
+      return unavailable('membership lookup failed', err);
     }
 
     if (verdict.allow) return next();
@@ -247,4 +290,40 @@ export function createWeddingAccess(supabaseAdmin) {
   };
 }
 
-export { PUBLIC_PREFIXES, ADMIN_PREFIXES, weddingIdFrom };
+/**
+ * Is this caller a member of this wedding, or an admin? Ask once, directly.
+ *
+ * The middleware above cannot answer this for a multipart route. It is mounted
+ * on /api and therefore runs before multer, and on a multipart/form-data
+ * request req.body is still an empty object at that point — so every one of
+ * /api/seating/import, /api/extract-contract, /api/inspo and /api/couple-photo
+ * looked to it like a request about no wedding at all, and sailed through.
+ *
+ * Those four handlers call this by hand on the line after multer has populated
+ * req.body, which is the first moment the wedding id exists.
+ *
+ * Returns { ok, status, why } rather than sending, so the caller keeps its own
+ * response shape.
+ */
+export async function assertWeddingMember(supabaseAdmin, req, weddingId) {
+  if (!req?.userId) return { ok: false, status: 401, why: 'no token' };
+  if (!weddingId || !UUID.test(String(weddingId))) {
+    return { ok: false, status: 403, why: 'no wedding named' };
+  }
+
+  const { data: profile, error } = await supabaseAdmin
+    .from('profiles')
+    .select('id, wedding_id, is_admin')
+    .eq('id', req.userId)
+    .maybeSingle();
+
+  if (error) return { ok: false, status: 503, why: 'access check unavailable' };
+  if (!profile) return { ok: false, status: 403, why: 'no profile' };
+  if (profile.is_admin) return { ok: true, status: 200, why: 'admin' };
+  if (profile.wedding_id && profile.wedding_id === String(weddingId)) {
+    return { ok: true, status: 200, why: 'member' };
+  }
+  return { ok: false, status: 403, why: `belongs to ${profile.wedding_id || 'no wedding'}` };
+}
+
+export { PUBLIC_PREFIXES, ADMIN_PREFIXES, ROW_TABLES, weddingIdFrom, rowLookupFor };

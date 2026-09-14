@@ -12,8 +12,12 @@ import rateLimit from 'express-rate-limit';
 // createHash, so the fingerprint would throw inside the one handler whose
 // whole job is to not throw.
 import crypto from 'node:crypto';
+// Used to resolve a user-supplied recipe URL before fetching it, so the server
+// cannot be pointed at Railway's own metadata or anything else on the private
+// network. See /api/bar-recipes/extract-url.
+import dns from 'node:dns/promises';
 import { requireAuth, requireAdmin } from './middleware/auth.js';
-import { createWeddingAccess } from './middleware/weddingAccess.js';
+import { createWeddingAccess, assertWeddingMember } from './middleware/weddingAccess.js';
 import { validateBody } from './middleware/validate.js';
 import { coerceBody } from './middleware/coerce.js';
 import { fetchAllTabs, SheetFetchError } from './lib/sheet-fetcher.js';
@@ -42,17 +46,42 @@ import { buildDirectory, matchMeeting } from '../shared/meeting-match.js';
 import { readMessageBody, readAttachments } from '../shared/gmail-body.js';
 import { placeNewContract, groupByVendor, currentAndHistory } from '../shared/contract-versions.js';
 import { buildPortalSnapshot } from './lib/sheet-diff/portal-snapshot.js';
+import { safeStorageKey } from './lib/storage-key.js';
 import cron from 'node-cron';
 import * as XLSX from 'xlsx';
 // PDF parsing removed - using Claude vision for all documents
 
 // Configure multer for file uploads
+//
+// No SVG. An SVG is a document, not a picture: it can carry script, and four of
+// the routes behind this filter write into buckets served publicly off Rixey's
+// own origin — vendor-photos, borrow-catalog, wedding-photos, manor-assets — so
+// an uploaded SVG is a page on the venue's domain running whatever it says.
+// Couples and vendors upload photographs; nothing on those routes needs it.
+// The one place it is genuinely wanted is the brand downloads, which get their
+// own filter below and are admin-only.
+const IMAGE_MIME_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 }, // 50MB limit
   fileFilter: (req, file, cb) => {
-    const allowed = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/svg+xml', 'image/gif'];
-    if (allowed.includes(file.mimetype)) {
+    if (IMAGE_MIME_TYPES.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`File type not allowed: ${file.mimetype}`));
+    }
+  }
+});
+
+// Manor brand assets: logos and crests, which really are SVGs, uploaded by an
+// admin and by nobody else. The file picker in ManorDownloads has offered .svg
+// since it shipped.
+const brandAssetUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if ([...IMAGE_MIME_TYPES, 'image/svg+xml'].includes(file.mimetype)) {
       cb(null, true);
     } else {
       cb(new Error(`File type not allowed: ${file.mimetype}`));
@@ -141,6 +170,19 @@ app.use(coerceBody);
 
 // ============ RATE LIMITING ============
 
+// Railway terminates TLS at its own proxy and forwards on, so req.ip is the
+// proxy's address for every single caller. Without this line every limiter
+// below keys on that one address: all users share one 500-per-15-minutes
+// bucket, and one looping browser tab empties it for the whole venue. That is
+// the shape of the August incident where the admin looked empty and the data
+// was fine. It also means the event-code and guest-search limiters cannot tell
+// an attacker apart from a couple, which is the entire point of having them.
+//
+// 1, not true: trust exactly one hop, the Railway proxy. `true` would trust a
+// client-supplied X-Forwarded-For and hand anyone an unlimited number of
+// buckets by spoofing the header.
+app.set('trust proxy', 1);
+
 // General rate limiter: 500 requests per 15 minutes per IP
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -196,7 +238,11 @@ app.get('/', (req, res) => {
 // Read via GET /api/gmail-callback-debug (public — no secrets in payload).
 let LAST_GMAIL_CALLBACK = { at: null, stage: 'no-attempts-yet', ok: null, error: null };
 
-app.get('/api/gmail-callback-debug', (req, res) => {
+// Admin only now. The payload carries the raw failure from the last Gmail
+// OAuth callback, which on a bad day is an error string with a token, an
+// address or an internal URL in it. Whoever is diagnosing a
+// redirect_uri_mismatch is signed in as an admin anyway.
+app.get('/api/gmail-callback-debug', requireAdmin, (req, res) => {
   res.json(LAST_GMAIL_CALLBACK);
 });
 
@@ -219,7 +265,10 @@ app.get('/api/google-debug', requireAdmin, (req, res) => {
 // ============ AUTH MIDDLEWARE ============
 // Public routes that skip auth (matched by path prefix)
 const PUBLIC_ROUTES = [
-  '/api/w/',                  // public wedding websites
+  // NOT /api/w/ any more. The public wedding site is still public — this
+  // middleware attaches a user when there is one and never blocks — but
+  // ?preview= has to be able to tell a signed-in couple from a stranger, and
+  // it cannot do that if the token is never looked at. See GET /api/w/:slug.
   '/api/rsvp/',               // public RSVP
   '/api/vendor-portal/',      // token-based vendor portal
   // Deliberately NOT public any more. It carries Rixey's whole curated list
@@ -379,6 +428,13 @@ app.use('/api/usage', requireAdmin);
 app.use('/api/storefront', (req, res, next) => {
   // GET /api/storefront is client-facing, others are admin-only
   if (req.method === 'GET' && req.path === '/') return next();
+  requireAdmin(req, res, next);
+});
+// Manor assets: the brand downloads couples fetch, so GET stays open to
+// everyone. Upload, edit and delete had no check at all and wrote into a
+// PUBLIC bucket, which is as close to an open file host as this server gets.
+app.use('/api/manor-assets', (req, res, next) => {
+  if (req.method === 'GET') return next();
   requireAdmin(req, res, next);
 });
 
@@ -1520,10 +1576,37 @@ async function getWeddingIdForUser(userId) {
   return data?.wedding_id || null;
 }
 
+/**
+ * Is this signed-in user an admin? Reads the verified id, never the body.
+ *
+ * Used by the Sage routes below, where an admin legitimately acts on another
+ * person's thread and a couple never does.
+ */
+async function isAdminUser(userId) {
+  if (!userId) return false;
+  const { data, error } = await supabaseAdmin
+    .from('profiles').select('is_admin').eq('id', userId).maybeSingle();
+  if (error) {
+    console.error('[isAdminUser] profile read failed:', error.message);
+    return false;
+  }
+  return !!data?.is_admin;
+}
+
 // Chat endpoint
-app.post('/api/chat', async (req, res) => {
+app.post('/api/chat', requireAuth, async (req, res) => {
   try {
     const { message, userId, profile, conversationHistory = [] } = req.body;
+
+    // The body used to be a fallback for the caller's identity, which meant
+    // anyone at all could POST { userId: <any couple's id> } with no token and
+    // have Sage read that couple's vendors, contracts, planning notes and
+    // budget back to them. There is no legitimate caller left that predates
+    // soft auth, so the token is now the only source. An admin may still name
+    // someone else; a couple may not.
+    if (userId && userId !== req.userId && !(await isAdminUser(req.userId))) {
+      return res.status(403).json({ error: 'Not your conversation' });
+    }
 
     // Get knowledge base context
     const knowledge = await getRelevantKnowledge(message);
@@ -1533,13 +1616,8 @@ app.post('/api/chat', async (req, res) => {
 
     // Get wedding-specific context (vendors, inspo, planning notes, contracts)
     let weddingContext = '';
-    // Resolved from the signed-in user, never from the request body. This used
-    // to prefer profile.wedding_id off req.body, so a caller could name any
-    // wedding and have Sage read out that couple's vendors, contracts,
-    // planning notes and budget. req.userId comes from the verified token;
-    // req.body.userId does not, so it is only a fallback for callers that
-    // predate soft auth and it goes through the same profiles lookup.
-    const weddingId = await getWeddingIdForUser(req.userId || userId);
+    // Resolved from the signed-in user, never from the request body.
+    const weddingId = await getWeddingIdForUser(req.userId);
     if (weddingId) {
       try {
         // Get vendors (use admin to bypass RLS)
@@ -2251,7 +2329,9 @@ function formatProfileContext(profile) {
 }
 
 // Welcome endpoint - generates personalized greeting
-app.post('/api/welcome', async (req, res) => {
+// Signed in only: it runs a model on a body-supplied conversation history, so
+// with no token it was a free Claude endpoint for anyone who found the URL.
+app.post('/api/welcome', requireAuth, async (req, res) => {
   try {
     const { userId, userEmail, profile, conversationHistory = [] } = req.body;
 
@@ -2469,7 +2549,13 @@ async function saveContract({
 }
 
 // Contract upload and extraction endpoint
-app.post('/api/extract-contract', upload.single('contract'), async (req, res) => {
+//
+// weddingAccess is mounted on /api and therefore runs before multer. On a
+// multipart request req.body is still empty at that point, so this route
+// looked to it like a request about no wedding at all and went straight
+// through with no token. The membership check has to happen here, on the first
+// line after multer has parsed the form.
+app.post('/api/extract-contract', requireAuth, upload.single('contract'), async (req, res) => {
   try {
     const { weddingId } = req.body;
     const file = req.file;
@@ -2481,6 +2567,9 @@ app.post('/api/extract-contract', upload.single('contract'), async (req, res) =>
     if (!weddingId) {
       return res.status(400).json({ error: 'Wedding ID required' });
     }
+
+    const allowed = await assertWeddingMember(supabaseAdmin, req, weddingId);
+    if (!allowed.ok) return res.status(allowed.status).json({ error: 'You do not have access to this wedding' });
 
     console.log(`Processing contract for wedding ${weddingId}: ${file.originalname}`);
 
@@ -2679,13 +2768,22 @@ app.post('/api/sage-preview', async (req, res) => {
 });
 
 // Chat with file upload (for client chat)
-app.post('/api/chat-with-file', upload.single('file'), async (req, res) => {
+//
+// requireAuth comes before multer deliberately: a rejected caller should not
+// get to upload 50MB first. weddingId is checked against the token after
+// multer, because on a multipart request req.body is empty until then.
+app.post('/api/chat-with-file', requireAuth, upload.single('file'), async (req, res) => {
   try {
     const { message, userId, weddingId } = req.body;
     const file = req.file;
 
     if (!file) {
       return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    if (weddingId) {
+      const allowed = await assertWeddingMember(supabaseAdmin, req, weddingId);
+      if (!allowed.ok) return res.status(allowed.status).json({ error: 'You do not have access to this wedding' });
     }
 
     console.log(`Chat with file: ${file.originalname} from user ${userId}, weddingId: ${weddingId || 'NONE'}`);
@@ -2771,7 +2869,7 @@ app.post('/api/chat-with-file', upload.single('file'), async (req, res) => {
 
           if (count < 20) {
             // Upload to inspo-gallery bucket
-            const fileName = `${weddingId}/${Date.now()}_${file.originalname}`;
+            const fileName = `${weddingId}/${safeStorageKey(file.originalname)}`;
             const { error: uploadError } = await supabaseAdmin.storage
               .from('inspo-gallery')
               .upload(fileName, file.buffer, { contentType: file.mimetype });
@@ -7033,7 +7131,9 @@ app.get('/api/inspo/:weddingId', async (req, res) => {
 });
 
 // Upload inspo image
-app.post('/api/inspo', upload.single('image'), async (req, res) => {
+// Multipart, so weddingAccess saw an empty body and could not scope it. See
+// the note on /api/extract-contract.
+app.post('/api/inspo', requireAuth, upload.single('image'), async (req, res) => {
   try {
     const { weddingId, caption, uploadedBy, category } = req.body;
     const file = req.file;
@@ -7041,6 +7141,9 @@ app.post('/api/inspo', upload.single('image'), async (req, res) => {
     if (!file || !weddingId) {
       return res.status(400).json({ error: 'File and wedding ID required' });
     }
+
+    const allowed = await assertWeddingMember(supabaseAdmin, req, weddingId);
+    if (!allowed.ok) return res.status(allowed.status).json({ error: 'You do not have access to this wedding' });
 
     // Check count limit
     const { count } = await supabaseAdmin
@@ -7053,7 +7156,7 @@ app.post('/api/inspo', upload.single('image'), async (req, res) => {
     }
 
     // Upload to storage
-    const fileName = `${weddingId}/${Date.now()}_${file.originalname}`;
+    const fileName = `${weddingId}/${safeStorageKey(file.originalname)}`;
     const { error: uploadError } = await supabaseAdmin.storage
       .from('inspo-gallery')
       .upload(fileName, file.buffer, {
@@ -7245,7 +7348,9 @@ app.get('/api/couple-photo/:weddingId', async (req, res) => {
 });
 
 // Upload/replace couple photo
-app.post('/api/couple-photo', upload.single('photo'), async (req, res) => {
+// Multipart, so weddingAccess saw an empty body and could not scope it. See
+// the note on /api/extract-contract.
+app.post('/api/couple-photo', requireAuth, upload.single('photo'), async (req, res) => {
   try {
     const { weddingId, uploadedBy } = req.body;
     const file = req.file;
@@ -7253,6 +7358,9 @@ app.post('/api/couple-photo', upload.single('photo'), async (req, res) => {
     if (!file || !weddingId) {
       return res.status(400).json({ error: 'File and wedding ID required' });
     }
+
+    const allowed = await assertWeddingMember(supabaseAdmin, req, weddingId);
+    if (!allowed.ok) return res.status(allowed.status).json({ error: 'You do not have access to this wedding' });
 
     // Check if photo already exists.
     //
@@ -10412,12 +10520,30 @@ app.get('/api/sage-messages/user/:userId', requireAuth, async (req, res) => {
 });
 
 // Save a Sage chat message (bypasses RLS)
-app.post('/api/sage-messages', async (req, res) => {
+//
+// This took user_id, content and sender straight off the body with no token at
+// all, so anyone could write into any couple's thread and label it `sage` —
+// words that appear in the portal as if the venue had said them.
+//
+// Who may write what:
+//   - a couple writes into their own thread, either side of the conversation.
+//     The dashboard saves Sage's reply itself after /api/chat returns, so
+//     sender 'sage' has to stay available to them; it is only allowed when the
+//     thread is their own.
+//   - an admin may write into anyone's, which is what the inject route does.
+app.post('/api/sage-messages', requireAuth, async (req, res) => {
   try {
-    const { user_id, content, sender } = req.body;
+    const { content, sender } = req.body;
+    const callerIsAdmin = await isAdminUser(req.userId);
+    // Admins may file into another person's thread; nobody else may.
+    const user_id = callerIsAdmin ? (req.body.user_id || req.userId) : req.userId;
 
     if (!user_id || !content || !sender) {
       return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    if (req.body.user_id && req.body.user_id !== user_id) {
+      return res.status(403).json({ error: 'Not your conversation' });
     }
 
     const { data, error } = await supabaseAdmin
@@ -10812,14 +10938,15 @@ app.get('/api/manor-assets', async (req, res) => {
 });
 
 // Upload new asset (admin only — multipart/form-data)
-app.post('/api/manor-assets', upload.single('file'), async (req, res) => {
+app.post('/api/manor-assets', brandAssetUpload.single('file'), async (req, res) => {
   try {
     const { title, description, sort_order } = req.body;
     const file = req.file;
     if (!file || !title) return res.status(400).json({ error: 'file and title required' });
 
-    const ext          = file.originalname.split('.').pop();
-    const storagePath  = `${Date.now()}-${file.originalname.replace(/\s+/g, '-')}`;
+    // Public bucket, so the key is guessable from the outside if it is only a
+    // timestamp and the name the uploader chose.
+    const storagePath = safeStorageKey(file.originalname);
 
     const { error: upErr } = await supabaseAdmin.storage
       .from('manor-assets')
@@ -12140,17 +12267,128 @@ app.delete('/api/bar-shopping/:id', async (req, res) => {
 });
 
 // Recipes
+
+/**
+ * Is this resolved address somewhere on the private network?
+ *
+ * A server that fetches a URL a stranger chose is a way into everything the
+ * server can reach and the caller cannot: Railway's internal services, the
+ * cloud metadata endpoint on 169.254.169.254, anything on localhost.
+ */
+function isPrivateAddress(address, family) {
+  const ip = String(address || '');
+  if (family === 4 || /^\d+\.\d+\.\d+\.\d+$/.test(ip)) {
+    const [a, b] = ip.split('.').map(Number);
+    if (a === 127) return true;                       // loopback
+    if (a === 10) return true;                        // private
+    if (a === 172 && b >= 16 && b <= 31) return true; // private
+    if (a === 192 && b === 168) return true;          // private
+    if (a === 169 && b === 254) return true;          // link-local, incl. metadata
+    if (a === 0) return true;                         // 0.0.0.0/8 reaches localhost on Linux
+    if (a === 100 && b >= 64 && b <= 127) return true; // carrier-grade NAT
+    if (a >= 224) return true;                        // multicast and reserved
+    return false;
+  }
+  const v6 = ip.toLowerCase();
+  // An IPv4-mapped address wears an IPv6 coat; judge the address inside it.
+  const mapped = v6.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) return isPrivateAddress(mapped[1], 4);
+  if (v6 === '::1' || v6 === '::') return true;
+  if (/^f[cd]/.test(v6)) return true;                 // fc00::/7 unique local
+  if (/^fe[89ab]/.test(v6)) return true;              // fe80::/10 link-local
+  return false;
+}
+
+/**
+ * Check a URL is safe to fetch: http(s) only, and every address its hostname
+ * resolves to is public.
+ *
+ * Every address, not the first one: a hostname that answers with one public
+ * and one private address would otherwise pass the check and connect to
+ * whichever the OS picked. This does not close DNS rebinding — the name could
+ * answer differently between this lookup and the fetch — which would need the
+ * connection pinned to the address checked here. The cheap and complete fixes
+ * are far apart, and this is the cheap one.
+ */
+async function assertFetchableUrl(raw) {
+  let parsed;
+  try { parsed = new URL(String(raw)); }
+  catch { return { ok: false, why: 'That does not look like a web address.' }; }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { ok: false, why: 'Only http and https addresses can be read.' };
+  }
+
+  let addresses;
+  try {
+    addresses = await dns.lookup(parsed.hostname, { all: true });
+  } catch {
+    return { ok: false, why: 'That address could not be found.' };
+  }
+
+  if (!addresses.length || addresses.some(a => isPrivateAddress(a.address, a.family))) {
+    return { ok: false, why: 'That address is not one this server will fetch.' };
+  }
+  return { ok: true, url: parsed };
+}
+
+/** Read at most `cap` bytes of a response, then stop pulling. */
+async function readCapped(response, cap) {
+  if (!response.body) return '';
+  // Streaming decode, so a multi-byte character split across two chunks is not
+  // mangled and nothing larger than the cap is ever held.
+  const decoder = new TextDecoder('utf-8');
+  let out = '';
+  let total = 0;
+  for await (const chunk of response.body) {
+    total += chunk.length;
+    out += decoder.decode(chunk, { stream: true });
+    if (total >= cap) break;
+  }
+  return out;
+}
+
 // Extract ingredients from a URL using Claude
-app.post('/api/bar-recipes/extract-url', async (req, res) => {
+//
+// Signed in only, and the URL is checked before anything is fetched. This used
+// to take any URL at all from an anonymous caller and fetch it server-side,
+// which is a request forgery hole: file://, http://localhost, and the cloud
+// metadata endpoint were all reachable, and whatever came back was handed to
+// Claude and returned to the caller.
+app.post('/api/bar-recipes/extract-url', requireAuth, async (req, res) => {
   try {
     const { url, name } = req.body;
     if (!url) return res.status(400).json({ error: 'url required' });
 
-    // Fetch the page content
-    const pageRes = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
-    });
-    const html = await pageRes.text();
+    // Redirects are followed by hand so every hop is checked, not just the one
+    // the caller typed. Left to fetch, a public URL that 302s to 169.254.169.254
+    // would defeat the whole check.
+    let target = url;
+    let pageRes = null;
+    for (let hop = 0; hop < 5; hop++) {
+      const safe = await assertFetchableUrl(target);
+      if (!safe.ok) return res.status(400).json({ error: safe.why });
+
+      pageRes = await fetch(safe.url, {
+        redirect: 'manual',
+        signal: AbortSignal.timeout(15_000),
+        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
+      });
+
+      if (pageRes.status >= 300 && pageRes.status < 400 && pageRes.headers.get('location')) {
+        target = new URL(pageRes.headers.get('location'), safe.url).toString();
+        pageRes = null;
+        continue;
+      }
+      break;
+    }
+    if (!pageRes) return res.status(400).json({ error: 'That page redirects too many times.' });
+    if (!pageRes.ok) return res.status(422).json({ error: 'That page could not be read.' });
+
+    // 500kB is generous for a recipe page and stops a hostile or merely huge
+    // response from filling memory. Only the first 20k characters are used
+    // anyway.
+    const html = await readCapped(pageRes, 500 * 1024);
     // Strip script/style blocks first (their text content is noise), then tags
     const text = html
       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
@@ -12661,8 +12899,22 @@ app.put('/api/venue-settings', async (req, res) => {
 // ── Public wedding website endpoint ──────────────────────────────────────────
 app.get('/api/w/:slug', async (req, res) => {
   try {
-    // Allow preview mode: /api/w/slug?preview=weddingId skips the published check
-    const previewWeddingId = req.query.preview;
+    // Preview mode: /api/w/slug?preview=weddingId skips both the published
+    // check and the password gate, which is exactly what the couple wants
+    // while they are still building the site and exactly what a stranger
+    // wants too. Anyone at all could add the query string and read an
+    // unpublished, password-protected site along with its guest-facing
+    // details.
+    //
+    // So the parameter is honoured only for someone who belongs to that
+    // wedding, or an admin. For everyone else it is ignored rather than
+    // refused: a visitor who lands on a preview link they should not have
+    // gets the ordinary published-and-password behaviour, not an error page.
+    let previewWeddingId = req.query.preview || null;
+    if (previewWeddingId) {
+      const allowed = await assertWeddingMember(supabaseAdmin, req, previewWeddingId);
+      if (!allowed.ok) previewWeddingId = null;
+    }
     let query = supabaseAdmin
       .from('wedding_website_settings')
       .select('*')
@@ -12774,6 +13026,144 @@ app.post('/api/join/lookup', joinLimiter, async (req, res) => {
   } catch (e) {
     console.error('Event code lookup error:', e);
     res.status(500).json({ error: 'Could not check that code' });
+  }
+});
+
+/** The roles the sign-up form offers. Anything else is not a role. */
+const JOIN_ROLES = new Set([
+  'couple-bride', 'couple-groom', 'couple-custom',
+  'mother-bride', 'mother-groom', 'father-bride', 'father-groom',
+  'best-man', 'maid-of-honor', 'vip',
+]);
+
+/**
+ * Finish joining a wedding by event code.
+ *
+ * The browser used to do this insert itself, straight into `profiles` with the
+ * anon key, choosing its own wedding_id and role. Three things went wrong with
+ * that and all three were invisible: the insert's error was logged to a console
+ * nobody was reading, the page said "Account created!" either way, and the
+ * couple arrived at a dashboard telling them they were not linked to a wedding
+ * — with no way for anyone to link them, because nothing in the admin set
+ * profiles.wedding_id. See PATCH /api/admin/profiles/:id below for that half.
+ *
+ * The code decides the wedding here, on the server. A wedding_id in the body is
+ * ignored: it is the caller naming their own permissions.
+ */
+app.post('/api/join/complete', joinLimiter, requireAuth, async (req, res) => {
+  try {
+    const code = String(req.body?.event_code || '').trim().toUpperCase();
+    if (code.length < 4) return res.status(400).json({ error: 'Enter your event code' });
+
+    const { data: wedding, error: weddingErr } = await supabaseAdmin
+      .from('weddings')
+      .select('id, wedding_date, partner1_name, partner2_name')
+      .eq('event_code', code)
+      .maybeSingle();
+    if (weddingErr) throw weddingErr;
+    if (!wedding) return res.status(404).json({ error: 'Event code not found. Please check and try again.' });
+
+    const rawRole = String(req.body?.role || '').trim();
+    const role = JOIN_ROLES.has(rawRole) ? rawRole : 'couple';
+
+    const profileRow = {
+      id: req.userId,                       // the token, never the body
+      email: req.user?.email || null,       // ditto
+      wedding_id: wedding.id,               // the code, never the body
+      wedding_date: wedding.wedding_date || null,
+      name: String(req.body?.name || '').trim() || req.user?.email || null,
+      phone: String(req.body?.phone || '').trim() || null,
+      role,
+      custom_role_term: role === 'couple-custom'
+        ? (String(req.body?.custom_role_term || '').trim() || null)
+        : null,
+    };
+
+    // Every field above is set by hand, but run it through the column map
+    // anyway: profiles gains and loses columns, and a write that dies on a
+    // column name is the one failure mode this sign-up path cannot afford
+    // twice.
+    const { fields, ignored } = onlyColumns('profiles', profileRow);
+    if (ignored.length) console.log('[join] ignored non-columns:', ignored.join(', '));
+
+    // Upsert rather than insert: someone who signed up, failed at this step and
+    // came back already has a half-made profile row, and telling them their
+    // account exists is not help.
+    const { error: profileErr } = await supabaseAdmin
+      .from('profiles')
+      .upsert(fields, { onConflict: 'id' });
+    if (profileErr) throw profileErr;
+
+    // Partner names, if the wedding does not have them yet. Only when empty:
+    // whoever joins second should not be able to rename the couple, and the
+    // admin's version of the names is the one that has been checked.
+    const partner1 = String(req.body?.partner1_name || '').trim();
+    const partner2 = String(req.body?.partner2_name || '').trim();
+    const namePatch = {};
+    if (partner1 && !wedding.partner1_name) namePatch.partner1_name = partner1;
+    if (partner2 && !wedding.partner2_name) namePatch.partner2_name = partner2;
+    if (Object.keys(namePatch).length) {
+      const { error: nameErr } = await supabaseAdmin
+        .from('weddings').update(namePatch).eq('id', wedding.id);
+      // Not fatal. They are joined either way, and a missing partner name is
+      // something the admin can fill in; failing the whole join over it is not
+      // the trade.
+      if (nameErr) console.error('[join] could not save partner names:', nameErr.message);
+    }
+
+    res.json({ wedding_id: wedding.id });
+  } catch (e) {
+    console.error('Join complete error:', e);
+    res.status(500).json({ error: 'Could not finish joining that wedding' });
+  }
+});
+
+/**
+ * Link a login to a wedding, or unlink it.
+ *
+ * The gap this fills: a couple whose profile insert failed at sign-up lands on
+ * a banner telling staff to use an Access tab, and there was no Access tab and
+ * no route behind it. Nothing anywhere could set profiles.wedding_id, so the
+ * only fix was the Supabase console.
+ *
+ * Mounted under /api/admin, which requireAdmin already covers.
+ */
+app.patch('/api/admin/profiles/:id', async (req, res) => {
+  try {
+    const weddingId = req.body?.wedding_id ?? null;
+
+    if (weddingId !== null) {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(weddingId))) {
+        return res.status(400).json({ error: 'wedding_id must be a wedding id, or null to unlink' });
+      }
+      const { data: wedding, error: weddingErr } = await supabaseAdmin
+        .from('weddings').select('id, wedding_date').eq('id', weddingId).maybeSingle();
+      if (weddingErr) throw weddingErr;
+      if (!wedding) return res.status(404).json({ error: 'No such wedding' });
+
+      const { data, error } = await supabaseAdmin
+        .from('profiles')
+        .update({ wedding_id: wedding.id, wedding_date: wedding.wedding_date || null })
+        .eq('id', req.params.id)
+        .select('id, email, name, wedding_id')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) return res.status(404).json({ error: 'No such profile' });
+      return res.json(data);
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('profiles')
+      .update({ wedding_id: null })
+      .eq('id', req.params.id)
+      .select('id, email, name, wedding_id')
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such profile' });
+    res.json(data);
+  } catch (e) {
+    console.error('Link profile to wedding error:', e);
+    res.status(500).json({ error: 'Could not link that login to a wedding' });
   }
 });
 
@@ -14370,12 +14760,18 @@ async function commitSeatingToGuests(weddingId, tables, replaceExisting) {
 }
 
 // POST /api/seating/import — parse (action=parse) or commit (action=commit)
-app.post('/api/seating/import', spreadsheetUpload.single('file'), async (req, res) => {
+// Multipart, so weddingAccess saw an empty body and could not scope it. A
+// commit rewrites a whole guest list, which makes this the most expensive of
+// the four to have left open. See the note on /api/extract-contract.
+app.post('/api/seating/import', requireAuth, spreadsheetUpload.single('file'), async (req, res) => {
   try {
     const action = req.body.action || 'parse';
     const weddingId = req.body.weddingId;
 
     if (!weddingId) return res.status(400).json({ error: 'weddingId required' });
+
+    const allowed = await assertWeddingMember(supabaseAdmin, req, weddingId);
+    if (!allowed.ok) return res.status(allowed.status).json({ error: 'You do not have access to this wedding' });
 
     if (action === 'parse') {
       if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
@@ -14402,7 +14798,15 @@ app.post('/api/seating/import', spreadsheetUpload.single('file'), async (req, re
 
 // Global error handler — ensures all unhandled Express errors return JSON, not HTML
 app.use((err, req, res, next) => {
-  console.error('Unhandled Express error:', err.message || err);
+  // A short id that appears in both the log line and the reply, so a couple can
+  // read it off the screen and it can be found in the logs without guessing
+  // from a timestamp.
+  const requestId = crypto.randomBytes(4).toString('hex');
+
+  // The whole error to the log, including the stack. The message alone was
+  // never enough to work from.
+  console.error(`[${requestId}] Unhandled Express error on ${req.method} ${req.originalUrl}:`, err?.stack || err);
+
   if (res.headersSent) return next(err);
 
   // A file rejected by multer never reaches its route, so the route's own
@@ -14410,13 +14814,19 @@ app.use((err, req, res, next) => {
   // reads as a crash rather than as a file that needs compressing, and the one
   // thing it does not say is how large is too large.
   if (err.code === 'LIMIT_FILE_SIZE') {
-    return res.status(413).json({ error: 'That file is too large to upload. Compress it, or send a smaller scan.' });
+    return res.status(413).json({ error: 'That file is too large to upload. Compress it, or send a smaller scan.', requestId });
   }
   if (/^File type not allowed:/.test(err.message || '')) {
-    return res.status(415).json({ error: `${err.message}. PDFs and images are accepted.` });
+    return res.status(415).json({ error: `${err.message}. PDFs and images are accepted.`, requestId });
   }
 
-  res.status(err.status || err.statusCode || 500).json({ error: err.message || 'Internal server error' });
+  // Everything else gets one sentence. err.message here is whatever threw,
+  // which in this codebase is very often PostgREST naming a column or a
+  // constraint — the shape of the database, handed to whoever asked.
+  res.status(err.status || err.statusCode || 500).json({
+    error: 'Something went wrong',
+    requestId,
+  });
 });
 
 const PORT = process.env.PORT || 3001;
