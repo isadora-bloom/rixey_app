@@ -213,7 +213,11 @@ app.get('/', (req, res) => {
 // Read via GET /api/gmail-callback-debug (public — no secrets in payload).
 let LAST_GMAIL_CALLBACK = { at: null, stage: 'no-attempts-yet', ok: null, error: null };
 
-app.get('/api/gmail-callback-debug', (req, res) => {
+// Admin only now. The payload carries the raw failure from the last Gmail
+// OAuth callback, which on a bad day is an error string with a token, an
+// address or an internal URL in it. Whoever is diagnosing a
+// redirect_uri_mismatch is signed in as an admin anyway.
+app.get('/api/gmail-callback-debug', requireAdmin, (req, res) => {
   res.json(LAST_GMAIL_CALLBACK);
 });
 
@@ -14630,7 +14634,15 @@ app.post('/api/seating/import', requireAuth, spreadsheetUpload.single('file'), a
 
 // Global error handler — ensures all unhandled Express errors return JSON, not HTML
 app.use((err, req, res, next) => {
-  console.error('Unhandled Express error:', err.message || err);
+  // A short id that appears in both the log line and the reply, so a couple can
+  // read it off the screen and it can be found in the logs without guessing
+  // from a timestamp.
+  const requestId = crypto.randomBytes(4).toString('hex');
+
+  // The whole error to the log, including the stack. The message alone was
+  // never enough to work from.
+  console.error(`[${requestId}] Unhandled Express error on ${req.method} ${req.originalUrl}:`, err?.stack || err);
+
   if (res.headersSent) return next(err);
 
   // A file rejected by multer never reaches its route, so the route's own
@@ -14638,13 +14650,19 @@ app.use((err, req, res, next) => {
   // reads as a crash rather than as a file that needs compressing, and the one
   // thing it does not say is how large is too large.
   if (err.code === 'LIMIT_FILE_SIZE') {
-    return res.status(413).json({ error: 'That file is too large to upload. Compress it, or send a smaller scan.' });
+    return res.status(413).json({ error: 'That file is too large to upload. Compress it, or send a smaller scan.', requestId });
   }
   if (/^File type not allowed:/.test(err.message || '')) {
-    return res.status(415).json({ error: `${err.message}. PDFs and images are accepted.` });
+    return res.status(415).json({ error: `${err.message}. PDFs and images are accepted.`, requestId });
   }
 
-  res.status(err.status || err.statusCode || 500).json({ error: err.message || 'Internal server error' });
+  // Everything else gets one sentence. err.message here is whatever threw,
+  // which in this codebase is very often PostgREST naming a column or a
+  // constraint — the shape of the database, handed to whoever asked.
+  res.status(err.status || err.statusCode || 500).json({
+    error: 'Something went wrong',
+    requestId,
+  });
 });
 
 const PORT = process.env.PORT || 3001;
