@@ -558,6 +558,11 @@ async function sendViaGmail(to, subject, html) {
 
 async function sendNotificationEmail(to, subject, bodyText, recipientType = 'admin') {
   if (!to) return false;
+  // bodyText can carry a client's own words (or the notification title, when
+  // there is no body), so it goes into the HTML escaped. See
+  // lib/rsvp-confirmation.js for the same esc().
+  const esc = s => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
   const linkUrl = recipientType === 'client' ? `${frontendUrl}/` : `${frontendUrl}/admin`;
   const linkLabel = recipientType === 'client' ? 'Open your portal' : 'View in Admin';
@@ -566,7 +571,7 @@ async function sendNotificationEmail(to, subject, bodyText, recipientType = 'adm
       <div style="padding-bottom: 16px; margin-bottom: 24px; border-bottom: 2px solid #7C9070;">
         <span style="font-size: 11px; letter-spacing: 3px; text-transform: uppercase; color: #7C9070;">Rixey Manor Planning Portal</span>
       </div>
-      <p style="font-size: 16px; line-height: 1.7; margin: 0 0 24px;">${bodyText}</p>
+      <p style="font-size: 16px; line-height: 1.7; margin: 0 0 24px;">${esc(bodyText)}</p>
       <a href="${linkUrl}" style="display: inline-block; background: #5C6B4F; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-size: 14px;">${linkLabel} →</a>
       <div style="margin-top: 32px; padding-top: 16px; border-top: 1px solid #e8e0d5;">
         <p style="font-size: 12px; color: #999; margin: 0;">Rapidan, VA · rixeymanor.com</p>
