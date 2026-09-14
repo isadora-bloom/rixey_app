@@ -202,6 +202,22 @@ export default function Admin() {
   const [confirmDeleteQuestionId, setConfirmDeleteQuestionId] = useState(null)
   const [last24h, setLast24h] = useState({ signups: [], activity: [] })
   const [last24hLoading, setLast24hLoading] = useState(true)
+  // The last 20 sync runs, whatever kind. Lifted out of the old sidebar panel
+  // because two things read it now: the Integrations card, for what each
+  // integration's last run actually did, and "Needs you", for a run that
+  // failed today. Fetching it twice would be two answers to one question.
+  const [syncJobs, setSyncJobs] = useState([])
+  const [syncJobsLoading, setSyncJobsLoading] = useState(true)
+  const [syncJobsError, setSyncJobsError] = useState(false)
+  // Sync history is behind a link on the Integrations card. A failed-sync row
+  // in "Needs you" opens it, which is why the flag lives up here.
+  const [historyOpen, setHistoryOpen] = useState(false)
+  // Whole /status payloads. Quo and Zoom already report last_status,
+  // last_finished_at and last_error; Gmail does not, and falls back to the
+  // sync-jobs list. See the note on checkGmailStatus.
+  const [gmailInfo, setGmailInfo] = useState(null)
+  const [quoInfo, setQuoInfo] = useState(null)
+  const [zoomInfo, setZoomInfo] = useState(null)
 
   // Keep unanswered count in sync with loaded uncertain questions
   useEffect(() => {
@@ -229,11 +245,30 @@ export default function Admin() {
     }
   }
 
+  /**
+   * The last twenty sync runs. Read once here rather than by the panel that
+   * happens to be open, so the Integrations rows and the failed-sync group in
+   * "Needs you" cannot disagree about what happened.
+   */
+  const loadSyncJobs = async () => {
+    try {
+      const data = await apiFetch(`${API_URL}/api/admin/sync-jobs?limit=20`)
+      setSyncJobs(data.jobs || [])
+      setSyncJobsError(false)
+    } catch {
+      setSyncJobsError(true)
+    }
+    setSyncJobsLoading(false)
+  }
+
+  const reloadSyncJobs = () => { setSyncJobsLoading(true); loadSyncJobs() }
+
   useEffect(() => {
     loadData()
     loadReviewItems()
     loadCrashCount()
     loadTourCount()
+    loadSyncJobs()
     checkGmailStatus()
     checkQuoStatus()
     checkZoomStatus()
@@ -255,6 +290,12 @@ export default function Admin() {
       // Defaults to true so an older server that does not report it does not
       // put a warning on the screen that nobody can act on.
       setGmailCanSend(data.canSend !== false)
+      // Unlike /api/quo/status and /api/zoom/status, this route does not
+      // spread lastSyncJob() into its answer, so there is no last_status or
+      // last_finished_at here to read. The Integrations row falls back to the
+      // sync_jobs list for Gmail. Adding `...(await lastSyncJob(['gmail',
+      // 'gmail-backfill']))` at server/index.js:3969 would close that gap.
+      setGmailInfo(data)
     } catch (err) {
       console.error('Gmail status check error:', err)
     }
@@ -352,6 +393,7 @@ export default function Admin() {
       })
       const data = await response.json()
       setQuoConnected(data.connected)
+      setQuoInfo(data)
     } catch (err) {
       console.error('Quo status check error:', err)
     }
@@ -425,6 +467,7 @@ export default function Admin() {
       })
       const data = await response.json()
       setZoomConnected(data.connected)
+      setZoomInfo(data)
     } catch (err) {
       console.error('Zoom status check error:', err)
     }
@@ -896,6 +939,9 @@ export default function Admin() {
   // and every wedding row again was wasted bandwidth on every button press.
   const refreshAfterSync = async () => {
     await loadReviewItems()
+    // The Integrations rows and the failed-sync group both read this, so a run
+    // that has just finished should be on the screen without a reload.
+    await loadSyncJobs()
     if (viewingWedding) await loadPlanningNotesForWedding(viewingWedding.id)
   }
 
@@ -1427,7 +1473,9 @@ export default function Admin() {
     }
   }
 
-  const unreadCount = notifications.filter(n => !n.read).length
+  // The unread count that used to live here fed a blue Notifications panel on
+  // the home screen. The rows themselves, and the tick that marks one read,
+  // are now a group in "Needs you", which counts them itself.
   const stats = getQuickStats()
 
   // Filter and sort weddings for display. Past-date weddings are auto-archived
@@ -1804,76 +1852,18 @@ export default function Admin() {
       />
 
       <main className="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
-        {/* Quick Stats - Compact Row */}
-        <div className="flex flex-wrap gap-3 mb-6">
-          <div className="flex items-center gap-2 bg-white rounded-lg px-4 py-2 border border-cream-200">
-            <span className="text-xl font-bold text-sage-700">{stats.active}</span>
-            <span className="text-sage-500 text-sm">Active</span>
-          </div>
-          <div className="flex items-center gap-2 bg-white rounded-lg px-4 py-2 border border-cream-200">
-            <span className="text-xl font-bold text-blue-600">{stats.activeThisWeek}</span>
-            <span className="text-sage-500 text-sm">This Week</span>
-          </div>
-          <div className="flex items-center gap-2 bg-white rounded-lg px-4 py-2 border border-cream-200">
-            <span className="text-xl font-bold text-amber-600">{stats.upcoming}</span>
-            <span className="text-sage-500 text-sm">Next 30 Days</span>
-          </div>
-          {uncertainQuestions.length > 0 && (
-            <button
-              onClick={() => setShowUncertainModal(true)}
-              className="flex items-center gap-2 bg-amber-50 rounded-lg px-4 py-2 border border-amber-200 hover:bg-amber-100 transition-colors"
-              title="Open the questions Sage could not answer confidently"
-            >
-              <span className="text-xl font-bold text-amber-600">{uncertainQuestions.length}</span>
-              <span className="text-amber-600 text-sm">Sage Needs Help</span>
-            </button>
-          )}
-        </div>
-
-        {/* Who needs attention, by name. A count on its own means opening every
-            profile to find out which couple it refers to. */}
-        {stats.needsAttention > 0 && (
-          <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 mb-6">
-            <p className="text-red-700 text-sm font-medium mb-2">
-              {stats.needsAttention === 1 ? '1 client needs attention' : `${stats.needsAttention} clients need attention`}
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {(stats.needsAttentionList || []).map(w => {
-                const escalation = escalations[w.id]
-                const firstMessage = escalation?.messages?.[0]
-                return (
-                  <button
-                    key={w.id}
-                    onClick={() => viewWeddingProfile(w, {
-                      focusUserId: firstMessage?.user_id,
-                      focusTab: firstMessage?.source === 'direct' ? 'inbox' : undefined,
-                    })}
-                    className="text-left bg-white border border-red-200 rounded-lg px-3 py-2 hover:border-red-400 hover:shadow-sm transition-all"
-                    title={firstMessage?.content
-                      ? `Open the conversation: "${String(firstMessage.content).slice(0, 120)}"`
-                      : 'Open this profile'}
-                  >
-                    <span className="block text-sm font-medium text-red-700">
-                      {w.project_name || w.couple_names || 'Unnamed wedding'}
-                    </span>
-                    <span className="block text-xs text-red-400">
-                      {w.wedding_date
-                        ? new Date(w.wedding_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-                        : 'No date set'}
-                      {escalation?.count ? ` · ${escalation.count} flagged message${escalation.count === 1 ? '' : 's'}` : ''}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-        )}
 
         {/* Meetings the matcher would not guess at.
-            Sits above every view now, not just eleven of thirteen: a queue
-            nobody passes is a queue nobody answers, and the whole point is
-            that it asks rather than files a meeting on a shared first name. */}
-        {reviewItems.length > 0 && (
+            Sits above every view, not just eleven of thirteen: a queue nobody
+            passes is a queue nobody answers, and the whole point is that it
+            asks rather than files a meeting on a shared first name.
+
+            Every view except the home screen, that is. Home now lists the same
+            items as one collapsed group in "Needs you", which links here; the
+            Meetings tab is where the queue is worked through and is the tab
+            its badge points at. Rendering both would put the same amber panel
+            on the one screen that was asked to stop shouting. */}
+        {mainView !== 'weddings' && reviewItems.length > 0 && (
           <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 sm:p-6 mb-6">
             <h3 className="font-serif text-lg text-amber-900">
               {reviewItems.length === 1 ? 'One thing I can’t place' : `${reviewItems.length} things I can’t place`}
@@ -2210,12 +2200,20 @@ export default function Admin() {
             setAnsweringQuestion={setAnsweringQuestion}
             setShowUncertainModal={setShowUncertainModal}
             notifications={notifications}
-            unreadCount={unreadCount}
             markAsRead={markAsRead}
+            reviewItems={reviewItems}
+            setMainView={setMainView}
+            syncJobs={syncJobs}
+            syncJobsLoading={syncJobsLoading}
+            syncJobsError={syncJobsError}
+            reloadSyncJobs={reloadSyncJobs}
+            historyOpen={historyOpen}
+            setHistoryOpen={setHistoryOpen}
             gmailConnected={gmailConnected}
             gmailCanSend={gmailCanSend}
             gmailSyncing={gmailSyncing}
             gmailStatus={gmailStatus}
+            gmailInfo={gmailInfo}
             connectGmail={connectGmail}
             syncEmails={syncEmails}
             recoverEmailBodies={recoverEmailBodies}
@@ -2224,11 +2222,13 @@ export default function Admin() {
             quoConnected={quoConnected}
             quoSyncing={quoSyncing}
             quoStatus={quoStatus}
+            quoInfo={quoInfo}
             syncQuo={syncQuo}
             sweepCallers={sweepCallers}
             zoomConnected={zoomConnected}
             zoomSyncing={zoomSyncing}
             zoomStatus={zoomStatus}
+            zoomInfo={zoomInfo}
             connectZoom={connectZoom}
             syncZoom={syncZoom}
             reextractZoom={reextractZoom}
