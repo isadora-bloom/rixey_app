@@ -45,6 +45,7 @@ import { useToast } from '../components/ui/Toast'
 import DashboardChat from './dashboard/DashboardChat'
 import FloatingSage from '../components/FloatingSage'
 import CoupleDocuments from '../components/CoupleDocuments'
+import CoupleNotes from '../components/CoupleNotes'
 import CoupleCompleteness from '../components/CoupleCompleteness'
 import DashboardNav, { FINALISABLE } from './dashboard/DashboardNav'
 import DashboardHeader from './dashboard/DashboardHeader'
@@ -1034,6 +1035,11 @@ export default function Dashboard() {
                   their planning file. */}
               {activeSection === 'documents' && profile?.wedding_id && (
                 <CoupleDocuments weddingId={profile.wedding_id} />
+              )}
+              {activeSection === 'rixey-notes' && profile?.wedding_id && (
+                <div className="p-4 sm:p-6">
+                  <CoupleNotes weddingId={profile.wedding_id} />
+                </div>
               )}
               {activeSection === 'completeness' && profile?.wedding_id && (
                 <CoupleCompleteness weddingId={profile.wedding_id} onOpenSection={setActiveSection} />
