@@ -6896,6 +6896,23 @@ async function fileZoomMeeting({ weddingId, topic, startTime, transcriptText, me
  * Throwing marks the job failed with the message attached, so an error has
  * somewhere to land instead of a console nobody is reading.
  */
+/**
+ * How many items this run left for a person to look at.
+ *
+ * The runners disagreed about the name. runCallerSweep returns `needs_review`,
+ * after the column; everything else returns `needsReview`, after nothing in
+ * particular. Both writers read only the camelCase one, so the caller sweep's
+ * job row has said 0 since it shipped while its own detail said otherwise.
+ *
+ * Accepting both is the fix rather than renaming one of them, because the
+ * detail blob is already in the database with whichever key it was written
+ * under and a rename would only move the mismatch.
+ */
+function reviewCount(summary) {
+  const s = summary || {};
+  return s.needsReview ?? s.needs_review ?? 0;
+}
+
 function backgroundSync(kind, runner) {
   return async (req, res) => {
     const { data: job, error } = await supabaseAdmin.from('sync_jobs')
@@ -6929,7 +6946,7 @@ function backgroundSync(kind, runner) {
           finished_at: new Date().toISOString(),
           processed: s.processed || 0,
           matched: s.matched || 0,
-          needs_review: s.needsReview || 0,
+          needs_review: reviewCount(s),
           failed: s.failed || 0,
           detail: s.detail || {},
         });
@@ -15442,13 +15459,24 @@ app.delete('/api/admin/walkthroughs/:id', requireAdmin, async (req, res) => {
 
 // Photos and voice notes. Stored under the existing day-of-media bucket with a
 // walkthroughs/ prefix so no new bucket has to be created before this works.
+// select('*') on purpose, so transcript_error comes back the moment migration
+// 035 lands without this line needing to change. It is the column that tells a
+// failed transcription apart from one still running, and with it missing the
+// panel polled a null transcript for ever. Where 035 has not been applied the
+// column is simply absent from the rows, which the client reads as unknown.
 app.get('/api/admin/walkthroughs/:id/media', requireAdmin, async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
       .from('walkthrough_media').select('*')
       .eq('walkthrough_id', req.params.id).order('created_at');
     if (error) throw error;
-    res.json(data || []);
+    // Named rather than left implicit: W2 renders transcript_error and needs to
+    // know the difference between "no error" and "this build cannot say".
+    res.json((data || []).map(m => ({
+      ...m,
+      transcript_error: has035('transcript') ? (m.transcript_error || null) : null,
+      transcriptErrorKnown: has035('transcript'),
+    })));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -15534,13 +15562,26 @@ app.post('/api/admin/walkthroughs/:id/media', requireAdmin, dayOfMediaUpload.sin
 
 app.delete('/api/admin/walkthrough-media/:id', requireAdmin, async (req, res) => {
   try {
-    const { data: row } = await supabaseAdmin
+    const { data: row, error: readErr } = await supabaseAdmin
       .from('walkthrough_media').select('storage_path').eq('id', req.params.id).maybeSingle();
-    // Remove the file too, and do not report success if that fails: a deleted
-    // row with an orphaned file is how storage quietly fills up.
+    // Not knowing whether there is a file means not deleting the row. Carrying
+    // on would orphan whatever is in the bucket with nothing left pointing at it.
+    if (readErr) throw new Error(`Could not read the recording: ${readErr.message}`);
+
+    // The file first, and stop if it will not go.
+    //
+    // The comment here already said "do not report success if that fails" and
+    // then the code logged the failure and reported success anyway. The row
+    // went, the audio stayed, and nothing on any screen knew it was there: the
+    // bucket fills up with recordings of walkthroughs nobody can find.
     if (row?.storage_path) {
       const { error: rmErr } = await supabaseAdmin.storage.from('day-of-media').remove([row.storage_path]);
-      if (rmErr) console.error('Walkthrough media file remove failed:', rmErr.message);
+      if (rmErr) {
+        console.error('Walkthrough media file remove failed:', rmErr.message);
+        return res.status(500).json({
+          error: `The recording itself could not be deleted (${rmErr.message}), so it has been left alone. Nothing was removed.`,
+        });
+      }
     }
     const { error } = await supabaseAdmin.from('walkthrough_media').delete().eq('id', req.params.id);
     if (error) throw error;
@@ -16150,7 +16191,7 @@ async function runScheduledSync(kind, runner, body = {}) {
         finished_at: new Date().toISOString(),
         processed: summary.processed || 0,
         matched: summary.matched || 0,
-        needs_review: summary.needsReview || 0,
+        needs_review: reviewCount(summary),
         failed: summary.failed || 0,
         detail: summary.detail || {},
       });
