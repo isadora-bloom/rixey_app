@@ -46,6 +46,10 @@ import { buildDirectory, matchMeeting } from '../shared/meeting-match.js';
 import { readMessageBody, readAttachments } from '../shared/gmail-body.js';
 import { placeNewContract, groupByVendor, currentAndHistory } from '../shared/contract-versions.js';
 import { buildPortalSnapshot } from './lib/sheet-diff/portal-snapshot.js';
+import {
+  detectMigration035, has035, markerExtractionPatch, withSource,
+  importWithMarker, normaliseConfidence,
+} from './lib/extraction-markers.js';
 import { safeStorageKey } from './lib/storage-key.js';
 import cron from 'node-cron';
 import { parseSpreadsheet } from './lib/spreadsheet.js';
@@ -1395,9 +1399,19 @@ function chunkForExtraction(text, size = TRANSCRIPT_WINDOW, overlap = TRANSCRIPT
 }
 
 // Unified AI-powered planning note extractor — used for all sources
-async function extractPlanningNotesAI(text, weddingId, source, sourceType = 'message') {
+//
+// Returns { notes, error }, not a bare array. It used to catch everything and
+// return [], so a 429 or a 529 was indistinguishable from a message with
+// nothing in it — and because the processed-marker row is written first, the
+// item was marked done and never looked at again. Callers record the error on
+// the marker row (migration 035) or count it into the sync job's detail.
+//
+// A partial failure still returns what it got. Half a meeting is worth having;
+// the error rides along beside it so a human knows the other half is missing.
+async function extractPlanningNotesAI(text, weddingId, source, sourceType = 'message', opts = {}) {
+  const { sourceKind = null, sourceId = null } = opts;
   const cleanText = sourceType === 'transcript' ? parseVttToText(text) : text;
-  if (!cleanText || cleanText.length < 20) return [];
+  if (!cleanText || cleanText.length < 20) return { notes: [], error: null };
 
   const isTranscript = sourceType === 'transcript' || sourceType === 'email';
   // A text message is not a small meeting. It is one turn of a conversation,
@@ -1428,8 +1442,10 @@ Capture the specifics that make a note usable later: names, numbers, dates, quan
 Allergies and emotional signals are the highest priority — never skip these.`;
 
   const SHORT_MESSAGE_TAIL = `Record what was said, in fewer words than they used. Names, numbers, dates, quantities, and what was actually asked or agreed.
-Do not describe how anyone feels, or what a message suggests about their health, their finances, their family or their state of mind, unless they said it themselves. "Jake's dad uses a wheelchair" is a fact they told you. "This suggests someone close to them has access needs" is a guess about strangers, and it goes in their file as though somebody checked it.
-Record an allergy, a disability or a worry when it is stated. Do not infer one.
+Only what the couple themselves stated in this message. Nothing about how anyone feels, and nothing about what the message suggests about their health, their finances, their family or their state of mind, unless they said it outright. "Jake's dad uses a wheelchair" is a fact they told you. "This suggests someone close to them has access needs" is a guess about strangers, and it goes in their file as though somebody checked it.
+Record an allergy, a disability or a worry when it is stated. Never infer one.
+Never infer a headcount. A number in a text is a number in a text; it is not the guest count unless they said it was.
+Two notes is the ceiling and zero is the usual answer.
 Do not add what somebody should do next. The person reading this can see that for themselves.`;
 
   const instruction = isTranscript
@@ -1447,6 +1463,7 @@ Do not assume what a number refers to. A headcount in a text is usually for a ta
 At most two notes, and one is usually too many. Keep each under about two lines.`;
 
   const collected = [];
+  const failures = [];
 
   for (let i = 0; i < chunks.length; i++) {
     const partLabel = chunks.length > 1 ? ` (part ${i + 1} of ${chunks.length})` : '';
@@ -1462,7 +1479,8 @@ At most two notes, and one is usually too many. Keep each under about two lines.
 
 ${instruction}${chunks.length > 1 ? `\n\nThis is part ${i + 1} of ${chunks.length} of a longer conversation. Extract only what is in this part; the other parts are handled separately. The start and end may cut mid-sentence — ignore fragments you cannot understand.` : ''}
 
-Return a JSON array. Each item: {"category": "<category>", "content": "<concise coordinator note>"}
+Return a JSON array. Each item: {"category": "<category>", "content": "<concise coordinator note>", "confidence": <0 to 1>}
+confidence is how firmly the source states the note, not how likely you think it is to be true. Something written down plainly is 0.9 or above; something you have read between the lines is below 0.5 and probably should not be a note at all.
 ${isShortMessage ? SHORT_MESSAGE_TAIL : TRANSCRIPT_TAIL}
 If nothing noteworthy was said, return [].
 Return ONLY the JSON array.
@@ -1479,14 +1497,19 @@ ${chunks[i]}`
       const items = JSON.parse(jsonMatch[0]);
       collected.push(...items.filter(item => item.category && item.content && item.content.length > 5));
     } catch (err) {
+      // Recorded, not swallowed. This catch is where every lost extraction went:
+      // a rate limit here meant the item was marked imported with no notes and
+      // nothing said so. The message goes back to the caller, which writes it
+      // onto the marker row so a backfill can come and pick it up.
       console.error(`AI extraction error (${sourceType}${partLabel}):`, err.message);
+      failures.push(`${partLabel.trim() || sourceType}: ${err.message}`);
     }
   }
 
   // Overlapping windows mean the same point can come back twice, worded almost
   // identically. Drop near-duplicates before they reach the notes list.
   const seen = new Set();
-  return collected
+  let notes = collected
     .filter(item => {
       const key = `${item.category}|${item.content.toLowerCase().replace(/[^a-z0-9 ]/g, '').slice(0, 80)}`;
       if (seen.has(key)) return false;
@@ -1499,13 +1522,43 @@ ${chunks[i]}`
       category: item.category,
       content: item.content.trim(),
       source_message: source || `Extracted from ${sourceType}`,
-      status: 'pending'
+      status: 'pending',
+      confidence: normaliseConfidence(item.confidence),
     }));
+
+  // The two-note ceiling is in the prompt and the prompt is not a guarantee.
+  // A two-line text came back as five notes often enough to be worth enforcing
+  // here, where it cannot be argued with. Highest confidence first, so the cut
+  // takes the guesses rather than the facts.
+  if (isShortMessage && notes.length > 2) {
+    console.log(`[extract] ${sourceType} returned ${notes.length} notes, keeping the 2 best`);
+    notes = [...notes].sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0)).slice(0, 2);
+  }
+
+  // Where each note came from, so dedup is a lookup rather than a scan of the
+  // whole wedding, and so a wrong note can be traced back to the email it was
+  // read out of. Dropped when 035 has not been applied: PostgREST refuses the
+  // whole insert over a column that is not there.
+  notes = withSource(notes, sourceKind || sourceType, sourceId);
+  if (!has035('noteSource')) {
+    notes = notes.map(n => {
+      const copy = { ...n };
+      delete copy.confidence;
+      return copy;
+    });
+  }
+
+  return {
+    notes,
+    error: failures.length
+      ? `${failures.length} of ${chunks.length} extraction call(s) failed — ${failures[0]}`
+      : null,
+  };
 }
 
 // Legacy alias used by chat endpoint (short user messages)
 async function extractPlanningNotes(message, userId, weddingId) {
-  const notes = await extractPlanningNotesAI(message, weddingId, message.substring(0, 200), 'message');
+  const { notes } = await extractPlanningNotesAI(message, weddingId, message.substring(0, 200), 'message');
   // Restore userId on notes from chat (userId may be set)
   return notes.map(n => ({ ...n, user_id: userId }));
 }
@@ -1513,6 +1566,19 @@ async function extractPlanningNotes(message, userId, weddingId) {
 // Save planning notes to database
 async function savePlanningNotes(notes) {
   if (notes.length === 0) return;
+
+  // With migration 035 every note knows which item it was read out of, so the
+  // question "have I saved this already" is a lookup on three indexed columns
+  // instead of a paged scan of every note the wedding has. The unique index
+  // behind it is the real guard; this read only saves the round trip.
+  //
+  // Not an upsert. The index is partial AND on md5(content) — it has to be,
+  // because a zoom_transcript note is longer than a btree entry is allowed to
+  // be — and PostgREST cannot infer an expression index for onConflict. It
+  // answers 42P10. See the migration for the whole story.
+  if (has035('noteSource') && notes.every(n => n.source_id)) {
+    return saveNotesBySource(notes);
+  }
 
   try {
     // Second line of defence against re-imports. Source-level dedup (the
@@ -1576,6 +1642,112 @@ async function savePlanningNotes(notes) {
   } catch (err) {
     console.error('Error saving planning notes:', err);
   }
+}
+
+/**
+ * Save notes that know their source, checking only that source's own notes.
+ *
+ * One read per (wedding, kind, id) group — in practice one, because a batch
+ * comes out of a single email or meeting. The 23505 fallback exists for the
+ * case this read cannot see: two syncs racing on the same item. A conflict
+ * there is the index doing exactly what it is for, so it is counted, not
+ * logged as an error.
+ */
+async function saveNotesBySource(notes) {
+  const groups = new Map();
+  for (const note of notes) {
+    const key = `${note.wedding_id}|${note.source_kind}|${note.source_id}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(note);
+  }
+
+  let saved = 0, dropped = 0;
+
+  for (const group of groups.values()) {
+    const { wedding_id, source_kind, source_id } = group[0];
+    const { data: prior, error: priorErr } = await supabaseAdmin
+      .from('planning_notes')
+      .select('category, content')
+      .eq('wedding_id', wedding_id)
+      .eq('source_kind', source_kind)
+      .eq('source_id', source_id);
+
+    // A guard that cannot answer is not a guard, and this one has the index
+    // behind it, so falling through to the insert is safe rather than reckless.
+    if (priorErr) {
+      console.error(`[notes] could not read this source's existing notes (${priorErr.message}); relying on the unique index`);
+    }
+
+    const existing = new Set((prior || []).map(p => `${p.category}|${p.content}`));
+    const fresh = [];
+    for (const note of group) {
+      const key = `${note.category}|${note.content}`;
+      if (existing.has(key)) { dropped++; continue; }
+      existing.add(key);
+      fresh.push(note);
+    }
+    if (!fresh.length) continue;
+
+    const { error } = await supabaseAdmin.from('planning_notes').insert(fresh);
+    if (!error) { saved += fresh.length; continue; }
+
+    if (error.code !== '23505') {
+      console.error('Error saving planning notes:', error.message);
+      continue;
+    }
+
+    // One row in the batch collided, which fails the whole insert. Retry them
+    // one at a time so the rest still land.
+    for (const note of fresh) {
+      const { error: rowErr } = await supabaseAdmin.from('planning_notes').insert(note);
+      if (!rowErr) saved++;
+      else if (rowErr.code === '23505') dropped++;
+      else console.error('Error saving planning note:', rowErr.message);
+    }
+  }
+
+  if (dropped) console.log(`Skipped ${dropped} planning note(s) already held for the same source`);
+  if (saved) console.log(`Saved ${saved} planning note(s)`);
+}
+
+/**
+ * Has this source already been read for planning notes?
+ *
+ * The question a reprocess has to ask before spending money on Claude a second
+ * time. With 035 it is answered off source_kind/source_id; without it, off the
+ * source_message label, which is the same check the Quo backfill has always
+ * done by prefix.
+ */
+async function sourceAlreadyExtracted({ weddingId, sourceKind, sourceId, sourceMessage }) {
+  if (has035('noteSource') && sourceId) {
+    const { data, error } = await supabaseAdmin
+      .from('planning_notes')
+      .select('id')
+      .eq('wedding_id', weddingId)
+      .eq('source_kind', sourceKind)
+      .eq('source_id', String(sourceId))
+      .limit(1);
+    // Cannot tell means do not spend. A second extraction of the same meeting
+    // is what produced 855 notes from 341 texts.
+    if (error) {
+      console.error(`[notes] could not check whether this source was already read (${error.message}); leaving it alone`);
+      return true;
+    }
+    return !!data?.length;
+  }
+
+  if (!sourceMessage) return false;
+  const { data, error } = await supabaseAdmin
+    .from('planning_notes')
+    .select('id')
+    .eq('wedding_id', weddingId)
+    .eq('source_message', sourceMessage)
+    .limit(1);
+  if (error) {
+    console.error(`[notes] could not check whether this source was already read (${error.message}); leaving it alone`);
+    return true;
+  }
+  return !!data?.length;
 }
 
 // Get wedding ID for a user
