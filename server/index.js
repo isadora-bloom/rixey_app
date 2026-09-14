@@ -11091,6 +11091,10 @@ const asAdminNotification = (n) => ({
   message: [n.title, n.body].filter(Boolean).join(' — '),
   wedding_id: n.wedding_id,
   read: !!n.is_read,
+  // createNotification writes false here when the email did not go out, and
+  // nothing ever read it, so a notification whose email bounced or whose Gmail
+  // grant had expired looked exactly like one that was delivered.
+  email_sent: n.email_sent ?? null,
   created_at: n.created_at,
 });
 
@@ -11098,7 +11102,7 @@ app.get('/api/admin/notifications', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
       .from('notifications')
-      .select('id, type, title, body, wedding_id, is_read, created_at')
+      .select('id, type, title, body, wedding_id, is_read, email_sent, created_at')
       .eq('recipient_type', 'admin')
       .order('created_at', { ascending: false })
       .limit(50);
@@ -12473,6 +12477,12 @@ app.get('/api/notifications/admin', async (req, res) => {
 });
 
 // Get client notifications for a wedding
+//
+// select('*') carries email_sent, which is the point of it here. A couple's
+// notification is always emailed immediately (see createNotification), so
+// email_sent false on one of these rows means the send failed — a bounced
+// address, or a Gmail grant that has quietly expired — and until now that was
+// indistinguishable from a delivered one on every screen.
 app.get('/api/notifications/client/:weddingId', async (req, res) => {
   try {
     const { weddingId } = req.params;
