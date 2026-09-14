@@ -1845,11 +1845,32 @@ app.post('/api/chat', async (req, res) => {
 
         if (contracts && contracts.length > 0) {
           if (isContractRelated) {
-            // Include full contract text for contract-related questions
+            // Include full contract text for contract-related questions, but
+            // capped: an uncapped inline of every contract on file was the
+            // single biggest thing in this prompt, per-contract and overall.
+            const PER_CONTRACT_CAP = 12_000;
+            const TOTAL_CAP = 40_000;
             weddingContext += '\nFULL CONTRACT DETAILS ON FILE:\n';
-            contracts.forEach(c => {
-              weddingContext += `--- CONTRACT: ${c.filename} ---\n${c.extracted_text || 'No text extracted'}\n\n`;
-            });
+            let contractCharsUsed = 0;
+            for (const c of contracts) {
+              if (contractCharsUsed >= TOTAL_CAP) {
+                weddingContext += `--- CONTRACT: ${c.filename} --- (omitted, total contract text limit reached)\n\n`;
+                continue;
+              }
+              let text = c.extracted_text || 'No text extracted';
+              let truncatedNote = '';
+              if (text.length > PER_CONTRACT_CAP) {
+                text = text.slice(0, PER_CONTRACT_CAP);
+                truncatedNote = ' [truncated]';
+              }
+              const remaining = TOTAL_CAP - contractCharsUsed;
+              if (text.length > remaining) {
+                text = text.slice(0, remaining);
+                truncatedNote = ' [truncated]';
+              }
+              contractCharsUsed += text.length;
+              weddingContext += `--- CONTRACT: ${c.filename}${truncatedNote} ---\n${text}\n\n`;
+            }
             console.log(`Including full contract text for contract-related question`);
           } else {
             // Just summaries for general questions
