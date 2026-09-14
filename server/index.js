@@ -10286,6 +10286,41 @@ app.put('/api/onboarding/:weddingId', async (req, res) => {
   }
 });
 
+/**
+ * What a couple has and has not done, for the venue.
+ *
+ * onboarding_progress has been filling up since the portal launched and had no
+ * venue-side reader, so "have they uploaded a photo yet, have they talked to
+ * Sage yet" was a question nobody could answer without opening the couple's
+ * own dashboard.
+ *
+ * Reads only. The couple route above creates the row on first read and
+ * recomputes the five booleans off the real tables; doing that here as well
+ * would mean the venue looking at a wedding writes a row into it, which is not
+ * something a read should do. A couple who has never opened the portal has no
+ * row, and the honest answer is that nothing has been recorded rather than a
+ * fresh set of falses invented on the spot.
+ *
+ * Shape (binding, W2 renders it):
+ *   { exists, progress: { couple_photo_uploaded, first_message_sent,
+ *     vendor_added, inspo_uploaded, checklist_item_completed,
+ *     onboarding_dismissed, updated_at } | null }
+ */
+app.get('/api/admin/onboarding/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('onboarding_progress')
+      .select('wedding_id, couple_photo_uploaded, first_message_sent, vendor_added, inspo_uploaded, checklist_item_completed, onboarding_dismissed, created_at, updated_at')
+      .eq('wedding_id', req.params.weddingId)
+      .maybeSingle();
+    if (error) throw error;
+    res.json({ exists: !!data, progress: data || null });
+  } catch (error) {
+    console.error('Admin onboarding read error:', error);
+    res.status(500).json({ error: 'Could not read onboarding progress' });
+  }
+});
+
 // ============ ENQUIRIES (tours and people who are not couples yet) ============
 
 /**
