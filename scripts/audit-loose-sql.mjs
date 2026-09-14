@@ -29,7 +29,8 @@ const schema = Object.fromEntries(
   Object.entries(spec.definitions || {}).map(([t, d]) => [t, new Set(Object.keys(d.properties || {}))])
 );
 
-const files = readdirSync('.').filter(f => /^(add_|seed_).*\.sql$/i.test(f)).sort();
+const files = readdirSync('migrations/archive').filter(f => /^(add_|seed_).*\.sql$/i.test(f)).sort()
+  .map(f => `migrations/archive/${f}`);
 
 const applied = [], partial = [], unrun = [], unknown = [];
 
