@@ -4953,9 +4953,50 @@ function normaliseDirection(raw) {
 // matching on numbers too. Two definitions of "the same number" is how a
 // mother's call ends up filed under nobody.
 
+/**
+ * The last thing this kind of sync did, for the status lights.
+ *
+ * "Connected" was `!!QUO_API_KEY` and `!!token`: it said whether the venue had
+ * ever typed a key in, not whether anything had worked since. A grant revoked
+ * in August showed green for a fortnight. This is the other half of the
+ * answer — when it last ran, how it went, and what it said if it went badly.
+ */
+async function lastSyncJob(kind) {
+  const kinds = Array.isArray(kind) ? kind : [kind];
+  const { data, error } = await supabaseAdmin
+    .from('sync_jobs')
+    .select('status, started_at, finished_at, last_error, heartbeat_at, trigger')
+    .in('kind', kinds)
+    .order('started_at', { ascending: false })
+    .limit(1);
+
+  if (error) {
+    console.error(`[status] could not read the last ${kinds.join('/')} job:`, error.message);
+    return { last_status: null, last_finished_at: null, last_error: null, running: false, statusUnknown: true };
+  }
+
+  const job = data?.[0] || null;
+  if (!job) return { last_status: null, last_finished_at: null, last_error: null, running: false };
+
+  // A "running" row whose heartbeat stopped fifteen minutes ago is a job that
+  // was killed, not a job that is working. Saying "running" for ever is how the
+  // 14 August Zoom run stayed invisible.
+  const beat = job.heartbeat_at ? new Date(job.heartbeat_at).getTime() : 0;
+  const live = job.status === 'running' && Date.now() - beat < 15 * 60 * 1000;
+
+  return {
+    last_status: job.status === 'running' && !live ? 'stalled' : job.status,
+    last_started_at: job.started_at,
+    last_finished_at: job.finished_at,
+    last_error: job.last_error || null,
+    last_trigger: job.trigger || null,
+    running: live,
+  };
+}
+
 // Check Quo connection status
-app.get('/api/quo/status', (req, res) => {
-  res.json({ connected: !!QUO_API_KEY });
+app.get('/api/quo/status', async (req, res) => {
+  res.json({ connected: !!QUO_API_KEY, ...(await lastSyncJob(['quo', 'quo-backfill', 'quo-callers'])) });
 });
 
 // Clear processed Quo messages (to allow reprocessing)
@@ -4967,7 +5008,14 @@ app.post('/api/quo/clear-processed', async (req, res) => {
       .neq('id', '00000000-0000-0000-0000-000000000000');
 
     if (error) throw error;
-    res.json({ success: true, message: 'Cleared all processed messages. Run sync again to reprocess.' });
+    res.json({
+      success: true,
+      // Said out loud because it used to be a surprise. Clearing the markers
+      // re-imports the raw texts and calls, but the sync will not pay Claude to
+      // read a message whose notes are already on file, so a reprocess restores
+      // the record without doubling the extracted notes.
+      message: 'Cleared all processed messages. Run sync again to reprocess. Messages that have already been read for planning notes will not be read again.',
+    });
   } catch (error) {
     console.error('Clear processed error:', error);
     res.status(500).json({ error: 'Failed to clear: ' + error.message });
@@ -5097,6 +5145,122 @@ async function assertNoOverlappingJob(kinds, ownJobId) {
   }
 }
 
+/** Write an extraction outcome onto a processed_quo_messages row. No-op without 035. */
+async function recordQuoExtraction(rowId, error) {
+  const patch = markerExtractionPatch({ error });
+  if (!patch) return;
+  const { error: patchErr } = await supabaseAdmin
+    .from('processed_quo_messages').update(patch).eq('id', rowId);
+  if (patchErr) console.error(`[quo] could not record the extraction outcome for ${rowId}: ${patchErr.message}`);
+}
+
+/** The same thing keyed by OpenPhone's id, which is what the sync has to hand. */
+async function recordQuoMarkerExtraction(quoMessageId, error) {
+  const patch = markerExtractionPatch({ error });
+  if (!patch) return;
+  const { error: patchErr } = await supabaseAdmin
+    .from('processed_quo_messages').update(patch).eq('quo_message_id', quoMessageId);
+  if (patchErr) console.error(`[quo] could not record the extraction outcome for ${quoMessageId}: ${patchErr.message}`);
+}
+
+/**
+ * Go back for the extractions that failed rather than found nothing.
+ *
+ * Only possible with migration 035, because before it there was no way to tell
+ * the two apart: both left an item marked imported with no notes. Now a 429 in
+ * the middle of a Tuesday sync leaves extract_error set, and this walks those
+ * rows across all three sources and asks again.
+ *
+ * Dry run unless { apply: true }. A partially extracted item — some chunks
+ * worked, one failed — can come back worded differently on a second reading, so
+ * this is a deliberate act rather than something a cron does behind you.
+ */
+async function runExtractionRetry(body, { jobId, bump }) {
+  await assertNoOverlappingJob(['quo', 'quo-backfill', 'quo-callers', 'extract-retry'], jobId);
+
+  if (!has035('markers')) {
+    throw new Error(
+      'Migration 035 has not been applied, so no failed extraction has been recorded and there is nothing to retry.'
+    );
+  }
+
+  const apply = body?.apply === true;
+  const limit = Number(body?.limit) > 0 ? Number(body.limit) : 200;
+
+  const SOURCES = [
+    { table: 'processed_emails',        idCol: 'gmail_message_id', textCol: 'body_text',       kind: 'email', type: 'email',      label: r => `Email: ${r.subject || '(no subject)'}` },
+    { table: 'processed_quo_messages',  idCol: 'quo_message_id',   textCol: 'body_text',       kind: 'sms',   type: 'sms',        label: r => `SMS: ${String(r.body_text || '').substring(0, 120)}` },
+    { table: 'processed_zoom_meetings', idCol: 'zoom_meeting_id',  textCol: 'transcript_text', kind: 'zoom',  type: 'transcript', label: r => `Zoom meeting: ${r.meeting_topic || 'Untitled'}` },
+  ];
+
+  const rows = [];
+  for (const src of SOURCES) {
+    const extra = src.table === 'processed_emails' ? ', subject'
+      : src.table === 'processed_zoom_meetings' ? ', meeting_topic' : '';
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin
+        .from(src.table)
+        .select(`id, wedding_id, ${src.idCol}, ${src.textCol}${extra}`)
+        .is('extracted_at', null)
+        .not('extract_error', 'is', null)
+        .not('wedding_id', 'is', null)
+        .range(from, from + 999);
+      if (error) throw new Error(`Could not read ${src.table}: ${error.message}`);
+      rows.push(...data.map(r => ({ ...r, src })));
+      if (data.length < 1000) break;
+    }
+  }
+
+  const queue = rows.slice(0, limit);
+  await bump({ total: queue.length, detail: { found: rows.length, queued: queue.length, mode: apply ? 'applying' : 'dry run' } });
+
+  let processed = 0, notesMade = 0, stillFailing = 0;
+
+  for (const row of queue) {
+    const { src } = row;
+    const text = String(row[src.textCol] || '');
+    if (!apply) { processed++; continue; }
+
+    const outcome = await importWithMarker({
+      extract: () => extractPlanningNotesAI(
+        text, row.wedding_id, src.label(row), src.type,
+        { sourceKind: src.kind, sourceId: row[src.idCol] },
+      ),
+      save: savePlanningNotes,
+      recordOutcome: async ({ error }) => {
+        const patch = markerExtractionPatch({ error });
+        if (!patch) return;
+        const { error: patchErr } = await supabaseAdmin.from(src.table).update(patch).eq('id', row.id);
+        if (patchErr) console.error(`[extract-retry] could not record the outcome for ${row.id}: ${patchErr.message}`);
+      },
+    });
+    notesMade += outcome.notes;
+    if (outcome.status === 'extract-failed') stillFailing++;
+    processed++;
+    if (processed % 20 === 0 || processed === queue.length) {
+      await bump({ processed, matched: notesMade, failed: stillFailing });
+    }
+  }
+
+  return {
+    processed,
+    matched: notesMade,
+    failed: stillFailing,
+    detail: {
+      mode: apply ? 'applied' : 'dry run — nothing was written',
+      waiting: rows.length,
+      queued: queue.length,
+      notesRecovered: notesMade,
+      stillFailing,
+      note: apply
+        ? `${notesMade} note(s) recovered, ${stillFailing} item(s) still failing.`
+        : `${rows.length} item(s) have a recorded extraction failure. Run it again with { "apply": true } to read them.`,
+    },
+  };
+}
+
+app.post('/api/admin/retry-extractions', requireAdmin, backgroundSync('extract-retry', runExtractionRetry));
+
 async function runQuoBackfillExtraction(body, { jobId, bump }) {
   await assertNoOverlappingJob(['quo', 'quo-backfill', 'quo-callers'], jobId);
   const limit = Number(body?.limit) > 0 ? Number(body.limit) : null;
@@ -5106,7 +5270,7 @@ async function runQuoBackfillExtraction(body, { jobId, bump }) {
   for (let from = 0; ; from += 1000) {
     const { data, error } = await supabaseAdmin
       .from('processed_quo_messages')
-      .select('id, wedding_id, body_text, processed_at')
+      .select('id, quo_message_id, wedding_id, body_text, processed_at')
       .eq('direction', 'inbound')
       .not('wedding_id', 'is', null)
       .order('processed_at', { ascending: true })
@@ -5156,15 +5320,18 @@ async function runQuoBackfillExtraction(body, { jobId, bump }) {
 
   for (const m of queue) {
     const text = String(m.body_text || '');
-    try {
-      const notes = await extractPlanningNotesAI(text, m.wedding_id, `SMS: ${text.substring(0, 120)}`, 'sms');
-      if (notes.length) {
-        await savePlanningNotes(notes);
-        notesMade += notes.length;
-      }
-    } catch (err) {
+    const outcome = await importWithMarker({
+      extract: () => extractPlanningNotesAI(
+        text, m.wedding_id, `SMS: ${text.substring(0, 120)}`, 'sms',
+        { sourceKind: 'sms', sourceId: m.quo_message_id },
+      ),
+      save: savePlanningNotes,
+      recordOutcome: ({ error }) => recordQuoExtraction(m.id, error),
+    });
+    notesMade += outcome.notes;
+    if (outcome.status === 'extract-failed') {
       failed++;
-      console.error(`[quo-backfill] ${m.id}: ${err.message}`);
+      console.error(`[quo-backfill] ${m.id}: ${outcome.error}`);
     }
     processed++;
     if (processed % 20 === 0 || processed === queue.length) {
@@ -5204,12 +5371,44 @@ async function runQuoSync(body, { jobId, bump }) {
 
     // If force reprocess, clear the processed table first
     if (forceReprocess) {
-      await supabaseAdmin
+      const { error: clearErr } = await supabaseAdmin
         .from('processed_quo_messages')
         .delete()
         .neq('id', '00000000-0000-0000-0000-000000000000');
+      // Half-cleared is the worst of both: some messages re-import and some do
+      // not, and which is which is unknowable afterwards.
+      if (clearErr) throw new Error(`Could not clear the processed markers: ${clearErr.message}`);
       console.log('Force reprocess: cleared processed_quo_messages');
     }
+
+    // What has already been read for planning notes, by source label.
+    //
+    // Loaded on every run, not only a reprocess. The marker table is the guard
+    // for a normal sync, but forceReprocess deletes it and so does the
+    // clear-processed button, and after either of those the sync would pay
+    // Claude to read every text and call again — which is how 341 texts turned
+    // into 855 notes, half of them the same observation in different words.
+    // Re-importing the raw record is cheap and idempotent. Re-extracting is
+    // neither.
+    const extractedSources = new Set();
+    for (const prefix of ['SMS: ', 'Phone call ']) {
+      for (let from = 0; ; from += 1000) {
+        const { data, error } = await supabaseAdmin
+          .from('planning_notes')
+          .select('source_message')
+          .like('source_message', `${prefix}%`)
+          .range(from, from + 999);
+        // Not fatal, but say so: without this set the run may re-read messages
+        // it has already read.
+        if (error) {
+          console.error(`[quo] could not read which messages have been extracted (${error.message}); they may be read twice`);
+          break;
+        }
+        for (const r of data) extractedSources.add(r.source_message);
+        if (data.length < 1000) break;
+      }
+    }
+    console.log(`[quo] ${extractedSources.size} message(s) already read for planning notes`);
 
     // Get all profiles with phone numbers (use admin to bypass RLS)
     const { data: profiles, error: profilesErr } = await supabaseAdmin
@@ -5332,6 +5531,26 @@ async function runQuoSync(body, { jobId, bump }) {
 
     let newlyProcessed = 0;
     let notesExtracted = 0;
+    // Extractions attempted and lost. Recorded on the marker row with 035, and
+    // in the job detail either way.
+    let extractFailed = 0;
+    // Pages OpenPhone refused. Silently skipping a client used to look like a
+    // client with nothing to say.
+    let messageFetchFailures = 0;
+    let callFetchFailures = 0;
+
+    // Twenty pages of a hundred is two thousand messages for one couple, which
+    // no wedding has ever come close to. The cap exists so a paging bug cannot
+    // turn into an all-night run.
+    const QUO_MAX_PAGES = 20;
+    const quoSinceDays = Number(body?.sinceDays) > 0 ? Number(body.sinceDays) : null;
+    const quoFloor = quoSinceDays ? Date.now() - quoSinceDays * 86400000 : null;
+    // OpenPhone calls it createdAt on a message and createdAt or answeredAt on
+    // a call, and older records have neither. No timestamp means do not stop.
+    const msgTime = (m) => {
+      const t = Date.parse(m?.createdAt || m?.created_at || m?.answeredAt || m?.completedAt || '');
+      return Number.isFinite(t) ? t : null;
+    };
 
     // Fetch phone numbers from Quo to get phoneNumberIds
     const phoneNumbersResponse = await fetch(`${QUO_API_BASE}/phone-numbers`, {
@@ -5379,20 +5598,48 @@ async function runQuoSync(body, { jobId, bump }) {
 
         if (!weddingId) continue;
 
-        // Fetch messages for this specific conversation (Quo API requires participants param)
-        const messagesUrl = `${QUO_API_BASE}/messages?phoneNumberId=${phoneNumberId}&participants=${encodeURIComponent(clientPhoneE164)}&maxResults=100`;
+        // Fetch messages for this specific conversation, all of them.
+        //
+        // One page of 100, newest first, and no pageToken: a couple who has
+        // texted more than a hundred times had their older conversation
+        // permanently out of reach. OpenPhone pages with pageToken /
+        // nextPageToken, the same way the conversations sweep in
+        // lib/quo-calls.js already does.
+        const messages = [];
+        {
+          let pageToken = null;
+          let fetchFailed = false;
+          for (let page = 0; page < QUO_MAX_PAGES; page++) {
+            const messagesUrl = `${QUO_API_BASE}/messages?phoneNumberId=${phoneNumberId}&participants=${encodeURIComponent(clientPhoneE164)}&maxResults=100${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`;
 
-        const messagesResponse = await fetch(messagesUrl, {
-          headers: { 'Authorization': QUO_API_KEY }
-        });
+            const messagesResponse = await fetch(messagesUrl, {
+              headers: { 'Authorization': QUO_API_KEY }
+            });
 
-        if (!messagesResponse.ok) {
-          const errText = await messagesResponse.text();
-          continue;
+            if (!messagesResponse.ok) {
+              const errText = await messagesResponse.text();
+              console.error(`[quo] messages ${messagesResponse.status} for ${clientPhoneE164}: ${errText.slice(0, 200)}`);
+              messageFetchFailures++;
+              fetchFailed = true;
+              break;
+            }
+
+            const messagesData = await messagesResponse.json();
+            const pageItems = messagesData.data || messagesData.messages || [];
+            if (!Array.isArray(pageItems)) break;
+            messages.push(...pageItems);
+
+            pageToken = messagesData.nextPageToken || null;
+            if (!pageToken) break;
+            // Every message on this page is on file already, and the page below
+            // it is older still.
+            if (pageItems.length && pageItems.every(m => processedIds.has(m.id))) break;
+            // A date floor, so a routine hourly run does not walk five years of
+            // conversation to find the one text that arrived since :35.
+            if (quoFloor && pageItems.length && pageItems.every(m => msgTime(m) && msgTime(m) < quoFloor)) break;
+          }
+          if (fetchFailed && messages.length === 0) continue;
         }
-
-        const messagesData = await messagesResponse.json();
-        const messages = messagesData.data || messagesData.messages || messagesData || [];
         totalMessagesFound += messages.length;
 
         // Capture sample for debugging
@@ -5491,13 +5738,31 @@ async function runQuoSync(body, { jobId, bump }) {
             }
           }
 
-          // AI extraction from inbound SMS messages
+          // AI extraction from inbound SMS messages.
+          //
+          // Skipped when this exact text has already been read, which is what
+          // makes a reprocess safe: the raw record is rewritten, the model is
+          // not asked a second time and cannot paraphrase itself into a
+          // duplicate note.
           if (direction === 'inbound' && messageBody) {
-            const notes = await extractPlanningNotesAI(messageBody, weddingId, `SMS: ${messageBody.substring(0, 120)}`, 'sms');
-            if (notes.length > 0) {
-              notes.forEach(n => { n.user_id = userId; });
-              await savePlanningNotes(notes);
-              notesExtracted += notes.length;
+            const smsSource = `SMS: ${messageBody.substring(0, 120)}`;
+            const outcome = await importWithMarker({
+              alreadyExtracted: extractedSources.has(smsSource),
+              extract: () => extractPlanningNotesAI(
+                messageBody, weddingId, smsSource, 'sms',
+                { sourceKind: 'sms', sourceId: msg.id },
+              ),
+              save: async (notes) => {
+                notes.forEach(n => { n.user_id = userId; });
+                await savePlanningNotes(notes);
+              },
+              recordOutcome: ({ error }) => recordQuoMarkerExtraction(msg.id, error),
+            });
+            notesExtracted += outcome.notes;
+            if (outcome.status === 'ok') extractedSources.add(smsSource);
+            if (outcome.status === 'extract-failed') {
+              extractFailed++;
+              console.error(`[quo] extraction failed for message ${msg.id}: ${outcome.error}`);
             }
           }
 
@@ -5534,20 +5799,36 @@ async function runQuoSync(body, { jobId, bump }) {
         if (!weddingId) continue;
 
         try {
-          // Fetch calls for this specific conversation
-          const callsUrl = `${QUO_API_BASE}/calls?phoneNumberId=${phoneNumberId}&participants=${encodeURIComponent(clientPhoneE164)}&maxResults=50`;
+          // Every call, not the newest fifty. Same paging as the messages pass
+          // above and the conversations sweep in lib/quo-calls.js.
+          const calls = [];
+          {
+            let pageToken = null;
+            for (let page = 0; page < QUO_MAX_PAGES; page++) {
+              const callsUrl = `${QUO_API_BASE}/calls?phoneNumberId=${phoneNumberId}&participants=${encodeURIComponent(clientPhoneE164)}&maxResults=50${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`;
 
-          const callsResponse = await fetch(callsUrl, {
-            headers: { 'Authorization': QUO_API_KEY }
-          });
+              const callsResponse = await fetch(callsUrl, {
+                headers: { 'Authorization': QUO_API_KEY }
+              });
 
-          if (!callsResponse.ok) {
-            const errText = await callsResponse.text();
-            continue;
+              if (!callsResponse.ok) {
+                const errText = await callsResponse.text();
+                console.error(`[quo] calls ${callsResponse.status} for ${clientPhoneE164}: ${errText.slice(0, 200)}`);
+                callFetchFailures++;
+                break;
+              }
+
+              const callsData = await callsResponse.json();
+              const pageItems = callsData.data || callsData.calls || [];
+              if (!Array.isArray(pageItems)) break;
+              calls.push(...pageItems);
+
+              pageToken = callsData.nextPageToken || null;
+              if (!pageToken) break;
+              if (pageItems.length && pageItems.every(c => processedIds.has(`call_${c.id}`))) break;
+              if (quoFloor && pageItems.length && pageItems.every(c => msgTime(c) && msgTime(c) < quoFloor)) break;
+            }
           }
-
-          const callsData = await callsResponse.json();
-          const calls = callsData.data || callsData.calls || callsData || [];
           totalCallsFound += calls.length;
 
           for (const call of calls) {
@@ -5573,34 +5854,78 @@ async function runQuoSync(body, { jobId, bump }) {
               body_text: `[CALL TRANSCRIPT] ${transcript.substring(0, 5000)}`
             });
 
-            if (insertError) {
-              console.error(`Error saving call to processed_quo_messages:`, insertError);
+            // Same rule the messages branch has had since August and this one
+            // never did: the marker is what stops the call being imported
+            // again, so if it did not save, skip the call. Carrying on wrote
+            // the transcript note and the extracted notes a second time on the
+            // next run. A unique-key collision is the expected case on a
+            // reprocess and is not a reason to skip.
+            if (insertError && insertError.code !== '23505') {
+              console.error(`[quo] marker failed for ${callId}, skipping it: ${insertError.message}`);
+              continue;
             }
 
-            // Also save transcript as a planning note so Sage can search it
-            const { data: savedCallNote, error: noteError } = await supabaseAdmin.from('planning_notes').insert({
-              wedding_id: weddingId,
-              user_id: userId,
-              category: 'call_transcript',
-              content: `[Call Transcript] ${transcript}`,
-              source_message: `From ${direction} call with: ${clientPhoneE164}`,
-              status: 'confirmed'
-            }).select();
+            // Also save transcript as a planning note so Sage can search it.
+            // Checked first, the same way the SMS branch checks: the marker is
+            // the real guard and this is what stops a gap in it reaching a
+            // couple as a second copy of a whole phone call.
+            const callNoteContent = `[Call Transcript] ${transcript}`;
+            const { data: priorCallNote, error: priorCallErr } = await supabaseAdmin
+              .from('planning_notes')
+              .select('id')
+              .eq('wedding_id', weddingId)
+              .eq('category', 'call_transcript')
+              .eq('content', callNoteContent)
+              .limit(1);
 
-            if (noteError) {
-              console.error(`Error saving call transcript to planning_notes:`, noteError);
-              planningNotesErrors.push({ type: 'call', error: noteError.message || JSON.stringify(noteError) });
-            } else {
-              planningNotesSaved++;
+            if (priorCallErr) {
+              console.error(`[quo] could not check for a duplicate call note, skipping ${callId}: ${priorCallErr.message}`);
+              continue;
             }
 
-            // AI extraction from call transcript
+            if (!priorCallNote?.length) {
+              const { error: noteError } = await supabaseAdmin.from('planning_notes').insert({
+                wedding_id: weddingId,
+                user_id: userId,
+                category: 'call_transcript',
+                content: callNoteContent,
+                source_message: `From ${direction} call with: ${clientPhoneE164}`,
+                status: 'confirmed'
+              });
+
+              if (noteError) {
+                console.error(`Error saving call transcript to planning_notes:`, noteError);
+                planningNotesErrors.push({ type: 'call', error: noteError.message || JSON.stringify(noteError) });
+              } else {
+                planningNotesSaved++;
+              }
+            }
+
+            // AI extraction from call transcript.
+            //
+            // The source label carries the call id. It used to be the constant
+            // string "Phone call transcript", so every call on the system
+            // shared one label and nothing could tell which call a note came
+            // from — or whether a given call had been read at all.
+            const callSource = `Phone call ${call.id}`;
             if (transcript) {
-              const notes = await extractPlanningNotesAI(transcript, weddingId, `Phone call transcript`, 'transcript');
-              if (notes.length > 0) {
-                notes.forEach(n => { n.user_id = userId; });
-                await savePlanningNotes(notes);
-                notesExtracted += notes.length;
+              const outcome = await importWithMarker({
+                alreadyExtracted: extractedSources.has(callSource),
+                extract: () => extractPlanningNotesAI(
+                  transcript, weddingId, callSource, 'transcript',
+                  { sourceKind: 'call', sourceId: call.id },
+                ),
+                save: async (notes) => {
+                  notes.forEach(n => { n.user_id = userId; });
+                  await savePlanningNotes(notes);
+                },
+                recordOutcome: ({ error }) => recordQuoMarkerExtraction(callId, error),
+              });
+              notesExtracted += outcome.notes;
+              if (outcome.status === 'ok') extractedSources.add(callSource);
+              if (outcome.status === 'extract-failed') {
+                extractFailed++;
+                console.error(`[quo] extraction failed for call ${call.id}: ${outcome.error}`);
               }
             }
 
@@ -5690,8 +6015,21 @@ async function runQuoSync(body, { jobId, bump }) {
       // The message and call counts are in detail, where they belong.
       processed: clientsDone,
       matched: newlyProcessed + callsProcessed,
+      failed: messageFetchFailures + callFetchFailures,
       detail: {
         messagesImported: newlyProcessed,
+        // Attempted and lost. A text or call that was imported and could not be
+        // read is a fact about this run, not a gap to be inferred from a zero.
+        extractFailed,
+        extractFailedNote: extractFailed
+          ? `${extractFailed} message(s) were imported but could not be read for planning notes.${has035('markers') ? ' Each one has extract_error set; run the extraction retry to pick them up.' : ' Migration 035 is not applied, so which ones is only in the log.'}`
+          : 'ok',
+        // Pages OpenPhone refused. Used to be a bare continue, so a client whose
+        // conversation could not be fetched looked like a client with nothing.
+        messageFetchFailures,
+        callFetchFailures,
+        pagingCap: QUO_MAX_PAGES,
+        sinceDays: quoSinceDays || 'all history',
         callsProcessed,
         callsFound: totalCallsFound,
         callsSkipped,
