@@ -17,9 +17,18 @@
  * shared/sections.js, because the couple's menu was the third copy of it and
  * disagreed with this one about what half the sections were called. Labels,
  * icons, groups and order all come from there. Nothing in this file names a
- * section; all it adds is the badges, which are venue-side only.
+ * section; all it adds is the badges and the two status marks, all venue-side
+ * only.
+ *
+ * `finalised` and `pending` come from computeSectionStatus, the same
+ * function the couple's menu calls (via its hook wrapper, useSectionStatus):
+ * a tick when the couple has signed a section off, a count of planning notes
+ * still waiting on the venue for it. This file calls the plain function
+ * rather than the hook, because weddingTabs is not a component and the rules
+ * of Hooks do not allow a Hook call inside one.
  */
 import { sectionsFor } from '../../../shared/sections.js'
+import { computeSectionStatus } from '../../hooks/useSectionStatus.js'
 
 const VENUE_GROUPS = sectionsFor('venue')
 
@@ -30,8 +39,10 @@ export function weddingTabs({
   borrowSelections = [],
   activities = [],
   contactMessageCount = 0,
+  sectionFinalisations = {},
 } = {}) {
   const pendingNotes = planningNotes.filter(n => n.status === 'pending').length
+  const { finalised, pending } = computeSectionStatus(sectionFinalisations, planningNotes)
   const uncertainForThis = viewingWedding
     ? uncertainQuestions.filter(q => q.wedding_id === viewingWedding.id).length
     : 0
@@ -60,6 +71,8 @@ export function weddingTabs({
       label: s.label,
       icon: s.icon,
       badge: badges[s.key] || 0,
+      finalised: finalised.has(s.key),
+      pending: pending.get(s.key) || 0,
     })),
   ])
 }
