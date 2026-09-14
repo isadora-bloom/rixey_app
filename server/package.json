@@ -19,8 +19,8 @@
     "googleapis": "^171.4.0",
     "mammoth": "^1.11.0",
     "multer": "^2.0.2",
+    "node-cron": "^3.0.3",
     "pdf-parse": "^2.4.5",
-    "resend": "^6.9.4",
     "xlsx": "^0.18.5"
   }
 }
