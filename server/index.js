@@ -394,6 +394,13 @@ app.use('/api/storefront', (req, res, next) => {
   if (req.method === 'GET' && req.path === '/') return next();
   requireAdmin(req, res, next);
 });
+// Manor assets: the brand downloads couples fetch, so GET stays open to
+// everyone. Upload, edit and delete had no check at all and wrote into a
+// PUBLIC bucket, which is as close to an open file host as this server gets.
+app.use('/api/manor-assets', (req, res, next) => {
+  if (req.method === 'GET') return next();
+  requireAdmin(req, res, next);
+});
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
