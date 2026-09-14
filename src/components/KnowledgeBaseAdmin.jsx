@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { apiFetch } from '../utils/api'
 import { Button, Input, ConfirmDialog } from './ui'
 import { useToast } from './ui/Toast'
 
@@ -37,6 +37,7 @@ function countMatches(text, query) {
 export default function KnowledgeBaseAdmin() {
   const [entries, setEntries] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [showAdd, setShowAdd] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -59,13 +60,13 @@ export default function KnowledgeBaseAdmin() {
 
   const loadEntries = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/knowledge-base`, {
-        headers: await authHeaders()
-      })
-      const data = await response.json()
+      const data = await apiFetch(`${API_URL}/api/knowledge-base`)
       setEntries(data.entries || [])
+      setLoadError(false)
     } catch (err) {
       console.error('Failed to load KB:', err)
+      toastError(`Could not load the knowledge base: ${err.message}`)
+      setLoadError(true)
     }
     setLoading(false)
   }
@@ -154,6 +155,15 @@ export default function KnowledgeBaseAdmin() {
 
   if (loading) {
     return <p className="text-sage-400 text-center py-8">Loading knowledge base...</p>
+  }
+
+  if (loadError && entries.length === 0) {
+    return (
+      <div className="text-center py-8">
+        <p className="text-sage-500 mb-2">Could not load the knowledge base</p>
+        <button onClick={loadEntries} className="text-sage-600 underline hover:text-sage-800 text-sm">Retry</button>
+      </div>
+    )
   }
 
   return (
