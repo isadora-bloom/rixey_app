@@ -7438,39 +7438,92 @@ app.post('/api/admin/ingest-review/:id/ignore', async (req, res) => {
 });
 
 // Debug: inspect stored Zoom transcripts
+/**
+ * Zoom meetings the portal has read, with the transcript and how it was matched.
+ *
+ * processed_zoom_meetings holds the whole transcript of every onboarding call
+ * and planning meeting, plus match_reason, match_confidence and matched_by —
+ * which is to say, why the portal believes this meeting belongs to this couple.
+ * Nothing in the client has ever called this route, so a meeting filed against
+ * the wrong wedding was undiscoverable and the transcripts themselves were
+ * write-only.
+ *
+ * Query: ?weddingId= to narrow to one couple, ?limit= and ?offset= to page.
+ *
+ * Shape (binding, W2 renders it):
+ *   {
+ *     meetings: [{ id, zoom_meeting_id, wedding_id, meeting_topic,
+ *                  processed_at, participant_names, match_reason,
+ *                  match_confidence, matched_by, transcript_text,
+ *                  transcript_length, transcript_truncated, parsed_preview }],
+ *     total, limit, offset, hasMore,
+ *     notes: [{ id, wedding_id, source, created_at, content_length, content_preview }],
+ *     // the old names, kept while the transition lands
+ *     processed_meetings: { count, data }, zoom_transcript_notes: { count, data }
+ *   }
+ *
+ * transcript_text is capped at 20,000 characters. A ninety-minute VTT runs to
+ * several hundred kilobytes and twenty of them in one response is a page that
+ * never finishes loading; transcript_truncated says when there is more.
+ */
+const ZOOM_TRANSCRIPT_CAP = 20_000;
+
 app.get('/api/zoom/transcripts', async (req, res) => {
   try {
     // Both tables only grow. Bounded to the newest N unless the caller asks
     // for more (still capped).
     const requested = parseInt(req.query.limit, 10);
     const limit = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 1000) : 200;
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const weddingId = req.query.weddingId || null;
 
-    const { data: meetings, error: meetingsErr } = await supabaseAdmin
+    let mq = supabaseAdmin
       .from('processed_zoom_meetings')
-      .select('zoom_meeting_id, meeting_topic, wedding_id, processed_at, transcript_text')
+      .select('id, zoom_meeting_id, meeting_topic, wedding_id, processed_at, participant_names, match_reason, match_confidence, matched_by, transcript_text', { count: 'exact' })
       .order('processed_at', { ascending: false })
-      .range(0, limit - 1);
+      .range(offset, offset + limit - 1);
+    if (weddingId) mq = mq.eq('wedding_id', weddingId);
+
+    const { data: meetings, error: meetingsErr, count } = await mq;
     if (meetingsErr) throw meetingsErr;
 
     // Also check planning_notes for zoom_transcript entries
-    const { data: transcriptNotes, error: notesErr } = await supabaseAdmin
+    let nq = supabaseAdmin
       .from('planning_notes')
       .select('id, wedding_id, content, source_message, created_at')
       .eq('category', 'zoom_transcript')
       .order('created_at', { ascending: false })
-      .range(0, limit - 1);
+      .range(offset, offset + limit - 1);
+    if (weddingId) nq = nq.eq('wedding_id', weddingId);
+
+    const { data: transcriptNotes, error: notesErr } = await nq;
     if (notesErr) throw notesErr;
 
-    const meetings_summary = (meetings || []).map(m => ({
-      id: m.zoom_meeting_id,
-      topic: m.meeting_topic,
-      wedding_id: m.wedding_id,
-      // processed_at is when we ingested it; the table has no created_at.
-      created_at: m.processed_at,
-      transcript_length: m.transcript_text?.length || 0,
-      transcript_preview: m.transcript_text?.substring(0, 300) || null,
-      parsed_preview: m.transcript_text ? parseVttToText(m.transcript_text).substring(0, 300) : null
-    }));
+    const meetings_summary = (meetings || []).map(m => {
+      const text = m.transcript_text || '';
+      return {
+        // zoom_meeting_id is what the old shape called id, and the row's own id
+        // is what a client needs to address one. Both, named for what they are.
+        id: m.zoom_meeting_id,
+        row_id: m.id,
+        zoom_meeting_id: m.zoom_meeting_id,
+        topic: m.meeting_topic,
+        meeting_topic: m.meeting_topic,
+        wedding_id: m.wedding_id,
+        // processed_at is when we ingested it; the table has no created_at.
+        created_at: m.processed_at,
+        processed_at: m.processed_at,
+        participant_names: m.participant_names || null,
+        match_reason: m.match_reason || null,
+        match_confidence: m.match_confidence ?? null,
+        matched_by: m.matched_by || null,
+        transcript_text: text.slice(0, ZOOM_TRANSCRIPT_CAP),
+        transcript_length: text.length,
+        transcript_truncated: text.length > ZOOM_TRANSCRIPT_CAP,
+        transcript_preview: text.substring(0, 300) || null,
+        parsed_preview: text ? parseVttToText(text).substring(0, 300) : null,
+      };
+    });
 
     const notes_summary = (transcriptNotes || []).map(n => ({
       id: n.id,
@@ -7482,10 +7535,20 @@ app.get('/api/zoom/transcripts', async (req, res) => {
     }));
 
     res.json({
+      meetings: meetings_summary,
+      notes: notes_summary,
+      total: count ?? meetings_summary.length,
+      limit,
+      offset,
+      hasMore: count != null ? offset + meetings_summary.length < count : meetings_summary.length === limit,
+      // The names the route has always answered with. Nothing calls it today,
+      // but a route that changes shape and a client that changes with it is
+      // two deploys, and they do not land at the same moment.
       processed_meetings: { count: meetings_summary.length, data: meetings_summary },
       zoom_transcript_notes: { count: notes_summary.length, data: notes_summary }
     });
   } catch (error) {
+    console.error('Zoom transcripts error:', error);
     res.status(500).json({ error: error.message });
   }
 });
