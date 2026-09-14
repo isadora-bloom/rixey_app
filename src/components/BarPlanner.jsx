@@ -402,7 +402,6 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
   // Shopping list: show calc summary
   const [showCalcSummary, setShowCalcSummary] = useState(false)
 
-  useEffect(() => { load() }, [load])
 
   useEffect(() => {
     const bt         = BAR_TYPES.find(b => b.key === barType) || BAR_TYPES[0]
@@ -456,6 +455,11 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
     setLoading(false)
   }, [weddingId])
 
+
+  // Below the callback on purpose: the dependency array is read during
+  // render, and with `load` declared further down it threw "Cannot access
+  // before initialization" in the built bundle. Found in client_errors.
+  useEffect(() => { load() }, [load])
   const { schedule: scheduleNotes, state: notesSaveState } = useAutosave(
     async (payload) => {
       await apiFetch(`${API_URL}/api/bar-notes/${weddingId}`, {

@@ -882,7 +882,13 @@ export default function GuestList({ weddingId, userId }) {
       ...answerCols.map(c => c.label),
     ]
     const rows = [headerCols.map(csvEscape).join(',')]
-    guests.forEach(g => {
+    // One line per party. Under the person model a plus one is also its own
+    // row (is_plus_one), and walking every row put each plus one out twice:
+    // once in the host's plus_one columns and once as a line of its own.
+    // Dana's export had 66 of them. The host row already carries the plus
+    // one's RSVP, meal and dietary through plusOneRsvpOf and friends.
+    const exportRows = usesPersonModel(guests) ? guests.filter(g => !g.is_plus_one) : guests
+    exportRows.forEach(g => {
       const answers = answersByGuest.get(g.id) || []
       const row = [
         csvEscape(g.first_name),
@@ -903,16 +909,23 @@ export default function GuestList({ weddingId, userId }) {
       ]
       rows.push(row.join(','))
     })
-    const csv = rows.join('\n')
+    // CRLF line endings and a UTF-8 byte-order mark: without the mark, Excel
+    // on Windows reads accented names as rubbish, and without CRLF some
+    // versions run the whole file into one row. A couple reported the file
+    // "not downloading properly"; this was the likeliest half of it.
+    const csv = '﻿' + rows.join('\r\n')
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = 'guest-list-export.csv'
+    a.download = `guest-list-${new Date().toISOString().slice(0, 10)}.csv`
+    a.rel = 'noopener'
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
-    URL.revokeObjectURL(url)
+    // Revoking straight away cancels the download on Safari and iPhone, the
+    // other half of the report. Give the browser a moment to take the blob.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000)
   }
 
   // Assign a guest to a table inline (sends full guest object to preserve all fields)

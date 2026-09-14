@@ -14894,6 +14894,13 @@ app.get('/api/w/:slug', async (req, res) => {
 
     // Never send the password to the client
     const { access_password: _pw, ...safeSettings } = settings;
+    // A section toggle that is null reads as on, the same rule the builder
+    // uses (`data[key] !== false`). Without this the two disagree: the switch
+    // shows on and the site hides the section. The columns default to true so
+    // this is belt and braces, added while chasing a missing wedding party.
+    for (const key of Object.keys(safeSettings)) {
+      if (key.startsWith('show_') && safeSettings[key] === null) safeSettings[key] = true;
+    }
     res.json({
       settings: safeSettings,
       wedding: weddingRes.data || {},
