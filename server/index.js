@@ -10286,6 +10286,93 @@ app.put('/api/onboarding/:weddingId', async (req, res) => {
   }
 });
 
+// ============ ACCOMMODATIONS (where a couple's guests can stay) ============
+//
+// Rixey's curated list of nearby places, shown on every couple's wedding
+// website when "Where to Stay" is switched on. The rows were typed straight
+// into the Supabase console because the portal had no writer for this table at
+// all, which means the one list every guest of every wedding reads was edited
+// somewhere with no audit, no validation and no way for anyone but Isadora to
+// touch it.
+//
+// The public read stays exactly as it was: the couple's site reads these rows
+// through GET /api/w/:slug, and the browser reads them with the anon key on
+// /accommodations. Nothing here changes either.
+//
+// Venue-wide, not per wedding — there is no wedding_id on this table.
+// Mounted under /api/admin, so requireAdmin already applies.
+
+app.get('/api/admin/accommodations', async (req, res) => {
+  try {
+    // Small and venue-wide, but it only grows and a select with no range
+    // silently stops at 1000.
+    const rows = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin
+        .from('accommodations').select('*').order('distance').range(from, from + 999);
+      if (error) throw error;
+      rows.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
+    res.json({ accommodations: rows });
+  } catch (error) {
+    console.error('Accommodations list error:', error);
+    res.status(500).json({ error: 'Could not load the accommodation list' });
+  }
+});
+
+app.post('/api/admin/accommodations', async (req, res) => {
+  try {
+    const { fields, ignored } = onlyColumns('accommodations', req.body || {});
+    if (ignored.length) console.log('[accommodations] ignored fields on create:', ignored.join(', '));
+    delete fields.id;
+    delete fields.created_at;
+    if (!String(fields.name || '').trim()) {
+      return res.status(400).json({ error: 'A place needs a name' });
+    }
+    const { data, error } = await supabaseAdmin
+      .from('accommodations').insert(fields).select().single();
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error('Accommodation create error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/admin/accommodations/:id', async (req, res) => {
+  try {
+    const { fields, ignored } = onlyColumns('accommodations', req.body || {});
+    if (ignored.length) console.log('[accommodations] ignored fields on update:', ignored.join(', '));
+    delete fields.id;
+    delete fields.created_at;
+    if (!Object.keys(fields).length) return res.status(400).json({ error: 'Nothing to change' });
+    const { data, error } = await supabaseAdmin
+      .from('accommodations').update(fields).eq('id', req.params.id).select().maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such place' });
+    res.json(data);
+  } catch (error) {
+    console.error('Accommodation update error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/admin/accommodations/:id', async (req, res) => {
+  try {
+    // .select() so a delete that matched nothing says so. A bare delete in
+    // PostgREST is a success whether or not a row was there.
+    const { data, error } = await supabaseAdmin
+      .from('accommodations').delete().eq('id', req.params.id).select('id').maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such place' });
+    res.json({ ok: true, id: data.id });
+  } catch (error) {
+    console.error('Accommodation delete error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 /**
  * What a couple has and has not done, for the venue.
  *
