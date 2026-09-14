@@ -10564,19 +10564,38 @@ app.get('/api/admin/onboarding/:weddingId', async (req, res) => {
  * wedding; a miss means somebody new. Matched on identifiers rather than names,
  * for the reason written up in shared/meeting-match.js.
  */
-app.post('/api/admin/enquiries/sync', requireAdmin, async (req, res) => {
-  try {
-    const token = process.env.CALENDLY_API_TOKEN;
-    if (!token) return res.status(400).json({ error: 'Calendly API token not configured' });
+/**
+ * Read the Calendly diary and file every booking.
+ *
+ * Pulled out of the route so the hourly cron can run exactly the same import.
+ * Gmail, Quo and Zoom have all been on a timer since August; Calendly was the
+ * one left on a button, and a tour booked on Saturday sat outside the portal
+ * until somebody happened to press it on Monday — which is the same failure
+ * that put this feature here in the first place.
+ *
+ * Throws on anything that means the whole run is worthless (no token, a
+ * rejected token, an unreadable diary) so runScheduledSync marks the job row
+ * failed and notifies. A single booking that will not read is counted into
+ * `skipped` and the rest of the diary still lands.
+ *
+ * Returns a summary in the shape the job row wants: processed, matched,
+ * needsReview, detail.
+ */
+async function runCalendlySync(body = {}) {
+  const token = process.env.CALENDLY_API_TOKEN;
+  if (!token) throw new Error('Calendly API token not configured');
 
-    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
     const me = await fetch('https://api.calendly.com/users/me', { headers });
     if (!me.ok) throw new Error(`Calendly rejected the token (${me.status})`);
     const userUri = (await me.json()).resource.uri;
 
     // A little way back as well as forward: a tour that happened yesterday
-    // still needs its outcome recording.
-    const from = new Date(Date.now() - 14 * 86_400_000).toISOString();
+    // still needs its outcome recording. body.sinceDays widens that for a
+    // catch-up run, which is how the first cron after an outage picks up what
+    // was missed.
+    const sinceDays = Math.min(Math.max(Number(body?.sinceDays) || 14, 1), 365);
+    const from = new Date(Date.now() - sinceDays * 86_400_000).toISOString();
     const url = `https://api.calendly.com/scheduled_events?user=${encodeURIComponent(userUri)}`
       + `&min_start_time=${from}&status=active&count=100&sort=start_time:asc`;
     const evRes = await fetch(url, { headers });
@@ -10653,15 +10672,33 @@ app.post('/api/admin/enquiries/sync', requireAdmin, async (req, res) => {
       }
     }
 
-    res.json({
-      created, updated, existingCouples, skipped, suggested, seen: events.length,
-      message: `${events.length} bookings in the diary. ${created} new, ${updated} updated`
-        + (existingCouples ? `, ${existingCouples} are existing couples` : '')
-        + (skipped ? `, ${skipped} could not be read` : '') + '.',
-    });
+  const message = `${events.length} bookings in the diary. ${created} new, ${updated} updated`
+    + (existingCouples ? `, ${existingCouples} are existing couples` : '')
+    + (skipped ? `, ${skipped} could not be read` : '') + '.';
+
+  return {
+    processed: events.length,
+    matched: existingCouples,
+    // A suggestion is precisely a booking waiting for a person to confirm it,
+    // which is what this column on the job row means everywhere else.
+    needsReview: suggested,
+    failed: skipped,
+    detail: { created, updated, existingCouples, skipped, suggested, seen: events.length, message },
+  };
+}
+
+// The button. Same import, answered inline so the admin panel can show the
+// result it has always shown rather than a job id to go and watch.
+app.post('/api/admin/enquiries/sync', requireAdmin, async (req, res) => {
+  try {
+    const summary = await runCalendlySync(req.body || {});
+    res.json({ ...summary.detail });
   } catch (error) {
     console.error('Enquiry sync error:', error);
-    res.status(500).json({ error: error.message });
+    // A missing token is a configuration answer, not a server fault, and the
+    // panel has always shown it as a 400.
+    const status = /not configured/i.test(error.message || '') ? 400 : 500;
+    res.status(status).json({ error: error.message });
   }
 });
 
@@ -16745,6 +16782,27 @@ cron.schedule('35 * * * *', async () => {
     return;
   }
   await runScheduledSync('quo', runQuoSync, { sinceDays: 30, trigger: 'scheduled' });
+}, { timezone: VENUE_TZ });
+
+/**
+ * Calendly at ten to, the last of the four.
+ *
+ * The other three syncs have been hourly since August and this one was still a
+ * button, so a tour booked on Saturday sat outside the portal until somebody
+ * pressed sync on Monday — and a venue tour is the conversation that decides
+ * whether anyone books at all. Nobody presses sync on the off-chance; that is
+ * the whole finding.
+ *
+ * Fourteen days back rather than thirty: Calendly holds the diary, the portal
+ * only needs the recent end of it, and every booking is upserted on its event
+ * URI so a repeat costs an update rather than a duplicate.
+ */
+cron.schedule('50 * * * *', async () => {
+  if (!process.env.CALENDLY_API_TOKEN) {
+    console.log('[calendly cron] no Calendly token, nothing to do');
+    return;
+  }
+  await runScheduledSync('calendly', runCalendlySync, { sinceDays: 14, trigger: 'scheduled' });
 }, { timezone: VENUE_TZ });
 
 // Ask the database once, at boot, which of migration 035's columns exist. Every
