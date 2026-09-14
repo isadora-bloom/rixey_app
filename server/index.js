@@ -7098,12 +7098,17 @@ app.post('/api/inspo', upload.single('image'), async (req, res) => {
       return res.status(400).json({ error: 'File and wedding ID required' });
     }
 
-    // Check count limit
-    const { count } = await supabaseAdmin
+    // Check count limit. A failed count is not "0 images" — treating it as
+    // under the cap would let uploads past MAX_INSPO_IMAGES on every blip.
+    const { count, error: countError } = await supabaseAdmin
       .from('inspo_gallery')
       .select('*', { count: 'exact', head: true })
       .eq('wedding_id', weddingId);
 
+    if (countError) {
+      console.error('inspo count check failed:', countError.message);
+      return res.status(500).json({ error: 'Could not check the image count' });
+    }
     if (count >= MAX_INSPO_IMAGES) {
       return res.status(400).json({ error: `Maximum ${MAX_INSPO_IMAGES} images allowed` });
     }
