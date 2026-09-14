@@ -134,7 +134,7 @@ const corsOptions = {
   credentials: true
 };
 app.use(cors(corsOptions));
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 // Blank form fields arrive as "" and Postgres rejects that for every non-text
 // column. Turn those into null before any handler sees them. See coerce.js.
 app.use(coerceBody);
