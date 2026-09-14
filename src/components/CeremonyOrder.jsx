@@ -121,7 +121,7 @@ function PersonCard({ entry, isDragging, onDragStart, onDragEnd, onDelete }) {
       <button
         onMouseDown={e => e.stopPropagation()}
         onClick={e => { e.stopPropagation(); onDelete(entry.id); }}
-        className="absolute top-1 right-1 w-4 h-4 text-cream-400 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-opacity text-sm leading-none flex items-center justify-center"
+        className="absolute top-1 right-1 w-4 h-4 text-cream-400 hover:text-rose-500 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity text-sm leading-none flex items-center justify-center"
         title="Remove"
       >×</button>
     </div>
@@ -153,7 +153,7 @@ function GapZone({ active, onDrop }) {
 
 // ── Step Row ──────────────────────────────────────────────────────────────────
 
-function StepRow({ step, stepNum, draggingId, onDragStart, onDragEnd, onDelete, onDropOnStep, isDragging }) {
+function StepRow({ step, stepNum, draggingId, onDragStart, onDragEnd, onDelete, onDropOnStep, isDragging, onMoveUp, onMoveDown, canMoveUp, canMoveDown }) {
   const [over, setOver] = useState(false);
   const draggingIsHere = step.some(e => e.id === draggingId);
   const canReceive = isDragging && !draggingIsHere && step.length < 3;
@@ -172,6 +172,26 @@ function StepRow({ step, stepNum, draggingId, onDragStart, onDragEnd, onDelete, 
       <span className="text-xs text-cream-400 font-mono w-5 text-right shrink-0 select-none">
         {stepNum}
       </span>
+      <div className="flex flex-col shrink-0">
+        <button
+          type="button"
+          onClick={onMoveUp}
+          disabled={!canMoveUp}
+          className="p-0.5 rounded text-sage-400 hover:text-sage-700 hover:bg-cream-100 transition disabled:opacity-30 disabled:cursor-not-allowed"
+          title="Move step up"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" /></svg>
+        </button>
+        <button
+          type="button"
+          onClick={onMoveDown}
+          disabled={!canMoveDown}
+          className="p-0.5 rounded text-sage-400 hover:text-sage-700 hover:bg-cream-100 transition disabled:opacity-30 disabled:cursor-not-allowed"
+          title="Move step down"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+        </button>
+      </div>
       <div className="flex flex-wrap gap-2 flex-1">
         {step.map(entry => (
           <PersonCard
@@ -327,6 +347,14 @@ function SectionBuilder({ section, sectionEntries, onAdd, onDelete, onReorder, o
     await applyNewSteps(without);
   };
 
+  const moveStep = async (index, direction) => {
+    const target = index + direction;
+    if (target < 0 || target >= steps.length) return;
+    const newSteps = [...steps];
+    [newSteps[index], newSteps[target]] = [newSteps[target], newSteps[index]];
+    await applyNewSteps(newSteps);
+  };
+
   const handleTraditionalSort = async () => {
     const sorted = [...sectionEntries].sort((a, b) => {
       const diff = roleRank(a.role) - roleRank(b.role);
@@ -378,6 +406,10 @@ function SectionBuilder({ section, sectionEntries, onAdd, onDelete, onReorder, o
                   onDelete={onDelete}
                   onDropOnStep={() => handleDropOnStep(i)}
                   isDragging={isDragging}
+                  onMoveUp={() => moveStep(i, -1)}
+                  onMoveDown={() => moveStep(i, 1)}
+                  canMoveUp={i > 0}
+                  canMoveDown={i < steps.length - 1}
                 />
                 <GapZone active={isDragging} onDrop={() => handleDropOnGap(i + 1)} />
               </div>
