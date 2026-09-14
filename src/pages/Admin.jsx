@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 // Components still used directly in the main Admin view (not in profile)
 import KnowledgeBaseAdmin from '../components/KnowledgeBaseAdmin'
 import VenueSettings from '../components/VenueSettings'
+import AccommodationsAdmin from '../components/admin/AccommodationsAdmin'
 import VendorsAdmin from '../components/VendorsAdmin'
 import UsageStats from '../components/UsageStats'
 import UpcomingMeetings from '../components/UpcomingMeetings'
@@ -138,6 +139,9 @@ export default function Admin() {
   const [crashCount, setCrashCount] = useState(0)
   const [reviewChoice, setReviewChoice] = useState({})
   const [reviewBusy, setReviewBusy] = useState(null)
+  // "Someone else" was picked for this review item, so its select shows the
+  // full wedding list instead of the (usually one) name the matcher suggested.
+  const [reviewShowAll, setReviewShowAll] = useState({})
   const [notesHighlights, setNotesHighlights] = useState('')
   const [loadingHighlights, setLoadingHighlights] = useState(false)
   const [notesSearchQuery, setNotesSearchQuery] = useState('')
@@ -1520,6 +1524,15 @@ export default function Admin() {
         planningNotes={planningNotes}
         setPlanningNotes={setPlanningNotes}
         sectionFinalisations={sectionFinalisations}
+        onSectionFinalised={(sectionKey, party, value) => {
+          setSectionFinalisations(prev => ({
+            ...prev,
+            [sectionKey]: {
+              ...(prev[sectionKey] || {}),
+              [party === 'couple' ? 'couple_finalised' : 'staff_finalised']: value,
+            },
+          }))
+        }}
         updateNoteStatus={updateNoteStatus}
         notesSearchQuery={notesSearchQuery}
         setNotesSearchQuery={setNotesSearchQuery}
@@ -1912,18 +1925,45 @@ export default function Admin() {
                   )}
 
                   <div className="flex flex-wrap gap-2 mt-3">
-                    <select
-                      value={reviewChoice[item.id] || item.suggested_wedding_id || ''}
-                      onChange={e => setReviewChoice(prev => ({ ...prev, [item.id]: e.target.value }))}
-                      className="flex-1 min-w-[200px] border border-cream-300 rounded-lg px-3 py-2 text-sm"
-                    >
-                      <option value="">Whose is this?</option>
-                      {weddings.map(w => (
-                        <option key={w.id} value={w.id}>
-                          {weddingName(w)}{w.wedding_date ? ` — ${w.wedding_date}` : ''}
-                        </option>
-                      ))}
-                    </select>
+                    {(item.candidates?.length > 0) && !reviewShowAll[item.id] ? (
+                      <select
+                        value={reviewChoice[item.id] || item.suggested_wedding_id || ''}
+                        onChange={e => {
+                          if (e.target.value === '__other__') {
+                            setReviewShowAll(prev => ({ ...prev, [item.id]: true }))
+                            setReviewChoice(prev => ({ ...prev, [item.id]: '' }))
+                            return
+                          }
+                          setReviewChoice(prev => ({ ...prev, [item.id]: e.target.value }))
+                        }}
+                        className="flex-1 min-w-[200px] border border-cream-300 rounded-lg px-3 py-2 text-sm"
+                      >
+                        <option value="">Whose is this?</option>
+                        {item.candidates.map(c => {
+                          const confidence = c.score ?? c.confidence
+                          const label = c.name || c.coupleNames || weddingName(weddings.find(w => w.id === c.weddingId) || {}, 'Unknown couple')
+                          return (
+                            <option key={c.weddingId} value={c.weddingId}>
+                              {label}{typeof confidence === 'number' ? ` (${Math.max(0, Math.min(100, Math.round(confidence)))}% sure)` : ''}
+                            </option>
+                          )
+                        })}
+                        <option value="__other__">Someone else…</option>
+                      </select>
+                    ) : (
+                      <select
+                        value={reviewChoice[item.id] || item.suggested_wedding_id || ''}
+                        onChange={e => setReviewChoice(prev => ({ ...prev, [item.id]: e.target.value }))}
+                        className="flex-1 min-w-[200px] border border-cream-300 rounded-lg px-3 py-2 text-sm"
+                      >
+                        <option value="">Whose is this?</option>
+                        {weddings.map(w => (
+                          <option key={w.id} value={w.id}>
+                            {weddingName(w)}{w.wedding_date ? ` — ${w.wedding_date}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                     <button
                       onClick={() => assignReviewItem(item)}
                       disabled={reviewBusy === item.id || !(reviewChoice[item.id] || item.suggested_wedding_id)}
@@ -2072,8 +2112,13 @@ export default function Admin() {
 
         {/* Venue Settings View */}
         {mainView === 'venue-settings' && (
-          <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
-            <VenueSettings />
+          <div className="space-y-6">
+            <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
+              <VenueSettings />
+            </div>
+            <div className="bg-white rounded-2xl shadow-sm border border-cream-200 p-4 sm:p-6">
+              <AccommodationsAdmin />
+            </div>
           </div>
         )}
 
