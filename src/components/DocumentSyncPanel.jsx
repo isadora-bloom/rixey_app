@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
 import { apiFetch } from '../utils/api'
 import { useToast } from './ui/Toast'
+import SyncHistoryList from './admin/SyncHistoryList'
 
 /**
  * Upload a planning document, see what it says the portal does not, decide.
@@ -199,6 +200,18 @@ export default function DocumentSyncPanel({ weddingId }) {
                 </p>
               </div>
               <div className="flex gap-2 shrink-0">
+                {d.download_url ? (
+                  <a
+                    href={d.download_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs px-3 py-1.5 rounded-lg border border-cream-300 text-sage-600 hover:bg-cream-50 transition"
+                  >
+                    Download
+                  </a>
+                ) : (
+                  <span className="text-xs text-sage-300 px-1">No file kept</span>
+                )}
                 <button
                   onClick={() => (d.parsed_at ? openDiff(d.id) : parse(d.id))}
                   disabled={!!busy}
@@ -218,6 +231,11 @@ export default function DocumentSyncPanel({ weddingId }) {
           <p className="text-sage-400 text-sm">Nothing uploaded yet. PDF, Excel or Word.</p>
         </div>
       )}
+
+      <div>
+        <h3 className="text-sm font-medium text-sage-700">History</h3>
+        <SyncHistoryList weddingId={weddingId} source="document" emptyLabel="Nothing imported from a document yet." />
+      </div>
 
       {diff && (
         <>
