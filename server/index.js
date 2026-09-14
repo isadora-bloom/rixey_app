@@ -1222,6 +1222,9 @@ async function loadKnowledgeBase() {
   const { data, error } = await supabaseAdmin
     .from('knowledge_base')
     .select('title, category, subcategory, content')
+    // The admin's deactivate toggle only changed the row's styling until
+    // this filter existed; deactivated entries were still read to Sage.
+    .or('active.is.null,active.eq.true')
     .range(0, 4999);
   if (error) {
     console.error('Error fetching knowledge:', error.message);
@@ -12305,9 +12308,15 @@ app.get('/api/notifications/client/:weddingId', async (req, res) => {
 });
 
 // Mark notification(s) as read
-app.put('/api/notifications/read', async (req, res) => {
+app.put('/api/notifications/read', requireAuth, async (req, res) => {
   try {
     const { notificationId, recipientType, weddingId } = req.body;
+    // This route had no auth at all: anyone could mark every admin
+    // notification read with one request. The admin branch is admin-only;
+    // the client branch is scoped by weddingAccess on the body's weddingId.
+    if (recipientType === 'admin' && !(await isAdminUser(req.userId))) {
+      return res.status(403).json({ error: 'Admin only' });
+    }
     let query = supabaseAdmin.from('notifications').update({ is_read: true });
     if (notificationId) {
       query = query.eq('id', notificationId);
@@ -13454,7 +13463,7 @@ app.post('/api/bar-recipes/extract-url', requireAuth, async (req, res) => {
 });
 
 // Extract ingredients from an uploaded image/PDF using Claude Vision
-app.post('/api/bar-recipes/extract-upload', upload.single('file'), async (req, res) => {
+app.post('/api/bar-recipes/extract-upload', requireAuth, upload.single('file'), async (req, res) => {
   try {
     const { name } = req.body;
     const file = req.file;

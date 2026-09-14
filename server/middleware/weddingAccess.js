@@ -38,7 +38,10 @@
 //
 // Set WEDDING_ACCESS_MODE=audit to go back to log-only without a deploy, if
 // something legitimate turns out to be refused.
-const MODE = () => (process.env.WEDDING_ACCESS_MODE || 'enforce').toLowerCase();
+// Anything other than the one word 'audit' enforces. The example env file
+// shipped 'production_or_test' for a while, and a typo here must not turn
+// authorisation off across forty routes.
+const MODE = () => (String(process.env.WEDDING_ACCESS_MODE || '').toLowerCase() === 'audit' ? 'audit' : 'enforce');
 
 /**
  * Routes with no wedding to check against, or that legitimately serve people

@@ -127,6 +127,12 @@ try {
   await check('own completeness', 200, `/api/completeness/${A.wedding}`, { token: A.token });
   await check('another couple\'s completeness', 403, `/api/completeness/${B.wedding}`, { token: A.token });
 
+  // Ingestion audit, 14 Sep evening.
+  await check('mark admin notifications read without a token', 401, '/api/notifications/read', { method: 'PUT', json: { recipientType: 'admin' } });
+  await check('mark admin notifications read as a couple', 403, '/api/notifications/read', { method: 'PUT', token: A.token, json: { recipientType: 'admin' } });
+  const fd4 = new FormData(); fd4.append('file', new Blob(['x'], { type: 'image/png' }), 'x.png');
+  await check('recipe upload without a token', 401, '/api/bar-recipes/extract-upload', { method: 'POST', form: fd4 });
+
   // Item 23: debug route gated.
   await check('gmail-callback-debug without a token', [401, 403], '/api/gmail-callback-debug');
   await check('health stays public', 200, '/api/health');
