@@ -4950,6 +4950,53 @@ app.post('/api/admin/client-errors/:id/resolve', requireAdmin, async (req, res) 
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+/**
+ * Change a crash report: its status, the note on it, or both.
+ *
+ * client_errors.notes has been a column since 026 and could never hold a
+ * value — the only writer was the resolve button, which posted no body at all,
+ * so "what turned out to be wrong" was never written down anywhere and the
+ * next identical crash started from nothing.
+ *
+ * requireAdmin by hand: /api/client-errors is not under the /api/admin mount,
+ * because POST /api/client-errors is how a browser reports its own crash and
+ * that one has to stay open to anybody.
+ *
+ * Body: { status?, notes? }. Status is checked against the three the table
+ * uses rather than passed through, since a typo would make a report vanish
+ * from every filtered list.
+ */
+const CLIENT_ERROR_STATUSES = new Set(['open', 'snoozed', 'done']);
+
+app.patch('/api/client-errors/:id', requireAdmin, async (req, res) => {
+  try {
+    const patch = {};
+    if (req.body?.status !== undefined) {
+      const status = String(req.body.status);
+      if (!CLIENT_ERROR_STATUSES.has(status)) {
+        return res.status(400).json({ error: `status must be one of ${[...CLIENT_ERROR_STATUSES].join(', ')}` });
+      }
+      patch.status = status;
+    }
+    // An empty string is a cleared note, not an absent one, so it is kept
+    // apart from undefined and written as null.
+    if (req.body?.notes !== undefined) {
+      patch.notes = req.body.notes === null || req.body.notes === '' ? null : String(req.body.notes).slice(0, 4000);
+    }
+    if (!Object.keys(patch).length) {
+      return res.status(400).json({ error: 'Nothing to change: send status, notes, or both' });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('client_errors').update(patch).eq('id', req.params.id)
+      .select('id, status, notes, message, component, seen_count, first_seen_at, last_seen_at')
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such crash report' });
+    res.json(data);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 
 /**
  * A few lines on what a call or an email was about, for the venue's eyes.
