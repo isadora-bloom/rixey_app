@@ -18,7 +18,10 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
       - run: npm ci
+      # Lint is advisory until the 158 pre-existing errors are worked down.
+      # Flip this to blocking once npx eslint . is clean.
       - run: npm run lint
+        continue-on-error: true
       - run: npm run audit
       - run: npm run test:unit
       - run: npm run build

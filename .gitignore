@@ -42,3 +42,6 @@ playwright-report/
 
 # Data pulled out of production for a one-off repair. Never commit.
 backups/
+
+# agent worktrees
+.claude/worktrees/
