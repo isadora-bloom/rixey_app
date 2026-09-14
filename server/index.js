@@ -13,7 +13,7 @@ import rateLimit from 'express-rate-limit';
 // whole job is to not throw.
 import crypto from 'node:crypto';
 import { requireAuth, requireAdmin } from './middleware/auth.js';
-import { createWeddingAccess } from './middleware/weddingAccess.js';
+import { createWeddingAccess, assertWeddingMember } from './middleware/weddingAccess.js';
 import { validateBody } from './middleware/validate.js';
 import { coerceBody } from './middleware/coerce.js';
 import { fetchAllTabs, SheetFetchError } from './lib/sheet-fetcher.js';
@@ -1533,10 +1533,37 @@ async function getWeddingIdForUser(userId) {
   return data?.wedding_id || null;
 }
 
+/**
+ * Is this signed-in user an admin? Reads the verified id, never the body.
+ *
+ * Used by the Sage routes below, where an admin legitimately acts on another
+ * person's thread and a couple never does.
+ */
+async function isAdminUser(userId) {
+  if (!userId) return false;
+  const { data, error } = await supabaseAdmin
+    .from('profiles').select('is_admin').eq('id', userId).maybeSingle();
+  if (error) {
+    console.error('[isAdminUser] profile read failed:', error.message);
+    return false;
+  }
+  return !!data?.is_admin;
+}
+
 // Chat endpoint
-app.post('/api/chat', async (req, res) => {
+app.post('/api/chat', requireAuth, async (req, res) => {
   try {
     const { message, userId, profile, conversationHistory = [] } = req.body;
+
+    // The body used to be a fallback for the caller's identity, which meant
+    // anyone at all could POST { userId: <any couple's id> } with no token and
+    // have Sage read that couple's vendors, contracts, planning notes and
+    // budget back to them. There is no legitimate caller left that predates
+    // soft auth, so the token is now the only source. An admin may still name
+    // someone else; a couple may not.
+    if (userId && userId !== req.userId && !(await isAdminUser(req.userId))) {
+      return res.status(403).json({ error: 'Not your conversation' });
+    }
 
     // Get knowledge base context
     const knowledge = await getRelevantKnowledge(message);
@@ -1546,13 +1573,8 @@ app.post('/api/chat', async (req, res) => {
 
     // Get wedding-specific context (vendors, inspo, planning notes, contracts)
     let weddingContext = '';
-    // Resolved from the signed-in user, never from the request body. This used
-    // to prefer profile.wedding_id off req.body, so a caller could name any
-    // wedding and have Sage read out that couple's vendors, contracts,
-    // planning notes and budget. req.userId comes from the verified token;
-    // req.body.userId does not, so it is only a fallback for callers that
-    // predate soft auth and it goes through the same profiles lookup.
-    const weddingId = await getWeddingIdForUser(req.userId || userId);
+    // Resolved from the signed-in user, never from the request body.
+    const weddingId = await getWeddingIdForUser(req.userId);
     if (weddingId) {
       try {
         // Get vendors (use admin to bypass RLS)
@@ -2264,7 +2286,9 @@ function formatProfileContext(profile) {
 }
 
 // Welcome endpoint - generates personalized greeting
-app.post('/api/welcome', async (req, res) => {
+// Signed in only: it runs a model on a body-supplied conversation history, so
+// with no token it was a free Claude endpoint for anyone who found the URL.
+app.post('/api/welcome', requireAuth, async (req, res) => {
   try {
     const { userId, userEmail, profile, conversationHistory = [] } = req.body;
 
@@ -2692,13 +2716,22 @@ app.post('/api/sage-preview', async (req, res) => {
 });
 
 // Chat with file upload (for client chat)
-app.post('/api/chat-with-file', upload.single('file'), async (req, res) => {
+//
+// requireAuth comes before multer deliberately: a rejected caller should not
+// get to upload 50MB first. weddingId is checked against the token after
+// multer, because on a multipart request req.body is empty until then.
+app.post('/api/chat-with-file', requireAuth, upload.single('file'), async (req, res) => {
   try {
     const { message, userId, weddingId } = req.body;
     const file = req.file;
 
     if (!file) {
       return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    if (weddingId) {
+      const allowed = await assertWeddingMember(supabaseAdmin, req, weddingId);
+      if (!allowed.ok) return res.status(allowed.status).json({ error: 'You do not have access to this wedding' });
     }
 
     console.log(`Chat with file: ${file.originalname} from user ${userId}, weddingId: ${weddingId || 'NONE'}`);
@@ -10425,12 +10458,30 @@ app.get('/api/sage-messages/user/:userId', requireAuth, async (req, res) => {
 });
 
 // Save a Sage chat message (bypasses RLS)
-app.post('/api/sage-messages', async (req, res) => {
+//
+// This took user_id, content and sender straight off the body with no token at
+// all, so anyone could write into any couple's thread and label it `sage` —
+// words that appear in the portal as if the venue had said them.
+//
+// Who may write what:
+//   - a couple writes into their own thread, either side of the conversation.
+//     The dashboard saves Sage's reply itself after /api/chat returns, so
+//     sender 'sage' has to stay available to them; it is only allowed when the
+//     thread is their own.
+//   - an admin may write into anyone's, which is what the inject route does.
+app.post('/api/sage-messages', requireAuth, async (req, res) => {
   try {
-    const { user_id, content, sender } = req.body;
+    const { content, sender } = req.body;
+    const callerIsAdmin = await isAdminUser(req.userId);
+    // Admins may file into another person's thread; nobody else may.
+    const user_id = callerIsAdmin ? (req.body.user_id || req.userId) : req.userId;
 
     if (!user_id || !content || !sender) {
       return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    if (req.body.user_id && req.body.user_id !== user_id) {
+      return res.status(403).json({ error: 'Not your conversation' });
     }
 
     const { data, error } = await supabaseAdmin
