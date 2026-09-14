@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { API_URL } from '../config/api'
 import { authHeaders, apiFetch } from '../utils/api'
 import { useToast } from './ui/Toast'
@@ -10,23 +10,30 @@ export default function RsvpSettings({ weddingId }) {
   const [config, setConfig] = useState({})
   const [customQuestions, setCustomQuestions] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const hasLoadedRef = useRef(false)
   const { error: toastError } = useToast()
 
-  useEffect(() => {
+  const loadSettings = useCallback(async () => {
     if (!weddingId) return
-    ;(async () => {
-      try {
-        const res = await fetch(`${API_URL}/api/wedding-website/${weddingId}`, { headers: await authHeaders() })
-        const data = await res.json()
-        if (data?.rsvp_config) {
-          setConfig(data.rsvp_config.fields || {})
-          setCustomQuestions(data.rsvp_config.custom_questions || [])
-        }
-      } catch {}
+    setLoadError(false)
+    try {
+      const res = await fetch(`${API_URL}/api/wedding-website/${weddingId}`, { headers: await authHeaders() })
+      if (!res.ok) throw new Error('Could not load RSVP settings')
+      const data = await res.json()
+      if (data?.rsvp_config) {
+        setConfig(data.rsvp_config.fields || {})
+        setCustomQuestions(data.rsvp_config.custom_questions || [])
+      }
+    } catch (err) {
+      console.error('Failed to load RSVP settings:', err)
+      setLoadError(true)
+    } finally {
       setLoading(false)
-    })()
+    }
   }, [weddingId])
+
+  useEffect(() => { loadSettings() }, [loadSettings])
 
   // Flip the *effective* value, not the stored one. Anything defaulting to on
   // is absent from config until first touched, and `!undefined` is true, so
@@ -51,7 +58,7 @@ export default function RsvpSettings({ weddingId }) {
   )
 
   useEffect(() => {
-    if (loading) return
+    if (loading || loadError) return
     if (!weddingId) return
     if (!hasLoadedRef.current) {
       hasLoadedRef.current = true
@@ -63,7 +70,7 @@ export default function RsvpSettings({ weddingId }) {
         custom_questions: customQuestions.filter(q => q.label.trim()),
       },
     })
-  }, [loading, weddingId, config, customQuestions, scheduleSave])
+  }, [loading, loadError, weddingId, config, customQuestions, scheduleSave])
 
   const addCustomQuestion = () => {
     setCustomQuestions(prev => [...prev, { label: '', type: 'text', options: '' }])
@@ -78,6 +85,15 @@ export default function RsvpSettings({ weddingId }) {
   }
 
   if (loading) return <div className="text-sage-500 text-center py-8">Loading RSVP settings...</div>
+
+  if (loadError) {
+    return (
+      <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-600 max-w-2xl">
+        Could not load RSVP settings.{' '}
+        <button onClick={loadSettings} className="underline hover:no-underline ml-1">Retry</button>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -104,12 +120,15 @@ export default function RsvpSettings({ weddingId }) {
             Sends a receipt of exactly what they submitted, where we have an email for them.
           </p>
         </div>
-        <div
+        <button
+          type="button"
+          role="switch"
+          aria-checked={sendsConfirmation({ fields: config })}
           onClick={() => toggle('send_confirmation')}
           className={`w-10 h-6 rounded-full transition-colors flex-shrink-0 cursor-pointer relative ${sendsConfirmation({ fields: config }) ? 'bg-sage-500' : 'bg-cream-300'}`}
         >
-          <div className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${sendsConfirmation({ fields: config }) ? 'translate-x-5' : 'translate-x-1'}`} />
-        </div>
+          <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${sendsConfirmation({ fields: config }) ? 'translate-x-5' : 'translate-x-1'}`} />
+        </button>
       </div>
 
       {/* Field toggles */}
@@ -119,12 +138,15 @@ export default function RsvpSettings({ weddingId }) {
           return (
             <div key={field.key} className="flex items-center justify-between px-5 py-3.5">
               <span className="text-sm text-sage-700">{field.label}</span>
-              <div
+              <button
+                type="button"
+                role="switch"
+                aria-checked={isOn}
                 onClick={() => toggle(field.key)}
                 className={`w-10 h-6 rounded-full transition-colors flex-shrink-0 cursor-pointer relative ${isOn ? 'bg-sage-500' : 'bg-cream-300'}`}
               >
-                <div className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${isOn ? 'translate-x-5' : 'translate-x-1'}`} />
-              </div>
+                <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${isOn ? 'translate-x-5' : 'translate-x-1'}`} />
+              </button>
             </div>
           )
         })}
