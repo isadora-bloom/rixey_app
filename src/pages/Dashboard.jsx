@@ -73,7 +73,10 @@ function WeddingCountdown({ weddingDate }) {
 
   if (!weddingDate) return null
 
-  const weddingPassed = new Date(weddingDate + 'T00:00:00') < new Date()
+  // Compare against the end of the wedding day, not its start, so "Today is
+  // YOUR day!" stays reachable all day rather than flipping to
+  // "Congratulations" the moment the day begins.
+  const weddingPassed = new Date(weddingDate + 'T23:59:59') < new Date()
   if (weddingPassed) {
     return (
       <div className="bg-gradient-to-r from-sage-500 to-sage-600 rounded-2xl p-6 text-white text-center">
@@ -169,10 +172,12 @@ export default function Dashboard() {
   const contentRef = useRef(null)
   const prevSectionRef = useRef('chat')
 
-  // Pre-wedding period: within 6 weeks of the wedding date
+  // Pre-wedding period: within 6 weeks of the wedding date, staying true for
+  // the whole wedding day itself (compare against its end, not its start, so
+  // the finaliser bar does not disappear at 00:00 on the day).
   const isPreWedding = (() => {
     if (!wedding?.wedding_date) return false
-    const days = (new Date(wedding.wedding_date + 'T00:00:00') - new Date()) / (1000 * 60 * 60 * 24)
+    const days = (new Date(wedding.wedding_date + 'T23:59:59') - new Date()) / (1000 * 60 * 60 * 24)
     return days >= 0 && days <= 42
   })()
 

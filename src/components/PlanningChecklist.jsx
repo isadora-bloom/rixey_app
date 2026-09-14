@@ -4,6 +4,7 @@ import { apiFetch, loadJson } from '../utils/api'
 import SaveIndicator from './ui/SaveIndicator'
 import { useToast } from './ui/Toast'
 import LoadError from './ui/LoadError'
+import { formatDateOnly } from '../utils/dates'
 
 
 const CATEGORIES = ['Venue', 'Vendors', 'Attire & Beauty', 'Decor', 'Timeline', 'Guests', 'Other']
@@ -332,7 +333,7 @@ export default function PlanningChecklist({ weddingId, userId, compact = false, 
                     </span>
                     {task.due_date && (
                       <span className="text-xs text-sage-400">
-                        {new Date(task.due_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                        {formatDateOnly(task.due_date, { month: 'short', day: 'numeric' })}
                       </span>
                     )}
                     {task.completed_via === 'sage' && (

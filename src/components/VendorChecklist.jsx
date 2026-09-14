@@ -3,6 +3,7 @@ import { API_URL } from '../config/api'
 import { apiFetch, loadJson } from '../utils/api'
 import { useToast } from './ui/Toast'
 import LoadError from './ui/LoadError'
+import { formatDateOnly } from '../utils/dates'
 
 
 export default function VendorChecklist({ weddingId, isAdmin = false }) {
@@ -376,7 +377,7 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
                   )}
                   {vendor.contract_date && (
                     <p className="text-sage-400 text-xs mt-1">
-                      Contract uploaded: {new Date(vendor.contract_date).toLocaleDateString()}
+                      Contract uploaded: {formatDateOnly(vendor.contract_date)}
                     </p>
                   )}
                 </div>
