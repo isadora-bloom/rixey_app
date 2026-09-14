@@ -445,6 +445,32 @@ function VendorProfile({ id, onSaved }) {
       {/* What the vendor wrote about themselves, and whether couples see it.
           Separate from whether Rixey recommends them: one is their words, the
           other is Isadora's endorsement. */}
+      {/* Approved unseen until now: the count of photos said nothing about
+          what was actually in them. Small and capped, because this is a
+          sanity check before publishing, not a gallery. */}
+      {(detail.vendor.logo_url || detail.vendor.photos?.length > 0) && (
+        <div className="flex flex-wrap items-center gap-2">
+          {detail.vendor.logo_url && (
+            <img
+              src={detail.vendor.logo_url}
+              alt={`${detail.vendor.name} logo`}
+              className="w-10 h-10 rounded-lg object-contain bg-cream-50 border border-cream-200"
+            />
+          )}
+          {(detail.vendor.photos || []).slice(0, 4).map((url, i) => (
+            <img
+              key={i}
+              src={url}
+              alt=""
+              className="w-10 h-10 rounded-lg object-cover border border-cream-200"
+            />
+          ))}
+          {detail.vendor.photos?.length > 4 && (
+            <span className="text-xs text-sage-400">+{detail.vendor.photos.length - 4} more</span>
+          )}
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="text-sage-400">Their own profile:</span>
         {ownProfile ? (
