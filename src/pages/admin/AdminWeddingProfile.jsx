@@ -1,5 +1,7 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { formatDateOnly } from '../../utils/dates'
+import Dashboard from '../Dashboard'
+import { ViewAsProvider } from '../../context/ViewAsContext'
 import VendorChecklist from '../../components/VendorChecklist'
 import InspoGallery from '../../components/InspoGallery'
 import PlanningChecklist from '../../components/PlanningChecklist'
@@ -39,11 +41,19 @@ import WeddingContacts from '../../components/admin/WeddingContacts'
 import DocumentSyncPanel from '../../components/DocumentSyncPanel'
 import { getLastActivity, getCategoryIcon, getCategoryLabel } from './adminUtils'
 import { weddingTabs } from './weddingTabs'
-import { resolveSectionKey } from '../../../shared/sections.js'
+import { resolveSectionKey, sectionsFor } from '../../../shared/sections.js'
 import SectionIcon from '../../components/ui/SectionIcon'
 import RsvpSettingsTab from '../../components/admin/RsvpSettingsTab'
 import { weddingName } from '../../../shared/wedding-name.js'
 import { ConfirmDialog } from '../../components/ui'
+
+// Sections that exist on the venue side. Coming out of couple view lands on
+// the section the couple's menu was last showing, and a few of theirs have no
+// venue tab at all (Rixey Picks, Book a Meeting), so those leave the tab alone
+// rather than sending Grace to a blank panel.
+const VENUE_SECTION_KEYS = new Set(
+  sectionsFor('venue').flatMap(g => g.sections.map(s => s.key))
+)
 
 
 export default function AdminWeddingProfile({
@@ -179,6 +189,71 @@ export default function AdminWeddingProfile({
   // One list for the sidebar and the phone dropdown both. See weddingTabs.js
   // for what went missing on phones while these were two lists.
   const TABS = weddingTabs({ planningNotes, uncertainQuestions, viewingWedding, borrowSelections, activities })
+
+  // View as couple.
+  //
+  // Grace on the phone with a couple who says "the Bar Planner won't let me
+  // add anything" needs to be looking at their screen, not hers. So this
+  // renders the couple's real Dashboard for this wedding, read-only, inside
+  // the profile. Not a copy of it: a second set of couple screens would
+  // disagree with the first within a fortnight, which is the whole reason the
+  // section registry exists.
+  //
+  // `viewas=1` in the address bar so the link can be read out to whoever is
+  // not on the call. Admin.jsx owns `wedding` and `section` in the URL and
+  // leaves everything else alone, so this parameter survives its writes.
+  const [viewingAsCouple, setViewingAsCouple] = useState(() => {
+    try {
+      return new URLSearchParams(window.location.search).get('viewas') === '1'
+    } catch { return false }
+  })
+
+  const writeViewAsParam = (on) => {
+    const url = new URL(window.location.href)
+    if (on) url.searchParams.set('viewas', '1')
+    else url.searchParams.delete('viewas')
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`)
+  }
+
+  const exitViewAs = useCallback(() => {
+    // Come back to the tab the couple's menu was last on, not the one the
+    // venue left. Both sides key off shared/sections.js, so the couple's
+    // section key is already the venue's tab id.
+    let section = null
+    try { section = new URLSearchParams(window.location.search).get('section') } catch { /* no URL, no move */ }
+    const resolved = resolveSectionKey(section)
+    setViewingAsCouple(false)
+    writeViewAsParam(false)
+    if (resolved && VENUE_SECTION_KEYS.has(resolved)) setActiveTab(resolved)
+  }, [setActiveTab])
+
+  const enterViewAs = () => {
+    setViewingAsCouple(true)
+    writeViewAsParam(true)
+  }
+
+  // Dashboard reads the wedding and the profile from here instead of from the
+  // signed-in user, who is the venue. Nothing else about it changes, and the
+  // venue's own token already passes weddingAccess for any wedding, so every
+  // loader inside works untouched.
+  const viewAsValue = useMemo(() => {
+    if (!viewingAsCouple) return null
+    return {
+      weddingId: viewingWedding.id,
+      // A stand-in, not the couple's real profiles row. Dashboard only reads
+      // wedding_id, role and the two editable name fields off it, and every
+      // section below it is handed a weddingId rather than reading one.
+      profile: {
+        wedding_id: viewingWedding.id,
+        role: 'couple',
+        name: viewingWedding.couple_names || '',
+        phone: null,
+        is_admin: false,
+      },
+      wedding: viewingWedding,
+      onExit: exitViewAs,
+    }
+  }, [viewingAsCouple, viewingWedding, exitViewAs])
 
   const [guestListKey, setGuestListKey] = useState(0)
   const [editingName, setEditingName] = useState(false)
@@ -337,6 +412,21 @@ export default function AdminWeddingProfile({
           </div>
           <div className="flex items-center gap-3">
             <button
+              onClick={viewingAsCouple ? exitViewAs : enterViewAs}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition ${
+                viewingAsCouple
+                  ? 'bg-amber-600 text-white hover:bg-amber-700'
+                  : 'bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200'
+              }`}
+              title="See this wedding's portal exactly as the couple sees it, read-only"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+              </svg>
+              {viewingAsCouple ? 'Exit couple view' : 'View as couple'}
+            </button>
+            <button
               onClick={sendCheckin}
               disabled={checkingIn}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition ${
@@ -381,6 +471,13 @@ export default function AdminWeddingProfile({
         </div>
       </header>
 
+      {viewingAsCouple ? (
+      <div className="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
+        <ViewAsProvider value={viewAsValue}>
+          <Dashboard />
+        </ViewAsProvider>
+      </div>
+      ) : (
       <main className="max-w-6xl mx-auto px-3 sm:px-4 py-4 sm:py-8">
         {/* Escalation Alert */}
         {escalation?.hasEscalation && (
@@ -1724,6 +1821,7 @@ export default function AdminWeddingProfile({
           </div>
         </div>
       </main>
+      )}
 
       <ConfirmDialog
         open={confirmDeleteNoteId !== null}
