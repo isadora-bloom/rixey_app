@@ -43,6 +43,8 @@ import { getLastActivity, getCategoryIcon, getCategoryLabel } from './adminUtils
 import { weddingTabs } from './weddingTabs'
 import { resolveSectionKey, sectionsFor } from '../../../shared/sections.js'
 import SectionIcon from '../../components/ui/SectionIcon'
+import SectionJump from '../../components/ui/SectionJump'
+import useCollapsedGroups from '../../hooks/useCollapsedGroups'
 import RsvpSettingsTab from '../../components/admin/RsvpSettingsTab'
 import { weddingName } from '../../../shared/wedding-name.js'
 import { ConfirmDialog } from '../../components/ui'
@@ -51,8 +53,9 @@ import { ConfirmDialog } from '../../components/ui'
 // the section the couple's menu was last showing, and a few of theirs have no
 // venue tab at all (Rixey Picks, Book a Meeting), so those leave the tab alone
 // rather than sending Grace to a blank panel.
+const VENUE_GROUPS = sectionsFor('venue')
 const VENUE_SECTION_KEYS = new Set(
-  sectionsFor('venue').flatMap(g => g.sections.map(s => s.key))
+  VENUE_GROUPS.flatMap(g => g.sections.map(s => s.key))
 )
 
 
@@ -99,6 +102,9 @@ export default function AdminWeddingProfile({
   // Planning notes
   planningNotes,
   setPlanningNotes,
+  // Section sign-offs, canonicalised by Admin.jsx the same way the couple's
+  // menu reads them. Feeds the tick and pending count in the sidebar below.
+  sectionFinalisations = {},
   updateNoteStatus,
   notesSearchQuery,
   setNotesSearchQuery,
@@ -188,7 +194,14 @@ export default function AdminWeddingProfile({
 
   // One list for the sidebar and the phone dropdown both. See weddingTabs.js
   // for what went missing on phones while these were two lists.
-  const TABS = weddingTabs({ planningNotes, uncertainQuestions, viewingWedding, borrowSelections, activities })
+  const TABS = weddingTabs({ planningNotes, uncertainQuestions, viewingWedding, borrowSelections, activities, sectionFinalisations })
+
+  // Collapsible groups, remembered per browser the same way the couple's menu
+  // remembers them (see useCollapsedGroups). 'venue' keeps this memory
+  // separate from the couple's, since a coordinator working several weddings
+  // a day should not have their own group state fight with a couple's.
+  const { isCollapsed, toggleGroup } = useCollapsedGroups('venue')
+  const activeGroup = VENUE_GROUPS.find(g => g.sections.some(s => s.key === activeTab))?.group
 
   // View as couple.
   //
@@ -564,40 +577,77 @@ export default function AdminWeddingProfile({
               <div className="px-4 pt-5 pb-3 flex justify-center border-b border-cream-200">
                 <img src="/rixey-manor-logo-optimized.png" alt="Rixey Manor" className="h-16 w-auto" />
               </div>
+              <SectionJump groups={VENUE_GROUPS} onJump={setActiveTab} />
               <nav className="p-2">
-                {TABS.map((item, idx) => {
-                  if (item.section) {
+                {(() => {
+                  // TABS is a flat list with group markers (see weddingTabs.js),
+                  // so the collapsed flag for whichever group is current is
+                  // tracked as the list is walked, same as the mobile <select>
+                  // grouping below. The group holding the active tab is always
+                  // open, whatever is stored for it.
+                  let groupCollapsed = false
+                  return TABS.map((item, idx) => {
+                    if (item.section) {
+                      const collapsed = isCollapsed(item.section, { activeGroup, defaultCollapsed: false })
+                      groupCollapsed = collapsed
+                      return (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => toggleGroup(item.section, collapsed)}
+                          aria-expanded={!collapsed}
+                          className="w-full flex items-center justify-between text-xs font-semibold text-sage-400 uppercase tracking-wide px-3 pt-3 pb-1 hover:text-sage-600"
+                        >
+                          <span>{item.section}</span>
+                          <span aria-hidden="true" className="text-[10px]">{collapsed ? '▸' : '▾'}</span>
+                        </button>
+                      )
+                    }
+                    if (groupCollapsed) return null
                     return (
-                      <p key={idx} className="text-xs font-semibold text-sage-400 uppercase tracking-wide px-3 pt-3 pb-1">
-                        {item.section}
-                      </p>
-                    )
-                  }
-                  return (
-                    <button
-                      key={item.tab}
-                      onClick={() => {
-                        setActiveTab(item.tab)
-                        if (item.tab === 'conversations') { setSelectedChatUser(null); setSearchQuery('') }
-                      }}
-                      className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition ${
-                        activeTab === item.tab
-                          ? 'bg-sage-100 text-sage-700 font-medium'
-                          : 'text-sage-500 hover:bg-cream-50 hover:text-sage-700'
-                      }`}
-                    >
-                      <span className="flex items-center gap-2">
-                        <SectionIcon sectionKey={item.tab} />
-                        <span>{item.label}</span>
-                      </span>
-                      {item.badge > 0 && (
-                        <span className="bg-amber-100 text-amber-700 text-xs px-1.5 py-0.5 rounded-full min-w-[1.25rem] text-center">
-                          {item.badge}
+                      <button
+                        key={item.tab}
+                        onClick={() => {
+                          setActiveTab(item.tab)
+                          if (item.tab === 'conversations') { setSelectedChatUser(null); setSearchQuery('') }
+                        }}
+                        className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition ${
+                          activeTab === item.tab
+                            ? 'bg-sage-100 text-sage-700 font-medium'
+                            : 'text-sage-500 hover:bg-cream-50 hover:text-sage-700'
+                        }`}
+                      >
+                        <span className="flex items-center gap-2">
+                          <SectionIcon sectionKey={item.tab} />
+                          <span>{item.label}</span>
                         </span>
-                      )}
-                    </button>
-                  )
-                })}
+                        <span className="flex items-center gap-1 shrink-0">
+                          {item.finalised && (
+                            <span
+                              className="w-4 h-4 rounded-full bg-sage-500 flex items-center justify-center shrink-0"
+                              title="Couple signed off"
+                            >
+                              <span className="text-white text-[9px] leading-none">✓</span>
+                            </span>
+                          )}
+                          {item.pending > 0 && (
+                            <span
+                              className="bg-amber-100 text-amber-700 text-xs px-1.5 py-0.5 rounded-full min-w-[1.25rem] text-center"
+                              title="Waiting on Rixey"
+                            >
+                              {item.pending}
+                            </span>
+                          )}
+                          {item.badge > 0 && (
+                            <span className="bg-amber-100 text-amber-700 text-xs px-1.5 py-0.5 rounded-full min-w-[1.25rem] text-center">
+                              {item.badge}
+                            </span>
+                          )}
+                        </span>
+                      </button>
+                    )
+                  })
+                })()}
               </nav>
             </div>
           </div>
