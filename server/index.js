@@ -8083,7 +8083,8 @@ app.get('/api/vendor-directory', async (req, res) => {
     }
     if (error) throw error;
 
-    const today = new Date().toISOString().slice(0, 10);
+    // UTC "today" hides an offer from 8pm Eastern onward, four hours early.
+    const today = venueToday();
     const vendors = (data || []).map(v => {
       const live = v.is_published === true;
       // An offer with a date on it stops being an offer after that date.
