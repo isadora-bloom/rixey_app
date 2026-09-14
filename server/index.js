@@ -265,21 +265,12 @@ app.get('/api/gmail-callback-debug', requireAdmin, (req, res) => {
   res.json(LAST_GMAIL_CALLBACK);
 });
 
-app.get('/api/google-debug', requireAdmin, (req, res) => {
-  const cid = process.env.GOOGLE_CLIENT_ID || '';
-  const fe = process.env.FRONTEND_URL || '(unset)';
-  res.json({
-    client_id_prefix: cid ? cid.slice(0, 16) + '…' : '(unset)',
-    client_id_project_number: cid.split('-')[0] || '(unset)',
-    redirect_uri: fe === '(unset)'
-      ? 'http://localhost:5173/admin/gmail-callback'
-      : `${fe}/admin/gmail-callback`,
-    frontend_url: fe,
-    has_client_secret: !!process.env.GOOGLE_CLIENT_SECRET,
-    git_commit: process.env.RAILWAY_GIT_COMMIT_SHA || '(unknown)',
-    note: 'project_number must match the GCP project where you added the redirect URI. redirect_uri must appear verbatim in that OAuth client.'
-  });
-});
+// GET /api/google-debug is gone. It existed to diagnose a redirect_uri_mismatch
+// in March, nothing has called it since, and it reported the OAuth client id
+// prefix, the project number, the redirect URI and the deployed commit — a
+// small map of the estate, kept live for ever to answer a question that was
+// answered once. The values are all in the Railway environment where whoever
+// needs them is already looking.
 
 // ============ AUTH MIDDLEWARE ============
 // Public routes that skip auth (matched by path prefix)
@@ -3924,17 +3915,16 @@ app.post('/api/admin/sheet-sync/:weddingId/diff', async (req, res) => {
   }
 });
 
-// In-memory record of the last apply attempt. Public-readable via
-// GET /api/sheet-sync-apply-debug — payload has no token values, only counts +
-// per-result error messages.
-let LAST_APPLY = { at: null, weddingId: null, attempted: 0, applied: 0, failures: [] };
-
+// GET /api/sheet-sync-apply-debug is gone, and so is the module-level record it
+// served. It held the last apply attempt in memory — one process, cleared on
+// every redeploy, so on Railway it was usually empty and never more than a few
+// hours of history. sheet_sync_log holds all of this properly and is now
+// readable through GET /api/admin/sync-log/:weddingId, per wedding, for good.
 app.post('/api/admin/sheet-sync/:weddingId/apply', async (req, res) => {
   const { weddingId } = req.params;
   const decisions = req.body?.decisions;
   console.log(`[sheet-sync apply] weddingId=${weddingId} decisions=${Array.isArray(decisions) ? decisions.length : 'NOT_ARRAY'}`);
   if (!Array.isArray(decisions)) {
-    LAST_APPLY = { at: new Date().toISOString(), weddingId, attempted: 0, applied: 0, failures: [{ entryId: null, error: 'decisions must be an array' }] };
     return res.status(400).json({ error: 'decisions must be an array' });
   }
   try {
@@ -3947,34 +3937,12 @@ app.post('/api/admin/sheet-sync/:weddingId/apply', async (req, res) => {
       recordSource: has036('syncSource'),
     });
     const failures = (result.results || []).filter((r) => !r.ok && !r.skipped);
-    const succeeded = (result.results || []).filter((r) => r.ok && !r.skipped).map((r) => r.entryId);
-    const importDecisions = (decisions || []).filter((d) => d.choice === 'import-sheet').map((d) => d.entryId);
-    LAST_APPLY = {
-      at: new Date().toISOString(),
-      weddingId,
-      attempted: decisions.length,
-      applied: result.appliedCount,
-      failures: failures.map((f) => ({ entryId: f.entryId, error: f.error })),
-      succeededIds: succeeded,
-      importsRequested: importDecisions
-    };
     console.log(`[sheet-sync apply] applied=${result.appliedCount} failures=${failures.length}`);
     res.json(result);
   } catch (err) {
-    LAST_APPLY = {
-      at: new Date().toISOString(),
-      weddingId,
-      attempted: decisions?.length || 0,
-      applied: 0,
-      failures: [{ entryId: null, error: err.message || String(err) }]
-    };
     console.error('[sheet-sync apply]', err);
     res.status(500).json({ error: err.message || 'Internal error' });
   }
-});
-
-app.get('/api/sheet-sync-apply-debug', requireAdmin, (req, res) => {
-  res.json(LAST_APPLY);
 });
 
 // Check Gmail connection status
@@ -5126,9 +5094,32 @@ app.get('/api/quo/status', async (req, res) => {
   res.json({ connected: !!QUO_API_KEY, ...(await lastSyncJob(['quo', 'quo-backfill', 'quo-callers'])) });
 });
 
-// Clear processed Quo messages (to allow reprocessing)
+/**
+ * Clear every processed-Quo marker, so the next sync re-reads the lot.
+ *
+ * This deletes the whole table with one POST and no body, which is the entire
+ * record of which text and which call has already been imported. Getting it
+ * wrong costs a full re-import of every conversation Rixey has ever had on that
+ * number. So it now takes { confirm: true }, which no accidental double-click,
+ * retried request or curl-from-history will carry.
+ *
+ * Admin-only already, by the /api/quo mount.
+ */
 app.post('/api/quo/clear-processed', async (req, res) => {
   try {
+    if (req.body?.confirm !== true) {
+      return res.status(400).json({
+        error: 'This clears every processed-message marker and makes the next sync re-read every text and call. Send { "confirm": true } if that is what you want.',
+      });
+    }
+
+    const { count: before, error: countErr } = await supabaseAdmin
+      .from('processed_quo_messages').select('id', { count: 'exact', head: true });
+    // Only for the log line, so a failed count is not worth refusing over —
+    // but it must not be reported as zero either.
+    if (countErr) console.error('[quo] could not count the markers before clearing:', countErr.message);
+    console.log(`[quo] clearing ${countErr ? 'an unknown number of' : before} processed-message markers, asked for by ${req.userId || 'an admin'}`);
+
     const { error } = await supabaseAdmin
       .from('processed_quo_messages')
       .delete()
