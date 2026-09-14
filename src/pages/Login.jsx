@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { supabase } from '../lib/supabase'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
 import { createWeddingAccount } from '../utils/createWedding'
 
 
@@ -149,19 +149,46 @@ export default function Login() {
           return
         }
         if (data?.user) {
-          const { error: profileError } = await supabase
-            .from('profiles')
-            .insert([{
-              id: data.user.id,
-              name: name.trim(),
-              email: email,
-              phone: phone.trim() || null,
-              role: role,
-              custom_role_term: role === 'couple-custom' ? customRoleTerm.trim() : null,
-              wedding_date: finalWeddingDate || null,
-              wedding_id: weddingId,
-            }])
-          if (profileError) console.error('Profile creation error:', profileError)
+          try {
+            // Server-side now, with the service role: the browser used to
+            // insert its own profile row and pick its own wedding_id, and a
+            // failure there was only ever console.error'd while the screen
+            // still said "Account created!".
+            await apiFetch(`${API_URL}/api/join/complete`, {
+              method: 'POST',
+              body: JSON.stringify({
+                event_code: eventCode.trim().toUpperCase(),
+                partner1_name: name.trim(),
+                partner2_name: null,
+              }),
+            })
+          } catch (err) {
+            if (err.status === 404) {
+              // Not deployed here yet — fall back to the old insert, but
+              // show whatever it says rather than swallowing it.
+              const { error: profileError } = await supabase
+                .from('profiles')
+                .insert([{
+                  id: data.user.id,
+                  name: name.trim(),
+                  email: email,
+                  phone: phone.trim() || null,
+                  role: role,
+                  custom_role_term: role === 'couple-custom' ? customRoleTerm.trim() : null,
+                  wedding_date: finalWeddingDate || null,
+                  wedding_id: weddingId,
+                }])
+              if (profileError) {
+                setError(profileError.message || 'Could not link your account to this wedding.')
+                setLoading(false)
+                return
+              }
+            } else {
+              setError(err.message || 'Could not join this wedding.')
+              setLoading(false)
+              return
+            }
+          }
         }
       } else if (weddingDate && isCouple) {
         // Creating a brand-new wedding — use the shared utility
@@ -194,7 +221,10 @@ export default function Login() {
           return
         }
         if (data?.user) {
-          await supabase.from('profiles').insert([{
+          // No event code here, so there is nothing for /api/join/complete
+          // to join — this profile is genuinely wedding_id: null. What was
+          // wrong was that a failure here was never even checked.
+          const { error: profileError } = await supabase.from('profiles').insert([{
             id: data.user.id,
             name: name.trim(),
             email: email,
@@ -204,6 +234,11 @@ export default function Login() {
             wedding_date: finalWeddingDate || null,
             wedding_id: null,
           }])
+          if (profileError) {
+            setError(profileError.message || 'Could not create your account.')
+            setLoading(false)
+            return
+          }
         }
       }
 

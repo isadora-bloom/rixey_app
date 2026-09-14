@@ -1,24 +1,44 @@
-// Stress/escalation keywords to detect
-export const ESCALATION_KEYWORDS = [
-  'stressed', 'stress', 'anxious', 'worried', 'frustrated', 'frustrating',
-  'overwhelmed', 'help', 'urgent', 'problem', 'issue', 'wrong', 'mistake',
-  'angry', 'upset', 'confused', 'lost', 'panic', 'emergency', 'asap',
-  'deadline', 'behind', 'late', 'cancel', 'disaster', 'terrible', 'awful'
-]
+// How long an unread direct message sits before it counts as needing
+// attention. Four hours is long enough that it is not "we haven't got to
+// this yet", short enough that a couple who message in the evening are not
+// waiting until morning to hear that back.
+const UNREAD_STALE_MS = 4 * 60 * 60 * 1000
 
-// Calculate time since last activity
-export function getLastActivity(messages) {
-  if (!messages || messages.length === 0) return null
+/**
+ * The wedding's own last-activity timestamp, wherever it lives.
+ *
+ * `wedding.last_activity_at` (once the server computes it) is the ground
+ * truth. Until then this falls back to the newest of the couple's Sage
+ * questions and their newest direct message, so a couple who only ever use
+ * direct messages stop reading as "No activity" just because nobody asked
+ * Sage anything.
+ */
+export function getLastActivityAt(wedding, messages, directConversation) {
+  if (wedding?.last_activity_at) {
+    const d = new Date(wedding.last_activity_at)
+    if (!isNaN(d)) return d
+  }
 
-  // Find the most recent user message
-  const userMessages = messages.filter(m => m.sender === 'user')
-  if (userMessages.length === 0) return null
+  const userMessages = (messages || []).filter(m => m.sender === 'user')
+  const sageLatest = userMessages.length
+    ? new Date(Math.max(...userMessages.map(m => new Date(m.created_at).getTime())))
+    : null
 
-  const lastMessage = userMessages.reduce((latest, msg) => {
-    return new Date(msg.created_at) > new Date(latest.created_at) ? msg : latest
-  })
+  const directLatest = directConversation?.latest_message?.created_at
+    ? new Date(directConversation.latest_message.created_at)
+    : null
 
-  const lastDate = new Date(lastMessage.created_at)
+  if (sageLatest && directLatest) return sageLatest > directLatest ? sageLatest : directLatest
+  return sageLatest || directLatest || null
+}
+
+// Calculate time since last activity. Takes the wedding row and the couple's
+// direct-message conversation alongside their Sage messages — see
+// getLastActivityAt for why all three matter.
+export function getLastActivity(wedding, messages, directConversation) {
+  const lastDate = getLastActivityAt(wedding, messages, directConversation)
+  if (!lastDate) return null
+
   const now = new Date()
   const diffMs = now - lastDate
   const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
@@ -48,25 +68,53 @@ export function getLastActivity(messages) {
   return { display, status, diffDays, lastDate }
 }
 
-export function detectEscalation(messages, handledAt = null) {
-  const recentMessages = messages.filter(m => {
-    const msgDate = new Date(m.created_at)
-    const weekAgo = new Date()
-    weekAgo.setDate(weekAgo.getDate() - 7)
-    // Only count messages after the last "handled" timestamp
-    const afterHandled = !handledAt || msgDate > new Date(handledAt)
-    return msgDate > weekAgo && m.sender === 'user' && afterHandled
-  })
+/**
+ * Two real signals instead of matching a couple's own words against a list
+ * of feelings ("no regex on user text" is a project rule, and keyword
+ * matching on "help", "late", "lost" flagged ordinary planning talk as
+ * distress just as often as it caught anything real).
+ *
+ * (a) a message the server itself judged worth flagging, at write time —
+ *     `messages[].flagged`. Absent wherever that hasn't shipped yet, which
+ *     reads as false rather than as an escalation.
+ * (b) a direct message from the couple that has sat unread for more than
+ *     four hours. The conversations endpoint only reports the newest message
+ *     per wedding, so this is judged from that one row: if it is unread,
+ *     from the couple, and already older than the threshold, there is for
+ *     certain been no reply in that time.
+ */
+export function detectEscalation(messages, handledAt = null, directConversation = null) {
+  const isAfterHandled = (dateStr) => !handledAt || new Date(dateStr) > new Date(handledAt)
 
-  const escalationMessages = recentMessages.filter(msg => {
-    const content = msg.content.toLowerCase()
-    return ESCALATION_KEYWORDS.some(keyword => content.includes(keyword))
-  })
+  const flagged = (messages || []).filter(m =>
+    m.sender === 'user' && m.flagged === true && isAfterHandled(m.created_at)
+  )
+
+  const latestDirect = directConversation?.latest_message
+  const directIsStale = !!(
+    latestDirect &&
+    latestDirect.sender_type === 'client' &&
+    !latestDirect.is_read &&
+    isAfterHandled(latestDirect.created_at) &&
+    Date.now() - new Date(latestDirect.created_at).getTime() > UNREAD_STALE_MS
+  )
+
+  const escalationMessages = [...flagged]
+  if (directIsStale) {
+    // No Sage message backs this one, so there's no user_id to focus a chat
+    // thread on — `source` tells callers to open Direct Messages instead.
+    escalationMessages.push({
+      content: latestDirect.content,
+      created_at: latestDirect.created_at,
+      user_id: null,
+      source: 'direct',
+    })
+  }
 
   return {
     hasEscalation: escalationMessages.length > 0,
     count: escalationMessages.length,
-    messages: escalationMessages
+    messages: escalationMessages,
   }
 }
 

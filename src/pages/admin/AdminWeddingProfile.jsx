@@ -37,8 +37,10 @@ import WalkthroughNotes from '../../components/WalkthroughNotes'
 import AdminWorksheets from '../../components/admin/AdminWorksheets'
 import WeddingContacts from '../../components/admin/WeddingContacts'
 import DocumentSyncPanel from '../../components/DocumentSyncPanel'
-import { ESCALATION_KEYWORDS, getLastActivity, getCategoryIcon, getCategoryLabel } from './adminUtils'
+import { getLastActivity, getCategoryIcon, getCategoryLabel } from './adminUtils'
 import { weddingTabs } from './weddingTabs'
+import { weddingName } from '../../../shared/wedding-name.js'
+import { ConfirmDialog } from '../../components/ui'
 
 export default function AdminWeddingProfile({
   viewingWedding,
@@ -58,6 +60,24 @@ export default function AdminWeddingProfile({
   // Escalation
   escalations,
   markEscalationHandled,
+  // Direct-message conversation for this wedding — used for the "last
+  // active" fallback and to route the escalation banner to the right tab.
+  directConversation,
+  // Which of the ten parallel per-wedding loads failed this time, and how
+  // to retry them all (see viewWeddingProfile in Admin.jsx).
+  sectionLoadErrors = {},
+  retryWeddingProfile,
+  // Links editor (HoneyBook / Sheets) — mirrors the one in AdminWeddingList,
+  // reachable here too since that one is hidden on a phone.
+  editingWedding,
+  setEditingWedding,
+  honeybook,
+  setHoneybook,
+  googleSheets,
+  setGoogleSheets,
+  saving,
+  saveLinks,
+  startEditing,
   // Photo
   couplePhotos,
   setEnlargedPhoto,
@@ -160,6 +180,7 @@ export default function AdminWeddingProfile({
   const [editingName, setEditingName] = useState(false)
   const [nameDraft, setNameDraft] = useState('')
   const [savingName, setSavingName] = useState(false)
+  const [confirmDeleteNoteId, setConfirmDeleteNoteId] = useState(null)
 
   const startEditName = () => {
     setNameDraft(viewingWedding.project_name || viewingWedding.couple_names || '')
@@ -279,7 +300,7 @@ export default function AdminWeddingProfile({
               )}
               {/* Last Activity in header */}
               {(() => {
-                const lastActivity = getLastActivity(weddingMessages)
+                const lastActivity = getLastActivity(viewingWedding, weddingMessages, directConversation)
                 if (!lastActivity) {
                   return (
                     <span className="text-sm px-3 py-1 rounded-full bg-gray-100 text-gray-500 font-medium">
@@ -381,9 +402,13 @@ export default function AdminWeddingProfile({
               <button
                 type="button"
                 onClick={() => {
-                  const uid = escalation.messages[0].user_id
-                  if (uid) setSelectedChatUser(uid)
-                  setActiveTab('messages')
+                  const first = escalation.messages[0]
+                  if (first.source === 'direct') {
+                    setActiveTab('direct-messages')
+                  } else {
+                    if (first.user_id) setSelectedChatUser(first.user_id)
+                    setActiveTab('messages')
+                  }
                 }}
                 className="mt-2 block w-full text-left text-sm text-red-700 bg-red-100 rounded-lg px-3 py-2 italic line-clamp-2 hover:bg-red-200 transition"
                 title="Open this person's conversation"
@@ -549,7 +574,7 @@ export default function AdminWeddingProfile({
                   </div>
 
                   {/* Planning Links */}
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     {viewingWedding.honeybook_link ? (
                       <a href={viewingWedding.honeybook_link} target="_blank" rel="noopener noreferrer"
                         className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 text-green-700 border border-green-200 rounded-lg hover:bg-green-100 transition text-xs">
@@ -566,7 +591,36 @@ export default function AdminWeddingProfile({
                     ) : (
                       <span className="px-3 py-1.5 bg-amber-50 text-amber-600 border border-amber-200 rounded-lg text-xs">⚠ No Spreadsheet</span>
                     )}
+                    {/* Reachable from a phone. The equivalent button in the
+                        wedding list is sm:flex only and cannot be tapped there. */}
+                    <button
+                      onClick={() => editingWedding === viewingWedding.id ? setEditingWedding(null) : startEditing(viewingWedding)}
+                      className="text-xs text-sage-500 hover:text-sage-700 underline"
+                    >
+                      {editingWedding === viewingWedding.id ? 'Close' : 'Edit links'}
+                    </button>
                   </div>
+
+                  {editingWedding === viewingWedding.id && (
+                    <div className="bg-cream-50 rounded-lg p-4 space-y-3 border border-cream-200">
+                      <div className="grid sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-sm font-medium text-sage-600 mb-1">HoneyBook Link</label>
+                          <input type="url" value={honeybook} onChange={(e) => setHoneybook(e.target.value)} placeholder="https://..." className="w-full px-3 py-2 rounded-lg border border-cream-300 text-sm" />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-sage-600 mb-1">Google Sheets Link</label>
+                          <input type="url" value={googleSheets} onChange={(e) => setGoogleSheets(e.target.value)} placeholder="https://..." className="w-full px-3 py-2 rounded-lg border border-cream-300 text-sm" />
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={saveLinks} disabled={saving} className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50">
+                          {saving ? 'Saving...' : 'Save'}
+                        </button>
+                        <button onClick={() => setEditingWedding(null)} className="px-4 py-2 text-sage-600 text-sm hover:text-sage-800">Cancel</button>
+                      </div>
+                    </div>
+                  )}
 
                   {/* AI Summary */}
                   <div className="bg-gradient-to-r from-sage-50 to-cream-50 rounded-xl p-4 border border-sage-100">
@@ -708,7 +762,12 @@ export default function AdminWeddingProfile({
                       <span className="text-xs bg-amber-50 text-amber-600 border border-amber-200 px-2 py-0.5 rounded-full">Admin only</span>
                     </div>
                     <div className="space-y-2 mb-3 max-h-48 overflow-y-auto">
-                      {internalNotes.length === 0 ? (
+                      {sectionLoadErrors.internalNotes ? (
+                        <p className="text-sage-400 text-sm italic">
+                          Could not load.{' '}
+                          <button onClick={retryWeddingProfile} className="underline hover:text-sage-600">Retry</button>
+                        </p>
+                      ) : internalNotes.length === 0 ? (
                         <p className="text-sage-400 text-sm italic">No notes yet</p>
                       ) : (
                         internalNotes.map(note => (
@@ -716,8 +775,8 @@ export default function AdminWeddingProfile({
                             <div className="flex items-start justify-between gap-2">
                               <p className="text-sage-700 whitespace-pre-wrap leading-snug flex-1">{note.content}</p>
                               <button
-                                onClick={() => deleteInternalNote(note.id)}
-                                className="opacity-0 group-hover:opacity-100 text-sage-300 hover:text-red-400 transition flex-shrink-0 mt-0.5"
+                                onClick={() => setConfirmDeleteNoteId(note.id)}
+                                className="opacity-40 hover:opacity-100 text-sage-300 hover:text-red-400 transition flex-shrink-0 mt-0.5"
                                 title="Delete note"
                               >
                                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -813,6 +872,11 @@ export default function AdminWeddingProfile({
 
                   {loadingMessages ? (
                     <p className="text-sage-400 text-center py-8">Loading...</p>
+                  ) : sectionLoadErrors.notes ? (
+                    <p className="text-sage-400 text-center py-8">
+                      Could not load planning notes.{' '}
+                      <button onClick={retryWeddingProfile} className="text-sage-600 underline hover:text-sage-800">Retry</button>
+                    </p>
                   ) : planningNotes.length === 0 ? (
                     <p className="text-sage-400 text-center py-8">
                       No planning notes detected yet. They'll appear here as clients share decisions with Sage.
@@ -1008,9 +1072,7 @@ export default function AdminWeddingProfile({
                           <div ref={chatScrollRef} className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
                             {chronological.map((msg, idx) => {
                               const isUser = msg.sender === 'user'
-                              const isEscalation = isUser && ESCALATION_KEYWORDS.some(kw =>
-                                msg.content.toLowerCase().includes(kw)
-                              )
+                              const isEscalation = isUser && msg.flagged === true
                               const showTime = idx === 0 ||
                                 new Date(msg.created_at) - new Date(chronological[idx - 1].created_at) > 5 * 60 * 1000
                               return (
@@ -1113,6 +1175,11 @@ export default function AdminWeddingProfile({
 
                       {loadingMessages ? (
                         <p className="text-sage-400 text-center py-8">Loading messages...</p>
+                      ) : sectionLoadErrors.messages ? (
+                        <p className="text-sage-400 text-center py-8">
+                          Could not load these conversations.{' '}
+                          <button onClick={retryWeddingProfile} className="text-sage-600 underline hover:text-sage-800">Retry</button>
+                        </p>
                       ) : weddingMessages.length === 0 ? (
                         <p className="text-sage-400 text-center py-8">No conversations yet</p>
                       ) : (() => {
@@ -1137,9 +1204,7 @@ export default function AdminWeddingProfile({
                               const msgs = byUser[uid]
                               const profile = profileMap[uid]
                               const userMsgs = msgs.filter(m => m.sender === 'user')
-                              const hasEscalation = userMsgs.some(m =>
-                                ESCALATION_KEYWORDS.some(kw => m.content.toLowerCase().includes(kw))
-                              )
+                              const hasEscalation = userMsgs.some(m => m.flagged === true)
                               // Latest message chronologically
                               const latest = [...msgs].sort((a, b) =>
                                 new Date(b.created_at) - new Date(a.created_at)
@@ -1428,7 +1493,7 @@ export default function AdminWeddingProfile({
 
               {/* Direct Messages Tab */}
               {activeTab === 'direct-messages' && (
-                <DirectMessagesPanel weddingId={viewingWedding.id} weddingName={viewingWedding.couple_names} />
+                <DirectMessagesPanel weddingId={viewingWedding.id} weddingName={weddingName(viewingWedding)} />
               )}
 
               {/* Timeline Tab */}
@@ -1494,6 +1559,11 @@ export default function AdminWeddingProfile({
                   </p>
                   {loadingActivities ? (
                     <p className="text-sage-400 text-center py-8">Loading activities...</p>
+                  ) : sectionLoadErrors.activities ? (
+                    <div className="text-center py-8 bg-cream-50 rounded-xl">
+                      <p className="text-sage-500">Could not load recent activity</p>
+                      <button onClick={retryWeddingProfile} className="text-sage-600 underline hover:text-sage-800 text-sm mt-1">Retry</button>
+                    </div>
                   ) : activities.length === 0 ? (
                     <div className="text-center py-8 bg-cream-50 rounded-xl">
                       <p className="text-sage-500">No recent activity</p>
@@ -1646,6 +1716,16 @@ export default function AdminWeddingProfile({
           </div>
         </div>
       </main>
+
+      <ConfirmDialog
+        open={confirmDeleteNoteId !== null}
+        onClose={() => setConfirmDeleteNoteId(null)}
+        onConfirm={() => deleteInternalNote(confirmDeleteNoteId)}
+        title="Delete internal note?"
+        message="This is admin-only and cannot be recovered."
+        confirmLabel="Delete"
+        danger
+      />
     </div>
   )
 }

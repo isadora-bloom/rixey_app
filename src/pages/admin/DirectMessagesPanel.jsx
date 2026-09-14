@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../../config/api'
-import { apiFetch, authHeaders } from '../../utils/api'
+import { apiFetch } from '../../utils/api'
 import { useToast } from '../../components/ui/Toast'
 
 export default function DirectMessagesPanel({ weddingId, weddingName }) {
@@ -8,6 +8,7 @@ export default function DirectMessagesPanel({ weddingId, weddingName }) {
   const [messages, setMessages] = useState([])
   const [newMessage, setNewMessage] = useState('')
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [sending, setSending] = useState(false)
   const messagesEndRef = useRef(null)
 
@@ -23,9 +24,9 @@ export default function DirectMessagesPanel({ weddingId, weddingName }) {
 
   const loadMessages = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/messages/${weddingId}`, { headers: await authHeaders() })
-      const data = await response.json()
+      const data = await apiFetch(`${API_URL}/api/messages/${weddingId}`)
       setMessages(data.messages || [])
+      setLoadError(false)
 
       // Mark client messages as read (fire-and-forget; toast on error)
       try {
@@ -38,6 +39,8 @@ export default function DirectMessagesPanel({ weddingId, weddingName }) {
       }
     } catch (err) {
       console.error('Failed to load messages:', err)
+      toastError(`Could not load messages: ${err.message}`)
+      setLoadError(true)
     }
     setLoading(false)
   }
@@ -79,6 +82,11 @@ export default function DirectMessagesPanel({ weddingId, weddingName }) {
         <div className="h-64 sm:h-80 overflow-y-auto p-3 sm:p-4 space-y-3">
           {loading ? (
             <p className="text-sage-400 text-center py-8">Loading messages...</p>
+          ) : loadError ? (
+            <div className="text-center py-8">
+              <p className="text-sage-500 mb-2">Could not load messages</p>
+              <button onClick={loadMessages} className="text-sage-600 underline hover:text-sage-800 text-sm">Retry</button>
+            </div>
           ) : messages.length === 0 ? (
             <div className="text-center py-8">
               <p className="text-sage-500">No messages yet</p>

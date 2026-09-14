@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { venueTime, venueDate, venueToday, venueDayLabel, isVenueToday, VENUE_TZ } from '../../shared/venue-time'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { apiFetch } from '../utils/api'
 
 
 export default function UpcomingMeetings({ weddings = [], filterWedding = null, compact = false }) {
@@ -17,17 +17,20 @@ export default function UpcomingMeetings({ weddings = [], filterWedding = null, 
 
   const loadEvents = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/calendly/events`, { headers: await authHeaders() })
-      const data = await response.json()
-
+      // apiFetch throws on a non-2xx response, so a 401 or 500 lands in the
+      // catch below and shows the same error/Retry state as a real Calendly
+      // problem — it used to slip through as "0 upcoming meetings" instead,
+      // because nothing here checked response.ok.
+      const data = await apiFetch(`${API_URL}/api/calendly/events`)
       if (data.error) {
         setError(data.error)
       } else {
         setEvents(data.events || [])
+        setError(null)
       }
     } catch (err) {
       console.error('Failed to load Calendly events:', err)
-      setError('Failed to connect to Calendly')
+      setError(err.message || 'Failed to connect to Calendly')
     }
     setLoading(false)
   }
@@ -98,18 +101,21 @@ export default function UpcomingMeetings({ weddings = [], filterWedding = null, 
     return eventDate >= today && eventDate <= weekFromNow
   }
 
+  // A first name is not an identity — "Sarah" matched every Sarah on the
+  // books, so a booking form filled in by anyone with a shared first name
+  // filed itself against whichever wedding happened to sort first. Only a
+  // full name or an email now counts as a match; anything short of that is
+  // left unmatched rather than guessed at.
+  const namesMatch = (a, b) => !!a && !!b && a.trim().toLowerCase() === b.trim().toLowerCase()
+
   const matchWedding = (invitees) => {
     if (!invitees || invitees.length === 0) return null
     const inviteeEmail = invitees[0]?.email?.toLowerCase()
-    const inviteeName = invitees[0]?.name?.toLowerCase()
+    const inviteeName = invitees[0]?.name
     for (const wedding of weddings) {
-      const coupleName = wedding.couple_names?.toLowerCase() || ''
       const email = wedding.email?.toLowerCase() || ''
       if (inviteeEmail && email && inviteeEmail === email) return wedding
-      if (inviteeName && coupleName && (
-        inviteeName.includes(coupleName.split(' ')[0]) ||
-        coupleName.includes(inviteeName.split(' ')[0])
-      )) return wedding
+      if (namesMatch(inviteeName, wedding.couple_names)) return wedding
     }
     return null
   }
@@ -117,16 +123,10 @@ export default function UpcomingMeetings({ weddings = [], filterWedding = null, 
   const eventMatchesWedding = (event, wedding) => {
     if (!event.invitees || event.invitees.length === 0) return false
     const inviteeEmail = event.invitees[0]?.email?.toLowerCase()
-    const inviteeName = event.invitees[0]?.name?.toLowerCase()
-    const coupleName = wedding.couple_names?.toLowerCase() || ''
+    const inviteeName = event.invitees[0]?.name
     const weddingEmail = wedding.email?.toLowerCase() || ''
     if (inviteeEmail && weddingEmail && inviteeEmail === weddingEmail) return true
-    if (inviteeName && coupleName) {
-      const coupleFirstName = coupleName.split(' ')[0]
-      const inviteeFirstName = inviteeName.split(' ')[0]
-      if (inviteeName.includes(coupleFirstName) || coupleName.includes(inviteeFirstName)) return true
-    }
-    return false
+    return namesMatch(inviteeName, wedding.couple_names)
   }
 
   // Pull meaningful Q&A answers — skip blanks and boilerplate
@@ -285,9 +285,13 @@ export default function UpcomingMeetings({ weddings = [], filterWedding = null, 
                                   {invitee && (
                                     <p className="text-sage-600 text-sm">
                                       {invitee.name}
-                                      {matchedWedding && (
+                                      {matchedWedding ? (
                                         <span className="ml-2 text-xs bg-sage-100 text-sage-600 px-1.5 py-0.5 rounded">
                                           {matchedWedding.couple_names}
+                                        </span>
+                                      ) : (
+                                        <span className="ml-2 text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded" title="No exact name or email match to a wedding on file">
+                                          unmatched
                                         </span>
                                       )}
                                     </p>
