@@ -10,8 +10,11 @@
  *
  * Nothing here throws at the caller. A recording that cannot be transcribed is
  * still a recording, and the audio is already safely stored by the time this
- * runs — the transcript column simply stays null, which means "not
- * transcribed", never "nothing was said".
+ * runs. What the caller does with { ok: false, error } matters, though: it
+ * writes the reason to walkthrough_media.transcript_error (migration 035) and
+ * logs it against the media id. Before that column existed a failure left
+ * transcript null, which is also what "queued" looks like and what "silent
+ * recording" looks like, so a dead key was invisible.
  */
 
 const DEEPGRAM_URL = 'https://api.deepgram.com/v1/listen';

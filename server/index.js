@@ -14713,10 +14713,40 @@ app.post('/api/admin/documents/:id/parse', requireAdmin, aiLimiter, async (req, 
     // response, marking progress as it goes, and the panel polls.
     await supabaseAdmin.from('wedding_documents')
       .update({ parse_error: null, parsed_at: null }).eq('id', doc.id);
-    res.json({ ok: true, started: true, chunks: chunks.length });
+
+    // A job row, like every other long-running read in this file.
+    //
+    // This was a bare IIFE. A redeploy in the middle of chunk four left the
+    // document with some sections, no parsed_at and no parse_error, which the
+    // panel draws as "not read yet" — so the only trace of eight minutes of
+    // Claude was a half-filled sections column nobody knew to distrust. Now the
+    // run has a row: how many chunks, how far it got, and what killed it.
+    const { data: parseJob, error: parseJobErr } = await supabaseAdmin.from('sync_jobs')
+      .insert({
+        kind: 'doc-parse',
+        trigger: 'manual',
+        total: chunks.length,
+        detail: { documentId: doc.id, filename: doc.filename, weddingId: doc.wedding_id },
+      })
+      .select()
+      .single();
+    // Not fatal. A document read with no job row is the old behaviour, which is
+    // worse but is not a reason to refuse to read the document.
+    if (parseJobErr) console.error('[doc-parse] could not open a job row:', parseJobErr.message);
+
+    const parseBump = parseJob
+      ? (fields) => supabaseAdmin.from('sync_jobs')
+        .update({ ...fields, heartbeat_at: new Date().toISOString() }).eq('id', parseJob.id)
+      : async () => {};
+
+    res.json({ ok: true, started: true, chunks: chunks.length, jobId: parseJob?.id || null });
 
     (async () => {
       const results = [];
+      // Which model actually read it. The 529 fallback to Haiku happened
+      // silently, so a document read by the cheaper model looked identical to
+      // one read properly, and "why is this section thin" had no answer.
+      const modelsUsed = new Set();
       try {
         for (let i = 0; i < chunks.length; i++) {
           const prompt = sectionsPrompt({
@@ -14732,13 +14762,16 @@ app.post('/api/admin/documents/:id/parse', requireAdmin, aiLimiter, async (req, 
               model: MODEL_SONNET, max_tokens: 8000, temperature: 0.1,
               messages: [{ role: 'user', content: prompt }],
             });
+            modelsUsed.add(MODEL_SONNET);
           } catch (err) {
             const overloaded = err.status === 529 || err.status === 503 || err.status === 429;
             if (!overloaded) throw err;
+            console.warn(`[doc-parse] ${doc.id}: chunk ${i + 1} fell back to Haiku (${err.status})`);
             response = await anthropic.messages.create({
               model: MODEL_HAIKU, max_tokens: 8000, temperature: 0.1,
               messages: [{ role: 'user', content: prompt }],
             });
+            modelsUsed.add(MODEL_HAIKU);
           }
           await logUsage(doc.wedding_id, null, 'document_parse', response);
           results.push(parseSectionsResponse(response.content[0].text));
@@ -14747,14 +14780,26 @@ app.post('/api/admin/documents/:id/parse', requireAdmin, aiLimiter, async (req, 
           // still readable rather than the whole read being lost.
           await supabaseAdmin.from('wedding_documents')
             .update({ sections: mergeSections(results) }).eq('id', doc.id);
+          await parseBump({ processed: i + 1, last_item: `chunk ${i + 1} of ${chunks.length}` });
           console.log(`[doc-parse] ${doc.id}: chunk ${i + 1}/${chunks.length}`);
         }
         const merged = mergeSections(results);
         await supabaseAdmin.from('wedding_documents')
-          .update({ sections: merged, parsed_at: new Date().toISOString(), parse_error: null })
+          .update({
+            sections: merged,
+            parsed_at: new Date().toISOString(),
+            parse_error: null,
+            ...(has035('docModel') ? { parsed_with_model: [...modelsUsed].join(', ') } : {}),
+          })
           .eq('id', doc.id);
         await fileOpenQuestions(doc, merged);
-        console.log(`[doc-parse] ${doc.id}: done`);
+        await parseBump({
+          status: 'finished',
+          finished_at: new Date().toISOString(),
+          processed: chunks.length,
+          detail: { documentId: doc.id, filename: doc.filename, models: [...modelsUsed] },
+        });
+        console.log(`[doc-parse] ${doc.id}: done, read by ${[...modelsUsed].join(', ')}`);
       } catch (err) {
         console.error(`[doc-parse] ${doc.id} failed:`, err.message);
         await supabaseAdmin.from('wedding_documents').update({
@@ -14763,7 +14808,14 @@ app.post('/api/admin/documents/:id/parse', requireAdmin, aiLimiter, async (req, 
           sections: results.length ? mergeSections(results) : null,
           parsed_at: results.length ? new Date().toISOString() : null,
           parse_error: String(err.message).slice(0, 500),
+          ...(has035('docModel') && modelsUsed.size ? { parsed_with_model: [...modelsUsed].join(', ') } : {}),
         }).eq('id', doc.id);
+        await parseBump({
+          status: 'failed',
+          finished_at: new Date().toISOString(),
+          processed: results.length,
+          last_error: String(err.message).slice(0, 500),
+        });
       }
     })();
   } catch (e) {
@@ -15013,18 +15065,36 @@ app.post('/api/admin/walkthroughs/:id/media', requireAdmin, dayOfMediaUpload.sin
       transcribeAudio(file.buffer, file.mimetype)
         .then(async (r) => {
           if (r.ok) {
-            await supabaseAdmin.from('walkthrough_media').update({
+            const { error: saveErr } = await supabaseAdmin.from('walkthrough_media').update({
               transcript: r.transcript,
               duration_secs: r.durationSecs || data.duration_secs || null,
+              ...(has035('transcript') ? { transcript_error: null } : {}),
             }).eq('id', data.id);
-            console.log(`[transcribe] ${data.id}: ${r.transcript.length} chars`);
+            if (saveErr) console.error(`[transcribe] ${data.id}: transcribed but could not be saved: ${saveErr.message}`);
+            else console.log(`[transcribe] ${data.id}: ${r.transcript.length} chars`);
           } else {
-            // Recorded but not readable. Left null so the UI keeps saying
-            // "not transcribed" rather than implying the recording was empty.
+            // Recorded but not readable, and now it says so.
+            //
+            // transcript stayed null, which is also what "queued" looks like
+            // and what "silent recording" looks like, so a dead Deepgram key
+            // read as a slow one for as long as nobody checked. The recording
+            // itself is safe either way; this is about the panel telling the
+            // truth about it.
             console.error(`[transcribe] ${data.id} failed: ${r.error}`);
+            if (has035('transcript')) {
+              const { error: errSaveErr } = await supabaseAdmin.from('walkthrough_media')
+                .update({ transcript_error: String(r.error).slice(0, 500) }).eq('id', data.id);
+              if (errSaveErr) console.error(`[transcribe] ${data.id}: could not record the failure: ${errSaveErr.message}`);
+            }
           }
         })
-        .catch(err => console.error('[transcribe] unexpected:', err.message));
+        .catch(async err => {
+          console.error(`[transcribe] ${data.id} unexpected:`, err.message);
+          if (has035('transcript')) {
+            await supabaseAdmin.from('walkthrough_media')
+              .update({ transcript_error: String(err.message).slice(0, 500) }).eq('id', data.id);
+          }
+        });
     }
   } catch (e) {
     console.error('Walkthrough media upload error:', e);
