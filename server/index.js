@@ -218,6 +218,20 @@ const rsvpSearchLimiter = rateLimit({
   message: { error: 'Too many lookups. Please wait a moment and try again.' }
 });
 
+// Deleting a vendor's photos needs no login at all: the vendor portal is
+// gated on a link, because a florist is never going to make an account. That
+// makes DELETE /api/vendor-portal/:token/photos the one destructive route in
+// here reachable by anyone holding a URL, and a leaked or forwarded link would
+// let somebody clear a profile at the speed of a loop. Thirty in ten minutes is
+// far more than a vendor tidying their gallery will ever need.
+const vendorPhotoDeleteLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many photo deletions. Please wait a few minutes and try again.' },
+});
+
 // Apply general rate limiter to all routes
 app.use(generalLimiter);
 
@@ -9442,8 +9456,67 @@ app.post('/api/vendor-portal/:token/photos', upload.single('photo'), async (req,
   }
 });
 
+/**
+ * A vendor's logo, uploaded by the vendor.
+ *
+ * vendors.logo_url exists and nothing has ever written to it, so the directory
+ * shows 218 vendors as identical grey cards. One image, the same bucket as
+ * their photos, under a safe key.
+ *
+ * Gated on the 036 probe even though the column is already on production: this
+ * code will be running against a database somebody rebuilt from the migrations
+ * folder often enough that "it is definitely there" is not a thing to rely on,
+ * and a 42703 here would read to a vendor as "the upload failed" while the
+ * file sat in the bucket.
+ */
+app.post('/api/vendor-portal/:token/logo', upload.single('logo'), async (req, res) => {
+  try {
+    if (!has036('vendorLogo')) {
+      return res.status(503).json({ error: 'Logo uploads are not switched on yet. Rixey has been told.' });
+    }
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    if (!String(req.file.mimetype || '').startsWith('image/')) {
+      return res.status(415).json({ error: 'A logo has to be an image' });
+    }
+
+    const resolved = await vendorIdForToken(req.params.token);
+    if (!resolved) return res.status(404).json({ error: 'Vendor not found' });
+
+    const path = `${resolved.id}/logo/${safeStorageKey(req.file.originalname)}`;
+    const { error: upErr } = await supabaseAdmin.storage
+      .from('vendor-photos')
+      .upload(path, req.file.buffer, { contentType: req.file.mimetype, upsert: false });
+    if (upErr) throw upErr;
+
+    const { data: urlData } = supabaseAdmin.storage.from('vendor-photos').getPublicUrl(path);
+
+    const { data, error } = await supabaseAdmin
+      .from('vendors')
+      .update({
+        logo_url: urlData.publicUrl,
+        last_vendor_update: new Date().toISOString(),
+        // A logo is a profile too, on the same reasoning as the photo route.
+        ...goLiveOnSave(resolved),
+      })
+      .eq('id', resolved.id)
+      .select('id, logo_url, is_published')
+      .single();
+    if (error) throw error;
+    res.json({ logo_url: data.logo_url, is_published: data.is_published });
+  } catch (err) {
+    console.error('Vendor logo upload error:', err);
+    res.status(500).json({ error: err.message || 'Upload failed' });
+  }
+});
+
 // DELETE remove a photo via token
-app.delete('/api/vendor-portal/:token/photos', async (req, res) => {
+//
+// Public by prefix — /api/vendor-portal/ skips auth, because a vendor has no
+// login — and destructive, so it is the one route here that both deletes a
+// file and can be called by anyone holding a link. Rate-limited separately and
+// logged every time: a token that turns up deleting forty photos from four
+// vendors is a thing somebody should be able to find afterwards.
+app.delete('/api/vendor-portal/:token/photos', vendorPhotoDeleteLimiter, async (req, res) => {
   try {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: 'url required' });
@@ -9455,10 +9528,16 @@ app.delete('/api/vendor-portal/:token/photos', async (req, res) => {
       .single();
     if (vErr || !vendor) return res.status(404).json({ error: 'Vendor not found' });
 
+    console.log(`[vendor-portal] photo delete on vendor ${vendor.id} from ${req.ip}: ${url}`);
+
     // Remove from storage
     const parts = url.split('/vendor-photos/');
     if (parts[1]) {
-      await supabaseAdmin.storage.from('vendor-photos').remove([parts[1]]);
+      const { error: rmErr } = await supabaseAdmin.storage.from('vendor-photos').remove([parts[1]]);
+      // The row is the thing the directory reads, so a file that will not go
+      // is worth a log line and not worth refusing the request over — but it
+      // must not pass unnoticed either.
+      if (rmErr) console.error(`[vendor-portal] could not remove ${parts[1]}: ${rmErr.message}`);
     }
 
     const newPhotos = (vendor.photos || []).filter(p => p !== url);
