@@ -14558,6 +14558,162 @@ app.get('/api/admin/documents/:weddingId', requireAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Couple-facing mirror of the route above. No requireAdmin: weddingAccess
+// scopes it to members of the wedding named in the path, or an admin. Same
+// columns as the admin list, minus parse_error and sectionCounts (which are
+// about what the venue found wrong with a read, not something the couple
+// needs), plus a download link so the couple can get their own file back.
+app.get('/api/documents/:weddingId', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('wedding_documents')
+      .select('id, filename, kind, page_count, parsed_at, created_at, storage_path')
+      .eq('wedding_id', req.params.weddingId)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json((data || []).map(d => ({
+      id: d.id,
+      filename: d.filename,
+      kind: d.kind,
+      page_count: d.page_count,
+      parsed_at: d.parsed_at,
+      created_at: d.created_at,
+      // day-of-media is a public bucket (migration 016), so the stored path
+      // is enough to build a stable link; nothing to sign or let expire.
+      download_url: d.storage_path
+        ? supabaseAdmin.storage.from('day-of-media').getPublicUrl(d.storage_path).data.publicUrl
+        : null,
+    })));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// The couple's own view of how complete their file is: the same aspects
+// WeddingCompleteness.jsx checks for the venue, read straight off the tables
+// server-side rather than through seventeen separate fetches, and with
+// nothing venue-internal in the response — no free-text notes, no contract
+// text, no planning notes or uncertain questions. One row per section; done
+// is the headline, filled/total/detail are there for sections worth saying
+// more about.
+//
+// PLAN-UX-NAV.md item 9. Section keys match shared/sections.js so the
+// component's "go to section" link can hand a key straight to the nav.
+app.get('/api/completeness/:weddingId', async (req, res) => {
+  try {
+    const weddingId = req.params.weddingId;
+
+    const [
+      weddingRes, detailsRes, vendorsCountRes, contractsCountRes, vendorContractsCountRes,
+      guestRows, allergiesCountRes, ceremonyOrderCountRes, ceremonyPlanRes,
+      timelineRes, tablesRes, tableLayoutRes, staffingRes, barCountRes,
+      shuttleCountRes, makeupCountRes, rehearsalRes, bedroomsDoneCountRes, decorCountRes,
+    ] = await Promise.all([
+      supabaseAdmin.from('weddings').select('wedding_date, couple_names').eq('id', weddingId).maybeSingle(),
+      supabaseAdmin.from('wedding_details').select('*').eq('wedding_id', weddingId).maybeSingle(),
+      supabaseAdmin.from('vendor_checklist').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId),
+      supabaseAdmin.from('contracts').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId),
+      supabaseAdmin.from('vendor_checklist').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId).eq('contract_uploaded', true),
+      // Counted properly rather than a row count: a wedding_guests row can be
+      // two people, and headcount() is the one place that already knows how
+      // to tell the person-model rows from the pre-025 shape. allVendorRows
+      // pages past 1000, the recurring bug in this file.
+      allVendorRows('wedding_guests', 'id, rsvp, is_plus_one, plus_one_name, plus_one_rsvp, party_id', q => q.eq('wedding_id', weddingId)),
+      supabaseAdmin.from('allergy_registry').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId),
+      supabaseAdmin.from('ceremony_order').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId),
+      supabaseAdmin.from('table_layouts').select('ceremony_plan').eq('wedding_id', weddingId).maybeSingle(),
+      supabaseAdmin.from('wedding_timeline').select('timeline_data, ceremony_start').eq('wedding_id', weddingId).maybeSingle(),
+      supabaseAdmin.from('wedding_tables').select('id').eq('wedding_id', weddingId).maybeSingle(),
+      supabaseAdmin.from('table_layouts').select('elements').eq('wedding_id', weddingId).maybeSingle(),
+      supabaseAdmin.from('wedding_staffing').select('answers').eq('wedding_id', weddingId).maybeSingle(),
+      supabaseAdmin.from('bar_shopping_list').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId),
+      supabaseAdmin.from('shuttle_schedule').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId),
+      supabaseAdmin.from('makeup_schedule').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId),
+      supabaseAdmin.from('rehearsal_dinner').select('bar_type, food_type, location').eq('wedding_id', weddingId).maybeSingle(),
+      // bedroom_assignments always has rows (the room list is auto-seeded on
+      // first read), so a plain row count would always read "done". Counting
+      // only rows where an assignment was actually made is the real signal.
+      supabaseAdmin.from('bedroom_assignments').select('id', { count: 'exact', head: true })
+        .eq('wedding_id', weddingId).or('guest_friday.not.is.null,guest_saturday.not.is.null'),
+      supabaseAdmin.from('decor_inventory').select('id', { count: 'exact', head: true }).eq('wedding_id', weddingId),
+    ]);
+
+    for (const r of [weddingRes, detailsRes, vendorsCountRes, contractsCountRes, vendorContractsCountRes,
+      allergiesCountRes, ceremonyOrderCountRes, ceremonyPlanRes, timelineRes, tablesRes, tableLayoutRes,
+      staffingRes, barCountRes, shuttleCountRes, makeupCountRes, rehearsalRes, bedroomsDoneCountRes, decorCountRes]) {
+      if (r?.error) throw r.error;
+    }
+
+    const wedding = weddingRes.data || {};
+    const details = detailsRes.data || {};
+    const filled = v => v !== null && v !== undefined && v !== '';
+
+    // Free-text fields: filled or not, never returned. Not-null fields: a
+    // couple answering "no" to charger plates has still answered.
+    const TEXT_FIELDS = [
+      'wedding_colors', 'partner1_parents', 'partner2_parents', 'partner1_social', 'partner2_social',
+      'ceremony_location', 'arbor_choice', 'ceremony_notes', 'seating_method', 'favors_description',
+      'send_off_type', 'contract_checkin', 'contract_checkout', 'contract_max_rehearsal',
+      'contract_max_wedding', 'contract_overnights', 'contract_wedding_hours',
+    ];
+    const NOT_NULL_FIELDS = [
+      'dogs_coming', 'unity_table', 'providing_table_numbers', 'providing_charger_plates',
+      'providing_champagne_glasses', 'providing_cake_cutter', 'providing_cake_topper', 'high_chairs_needed',
+    ];
+    const wdFilled =
+      TEXT_FIELDS.filter(f => filled(details[f])).length +
+      NOT_NULL_FIELDS.filter(f => details[f] !== null && details[f] !== undefined).length +
+      (details.wedding_party_count_1 || details.wedding_party_count_2 ? 1 : 0) +
+      (filled(wedding.wedding_date) ? 1 : 0) +
+      (filled(wedding.couple_names) ? 1 : 0);
+    const wdTotal = TEXT_FIELDS.length + NOT_NULL_FIELDS.length + 1 + 2;
+
+    const people = allPeople(guestRows || []);
+    const guestTotal = people.length;
+    const rsvpDone = people.filter(p => p.rsvp === 'yes').length;
+
+    const contractCount = (contractsCountRes.count || 0) + (vendorContractsCountRes.count || 0);
+    const ceremonyPlanRows = ceremonyPlanRes.data?.ceremony_plan?.rows?.length || 0;
+    const timelineDone = !!(timelineRes.data && (
+      (timelineRes.data.timeline_data && Object.keys(timelineRes.data.timeline_data).length > 0) ||
+      timelineRes.data.ceremony_start
+    ));
+    const rehearsalDone = !!(rehearsalRes.data &&
+      (rehearsalRes.data.bar_type || rehearsalRes.data.food_type || rehearsalRes.data.location));
+
+    const sections = [
+      { key: 'wedding-details', label: 'Wedding Details', done: wdFilled === wdTotal, filled: wdFilled, total: wdTotal },
+      {
+        key: 'guests', label: 'Guest List', done: guestTotal > 0, filled: guestTotal, total: null,
+        detail: guestTotal > 0 ? `${guestTotal} guests, ${rsvpDone} RSVP'd` : null,
+      },
+      { key: 'allergies', label: 'Allergy Registry', done: (allergiesCountRes.count || 0) > 0, filled: allergiesCountRes.count || 0, total: null },
+      {
+        key: 'vendors', label: 'Vendors', done: (vendorsCountRes.count || 0) > 0, filled: vendorsCountRes.count || 0, total: null,
+        detail: contractCount > 0 ? `${contractCount} contract${contractCount === 1 ? '' : 's'} on file` : null,
+      },
+      { key: 'timeline', label: 'Timeline', done: timelineDone, filled: null, total: null },
+      { key: 'tables', label: 'Tables', done: !!tablesRes.data, filled: null, total: null },
+      { key: 'table-map', label: 'Table Map', done: (tableLayoutRes.data?.elements?.length || 0) > 0, filled: null, total: null },
+      { key: 'ceremony-order', label: 'Ceremony Order', done: (ceremonyOrderCountRes.count || 0) > 0, filled: null, total: null },
+      { key: 'ceremony-chairs', label: 'Ceremony Chairs', done: ceremonyPlanRows > 0, filled: null, total: null },
+      { key: 'staffing', label: 'Staffing Guide', done: !!staffingRes.data?.answers, filled: null, total: null },
+      { key: 'bar', label: 'Bar Planner', done: (barCountRes.count || 0) > 0, filled: null, total: null },
+      { key: 'shuttle', label: 'Shuttle Schedule', done: (shuttleCountRes.count || 0) > 0, filled: null, total: null },
+      { key: 'makeup', label: 'Hair & Makeup', done: (makeupCountRes.count || 0) > 0, filled: null, total: null },
+      { key: 'rehearsal', label: 'Rehearsal Dinner', done: rehearsalDone, filled: null, total: null },
+      { key: 'bedrooms', label: 'Bedroom Assignments', done: (bedroomsDoneCountRes.count || 0) > 0, filled: null, total: null },
+      { key: 'decor', label: 'Decor Inventory', done: (decorCountRes.count || 0) > 0, filled: null, total: null },
+    ];
+
+    const doneCount = sections.filter(s => s.done).length;
+    res.json({
+      sections,
+      doneCount,
+      totalCount: sections.length,
+      percent: sections.length ? Math.round((doneCount / sections.length) * 100) : 0,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/admin/documents/:weddingId/upload', requireAdmin, documentUpload.single('file'), async (req, res) => {
   try {
     const file = req.file;
