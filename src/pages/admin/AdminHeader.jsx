@@ -9,13 +9,15 @@ import NotificationBell from '../../components/NotificationBell'
  * unreachable, and because the select's value had no matching option whenever
  * that view was open, the dropdown also went blank and looked broken.
  */
-function views({ stats, unreadMessages, unansweredCount, tourCount, crashCount }) {
+function views({ stats, unreadMessages, unansweredCount, tourCount, crashCount, reviewCount }) {
   return [
     { id: 'weddings', label: 'Weddings', count: stats.active },
     { id: 'messages', label: 'Messages', count: unreadMessages, alert: unreadMessages > 0 },
     { id: 'sage-help', label: 'Sage Help', count: unansweredCount, alert: unansweredCount > 0 },
     { id: 'vendors', label: 'Vendors' },
-    { id: 'meetings', label: 'Meetings' },
+    // Badged with the "can't place this" queue: calls and emails the matcher
+    // would not guess at live on the same diary as meetings do.
+    { id: 'meetings', label: 'Meetings', count: reviewCount, alert: reviewCount > 0 },
     // Tours sit next to Meetings on purpose: same diary, but these are the
     // people who have not booked, who had nowhere in the portal at all.
     { id: 'tours', label: 'Tours', count: tourCount, alert: false },
@@ -45,8 +47,9 @@ export default function AdminHeader({
   setActiveTab,
   tourCount = 0,
   crashCount = 0,
+  reviewCount = 0,
 }) {
-  const VIEWS = views({ stats, unreadMessages, unansweredCount, tourCount, crashCount })
+  const VIEWS = views({ stats, unreadMessages, unansweredCount, tourCount, crashCount, reviewCount })
 
   return (
     <header
