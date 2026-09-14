@@ -8,6 +8,7 @@ import {
   resolveSectionKey,
   FINALISABLE_KEYS,
 } from '../../shared/sections.js';
+import { computeSectionStatus } from '../../src/hooks/useSectionStatus.js';
 
 test('old keys resolve to the section they became', () => {
   // These are the ones that were actually different on the two sides, and the
@@ -124,4 +125,60 @@ test('the sections carrying a sign-off are all real sections', () => {
   for (const key of FINALISABLE_KEYS) {
     assert.ok(sectionByKey(key), `${key} is finalisable but not in the registry`);
   }
+});
+
+test('every section has a noteCategories list, even an empty one', () => {
+  for (const section of SECTIONS) {
+    assert.ok(Array.isArray(section.noteCategories), `${section.key} has no noteCategories array`);
+  }
+});
+
+test('no planning_notes category is claimed by two sections', () => {
+  // A category resolving to two sections would mean a "3 waiting on Rixey"
+  // count that is really 3 spread across two menu entries, or worse, double
+  // counted on both.
+  const seen = new Map();
+  for (const section of SECTIONS) {
+    for (const category of section.noteCategories) {
+      assert.ok(!seen.has(category), `category "${category}" claimed by both ${seen.get(category)} and ${section.key}`);
+      seen.set(category, section.key);
+    }
+  }
+});
+
+test('computeSectionStatus ticks only couple_finalised, resolving old keys', () => {
+  const { finalised } = computeSectionStatus({
+    bar: { couple_finalised: true, staff_finalised: false },
+    vendor: { couple_finalised: true }, // old key for "vendors"
+    timeline: { couple_finalised: false, staff_finalised: true },
+  }, []);
+  assert.ok(finalised.has('bar'));
+  assert.ok(finalised.has('vendors'));
+  assert.ok(!finalised.has('timeline')); // staff-only sign-off is not a tick
+});
+
+test('computeSectionStatus counts only pending notes in a mapped category', () => {
+  const { pending } = computeSectionStatus({}, [
+    { category: 'vendor', status: 'pending' },
+    { category: 'vendor_contact', status: 'pending' },
+    { category: 'vendor', status: 'confirmed' }, // resolved, does not count
+    { category: 'note', status: 'pending' }, // unmapped category, counts nowhere
+    { category: 'allergy', status: 'pending' },
+  ]);
+  assert.equal(pending.get('vendors'), 2);
+  assert.equal(pending.get('allergies'), 1);
+  assert.equal(pending.get('note'), undefined);
+  assert.equal([...pending.values()].reduce((a, b) => a + b, 0), 3);
+});
+
+test('computeSectionStatus is the same function both menus call', () => {
+  // weddingTabs.js calls computeSectionStatus directly (it is not a
+  // component); DashboardNav.jsx calls it through useSectionStatus, which
+  // only wraps it in useMemo. Same inputs, same answer, either way in.
+  const finalisations = { bar: { couple_finalised: true } };
+  const planningNotes = [{ category: 'timeline', status: 'pending' }];
+  const first = computeSectionStatus(finalisations, planningNotes);
+  const second = computeSectionStatus(finalisations, planningNotes);
+  assert.deepEqual([...first.finalised], [...second.finalised]);
+  assert.deepEqual([...first.pending.entries()], [...second.pending.entries()]);
 });
