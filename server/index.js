@@ -9488,8 +9488,9 @@ app.post('/api/admin/enquiries/:id/link', requireAdmin, async (req, res) => {
     if (!w) return res.status(404).json({ error: 'That wedding does not exist' });
 
     // Recordings made before we knew who they were belong to the wedding too.
-    await supabaseAdmin.from('walkthroughs')
+    const { error: walkthroughError } = await supabaseAdmin.from('walkthroughs')
       .update({ wedding_id: weddingId }).eq('enquiry_id', req.params.id);
+    if (walkthroughError) throw walkthroughError;
 
     const { data, error } = await supabaseAdmin.from('enquiries').update({
       wedding_id: weddingId,
