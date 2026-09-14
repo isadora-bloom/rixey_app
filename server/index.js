@@ -3947,13 +3947,15 @@ app.post('/api/admin/sheet-sync/:weddingId/apply', async (req, res) => {
 
 // Check Gmail connection status
 app.get('/api/gmail/status', async (req, res) => {
+  // Same shape as the Zoom and Quo status routes: connected, plus the last
+  // job row so the integrations card can show "Synced 4:35 PM, 30 processed"
+  // or "Failed 4:05 PM: ..." without a second request.
+  const lastJob = await lastSyncJob('gmail');
   try {
     const tokens = await loadAndRefreshGmailTokens();
 
-    console.log('Gmail status check - tokens found:', !!tokens);
-
     if (!tokens) {
-      return res.json({ connected: false });
+      return res.json({ connected: false, reason: 'Gmail is not connected. Reconnect it in the admin panel.', ...lastJob });
     }
 
     // Test the connection (tokens are already set and refreshed by the helper)
@@ -3966,14 +3968,14 @@ app.get('/api/gmail/status', async (req, res) => {
       // "Connected" in green while every email the portal tried to send was
       // refused for want of a scope nobody had asked for.
       const cap = await gmailSendCapability();
-      res.json({ connected: true, canSend: cap.canSend, scopes: cap.scopes });
+      res.json({ connected: true, canSend: cap.canSend, scopes: cap.scopes, ...lastJob });
     } catch (testErr) {
       console.log('Gmail test failed:', testErr.message);
-      res.json({ connected: false });
+      res.json({ connected: false, reason: testErr.message, ...lastJob });
     }
   } catch (error) {
     console.log('Gmail status error:', error.message);
-    res.json({ connected: false });
+    res.json({ connected: false, reason: error.message, ...lastJob });
   }
 });
 
