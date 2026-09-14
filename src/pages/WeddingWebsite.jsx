@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import { API_URL } from '../config/api'
+import { authHeaders } from '../utils/api'
 import { isFieldOn, sendsConfirmation, RSVP_FIELDS } from '../../shared/rsvp-fields'
 
 
@@ -1071,7 +1072,8 @@ export default function WeddingWebsite() {
       ? `${API_URL}/api/w/${slug}?preview=${preview}`
       : `${API_URL}/api/w/${slug}`
     if (pw) apiUrl += `${apiUrl.includes('?') ? '&' : '?'}pw=${encodeURIComponent(pw)}`
-    return fetch(apiUrl).then(r => { if (!r.ok) throw new Error(); return r.json() })
+    // A signed-in member or admin may preview an unpublished site; guests send no token.
+    return authHeaders().then(headers => fetch(apiUrl, { headers })).then(r => { if (!r.ok) throw new Error(); return r.json() })
   }
 
   useEffect(() => {

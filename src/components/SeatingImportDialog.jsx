@@ -1,4 +1,12 @@
 import { useState, useRef } from 'react';
+import { authHeaders } from '../utils/api';
+
+// multipart posts must let the browser set the boundary, so drop the JSON content type
+async function formHeaders() {
+  const h = await authHeaders();
+  delete h['Content-Type'];
+  return h;
+}
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
@@ -33,7 +41,7 @@ export default function SeatingImportDialog({ weddingId, onComplete }) {
     form.append('weddingId', weddingId);
     form.append('action', 'parse');
     try {
-      const r = await fetch(`${API}/api/seating/import`, { method: 'POST', body: form });
+      const r = await fetch(`${API}/api/seating/import`, { method: 'POST', body: form, headers: await formHeaders() });
       const data = await r.json();
       if (!r.ok || !data.ok) throw new Error(data.error || 'Parse failed');
       setChart(data.chart);
@@ -65,7 +73,7 @@ export default function SeatingImportDialog({ weddingId, onComplete }) {
     form.append('chart', JSON.stringify(chart));
     form.append('replaceExisting', replaceExisting ? 'true' : 'false');
     try {
-      const r = await fetch(`${API}/api/seating/import`, { method: 'POST', body: form });
+      const r = await fetch(`${API}/api/seating/import`, { method: 'POST', body: form, headers: await formHeaders() });
       const data = await r.json();
       if (!r.ok || !data.ok) throw new Error(data.error || 'Commit failed');
       setResult(data);
