@@ -236,7 +236,10 @@ app.get('/api/google-debug', requireAdmin, (req, res) => {
 // ============ AUTH MIDDLEWARE ============
 // Public routes that skip auth (matched by path prefix)
 const PUBLIC_ROUTES = [
-  '/api/w/',                  // public wedding websites
+  // NOT /api/w/ any more. The public wedding site is still public — this
+  // middleware attaches a user when there is one and never blocks — but
+  // ?preview= has to be able to tell a signed-in couple from a stranger, and
+  // it cannot do that if the token is never looked at. See GET /api/w/:slug.
   '/api/rsvp/',               // public RSVP
   '/api/vendor-portal/',      // token-based vendor portal
   // Deliberately NOT public any more. It carries Rixey's whole curated list
@@ -12866,8 +12869,22 @@ app.put('/api/venue-settings', async (req, res) => {
 // ── Public wedding website endpoint ──────────────────────────────────────────
 app.get('/api/w/:slug', async (req, res) => {
   try {
-    // Allow preview mode: /api/w/slug?preview=weddingId skips the published check
-    const previewWeddingId = req.query.preview;
+    // Preview mode: /api/w/slug?preview=weddingId skips both the published
+    // check and the password gate, which is exactly what the couple wants
+    // while they are still building the site and exactly what a stranger
+    // wants too. Anyone at all could add the query string and read an
+    // unpublished, password-protected site along with its guest-facing
+    // details.
+    //
+    // So the parameter is honoured only for someone who belongs to that
+    // wedding, or an admin. For everyone else it is ignored rather than
+    // refused: a visitor who lands on a preview link they should not have
+    // gets the ordinary published-and-password behaviour, not an error page.
+    let previewWeddingId = req.query.preview || null;
+    if (previewWeddingId) {
+      const allowed = await assertWeddingMember(supabaseAdmin, req, previewWeddingId);
+      if (!allowed.ok) previewWeddingId = null;
+    }
     let query = supabaseAdmin
       .from('wedding_website_settings')
       .select('*')
