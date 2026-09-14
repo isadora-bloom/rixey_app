@@ -10077,6 +10077,42 @@ app.get('/api/admin/unlinked-profiles', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// The newest timestamp across every inbound channel for one wedding. Each
+// lookup is a single indexed "order desc limit 1", so this stays bounded no
+// matter how large messages/direct_messages/activity_log/processed_emails/
+// processed_quo_messages get — the alternative, loading every row of five
+// ever-growing tables to find a maximum, is exactly the shape of read this
+// fix exists to remove.
+async function lastActivityAtFor(wedding) {
+  const profileIds = (wedding.profiles || []).map(p => p.id).filter(Boolean);
+
+  const latestOf = async (fn, dateCol) => {
+    const { data, error: qErr } = await fn();
+    if (qErr) {
+      console.error(`[admin/weddings] last_activity_at read failed for ${wedding.id}:`, qErr.message);
+      return null;
+    }
+    return data?.[0]?.[dateCol] || null;
+  };
+
+  const [msgAt, dmAt, actAt, emailAt, quoAt] = await Promise.all([
+    profileIds.length
+      ? latestOf(() => supabaseAdmin.from('messages').select('created_at')
+          .in('user_id', profileIds).order('created_at', { ascending: false }).limit(1), 'created_at')
+      : Promise.resolve(null),
+    latestOf(() => supabaseAdmin.from('direct_messages').select('created_at')
+      .eq('wedding_id', wedding.id).order('created_at', { ascending: false }).limit(1), 'created_at'),
+    latestOf(() => supabaseAdmin.from('activity_log').select('created_at')
+      .eq('wedding_id', wedding.id).order('created_at', { ascending: false }).limit(1), 'created_at'),
+    latestOf(() => supabaseAdmin.from('processed_emails').select('processed_at')
+      .eq('wedding_id', wedding.id).order('processed_at', { ascending: false }).limit(1), 'processed_at'),
+    latestOf(() => supabaseAdmin.from('processed_quo_messages').select('processed_at')
+      .eq('wedding_id', wedding.id).order('processed_at', { ascending: false }).limit(1), 'processed_at'),
+  ]);
+
+  return [msgAt, dmAt, actAt, emailAt, quoAt].filter(Boolean).sort().pop() || null;
+}
+
 app.get('/api/admin/weddings', async (req, res) => {
   try {
     const { data: weddings, error } = await supabaseAdmin
@@ -10087,7 +10123,11 @@ app.get('/api/admin/weddings', async (req, res) => {
 
     if (error) throw error;
 
-    res.json({ weddings: weddings || [] });
+    const weddingsWithActivity = await Promise.all(
+      (weddings || []).map(async (w) => ({ ...w, last_activity_at: await lastActivityAtFor(w) }))
+    );
+
+    res.json({ weddings: weddingsWithActivity });
   } catch (error) {
     console.error('Get admin weddings error:', error);
     res.status(500).json({ error: 'Failed to fetch weddings' });
