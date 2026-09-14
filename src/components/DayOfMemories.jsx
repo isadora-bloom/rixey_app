@@ -18,7 +18,7 @@ function formatSize(bytes) {
   return `${(mb / 1024).toFixed(2)} GB`
 }
 
-function MediaTile({ item, isAdmin, onDelete, onCaptionChange }) {
+function MediaTile({ item, isAdmin, onDelete, onCaptionChange, onReorder, canMoveUp, canMoveDown }) {
   const video = isVideo(item.mime_type)
   const [caption, setCaption] = useState(item.caption || '')
   const [savingCaption, setSavingCaption] = useState(false)
@@ -35,13 +35,35 @@ function MediaTile({ item, isAdmin, onDelete, onCaptionChange }) {
 
   return (
     <div className="bg-white rounded-xl border border-cream-200 overflow-hidden flex flex-col">
-      <div className="bg-cream-50 aspect-video flex items-center justify-center">
+      <div className="relative bg-cream-50 aspect-video flex items-center justify-center">
         {video ? (
           <video controls preload="metadata" className="w-full h-full object-contain bg-black">
             <source src={item.url} type={item.mime_type} />
           </video>
         ) : (
           <img src={item.url} alt={item.caption || item.filename} className="w-full h-full object-cover" />
+        )}
+        {isAdmin && onReorder && (
+          <div className="absolute top-1 left-1 flex flex-col gap-1">
+            <button
+              type="button"
+              onClick={() => onReorder(item, 'up')}
+              disabled={!canMoveUp}
+              className="w-6 h-6 bg-black/60 text-white rounded-full flex items-center justify-center hover:bg-black/80 disabled:opacity-30 disabled:cursor-not-allowed"
+              title="Move earlier"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" /></svg>
+            </button>
+            <button
+              type="button"
+              onClick={() => onReorder(item, 'down')}
+              disabled={!canMoveDown}
+              className="w-6 h-6 bg-black/60 text-white rounded-full flex items-center justify-center hover:bg-black/80 disabled:opacity-30 disabled:cursor-not-allowed"
+              title="Move later"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+            </button>
+          </div>
         )}
       </div>
 
@@ -163,6 +185,34 @@ export default function DayOfMemories({ weddingId, isAdmin = false }) {
     }
   }
 
+  // Swaps sort_order with the neighbour within the same category (the order
+  // is grouped by category server-side and in this view), through the
+  // existing PUT route, optimistic with rollback on failure.
+  async function handleReorder(item, direction, categoryItems) {
+    const idx = categoryItems.findIndex(i => i.id === item.id)
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1
+    if (idx === -1 || swapIdx < 0 || swapIdx >= categoryItems.length) return
+    const other = categoryItems[swapIdx]
+    const aOrder = item.sort_order
+    const bOrder = other.sort_order
+    const snapshot = items
+    setItems(prev => prev.map(i => {
+      if (i.id === item.id) return { ...i, sort_order: bOrder }
+      if (i.id === other.id) return { ...i, sort_order: aOrder }
+      return i
+    }))
+    try {
+      await Promise.all([
+        apiFetch(`${API_URL}/api/day-of-media/${item.id}`, { method: 'PUT', body: JSON.stringify({ sort_order: bOrder }) }),
+        apiFetch(`${API_URL}/api/day-of-media/${other.id}`, { method: 'PUT', body: JSON.stringify({ sort_order: aOrder }) }),
+      ])
+    } catch (err) {
+      setItems(snapshot)
+      setError(`Couldn't reorder: ${err.message}`)
+      toastError(`Could not reorder: ${err.message}`)
+    }
+  }
+
   async function handleCaptionChange(id, caption) {
     try {
       const updated = await apiFetch(`${API_URL}/api/day-of-media/${id}`, {
@@ -247,13 +297,16 @@ export default function DayOfMemories({ weddingId, isAdmin = false }) {
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {categoryItems.map(item => (
+                {categoryItems.map((item, i) => (
                   <MediaTile
                     key={item.id}
                     item={item}
                     isAdmin={isAdmin}
                     onDelete={handleDelete}
                     onCaptionChange={handleCaptionChange}
+                    onReorder={(it, dir) => handleReorder(it, dir, categoryItems)}
+                    canMoveUp={i > 0}
+                    canMoveDown={i < categoryItems.length - 1}
                   />
                 ))}
               </div>
