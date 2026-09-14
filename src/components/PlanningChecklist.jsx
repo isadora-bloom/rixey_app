@@ -342,7 +342,7 @@ export default function PlanningChecklist({ weddingId, userId, compact = false, 
                     {task.is_custom && (
                       <button
                         onClick={() => handleDeleteTask(task.id)}
-                        className="text-red-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition"
+                        className="text-red-400 hover:text-red-600 opacity-60 lg:opacity-0 lg:group-hover:opacity-100 transition"
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />

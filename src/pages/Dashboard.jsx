@@ -258,11 +258,14 @@ export default function Dashboard() {
           setWedding(weddingData)
         }
 
-        // Check if couple photo has been uploaded — require it if not
+        // Check if couple photo has been uploaded — require it if not, unless
+        // they already dismissed it for this session (see "Do this later").
         if (data.role?.startsWith('couple')) {
+          let dismissed = false
+          try { dismissed = !!sessionStorage.getItem('couplePhotoDismissed') } catch { /* private browsing */ }
           try {
             const photoData = await loadJson(`${API_URL}/api/couple-photo/${data.wedding_id}`)
-            if (!photoData.photo) setNeedsPhoto(true)
+            if (!photoData.photo && !dismissed) setNeedsPhoto(true)
           } catch {}
         }
 
@@ -1185,7 +1188,16 @@ export default function Dashboard() {
             {photoError && (
               <p className="text-red-500 text-xs mt-3">{photoError}</p>
             )}
-            <p className="text-sage-400 text-xs mt-4">JPG, PNG or HEIC · any size</p>
+            <p className="text-sage-400 text-xs mt-4">JPG, PNG or WebP · any size</p>
+            <button
+              onClick={() => {
+                try { sessionStorage.setItem('couplePhotoDismissed', '1') } catch { /* private browsing */ }
+                setNeedsPhoto(false)
+              }}
+              className="mt-4 text-sage-400 text-xs underline hover:text-sage-600"
+            >
+              Do this later
+            </button>
           </div>
         </div>
       )}
