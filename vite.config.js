@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { visualizer } from 'rollup-plugin-visualizer'
 
 const DEV_API_TARGET = process.env.VITE_DEV_API_TARGET || 'https://rixeyapp-production.up.railway.app'
 
@@ -24,7 +25,7 @@ export default defineConfig({
   define: {
     'import.meta.env.VITE_COMMIT_SHA': JSON.stringify(COMMIT ? COMMIT.slice(0, 7) : null),
   },
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), visualizer({ gzipSize: true, open: false, filename: './dist/stats.html' })],
   server: {
     proxy: {
       '/api': {
@@ -42,14 +43,6 @@ export default defineConfig({
           'vendor-react': ['react', 'react-dom', 'react-router-dom'],
           'vendor-supabase': ['@supabase/supabase-js'],
           'vendor-konva': ['konva', 'react-konva'],
-          // Admin is the heaviest page — split it for faster initial load
-          'admin': [
-            './src/pages/Admin.jsx',
-            './src/pages/admin/AdminWeddingProfile.jsx',
-            './src/pages/admin/AdminWeddingList.jsx',
-            './src/pages/admin/AdminHeader.jsx',
-            './src/pages/admin/DirectMessagesPanel.jsx',
-          ],
         },
       },
     },
