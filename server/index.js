@@ -13934,9 +13934,12 @@ app.post('/api/admin/walkthroughs/:id/apply', requireAdmin, async (req, res) => 
       });
     }
 
-    const { data: items } = await supabaseAdmin
+    const { data: items, error: itemsError } = await supabaseAdmin
       .from('walkthrough_items').select('*')
       .eq('walkthrough_id', wt.id).eq('status', 'accepted');
+    // A failed read looked identical to "nothing accepted yet" and reported
+    // ok:true, applied:0 — success, when nothing had been attempted.
+    if (itemsError) return res.status(500).json({ error: itemsError.message });
     if (!items?.length) return res.json({ ok: true, applied: 0, results: [] });
 
     const label = `${(wt.kind || 'walkthrough').replace(/_/g, ' ')} on ${wt.occurred_on}`;
