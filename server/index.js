@@ -12469,11 +12469,15 @@ app.put('/api/wedding-photos/:photoId', async (req, res) => {
 
 app.delete('/api/wedding-photos/:photoId', async (req, res) => {
   try {
-    const { data: photo } = await supabaseAdmin
+    const { data: photo, error: readError } = await supabaseAdmin
       .from('wedding_photos')
       .select('storage_path')
       .eq('id', req.params.photoId)
       .single();
+
+    // A failed read is not "no storage path" — deleting the row anyway would
+    // orphan whatever is sitting in storage with nothing left pointing at it.
+    if (readError) return res.status(500).json({ error: readError.message });
 
     if (photo?.storage_path) {
       await supabaseAdmin.storage.from('wedding-photos').remove([photo.storage_path]);
@@ -12571,11 +12575,14 @@ app.put('/api/day-of-media/:id', validateBody(['caption', 'category', 'sort_orde
 
 app.delete('/api/day-of-media/:id', async (req, res) => {
   try {
-    const { data: item } = await supabaseAdmin
+    const { data: item, error: readError } = await supabaseAdmin
       .from('day_of_media')
       .select('storage_path')
       .eq('id', req.params.id)
       .single();
+    // A failed read is not "no storage path" — deleting the row anyway would
+    // orphan whatever is sitting in storage with nothing left pointing at it.
+    if (readError) return res.status(500).json({ error: readError.message });
     if (item?.storage_path) {
       await supabaseAdmin.storage.from('day-of-media').remove([item.storage_path]);
     }
