@@ -39,8 +39,25 @@ import WeddingContacts from '../../components/admin/WeddingContacts'
 import DocumentSyncPanel from '../../components/DocumentSyncPanel'
 import { getLastActivity, getCategoryIcon, getCategoryLabel } from './adminUtils'
 import { weddingTabs } from './weddingTabs'
+import { resolveSectionKey, sectionByKey } from '../../../shared/sections.js'
+import SectionIcon from '../../components/ui/SectionIcon'
 import { weddingName } from '../../../shared/wedding-name.js'
 import { ConfirmDialog } from '../../components/ui'
+
+/**
+ * A tab that is in the menu but whose panel is still being built. Registering
+ * the key now is what keeps the venue's menu and the couple's the same shape,
+ * and a tab that opens a blank panel reads as a broken page.
+ */
+function ComingShortly({ sectionKey }) {
+  const label = sectionByKey(sectionKey)?.label || 'This tab'
+  return (
+    <div className="p-8 text-center">
+      <p className="font-medium text-sage-700">{label}</p>
+      <p className="text-sage-400 text-sm mt-1">Coming shortly.</p>
+    </div>
+  )
+}
 
 export default function AdminWeddingProfile({
   viewingWedding,
@@ -404,10 +421,10 @@ export default function AdminWeddingProfile({
                 onClick={() => {
                   const first = escalation.messages[0]
                   if (first.source === 'direct') {
-                    setActiveTab('direct-messages')
+                    setActiveTab('inbox')
                   } else {
                     if (first.user_id) setSelectedChatUser(first.user_id)
-                    setActiveTab('messages')
+                    setActiveTab('conversations')
                   }
                 }}
                 className="mt-2 block w-full text-left text-sm text-red-700 bg-red-100 rounded-lg px-3 py-2 italic line-clamp-2 hover:bg-red-200 transition"
@@ -477,7 +494,7 @@ export default function AdminWeddingProfile({
                       key={item.tab}
                       onClick={() => {
                         setActiveTab(item.tab)
-                        if (item.tab === 'messages') { setSelectedChatUser(null); setSearchQuery('') }
+                        if (item.tab === 'conversations') { setSelectedChatUser(null); setSearchQuery('') }
                       }}
                       className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition ${
                         activeTab === item.tab
@@ -486,7 +503,7 @@ export default function AdminWeddingProfile({
                       }`}
                     >
                       <span className="flex items-center gap-2">
-                        <img src={item.icon} className="w-5 h-5 flex-shrink-0" alt="" />
+                        <SectionIcon sectionKey={item.tab} />
                         <span>{item.label}</span>
                       </span>
                       {item.badge > 0 && (
@@ -509,8 +526,9 @@ export default function AdminWeddingProfile({
                 <select
                   value={activeTab}
                   onChange={(e) => {
-                    setActiveTab(e.target.value)
-                    if (e.target.value === 'messages') { setSelectedChatUser(null); setSearchQuery('') }
+                    const tab = resolveSectionKey(e.target.value) || 'overview'
+                    setActiveTab(tab)
+                    if (tab === 'conversations') { setSelectedChatUser(null); setSearchQuery('') }
                   }}
                   className="w-full p-3 border border-cream-200 rounded-lg bg-cream-50 text-sage-700 font-medium focus:outline-none focus:ring-2 focus:ring-sage-300"
                 >
@@ -1031,7 +1049,7 @@ export default function AdminWeddingProfile({
               )}
 
               {/* Messages Tab */}
-              {activeTab === 'messages' && (
+              {activeTab === 'conversations' && (
                 <div>
                   {selectedChatUser ? (
                     /* Chat Thread View */
@@ -1293,6 +1311,14 @@ export default function AdminWeddingProfile({
                 <AdminWorksheets wedding={viewingWedding} />
               )}
 
+              {/* RSVP Settings. The couple has had this for months and the
+                  venue had no way to see what they had switched on, so Grace
+                  was reading it back off a screenshot. U2 is building
+                  RsvpSettingsTab; the orchestrator swaps it in here. */}
+              {activeTab === 'rsvp-settings' && (
+                <ComingShortly sectionKey="rsvp-settings" />
+              )}
+
               {activeTab === 'allergies' && (
                 <AllergyRegistry weddingId={viewingWedding.id} userId={null} />
               )}
@@ -1492,7 +1518,7 @@ export default function AdminWeddingProfile({
               )}
 
               {/* Direct Messages Tab */}
-              {activeTab === 'direct-messages' && (
+              {activeTab === 'inbox' && (
                 <DirectMessagesPanel weddingId={viewingWedding.id} weddingName={weddingName(viewingWedding)} />
               )}
 
