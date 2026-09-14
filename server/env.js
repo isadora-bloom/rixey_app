@@ -10,14 +10,21 @@
  *
  * Import this first, before any module that reads process.env at load time.
  */
-import dotenv from 'dotenv';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import dotenv from 'dotenv'
+import path from 'path'
+import { fileURLToPath } from 'url'
 
-const here = path.dirname(fileURLToPath(import.meta.url));
+const here = path.dirname(fileURLToPath(import.meta.url))
 
 // Run from the repo root or from server/, either works.
-dotenv.config({ path: path.join(here, '..', '.env') });
-dotenv.config();
+dotenv.config({ path: path.join(here, '..', '.env') })
+dotenv.config()
 
-export const env = process.env;
+// Fail at startup if the service role key is missing.
+if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  throw new Error(
+    'SUPABASE_SERVICE_ROLE_KEY is required. Set it in .env or as an environment variable on Railway.'
+  )
+}
+
+export const env = process.env
