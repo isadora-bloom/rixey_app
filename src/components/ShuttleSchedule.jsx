@@ -7,16 +7,32 @@ import { shuttleRequests } from '../../shared/rsvp-fields'
 
 
 // ── time helpers ──────────────────────────────────────────────────
+// Accepts common formats: "4pm", "4:00pm", "4:00 PM", and 24-hour "16:00".
+// Used to silently do nothing on anything else — this is why "Generate
+// Pre-Ceremony Runs" only ever worked for typing exactly "4:00 PM".
 function parseTime(str) {
   if (!str) return null;
-  const m = str.trim().match(/^(\d{1,2}):(\d{2})\s*(am|pm)$/i);
-  if (!m) return null;
-  let h = parseInt(m[1]);
-  const min = parseInt(m[2]);
-  const period = m[3].toLowerCase();
-  if (period === 'pm' && h !== 12) h += 12;
-  if (period === 'am' && h === 12) h = 0;
-  return h * 60 + min;
+  const s = str.trim();
+
+  // 24-hour, e.g. "16:00" or "16:00:00"
+  const h24 = s.match(/^([01]?\d|2[0-3]):([0-5]\d)(?::\d{2})?$/);
+  if (h24) {
+    return parseInt(h24[1], 10) * 60 + parseInt(h24[2], 10);
+  }
+
+  // 12-hour with am/pm — minutes and the space before am/pm are both optional
+  const h12 = s.match(/^(\d{1,2})(?::([0-5]\d))?\s*(am|pm)$/i);
+  if (h12) {
+    let h = parseInt(h12[1], 10);
+    const min = h12[2] ? parseInt(h12[2], 10) : 0;
+    if (h < 1 || h > 12) return null;
+    const period = h12[3].toLowerCase();
+    if (period === 'pm' && h !== 12) h += 12;
+    if (period === 'am' && h === 12) h = 0;
+    return h * 60 + min;
+  }
+
+  return null;
 }
 
 function formatTime(totalMinutes) {
@@ -34,13 +50,18 @@ function SuggestedSchedule({ onGenerateRuns }) {
   const [pre, setPre] = useState({ ceremonyTime: '', numRuns: '2', pickupLocation: '' });
   const [post, setPost] = useState({ eventEndTime: '', numRuns: '2', dropoffLocation: '' });
   const [generating, setGenerating] = useState('');
+  const [preError, setPreError] = useState('');
+  const [postError, setPostError] = useState('');
 
-  const setPreField = (f, v) => setPre((p) => ({ ...p, [f]: v }));
-  const setPostField = (f, v) => setPost((p) => ({ ...p, [f]: v }));
+  const setPreField = (f, v) => { setPre((p) => ({ ...p, [f]: v })); setPreError(''); };
+  const setPostField = (f, v) => { setPost((p) => ({ ...p, [f]: v })); setPostError(''); };
+
+  const TIME_FORMAT_HELP = 'Could not understand that time. Try a format like 4pm, 4:00 PM, or 16:00.';
 
   const generatePreRuns = async () => {
     const base = parseTime(pre.ceremonyTime);
-    if (!base) return;
+    if (base === null) { setPreError(TIME_FORMAT_HELP); return; }
+    setPreError('');
     const n = parseInt(pre.numRuns) || 1;
     const TRANSIT = 25; // minutes hotel → venue
     const ARRIVE_BEFORE = 5; // arrive this many minutes before ceremony
@@ -67,7 +88,8 @@ function SuggestedSchedule({ onGenerateRuns }) {
 
   const generatePostRuns = async () => {
     const base = parseTime(post.eventEndTime);
-    if (!base) return;
+    if (base === null) { setPostError(TIME_FORMAT_HELP); return; }
+    setPostError('');
     const n = parseInt(post.numRuns) || 1;
     const TRANSIT = 25;
     const runs = [];
@@ -119,8 +141,9 @@ function SuggestedSchedule({ onGenerateRuns }) {
               <Input
                 value={pre.ceremonyTime}
                 onChange={(e) => setPreField('ceremonyTime', e.target.value)}
-                placeholder="e.g. 4:00 PM"
+                placeholder="e.g. 4pm, 4:00 PM, or 16:00"
               />
+              {preError && <p className="text-xs text-rose-500 mt-1">{preError}</p>}
             </div>
             <div>
               <label className="block text-xs font-medium text-sage-600 mb-1">Number of runs</label>
@@ -167,8 +190,9 @@ function SuggestedSchedule({ onGenerateRuns }) {
               <Input
                 value={post.eventEndTime}
                 onChange={(e) => setPostField('eventEndTime', e.target.value)}
-                placeholder="e.g. 11:00 PM"
+                placeholder="e.g. 11pm, 11:00 PM, or 23:00"
               />
+              {postError && <p className="text-xs text-rose-500 mt-1">{postError}</p>}
             </div>
             <div>
               <label className="block text-xs font-medium text-sage-600 mb-1">Number of runs</label>
