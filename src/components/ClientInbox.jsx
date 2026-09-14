@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { apiFetch, authHeaders } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import { useToast } from './ui/Toast'
+import LoadError from './ui/LoadError'
 
 
 export default function ClientInbox({ weddingId, userId, onUnreadChange }) {
@@ -9,6 +10,7 @@ export default function ClientInbox({ weddingId, userId, onUnreadChange }) {
   const [messages, setMessages] = useState([])
   const [newMessage, setNewMessage] = useState('')
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
   const [sending, setSending] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
@@ -40,23 +42,19 @@ export default function ClientInbox({ weddingId, userId, onUnreadChange }) {
 
   const loadMessages = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/messages/${weddingId}`, {
-        headers: await authHeaders()
-      })
-      const data = await response.json()
+      const data = await loadJson(`${API_URL}/api/messages/${weddingId}`)
       setMessages(data.messages || [])
+      setLoadError(null)
     } catch (err) {
       console.error('Failed to load messages:', err)
+      setLoadError(err)
     }
     setLoading(false)
   }
 
   const loadUnreadCount = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/messages/unread/${weddingId}`, {
-        headers: await authHeaders()
-      })
-      const data = await response.json()
+      const data = await loadJson(`${API_URL}/api/messages/unread/${weddingId}`)
       setUnreadCount(data.unread || 0)
       onUnreadChange?.(data.unread || 0)
     } catch (err) {
@@ -172,6 +170,8 @@ export default function ClientInbox({ weddingId, userId, onUnreadChange }) {
       <div className="h-64 sm:h-80 overflow-y-auto p-3 sm:p-4 space-y-3 bg-cream-50">
         {loading ? (
           <p className="text-sage-400 text-center py-8">Loading messages...</p>
+        ) : loadError ? (
+          <LoadError what="messages" error={loadError} onRetry={loadMessages} />
         ) : messages.length === 0 ? (
           <div className="text-center py-8">
             <p className="text-sage-500 mb-2">No messages yet</p>

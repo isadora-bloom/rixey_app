@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef, Fragment } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import { describeExtras } from '../../shared/rsvp-fields'
 import { plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, allPeople, headcount, usesPersonModel } from '../../shared/guest-names'
 import { useToast } from './ui/Toast'
+import LoadError from './ui/LoadError'
 
 
 const RSVP_OPTIONS = [
@@ -674,6 +675,7 @@ export default function GuestList({ weddingId, userId }) {
   const [platedMeal, setPlatedMeal] = useState(false)
   const [rsvpConfig, setRsvpConfig] = useState(null) // labels for rsvp_extras answers
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [filterRsvp, setFilterRsvp] = useState('all')
   const [filterTag, setFilterTag] = useState('all')
@@ -695,20 +697,21 @@ export default function GuestList({ weddingId, userId }) {
 
   const loadData = async () => {
     setLoading(true)
+    setLoadError(null)
     try {
-      const hdrs = await authHeaders()
-      const [gRes, sRes, tRes, wRes] = await Promise.all([
-        fetch(`${API_URL}/api/guests/${weddingId}`, { headers: hdrs }),
-        fetch(`${API_URL}/api/guest-settings/${weddingId}`, { headers: hdrs }),
-        fetch(`${API_URL}/api/table-layout/${weddingId}`, { headers: hdrs }),
-        // Only for the custom-question labels, so RSVP answers read as words
-        // rather than custom_0. Failing this must not break the guest list.
-        fetch(`${API_URL}/api/wedding-website/${weddingId}`, { headers: hdrs }),
+      const [gData, sData, tData] = await Promise.all([
+        loadJson(`${API_URL}/api/guests/${weddingId}`),
+        loadJson(`${API_URL}/api/guest-settings/${weddingId}`),
+        loadJson(`${API_URL}/api/table-layout/${weddingId}`),
       ])
-      const gData = await gRes.json()
-      const sData = await sRes.json()
-      const tData = await tRes.json()
-      setRsvpConfig(wRes.ok ? (await wRes.json())?.rsvp_config || null : null)
+      // Only for the custom-question labels, so RSVP answers read as words
+      // rather than custom_0. Failing this must not break the guest list.
+      try {
+        const wData = await loadJson(`${API_URL}/api/wedding-website/${weddingId}`)
+        setRsvpConfig(wData?.rsvp_config || null)
+      } catch {
+        setRsvpConfig(null)
+      }
       setGuests(gData.guests || [])
       setTagOptions(sData.tagOptions || [])
       setMealOptions(sData.mealOptions || [])
@@ -725,6 +728,7 @@ export default function GuestList({ weddingId, userId }) {
       setTableOptions(tableEls)
     } catch (err) {
       console.error('Failed to load guests:', err)
+      setLoadError(err)
     }
     setLoading(false)
   }
@@ -1136,6 +1140,10 @@ export default function GuestList({ weddingId, userId }) {
         <p className="text-sage-400 text-sm">Loading guest list...</p>
       </div>
     )
+  }
+
+  if (loadError) {
+    return <LoadError what="the guest list" error={loadError} onRetry={loadData} />
   }
 
   return (

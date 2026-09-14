@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import { useToast } from './ui/Toast'
+import LoadError from './ui/LoadError'
 import { shrinkImageForUpload } from '../utils/image'
 
 const CATEGORIES = ['All', 'Flowers', 'Decor', 'Table Settings', 'Cake & Dessert', 'Ceremony', 'Reception', 'Attire', 'Other']
@@ -11,6 +12,7 @@ export default function InspoGallery({ weddingId, userId, isAdmin = false }) {
   const [images, setImages] = useState([])
   const [maxImages, setMaxImages] = useState(20)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
   const [uploading, setUploading] = useState(false)
   const [selectedImage, setSelectedImage] = useState(null)
   const [editingCaption, setEditingCaption] = useState(null)
@@ -26,13 +28,14 @@ export default function InspoGallery({ weddingId, userId, isAdmin = false }) {
   }, [weddingId])
 
   const loadImages = async () => {
+    setLoadError(null)
     try {
-      const response = await fetch(`${API_URL}/api/inspo/${weddingId}`, { headers: await authHeaders() })
-      const data = await response.json()
+      const data = await loadJson(`${API_URL}/api/inspo/${weddingId}`)
       setImages(data.images || [])
       setMaxImages(data.maxImages || 20)
     } catch (error) {
       console.error('Error loading inspo images:', error)
+      setLoadError(error)
     }
     setLoading(false)
   }
@@ -109,6 +112,10 @@ export default function InspoGallery({ weddingId, userId, isAdmin = false }) {
 
   if (loading) {
     return <div className="text-sage-400 text-center py-4">Loading gallery...</div>
+  }
+
+  if (loadError) {
+    return <LoadError what="the inspiration gallery" error={loadError} onRetry={loadImages} />
   }
 
   const filteredImages = activeCategory === 'All'

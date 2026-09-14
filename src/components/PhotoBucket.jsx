@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import { useToast } from './ui/Toast'
+import LoadError from './ui/LoadError'
 import { shrinkImageForUpload } from '../utils/image'
 
 
@@ -252,6 +253,7 @@ export default function PhotoBucket({ weddingId, readOnly = false }) {
   const { error: toastError } = useToast()
   const [photos, setPhotos]               = useState([])
   const [loading, setLoading]             = useState(true)
+  const [loadError, setLoadError]         = useState(null)
   const [uploading, setUploading]         = useState(false)
   const [selectedPhoto, setSelectedPhoto] = useState(null)
   const [guestNames, setGuestNames]       = useState([])
@@ -264,20 +266,22 @@ export default function PhotoBucket({ weddingId, readOnly = false }) {
   }, [weddingId])
 
   const loadPhotos = async () => {
+    setLoadError(null)
     try {
-      const res = await fetch(`${API_URL}/api/wedding-photos/${weddingId}`, { headers: await authHeaders() })
-      const data = await res.json()
+      const data = await loadJson(`${API_URL}/api/wedding-photos/${weddingId}`)
       setPhotos(Array.isArray(data) ? data : [])
     } catch (err) {
       console.error('Failed to load photos:', err)
+      setLoadError(err)
     }
     setLoading(false)
   }
 
   const loadGuestNames = async () => {
     try {
-      const res = await fetch(`${API_URL}/api/guests/${weddingId}`, { headers: await authHeaders() })
-      const data = await res.json()
+      // Read-only, purely for tag suggestions. Failing this must not block
+      // the photo bucket itself.
+      const data = await loadJson(`${API_URL}/api/guests/${weddingId}`)
       const guests = data.guests || data || []
       // Prioritise wedding party tagged guests first, then all
       const names = guests
@@ -354,6 +358,8 @@ export default function PhotoBucket({ weddingId, readOnly = false }) {
   const websiteCount = photos.filter(p => p.tags?.includes('website')).length
 
   if (loading) return <p className="text-sage-400 text-center py-8">Loading photos…</p>
+
+  if (loadError) return <LoadError what="the photo bucket" error={loadError} onRetry={loadPhotos} />
 
   return (
     <div className="flex gap-0 h-full min-h-[500px]">

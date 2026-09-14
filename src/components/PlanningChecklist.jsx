@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import SaveIndicator from './ui/SaveIndicator'
 import { useToast } from './ui/Toast'
+import LoadError from './ui/LoadError'
+import { formatDateOnly } from '../utils/dates'
 
 
 const CATEGORIES = ['Venue', 'Vendors', 'Attire & Beauty', 'Decor', 'Timeline', 'Guests', 'Other']
@@ -10,6 +12,7 @@ const CATEGORIES = ['Venue', 'Vendors', 'Attire & Beauty', 'Decor', 'Timeline', 
 export default function PlanningChecklist({ weddingId, userId, compact = false, isAdmin = false }) {
   const [tasks, setTasks] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
   const [showAddForm, setShowAddForm] = useState(false)
   const [newTask, setNewTask] = useState({ text: '', category: 'Other', dueDate: '' })
   const [saving, setSaving] = useState(false)
@@ -25,11 +28,9 @@ export default function PlanningChecklist({ weddingId, userId, compact = false, 
   }, [weddingId])
 
   const loadChecklist = async () => {
+    setLoadError(null)
     try {
-      const response = await fetch(`${API_URL}/api/checklist/${weddingId}`, {
-        headers: await authHeaders()
-      })
-      const data = await response.json()
+      const data = await loadJson(`${API_URL}/api/checklist/${weddingId}`)
 
       if (data.tasks && data.tasks.length === 0) {
         // Initialize default checklist if empty
@@ -46,6 +47,7 @@ export default function PlanningChecklist({ weddingId, userId, compact = false, 
       }
     } catch (error) {
       console.error('Error loading checklist:', error)
+      setLoadError(error)
     }
     setLoading(false)
   }
@@ -137,6 +139,10 @@ export default function PlanningChecklist({ weddingId, userId, compact = false, 
 
   if (loading) {
     return <div className="text-sage-400 text-center py-4">Loading checklist...</div>
+  }
+
+  if (loadError) {
+    return <LoadError what="the checklist" error={loadError} onRetry={loadChecklist} />
   }
 
   // Compact view (for sidebar preview)
@@ -327,7 +333,7 @@ export default function PlanningChecklist({ weddingId, userId, compact = false, 
                     </span>
                     {task.due_date && (
                       <span className="text-xs text-sage-400">
-                        {new Date(task.due_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                        {formatDateOnly(task.due_date, { month: 'short', day: 'numeric' })}
                       </span>
                     )}
                     {task.completed_via === 'sage' && (
@@ -336,7 +342,7 @@ export default function PlanningChecklist({ weddingId, userId, compact = false, 
                     {task.is_custom && (
                       <button
                         onClick={() => handleDeleteTask(task.id)}
-                        className="text-red-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition"
+                        className="text-red-400 hover:text-red-600 opacity-60 lg:opacity-0 lg:group-hover:opacity-100 transition"
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />

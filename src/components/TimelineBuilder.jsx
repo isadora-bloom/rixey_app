@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
 import { partnerLabels, fillLabel } from '../../shared/partner-labels'
-import { authHeaders, apiFetch } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import { useToast } from './ui/Toast'
+import LoadError from './ui/LoadError'
 import { useAutosave } from '../hooks/useAutosave'
 import SaveIndicator from './ui/SaveIndicator'
 
@@ -165,7 +166,13 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, weddin
   const [formalitiesTiming, setFormalitiesTiming] = useState('after') // 'before' or 'after' dinner
   const [notes, setNotes] = useState('')
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
+  // True only once a load has actually succeeded. The autosave effect refuses
+  // to run at all until this is set, so a failed load can never PUT
+  // initialised-blank events back over what the couple actually saved.
   const hasLoadedRef = useRef(false)
+  // Skips the one autosave-effect run that follows a successful load.
+  const skipNextAutosaveRef = useRef(true)
   const [showAddCustom, setShowAddCustom] = useState(false)
   const [newCustomEvent, setNewCustomEvent] = useState({ name: '', time: '', duration: 15, notes: '', section: 'reception' })
   const [editingCustomEvent, setEditingCustomEvent] = useState(null)
@@ -791,11 +798,10 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, weddin
   }
 
   const loadTimeline = async () => {
+    setLoading(true)
+    setLoadError(null)
     try {
-      const response = await fetch(`${API_URL}/api/timeline/${weddingId}`, {
-        headers: await authHeaders()
-      })
-      const data = await response.json()
+      const data = await loadJson(`${API_URL}/api/timeline/${weddingId}`)
 
       let loadedCeremonyTime = '16:00'
       let loadedReceptionEnd = '22:00'
@@ -884,9 +890,12 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, weddin
       } else {
         setEvents(initializeEvents())
       }
+      // Only a real, successful response arms the autosave effect below.
+      hasLoadedRef.current = true
+      skipNextAutosaveRef.current = true
     } catch (err) {
       console.error('Failed to load timeline:', err)
-      setEvents(initializeEvents())
+      setLoadError(err)
     }
     setLoading(false)
   }
@@ -902,11 +911,13 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, weddin
   )
 
   // Autosave on any planning-state change. Skips the first effect after load
-  // so we don't fire a no-op save with the just-loaded data.
+  // so we don't fire a no-op save with the just-loaded data, and never runs
+  // at all until a load has actually succeeded (see loadTimeline).
   useEffect(() => {
     if (loading) return
-    if (!hasLoadedRef.current) {
-      hasLoadedRef.current = true
+    if (!hasLoadedRef.current) return
+    if (skipNextAutosaveRef.current) {
+      skipNextAutosaveRef.current = false
       return
     }
     scheduleSave({
@@ -1184,6 +1195,10 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, weddin
 
   if (loading) {
     return <div className="text-sage-400 text-center py-8">Loading timeline...</div>
+  }
+
+  if (loadError) {
+    return <LoadError what="the timeline" error={loadError} onRetry={loadTimeline} />
   }
 
   // Build summary timeline

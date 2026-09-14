@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import { useToast } from './ui/Toast'
+import LoadError from './ui/LoadError'
+import { formatDateOnly } from '../utils/dates'
 
 
 export default function VendorChecklist({ weddingId, isAdmin = false }) {
@@ -9,6 +11,7 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
   const [vendors, setVendors] = useState([])
   const [vendorTypes, setVendorTypes] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
   const [editingId, setEditingId] = useState(null)
   const [showAddForm, setShowAddForm] = useState(false)
   const [formData, setFormData] = useState({
@@ -38,15 +41,14 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
   }, [weddingId])
 
   const loadVendors = async () => {
+    setLoadError(null)
     try {
-      const response = await fetch(`${API_URL}/api/vendors/${weddingId}`, {
-        headers: await authHeaders()
-      })
-      const data = await response.json()
+      const data = await loadJson(`${API_URL}/api/vendors/${weddingId}`)
       setVendors(data.vendors || [])
       setVendorTypes(data.vendorTypes || [])
     } catch (error) {
       console.error('Error loading vendors:', error)
+      setLoadError(error)
     }
     setLoading(false)
   }
@@ -179,6 +181,10 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
 
   if (loading) {
     return <div className="text-sage-400 text-center py-4">Loading vendors...</div>
+  }
+
+  if (loadError) {
+    return <LoadError what="the vendor checklist" error={loadError} onRetry={loadVendors} />
   }
 
   return (
@@ -371,7 +377,7 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
                   )}
                   {vendor.contract_date && (
                     <p className="text-sage-400 text-xs mt-1">
-                      Contract uploaded: {new Date(vendor.contract_date).toLocaleDateString()}
+                      Contract uploaded: {formatDateOnly(vendor.contract_date)}
                     </p>
                   )}
                 </div>

@@ -39,7 +39,7 @@ import BarPlanner from '../components/BarPlanner'
 import SectionFinaliser from '../components/SectionFinaliser'
 import WalkthroughSummaries from '../components/WalkthroughSummaries'
 import { API_URL } from '../config/api'
-import { apiFetch, authHeaders } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import { useToast } from '../components/ui/Toast'
 import DashboardChat from './dashboard/DashboardChat'
 import FloatingSage from '../components/FloatingSage'
@@ -73,7 +73,10 @@ function WeddingCountdown({ weddingDate }) {
 
   if (!weddingDate) return null
 
-  const weddingPassed = new Date(weddingDate + 'T00:00:00') < new Date()
+  // Compare against the end of the wedding day, not its start, so "Today is
+  // YOUR day!" stays reachable all day rather than flipping to
+  // "Congratulations" the moment the day begins.
+  const weddingPassed = new Date(weddingDate + 'T23:59:59') < new Date()
   if (weddingPassed) {
     return (
       <div className="bg-gradient-to-r from-sage-500 to-sage-600 rounded-2xl p-6 text-white text-center">
@@ -129,6 +132,7 @@ export default function Dashboard() {
   const [messages, setMessages] = useState([])
   const [newMessage, setNewMessage] = useState('')
   const [loadingMessages, setLoadingMessages] = useState(true)
+  const [loadFailed, setLoadFailed] = useState(false)
   const [sending, setSending] = useState(false)
   const [welcomeSent, setWelcomeSent] = useState(false)
   const [profile, setProfile] = useState(null)
@@ -169,10 +173,12 @@ export default function Dashboard() {
   const contentRef = useRef(null)
   const prevSectionRef = useRef('chat')
 
-  // Pre-wedding period: within 6 weeks of the wedding date
+  // Pre-wedding period: within 6 weeks of the wedding date, staying true for
+  // the whole wedding day itself (compare against its end, not its start, so
+  // the finaliser bar does not disappear at 00:00 on the day).
   const isPreWedding = (() => {
     if (!wedding?.wedding_date) return false
-    const days = (new Date(wedding.wedding_date + 'T00:00:00') - new Date()) / (1000 * 60 * 60 * 24)
+    const days = (new Date(wedding.wedding_date + 'T23:59:59') - new Date()) / (1000 * 60 * 60 * 24)
     return days >= 0 && days <= 42
   })()
 
@@ -252,40 +258,32 @@ export default function Dashboard() {
           setWedding(weddingData)
         }
 
-        // Check if couple photo has been uploaded — require it if not
+        // Check if couple photo has been uploaded — require it if not, unless
+        // they already dismissed it for this session (see "Do this later").
         if (data.role?.startsWith('couple')) {
+          let dismissed = false
+          try { dismissed = !!sessionStorage.getItem('couplePhotoDismissed') } catch { /* private browsing */ }
           try {
-            const photoRes = await fetch(`${API_URL}/api/couple-photo/${data.wedding_id}`, {
-              headers: await authHeaders()
-            })
-            const photoData = await photoRes.json()
-            if (!photoData.photo) setNeedsPhoto(true)
+            const photoData = await loadJson(`${API_URL}/api/couple-photo/${data.wedding_id}`)
+            if (!photoData.photo && !dismissed) setNeedsPhoto(true)
           } catch {}
         }
 
         // Load finalisations
         try {
-          const finRes = await fetch(`${API_URL}/api/finalisations/${data.wedding_id}`, {
-            headers: await authHeaders()
-          })
-          if (finRes.ok) setFinalisations(await finRes.json())
+          setFinalisations(await loadJson(`${API_URL}/api/finalisations/${data.wedding_id}`))
         } catch {}
 
         // Load budget summary
         try {
-          const budgetRes = await fetch(`${API_URL}/api/budget/${data.wedding_id}`, {
-            headers: await authHeaders()
-          })
-          if (budgetRes.ok) {
-            const budgetData = await budgetRes.json()
-            if (budgetData.budget) {
-              const cats = budgetData.budget.categories || {}
-              const totalCommitted = Object.values(cats).reduce((s, c) => s + (c.committed || 0), 0)
-              setBudgetSummary({
-                totalBudget: budgetData.budget.total_budget,
-                totalCommitted
-              })
-            }
+          const budgetData = await loadJson(`${API_URL}/api/budget/${data.wedding_id}`)
+          if (budgetData.budget) {
+            const cats = budgetData.budget.categories || {}
+            const totalCommitted = Object.values(cats).reduce((s, c) => s + (c.committed || 0), 0)
+            setBudgetSummary({
+              totalBudget: budgetData.budget.total_budget,
+              totalCommitted
+            })
           }
         } catch (err) {
           console.error('Failed to load budget summary:', err)
@@ -293,10 +291,7 @@ export default function Dashboard() {
 
         // Load timeline summary
         try {
-          const timelineRes = await fetch(`${API_URL}/api/timeline/${data.wedding_id}`, {
-            headers: await authHeaders()
-          })
-          const timelineData = await timelineRes.json()
+          const timelineData = await loadJson(`${API_URL}/api/timeline/${data.wedding_id}`)
           if (timelineData.timeline) {
             const tl = timelineData.timeline
             const events = tl.timeline_data?.events || {}
@@ -316,10 +311,7 @@ export default function Dashboard() {
 
         // Load table summary
         try {
-          const tablesRes = await fetch(`${API_URL}/api/tables/${data.wedding_id}`, {
-            headers: await authHeaders()
-          })
-          const tablesData = await tablesRes.json()
+          const tablesData = await loadJson(`${API_URL}/api/tables/${data.wedding_id}`)
           if (tablesData.tables) {
             const tb = tablesData.tables
             const guestsPerTable = tb.guests_per_table || 8
@@ -349,10 +341,7 @@ export default function Dashboard() {
 
     // Refresh timeline summary
     try {
-      const timelineRes = await fetch(`${API_URL}/api/timeline/${profile.wedding_id}`, {
-        headers: await authHeaders()
-      })
-      const timelineData = await timelineRes.json()
+      const timelineData = await loadJson(`${API_URL}/api/timeline/${profile.wedding_id}`)
       if (timelineData.timeline) {
         const tl = timelineData.timeline
         const events = tl.timeline_data?.events || {}
@@ -372,10 +361,7 @@ export default function Dashboard() {
 
     // Refresh table summary
     try {
-      const tablesRes = await fetch(`${API_URL}/api/tables/${profile.wedding_id}`, {
-        headers: await authHeaders()
-      })
-      const tablesData = await tablesRes.json()
+      const tablesData = await loadJson(`${API_URL}/api/tables/${profile.wedding_id}`)
       if (tablesData.tables) {
         const tb = tablesData.tables
         const guestsPerTable = tb.guests_per_table || 8
@@ -401,13 +387,15 @@ export default function Dashboard() {
     scrollToBottom()
   }, [messages])
 
-  // Trigger welcome message only if user has no messages in this session
+  // Trigger welcome message only if the load actually succeeded and found no
+  // messages. A failed load also leaves messages at [], but must not be
+  // mistaken for a couple with a genuinely empty history.
   useEffect(() => {
-    if (!loadingMessages && !welcomeSent && user && messages.length === 0) {
+    if (!loadingMessages && !loadFailed && !welcomeSent && user && messages.length === 0) {
       sendWelcomeMessage()
       setWelcomeSent(true)
     }
-  }, [loadingMessages, welcomeSent, user, messages.length])
+  }, [loadingMessages, loadFailed, welcomeSent, user, messages.length])
 
   const scrollToBottom = () => {
     if (chatContainerRef.current) {
@@ -490,14 +478,16 @@ export default function Dashboard() {
   }
 
   const loadMessages = async () => {
+    setLoadFailed(false)
     try {
-      const response = await fetch(`${API_URL}/api/sage-messages/user/${user.id}`, {
-        headers: await authHeaders()
-      })
-      const data = await response.json()
+      const data = await loadJson(`${API_URL}/api/sage-messages/user/${user.id}`)
       setMessages(data.messages || [])
     } catch (error) {
       console.error('Error loading messages:', error)
+      // Distinct from a genuine zero-messages load: a failed load must never
+      // look like "no messages yet", or the welcome-message effect below
+      // sends a second welcome on top of whatever the couple already has.
+      setLoadFailed(true)
       setMessages([])
     }
     setLoadingMessages(false)
@@ -963,7 +953,11 @@ export default function Dashboard() {
               {/* Bar Planner section */}
               {activeSection === 'bar' && profile?.wedding_id && (
                 <div className="p-4 sm:p-6">
-                  <BarPlanner weddingId={profile.wedding_id} guestCount={profile.guest_count} weddingDate={profile.wedding_date} coupleNames={profile.couple_names} />
+                  {/* profile carries none of these — wedding_date and couple_names live
+                      on the weddings row, and there is no guest_count column on either
+                      profiles or weddings; tableSummary.guestCount (loaded from the
+                      table planner) is the real figure, where one exists. */}
+                  <BarPlanner weddingId={profile.wedding_id} guestCount={tableSummary?.guestCount} weddingDate={wedding?.wedding_date} coupleNames={wedding?.couple_names} />
                 </div>
               )}
 
@@ -1198,7 +1192,16 @@ export default function Dashboard() {
             {photoError && (
               <p className="text-red-500 text-xs mt-3">{photoError}</p>
             )}
-            <p className="text-sage-400 text-xs mt-4">JPG, PNG or HEIC · any size</p>
+            <p className="text-sage-400 text-xs mt-4">JPG, PNG or WebP · any size</p>
+            <button
+              onClick={() => {
+                try { sessionStorage.setItem('couplePhotoDismissed', '1') } catch { /* private browsing */ }
+                setNeedsPhoto(false)
+              }}
+              className="mt-4 text-sage-400 text-xs underline hover:text-sage-600"
+            >
+              Do this later
+            </button>
           </div>
         </div>
       )}
