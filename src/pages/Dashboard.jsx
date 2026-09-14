@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { useViewAs, READ_ONLY_MESSAGE } from '../context/ViewAsContext'
 import { supabase } from '../lib/supabase'
 import CouplePhoto from '../components/CouplePhoto'
 import VendorChecklist from '../components/VendorChecklist'
@@ -161,6 +162,10 @@ function WeddingCountdown({ weddingDate }) {
 
 export default function Dashboard() {
   const { user, signOut } = useAuth()
+  // Set when the venue is looking at this couple's portal from the wedding
+  // profile. Null for a couple looking at their own, which is every other time
+  // this page renders. See src/context/ViewAsContext.jsx.
+  const viewAs = useViewAs()
   const navigate = useNavigate()
   const { error: toastError } = useToast()
   const [messages, setMessages] = useState([])
@@ -183,9 +188,16 @@ export default function Dashboard() {
   // arrive here — ?section=vendor was in every link sent before the registry
   // existed — so they are resolved rather than rejected.
   const [searchParams] = useSearchParams()
-  const [activeSection, setActiveSectionRaw] = useState(
-    () => resolveSectionKey(searchParams.get('section')) || 'chat'
-  )
+  const [activeSection, setActiveSectionRaw] = useState(() => {
+    // window.location before the router's copy of it. Both this page and the
+    // admin page keep ?section= current with replaceState, which the router
+    // never sees, so on a mount part-way through a session its idea of the
+    // query string is whatever it was at the last real navigation. That is how
+    // "View as couple" would open on Chat having been clicked from Bar Planner.
+    let fromUrl = null
+    try { fromUrl = new URLSearchParams(window.location.search).get('section') } catch { /* no URL to read */ }
+    return resolveSectionKey(fromUrl || searchParams.get('section')) || 'chat'
+  })
   // Every write of a section key goes through here, so an old key handed over
   // by Sage's portal actions or a resource link lands on the canonical panel.
   const setActiveSection = (key) => setActiveSectionRaw(resolveSectionKey(key) || 'chat')
@@ -280,11 +292,109 @@ export default function Dashboard() {
   }, [activeSection])
 
   useEffect(() => {
+    // Viewing as the couple: the wedding row and a stand-in profile arrive from
+    // the wedding profile, which already holds both. Nothing about the signed-in
+    // user is read here, because the signed-in user is the venue.
+    if (viewAs) {
+      setProfile(viewAs.profile)
+      setWedding(viewAs.wedding || null)
+      setProfileLoading(false)
+      setEditName(viewAs.profile?.name || '')
+      setEditPhone(viewAs.profile?.phone || '')
+      loadWeddingMessages(viewAs.weddingId)
+      loadWeddingData(viewAs.weddingId)
+      return
+    }
     if (user) {
       loadMessages()
       loadProfile()
     }
-  }, [user])
+  }, [user, viewAs]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Everything that hangs off a wedding id rather than off who is looking.
+  // Pulled out of loadProfile so view-as runs exactly the same loads the couple
+  // does; the admin's own token already passes weddingAccess for any wedding,
+  // so not one of these needs a different endpoint.
+  const loadWeddingData = async (weddingId) => {
+    if (!weddingId) return
+
+    // Load finalisations.
+    //
+    // The rows are keyed by whatever section key was current when they were
+    // written, and a wedding signed off in July has a row saying 'vendor'
+    // where the menu now says 'vendors'. Nothing stored gets rewritten, so
+    // the keys are resolved on the way in instead. Where an old row and a
+    // new one both resolve to the same section, the later write wins, which
+    // is the only reading that survives someone un-ticking a section.
+    try {
+      const rows = await loadJson(`${API_URL}/api/finalisations/${weddingId}`)
+      setFinalisations(canonicaliseFinalisations(rows))
+    } catch {}
+
+    // Onboarding. Only needed to decide whether Get Started opens closed.
+    try {
+      const onboarding = await loadJson(`${API_URL}/api/onboarding/${weddingId}`)
+      setOnboardingComplete(isOnboardingComplete(onboarding?.progress))
+    } catch { /* a menu group's opening state is not worth a toast */ }
+
+    // Load budget summary
+    try {
+      const budgetData = await loadJson(`${API_URL}/api/budget/${weddingId}`)
+      if (budgetData.budget) {
+        const cats = budgetData.budget.categories || {}
+        const totalCommitted = Object.values(cats).reduce((s, c) => s + (c.committed || 0), 0)
+        setBudgetSummary({
+          totalBudget: budgetData.budget.total_budget,
+          totalCommitted
+        })
+      }
+    } catch (err) {
+      console.error('Failed to load budget summary:', err)
+    }
+
+    // Load timeline summary
+    try {
+      const timelineData = await loadJson(`${API_URL}/api/timeline/${weddingId}`)
+      if (timelineData.timeline) {
+        const tl = timelineData.timeline
+        const events = tl.timeline_data?.events || {}
+        const includedCount = Object.values(events).filter(e => e.included).length
+        setTimelineSummary({
+          ceremonyTime: tl.ceremony_start,
+          receptionEnd: tl.reception_end,
+          doingFirstLook: tl.timeline_data?.doingFirstLook,
+          dinnerType: tl.timeline_data?.dinnerType,
+          includedEvents: includedCount,
+          updatedAt: tl.updated_at
+        })
+      }
+    } catch (err) {
+      console.error('Failed to load timeline:', err)
+    }
+
+    // Load table summary
+    try {
+      const tablesData = await loadJson(`${API_URL}/api/tables/${weddingId}`)
+      if (tablesData.tables) {
+        const tb = tablesData.tables
+        const guestsPerTable = tb.guests_per_table || 8
+        const baseGuests = tb.guest_count - (tb.head_table ? tb.head_table_size : 0) - (tb.sweetheart_table ? 2 : 0) - (tb.kids_count || 0)
+        const tablesNeeded = Math.ceil(baseGuests / guestsPerTable)
+        setTableSummary({
+          guestCount: tb.guest_count,
+          tableShape: tb.table_shape,
+          tablesNeeded,
+          headTable: tb.head_table,
+          sweetheartTable: tb.sweetheart_table,
+          linenColor: tb.linen_color,
+          napkinColor: tb.napkin_color,
+          updatedAt: tb.updated_at
+        })
+      }
+    } catch (err) {
+      console.error('Failed to load tables:', err)
+    }
+  }
 
   const loadProfile = async () => {
     const { data, error } = await supabase
@@ -322,82 +432,7 @@ export default function Dashboard() {
           } catch {}
         }
 
-        // Load finalisations.
-        //
-        // The rows are keyed by whatever section key was current when they were
-        // written, and a wedding signed off in July has a row saying 'vendor'
-        // where the menu now says 'vendors'. Nothing stored gets rewritten, so
-        // the keys are resolved on the way in instead. Where an old row and a
-        // new one both resolve to the same section, the later write wins, which
-        // is the only reading that survives someone un-ticking a section.
-        try {
-          const rows = await loadJson(`${API_URL}/api/finalisations/${data.wedding_id}`)
-          setFinalisations(canonicaliseFinalisations(rows))
-        } catch {}
-
-        // Onboarding. Only needed to decide whether Get Started opens closed.
-        try {
-          const onboarding = await loadJson(`${API_URL}/api/onboarding/${data.wedding_id}`)
-          setOnboardingComplete(isOnboardingComplete(onboarding?.progress))
-        } catch { /* a menu group's opening state is not worth a toast */ }
-
-        // Load budget summary
-        try {
-          const budgetData = await loadJson(`${API_URL}/api/budget/${data.wedding_id}`)
-          if (budgetData.budget) {
-            const cats = budgetData.budget.categories || {}
-            const totalCommitted = Object.values(cats).reduce((s, c) => s + (c.committed || 0), 0)
-            setBudgetSummary({
-              totalBudget: budgetData.budget.total_budget,
-              totalCommitted
-            })
-          }
-        } catch (err) {
-          console.error('Failed to load budget summary:', err)
-        }
-
-        // Load timeline summary
-        try {
-          const timelineData = await loadJson(`${API_URL}/api/timeline/${data.wedding_id}`)
-          if (timelineData.timeline) {
-            const tl = timelineData.timeline
-            const events = tl.timeline_data?.events || {}
-            const includedCount = Object.values(events).filter(e => e.included).length
-            setTimelineSummary({
-              ceremonyTime: tl.ceremony_start,
-              receptionEnd: tl.reception_end,
-              doingFirstLook: tl.timeline_data?.doingFirstLook,
-              dinnerType: tl.timeline_data?.dinnerType,
-              includedEvents: includedCount,
-              updatedAt: tl.updated_at
-            })
-          }
-        } catch (err) {
-          console.error('Failed to load timeline:', err)
-        }
-
-        // Load table summary
-        try {
-          const tablesData = await loadJson(`${API_URL}/api/tables/${data.wedding_id}`)
-          if (tablesData.tables) {
-            const tb = tablesData.tables
-            const guestsPerTable = tb.guests_per_table || 8
-            const baseGuests = tb.guest_count - (tb.head_table ? tb.head_table_size : 0) - (tb.sweetheart_table ? 2 : 0) - (tb.kids_count || 0)
-            const tablesNeeded = Math.ceil(baseGuests / guestsPerTable)
-            setTableSummary({
-              guestCount: tb.guest_count,
-              tableShape: tb.table_shape,
-              tablesNeeded,
-              headTable: tb.head_table,
-              sweetheartTable: tb.sweetheart_table,
-              linenColor: tb.linen_color,
-              napkinColor: tb.napkin_color,
-              updatedAt: tb.updated_at
-            })
-          }
-        } catch (err) {
-          console.error('Failed to load tables:', err)
-        }
+        await loadWeddingData(data.wedding_id)
       }
     }
   }
@@ -457,12 +492,17 @@ export default function Dashboard() {
   // Trigger welcome message only if the load actually succeeded and found no
   // messages. A failed load also leaves messages at [], but must not be
   // mistaken for a couple with a genuinely empty history.
+  //
+  // Never while viewing as the couple. A venue opening a quiet wedding's portal
+  // would otherwise post a welcome message into the couple's own chat, from the
+  // couple's own account, dated today.
   useEffect(() => {
+    if (viewAs) return
     if (!loadingMessages && !loadFailed && !welcomeSent && user && messages.length === 0) {
       sendWelcomeMessage()
       setWelcomeSent(true)
     }
-  }, [loadingMessages, loadFailed, welcomeSent, user, messages.length])
+  }, [loadingMessages, loadFailed, welcomeSent, user, messages.length, viewAs])
 
   const scrollToBottom = () => {
     if (chatContainerRef.current) {
@@ -560,6 +600,24 @@ export default function Dashboard() {
     setLoadingMessages(false)
   }
 
+  // The couple's chat as the couple sees it, for view-as.
+  //
+  // loadMessages reads the signed-in user's own thread, which during view-as is
+  // the venue's. This endpoint gathers every profile on the wedding, which is
+  // what the couple's own screen amounts to, and hands them back newest first.
+  const loadWeddingMessages = async (weddingId) => {
+    setLoadFailed(false)
+    try {
+      const data = await loadJson(`${API_URL}/api/sage-messages/${weddingId}`)
+      setMessages([...(data.messages || [])].reverse())
+    } catch (error) {
+      console.error('Error loading wedding messages:', error)
+      setLoadFailed(true)
+      setMessages([])
+    }
+    setLoadingMessages(false)
+  }
+
   const sendWelcomeMessage = async () => {
     setSending(true)
 
@@ -600,6 +658,10 @@ export default function Dashboard() {
 
   const sendMessage = async (e) => {
     e.preventDefault()
+    // Sage is shown during view-as because the couple's chat is most of what
+    // the couple looks at. Sending is not: a reply from the venue would land in
+    // the thread as the couple, which is the one thing nobody could unpick.
+    if (viewAs) { toastError(READ_ONLY_MESSAGE); return }
     if (!newMessage.trim() || sending) return
 
     setRetryState(null) // cancel any pending retry when user sends a new message
@@ -663,6 +725,7 @@ export default function Dashboard() {
 
   const sendWithFile = async (e) => {
     e.preventDefault()
+    if (viewAs) { toastError(READ_ONLY_MESSAGE); return }
     if (!selectedFile || sending) return
 
     setUploadingFile(true)
@@ -759,6 +822,7 @@ export default function Dashboard() {
   }
 
   const saveProfile = async () => {
+    if (viewAs) { toastError(READ_ONLY_MESSAGE); return }
     if (!editName.trim()) return
     setSavingProfile(true)
 
@@ -785,20 +849,45 @@ export default function Dashboard() {
   ]
 
   return (
-    <div className="min-h-screen bg-cream-50">
-      <DashboardHeader
-        user={user}
-        profile={profile}
-        wedding={wedding}
-        setActiveSection={setActiveSection}
-        setShowEditProfile={setShowEditProfile}
-        handleSignOut={handleSignOut}
-        mobileMenuOpen={mobileMenuOpen}
-        setMobileMenuOpen={setMobileMenuOpen}
-        resourceLinks={resourceLinks}
-      />
+    <div className={viewAs ? 'bg-cream-50' : 'min-h-screen bg-cream-50'}>
+      {/* The couple's own header carries a sign-out button and their account
+          menu. Neither belongs to the venue, and the wedding profile already
+          has a header of its own, so during view-as the banner stands in for
+          it. Everything below this line is the couple's screen untouched. */}
+      {viewAs ? (
+        <div className="bg-amber-50 border border-amber-300 rounded-2xl px-4 py-3 mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2 min-w-0">
+            <svg className="w-5 h-5 text-amber-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+            </svg>
+            <p className="text-sm text-amber-900 truncate">
+              <span className="font-medium">Viewing as {wedding?.couple_names || 'the couple'}.</span>{' '}
+              Read-only.
+            </p>
+          </div>
+          <button
+            onClick={viewAs.onExit}
+            className="px-3 py-1.5 rounded-lg bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 transition flex-shrink-0"
+          >
+            Exit
+          </button>
+        </div>
+      ) : (
+        <DashboardHeader
+          user={user}
+          profile={profile}
+          wedding={wedding}
+          setActiveSection={setActiveSection}
+          setShowEditProfile={setShowEditProfile}
+          handleSignOut={handleSignOut}
+          mobileMenuOpen={mobileMenuOpen}
+          setMobileMenuOpen={setMobileMenuOpen}
+          resourceLinks={resourceLinks}
+        />
+      )}
 
-      <main className="max-w-7xl mx-auto px-4 py-4 sm:py-6">
+      <main className={viewAs ? '' : 'max-w-7xl mx-auto px-4 py-4 sm:py-6'}>
         {/* An account with no wedding attached. Every section reads from
             wedding_id, so without one the portal renders as a shell and looks
             broken rather than unfinished. Brittany Lamback sat like this for a
@@ -1242,8 +1331,10 @@ export default function Dashboard() {
         />
       )}
 
-      {/* Mandatory couple photo overlay — blocks portal until uploaded */}
-      {needsPhoto && (
+      {/* Mandatory couple photo overlay — blocks portal until uploaded.
+          Never during view-as: it is the couple's prompt, it writes, and it
+          would cover the screen the venue opened this to look at. */}
+      {needsPhoto && !viewAs && (
         <div className="fixed inset-0 bg-sage-900/80 flex items-center justify-center z-[100] px-4">
           <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full text-center">
             <h2 className="font-serif text-2xl text-sage-700 mb-2">One last thing</h2>
