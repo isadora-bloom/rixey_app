@@ -689,6 +689,7 @@ export default function GuestList({ weddingId, userId }) {
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const [csvImporting, setCsvImporting] = useState(false)
   const [csvResult, setCsvResult] = useState(null)
+  const [csvPendingImport, setCsvPendingImport] = useState(null) // parsed rows waiting on a mode choice
   const csvInputRef = useRef(null)
 
   useEffect(() => {
@@ -762,13 +763,12 @@ export default function GuestList({ weddingId, userId }) {
   const handleCsvUpload = async (e) => {
     const file = e.target.files[0]
     if (!file) return
-    setCsvImporting(true)
     setCsvResult(null)
     let text = await file.text()
     // Strip UTF-8 BOM if present
     if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1)
     const lines = text.split('\n').filter(l => l.trim().length > 0)
-    if (lines.length < 2) { setCsvImporting(false); setCsvResult({ success: false, error: 'CSV has no data rows' }); e.target.value = ''; return }
+    if (lines.length < 2) { setCsvResult({ success: false, error: 'CSV has no data rows' }); e.target.value = ''; return }
     const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z_]/g, ''))
     const guests = lines.slice(1).map(line => {
       const values = parseCSVLine(line)
@@ -816,19 +816,45 @@ export default function GuestList({ weddingId, userId }) {
 
       return g
     })
+    // Ask before importing rather than after: whether a re-import doubles the
+    // list or updates it in place is a one-way choice about existing data.
+    setCsvPendingImport(normalised)
+    e.target.value = ''
+  }
+
+  const submitCsvImport = async (mode) => {
+    const guestsToImport = csvPendingImport
+    if (!guestsToImport) return
+    setCsvPendingImport(null)
+    setCsvImporting(true)
+    setCsvResult(null)
     try {
       const data = await apiFetch(`${API_URL}/api/guests/bulk`, {
         method: 'POST',
-        body: JSON.stringify({ weddingId, guests: normalised }),
+        body: JSON.stringify({ weddingId, guests: guestsToImport, mode }),
       })
-      setGuests(prev => [...prev, ...data.guests])
-      setCsvResult({ success: true, count: data.imported, warning: data.duplicateWarning })
+      if (data && (data.added !== undefined || data.updated !== undefined || data.skipped !== undefined)) {
+        setCsvResult({ success: true, added: data.added || 0, updated: data.updated || 0, skipped: data.skipped || 0 })
+      } else {
+        // Old server: no mode support yet, same shape as before.
+        setGuests(prev => [...prev, ...(data?.guests || [])])
+        setCsvResult({ success: true, count: data?.imported, warning: data?.duplicateWarning })
+        setCsvImporting(false)
+        return
+      }
+      // New server: added/updated rows both need to show, so re-fetch rather
+      // than guess which rows changed.
+      try {
+        const gData = await loadJson(`${API_URL}/api/guests/${weddingId}`)
+        setGuests(gData.guests || [])
+      } catch (err) {
+        console.error('Failed to refresh guests after import:', err)
+      }
     } catch (err) {
       setCsvResult({ success: false, error: err.message })
       toastError(`Could not import guests: ${err.message}`)
     }
     setCsvImporting(false)
-    e.target.value = ''
   }
 
   const handleSettingsUpdate = ({ platedMeal: pm, tagOptions: to, mealOptions: mo }) => {
@@ -1495,12 +1521,47 @@ export default function GuestList({ weddingId, userId }) {
         />
       )}
 
+      {csvPendingImport && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl p-6 max-w-sm w-full">
+            <h3 className="font-semibold text-sage-800 mb-2">
+              Import {csvPendingImport.length} guest{csvPendingImport.length !== 1 ? 's' : ''}
+            </h3>
+            <p className="text-sm text-sage-500 mb-5">
+              Re-importing the same list can double it up. Choose how these should land.
+            </p>
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={() => submitCsvImport('add')}
+                className="border border-sage-300 text-sage-700 rounded-xl py-2.5 text-sm font-medium hover:bg-sage-50 transition"
+              >
+                Add all as new
+              </button>
+              <button
+                onClick={() => submitCsvImport('update')}
+                className="bg-sage-600 text-white rounded-xl py-2.5 text-sm font-medium hover:bg-sage-700 transition"
+              >
+                Update guests that match by name, add the rest
+              </button>
+              <button
+                onClick={() => setCsvPendingImport(null)}
+                className="text-sage-500 text-sm py-2 hover:text-sage-700 transition"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {csvResult && (
         <div className={`fixed bottom-6 right-6 z-50 px-5 py-3 rounded-xl shadow-lg text-sm font-medium ${
           csvResult.success ? 'bg-green-600 text-white' : 'bg-red-500 text-white'
         }`}>
           {csvResult.success
-            ? `✓ Imported ${csvResult.count} guest${csvResult.count !== 1 ? 's' : ''}`
+            ? (csvResult.added !== undefined
+                ? `✓ Added ${csvResult.added}, updated ${csvResult.updated || 0}, skipped ${csvResult.skipped || 0}`
+                : `✓ Imported ${csvResult.count} guest${csvResult.count !== 1 ? 's' : ''}`)
             : `Import failed: ${csvResult.error}`}
           {csvResult.warning && (
             <span className="block mt-1 text-xs opacity-90">{csvResult.warning}</span>
