@@ -19,7 +19,7 @@
 
 import { createRequire } from 'module';
 import crypto from 'crypto';
-import * as XLSX from 'xlsx';
+import { parseSpreadsheet } from '../spreadsheet.js';
 
 const require = createRequire(import.meta.url);
 
@@ -96,16 +96,18 @@ function cellToText(v) {
  * position carries meaning in a hand-made sheet: the seating chart's blocks
  * are only distinguishable by which column they start in.
  */
-export function extractXlsx(buffer) {
-  const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
+export async function extractXlsx(buffer, { mimetype, originalname } = {}) {
+  // exceljs via lib/spreadsheet.js, which hands back the same header:1 shape
+  // the xlsx library did: arrays per row, blank rows dropped, dates as Date.
+  const wb = await parseSpreadsheet(buffer, { mimetype, originalname });
   const parts = [];
-  for (const name of wb.SheetNames) {
-    const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, blankrows: false, raw: true });
+  for (const name of wb.sheetNames) {
+    const rows = wb.sheets[name]?.rows || [];
     const lines = [];
     for (const row of rows) {
-      // Array.from rather than .map: sheet_to_json returns sparse arrays for
-      // rows with blank cells, and .map skips holes instead of filling them,
-      // so interior gaps came back undefined.
+      // Array.from rather than .map: rows can be sparse where cells are blank,
+      // and .map skips holes instead of filling them, so interior gaps came
+      // back undefined.
       const cells = Array.from({ length: (row || []).length }, (_, i) => cellToText(row?.[i]));
       while (cells.length && !cells[cells.length - 1].trim()) cells.pop();
       if (!cells.length) continue;
@@ -113,7 +115,7 @@ export function extractXlsx(buffer) {
     }
     if (lines.length) parts.push(`===== TAB: ${name} =====\n${lines.join('\n')}`);
   }
-  return { text: parts.join('\n\n'), pageCount: wb.SheetNames.length };
+  return { text: parts.join('\n\n'), pageCount: wb.sheetNames.length };
 }
 
 /**
@@ -173,7 +175,7 @@ export async function extractDocument(buffer, filename, mimetype) {
   const kind = kindFor(filename, mimetype);
   let result;
   if (kind === 'pdf') result = await extractPdf(buffer);
-  else if (kind === 'xlsx') result = extractXlsx(buffer);
+  else if (kind === 'xlsx') result = await extractXlsx(buffer, { mimetype, originalname: filename });
   else if (kind === 'docx') result = await extractDocx(buffer);
   else result = { text: buffer.toString('utf8').slice(0, 400_000), pageCount: null };
 
