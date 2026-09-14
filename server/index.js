@@ -3975,7 +3975,11 @@ async function runGmailSync(body, { bump }) {
     const emailToWedding = {};
     const clientEmails = [];
     const skippedVenueAddresses = [];
+    // Names, so a review-queue question can say which two couples are on the
+    // email rather than printing a pair of uuids at somebody.
+    const weddingNames = {};
     for (const wedding of weddings) {
+      weddingNames[wedding.id] = wedding.couple_names || 'Unknown couple';
       for (const profile of (wedding.profiles || [])) {
         if (!profile.email) continue;
         const email = profile.email.toLowerCase().trim();
@@ -4052,26 +4056,81 @@ async function runGmailSync(body, { bump }) {
     // Emails from family and other contacts, filed venue-side rather than into
     // planning_notes. Counted separately so a run can say so.
     let contactEmailsImported = 0;
+    // Emails with more than one couple's address on them. Filed to nobody and
+    // asked about, rather than filed to whoever was being searched for.
+    let multiClient = 0;
+    // Extractions that were attempted and failed. Without 035 this is the only
+    // place the loss is recorded, so it goes in the job detail either way.
+    let extractFailed = 0;
+    // Per-query outcomes. A run where every search threw used to finish
+    // "processed: 0", which reads as a quiet inbox rather than a dead grant.
+    let queriesRun = 0;
+    let queriesFailed = 0;
+    let authFailure = null;
+    const queryErrors = [];
+
+    // How far back to go. Absent, the paging below walks until Gmail stops
+    // offering pages or the cap is hit, which is what a first proper run after
+    // months of 20-results-per-query needs to do.
+    const sinceDays = Number(body?.sinceDays) > 0 ? Number(body.sinceDays) : null;
+    const dateFloor = sinceDays ? new Date(Date.now() - sinceDays * 86400000) : null;
+    // Gmail wants YYYY/MM/DD and treats it as an inclusive whole day.
+    const afterClause = dateFloor
+      ? ` after:${dateFloor.getFullYear()}/${dateFloor.getMonth() + 1}/${dateFloor.getDate()}`
+      : '';
+    // Twenty pages of a hundred is two thousand hits per query, which is far
+    // past any real backlog. The cap is here so a pathological query cannot
+    // turn one client into an all-night run.
+    const MAX_PAGES = 20;
 
     // Search for emails from each client AND emails containing their email (form submissions)
     await bump({ total: clientEmails.length });
 
     for (const clientEmail of clientEmails) {
+      // A revoked grant answers 401 to all 146 searches. Stop at the first one
+      // rather than spending ten minutes proving it.
+      if (authFailure) break;
+
       // Two searches: emails FROM client, and emails CONTAINING client email (pricing calculator, etc.)
       const searchQueries = [
-        `from:${clientEmail}`,
-        `"${clientEmail}"` // Search for email address in body
+        `from:${clientEmail}${afterClause}`,
+        `"${clientEmail}"${afterClause}` // Search for email address in body
       ];
 
       for (const searchQuery of searchQueries) {
+      queriesRun++;
       try {
-        const messagesResponse = await gmail.users.messages.list({
-          userId: 'me',
-          q: searchQuery,
-          maxResults: 20 // Limit per query to avoid rate limits
-        });
+        // Page until the backlog runs out, not until the first twenty.
+        //
+        // This asked for maxResults: 20 and never looked at nextPageToken, so
+        // anything older than the twentieth hit for a given address was
+        // unreachable for ever. Not slow to arrive: unreachable. Gmail returns
+        // newest first, so a page containing nothing new means everything below
+        // it is already imported and there is no reason to keep paying for
+        // pages.
+        const messageIds = [];
+        let pageToken = null;
+        for (let page = 0; page < MAX_PAGES; page++) {
+          const messagesResponse = await gmail.users.messages.list({
+            userId: 'me',
+            q: searchQuery,
+            maxResults: 100,
+            ...(pageToken ? { pageToken } : {}),
+          });
 
-        const messageIds = messagesResponse.data.messages || [];
+          const pageIds = messagesResponse.data.messages || [];
+          const fresh = pageIds.filter(m => !processedIds.has(m.id));
+          messageIds.push(...fresh);
+
+          pageToken = messagesResponse.data.nextPageToken || null;
+          if (!pageToken) break;
+          // Every hit on this page is already on file, and the next page is
+          // older still.
+          if (pageIds.length && fresh.length === 0) break;
+          if (page === MAX_PAGES - 1) {
+            console.log(`[gmail] stopped at ${MAX_PAGES} pages for "${searchQuery}" — run it again to go further back`);
+          }
+        }
 
         for (const msg of messageIds) {
           if (processedIds.has(msg.id)) continue;
@@ -4147,6 +4206,57 @@ async function runGmailSync(body, { bump }) {
             // The address really is in this email, not merely matched by Gmail.
             weddingId = emailToWedding[clientEmail];
             attribution = 'client address appears in the message';
+          }
+
+          // More than one couple on the same email.
+          //
+          // The last matcher in this file that guessed. A group email to two
+          // couples, or a forward that quotes another couple's address in the
+          // headers, was filed to whichever of them the search happened to be
+          // running for, and the other one was never told. Two weddings named
+          // in one thread is a question, and the review queue is where the
+          // questions go. Counted by wedding rather than by address, because
+          // both halves of one couple on the same email is not a conflict, it
+          // is a couple.
+          const headerHay = `${fromHeader} ${toHeader} ${ccHeader}`.toLowerCase();
+          const weddingsOnHeaders = new Set();
+          for (const [addr, wid] of Object.entries(emailToWedding)) {
+            if (headerHay.includes(addr)) weddingsOnHeaders.add(wid);
+          }
+
+          if (weddingsOnHeaders.size > 1) {
+            const candidates = [...weddingsOnHeaders].map(wid => ({
+              weddingId: wid,
+              name: weddingNames[wid] || 'Unknown couple',
+            }));
+            processedIds.add(msg.id);
+            const { error: markerErr } = await supabaseAdmin.from('processed_emails').insert({
+              gmail_message_id: msg.id,
+              wedding_id: null,
+              from_email: fromEmail,
+              subject,
+              body_text: bodyText.substring(0, 10000),
+            });
+            if (markerErr && markerErr.code !== '23505') {
+              console.error(`[gmail] marker failed for ${msg.id}, skipping it: ${markerErr.message}`);
+              continue;
+            }
+            const { error: reviewErr } = await supabaseAdmin.from('ingest_review').upsert({
+              source: 'gmail',
+              external_id: msg.id,
+              title: subject || '(no subject)',
+              occurred_at: dateHeader ? new Date(dateHeader).toISOString() : null,
+              excerpt: bodyText.replace(/\s+/g, ' ').slice(0, 600),
+              suggested_wedding_id: weddingId || null,
+              confidence: 0,
+              reason: `multiple clients on one email — ${candidates.map(c => c.name).join(' and ')} both appear in the headers, so filing it to one of them would be a guess.`,
+              candidates,
+              status: 'open',
+            }, { onConflict: 'source,external_id' });
+            if (reviewErr) console.error('[gmail] could not queue a multi-client email for review:', reviewErr.message);
+            newlyProcessed++;
+            multiClient++;
+            continue;
           }
 
           // A family address, checked before the unattributable branch below.
@@ -4301,11 +4411,30 @@ async function runGmailSync(body, { bump }) {
               console.error('Error saving email to planning_notes:', noteError);
             }
 
-            // AI extraction of planning details from email body
-            const notes = await extractPlanningNotesAI(bodyText, weddingId, `Email: "${subject}" (${dateHeader})`, 'email');
-            if (notes.length > 0) {
-              await savePlanningNotes(notes);
-              notesExtracted += notes.length;
+            // AI extraction of planning details from email body.
+            //
+            // The marker is already written, three statements up, and that
+            // order is deliberate. What is new is that a failure here is
+            // recorded rather than thrown away: extract_error on the marker row
+            // when 035 is applied, the job's extractFailed count either way.
+            const outcome = await importWithMarker({
+              extract: () => extractPlanningNotesAI(
+                bodyText, weddingId, `Email: "${subject}" (${dateHeader})`, 'email',
+                { sourceKind: 'email', sourceId: msg.id },
+              ),
+              save: savePlanningNotes,
+              recordOutcome: async ({ error }) => {
+                const patch = markerExtractionPatch({ error });
+                if (!patch) return;
+                const { error: patchErr } = await supabaseAdmin
+                  .from('processed_emails').update(patch).eq('gmail_message_id', msg.id);
+                if (patchErr) console.error(`[gmail] could not record the extraction outcome for ${msg.id}: ${patchErr.message}`);
+              },
+            });
+            notesExtracted += outcome.notes;
+            if (outcome.status === 'extract-failed') {
+              extractFailed++;
+              console.error(`[gmail] extraction failed for "${subject}" (${msg.id}): ${outcome.error}`);
             }
           }
 
@@ -4313,6 +4442,13 @@ async function runGmailSync(body, { bump }) {
           processedIds.add(msg.id); // Track within this sync
         }
       } catch (searchErr) {
+        // A search that threw is a search that found nothing, and the two used
+        // to be indistinguishable in the result. A dead Gmail grant answered
+        // 401 on all 146 queries and the run finished "processed: 0", green.
+        queriesFailed++;
+        const status = searchErr?.code || searchErr?.status || searchErr?.response?.status || null;
+        if (status === 401 || status === 403) authFailure = status;
+        if (queryErrors.length < 5) queryErrors.push(`${searchQuery}: ${searchErr.message}`);
         console.error(`Error searching "${searchQuery}":`, searchErr.message);
       }
       } // end searchQueries loop
@@ -4322,13 +4458,39 @@ async function runGmailSync(body, { bump }) {
       await bump({ processed: newlyProcessed, last_item: clientEmail });
     } // end clientEmails loop
 
+    // A run where the searches all failed is a failed run, whatever the
+    // counters say. Gmail answers 401 for a revoked grant on every query, and
+    // this used to finish "finished, 0 processed" — the same output as a quiet
+    // week. The status code goes in the message so the panel says what to fix.
+    if (authFailure) {
+      throw new Error(
+        `Gmail refused the search with ${authFailure} on ${queriesFailed} of ${queriesRun} queries. ` +
+        `The grant has been revoked or has expired — reconnect Gmail in the admin panel.`
+      );
+    }
+    if (queriesRun > 0 && queriesFailed === queriesRun) {
+      throw new Error(
+        `All ${queriesRun} Gmail searches failed, so nothing was read. First error: ${queryErrors[0] || 'unknown'}`
+      );
+    }
+
     console.log(`Processed ${newlyProcessed} new emails (${unattributed} unattributed), extracted ${notesExtracted} planning notes`);
     return {
       processed: newlyProcessed,
       matched: newlyProcessed - unattributed,
-      needsReview: unattributed,
+      needsReview: unattributed + multiClient,
+      failed: queriesFailed,
       detail: {
         notesExtracted,
+        // Attempted and lost. Zero is the answer you want; anything else is
+        // reading somebody's email and getting nothing out of it.
+        extractFailed,
+        // Emails naming two couples. Filed to nobody on purpose.
+        multiClient,
+        queriesRun,
+        queriesFailed,
+        queryErrors,
+        sinceDays: sinceDays || 'all history',
         clientsSearched: clientEmails.length,
         // Named rather than counted, because a venue address on a couple's
         // profile is a data problem somebody has to go and fix.
@@ -4338,13 +4500,19 @@ async function runGmailSync(body, { bump }) {
         // that way on the panel.
         contactAddressesSearched: contactByEmail.size,
         contactEmailsImported,
-        attributed: newlyProcessed - unattributed,
+        attributed: newlyProcessed - unattributed - multiClient,
         // Said out loud rather than left as a gap between two numbers. These
         // used to be filed against whoever the search was for, which is how ten
         // WeddingWire prospects ended up on a test wedding.
         unattributed,
         unattributedNote: unattributed
           ? `${unattributed} email(s) could not be tied to a couple and are waiting in the review list.`
+          : 'ok',
+        multiClientNote: multiClient
+          ? `${multiClient} email(s) name more than one couple and are waiting in the review list.`
+          : 'ok',
+        extractFailedNote: extractFailed
+          ? `${extractFailed} email(s) were imported but could not be read for planning notes.${has035('markers') ? ' Each one has extract_error set; run the extraction backfill to retry them.' : ' Migration 035 is not applied, so which ones is only in the log.'}`
           : 'ok',
       },
     };
@@ -4410,7 +4578,12 @@ async function fileEmailAttachments({ messageId, payload, weddingId, subject }) 
 
       // Keep the file, not only what Claude read out of it. A contract you
       // cannot open is half a contract.
-      const path = `${weddingId}/${messageId}_${att.filename}`;
+      //
+      // The filename is whatever the sender called it, which is the one input
+      // on this path that a stranger controls. safeStorageKey keeps the
+      // readable part and drops the separators and control characters, so
+      // "../../public/logo.png" cannot be a key.
+      const path = `${weddingId}/${messageId}_${safeStorageKey(att.filename)}`;
       const { error: storeErr } = await supabaseAdmin.storage
         .from('vendor-contracts')
         .upload(path, buffer, { contentType: att.mimeType, upsert: true });
@@ -4497,7 +4670,7 @@ async function runEmailBodyBackfill(body, { bump }) {
 
   const summary = {
     looked: empty.length, recovered: 0, stillEmpty: 0, gone: 0,
-    notesExtracted: 0, documentsFiled: 0, failed: 0,
+    notesExtracted: 0, documentsFiled: 0, failed: 0, extractFailed: 0,
   };
   const examples = [];
 
@@ -4545,11 +4718,27 @@ async function runEmailBodyBackfill(body, { bump }) {
       // stays in the review queue where it is.
       if (row.wedding_id) {
         if (apply) {
-          const notes = await extractPlanningNotesAI(
+          const { notes, error: extractErr } = await extractPlanningNotesAI(
             text, row.wedding_id, `Email: ${row.subject || '(no subject)'}`, 'email',
+            { sourceKind: 'email', sourceId: row.gmail_message_id },
           );
           if (notes.length) await savePlanningNotes(notes);
           summary.notesExtracted += notes.length;
+          if (extractErr) {
+            summary.extractFailed = (summary.extractFailed || 0) + 1;
+            const patch = markerExtractionPatch({ error: extractErr });
+            if (patch) {
+              await supabaseAdmin.from('processed_emails').update(patch)
+                .eq('gmail_message_id', row.gmail_message_id);
+            }
+            console.error(`[gmail-backfill] extraction failed for ${row.gmail_message_id}: ${extractErr}`);
+          } else {
+            const patch = markerExtractionPatch({ error: null });
+            if (patch) {
+              await supabaseAdmin.from('processed_emails').update(patch)
+                .eq('gmail_message_id', row.gmail_message_id);
+            }
+          }
         } else {
           // Dry run says what it would read, not what it would find.
           summary.notesExtracted += 0;
