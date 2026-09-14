@@ -2776,6 +2776,33 @@ async function saveContract({
   return saved;
 }
 
+/**
+ * Put an uploaded contract in the bucket, and answer with its key.
+ *
+ * Both upload paths — the admin one and the Sage attachment one — used to keep
+ * only the extracted text, so `contracts.storage_path` was null on every row
+ * either of them wrote and there was nothing to hand back to a couple asking
+ * for their own file.
+ *
+ * Returns null when the upload fails. That is deliberate: the extraction is
+ * the expensive part and it has already happened, so a bucket that is full or
+ * briefly unreachable must not lose the reading as well as the file. The
+ * failure is logged and the row is written without a path, which is exactly
+ * what every row before this looked like.
+ */
+async function storeContractFile(weddingId, file) {
+  if (!weddingId || !file?.buffer) return null;
+  const path = `${weddingId}/${safeStorageKey(file.originalname)}`;
+  const { error } = await supabaseAdmin.storage
+    .from('vendor-contracts')
+    .upload(path, file.buffer, { contentType: file.mimetype, upsert: false });
+  if (error) {
+    console.error(`[contracts] could not store ${file.originalname}: ${error.message}`);
+    return null;
+  }
+  return path;
+}
+
 // Contract upload and extraction endpoint
 //
 // weddingAccess is mounted on /api and therefore runs before multer. On a
@@ -2833,6 +2860,15 @@ app.post('/api/extract-contract', requireAuth, upload.single('contract'), async 
       console.error('Text extraction error:', textErr);
     }
 
+    // Keep the file, not just what Claude read out of it.
+    //
+    // This path stored the extracted text and threw the PDF away, so a couple
+    // who uploaded their photographer's contract could never get it back, and
+    // the venue was reading a transcription of a document nobody could open.
+    // Stored before the row is written: a contract row pointing at a file that
+    // failed to upload is worse than one with no path at all.
+    const contractPath = await storeContractFile(weddingId, file);
+
     // Save the contract, chained to whatever version it replaces.
     await saveContract({
       weddingId,
@@ -2840,6 +2876,7 @@ app.post('/api/extract-contract', requireAuth, upload.single('contract'), async 
       fileType: file.mimetype,
       text: extractedFullText,
       source: 'upload',
+      storagePath: contractPath,
     });
 
     // Prepare Claude request
@@ -3156,6 +3193,12 @@ app.post('/api/chat-with-file', requireAuth, upload.single('file'), async (req, 
           const contractText = textResponse.content[0].text;
           const contractFacts = await readContractFacts(contractText, file.originalname);
 
+          // Same as the admin path: keep the file itself, under a key that is
+          // safe to store. This one used to upload the document twice, once
+          // here with a Date.now() key and once further down for the vendor
+          // checklist, and neither key ever reached the contracts row.
+          const chatContractPath = await storeContractFile(weddingId, file);
+
           await saveContract({
             weddingId,
             filename: file.originalname,
@@ -3163,6 +3206,7 @@ app.post('/api/chat-with-file', requireAuth, upload.single('file'), async (req, 
             text: contractText,
             source: 'chat',
             facts: contractFacts,
+            storagePath: chatContractPath,
           });
 
           const vendorType = contractFacts.vendorType || 'other';
@@ -3181,16 +3225,15 @@ app.post('/api/chat-with-file', requireAuth, upload.single('file'), async (req, 
           if (existingVendorErr) {
             console.error('Could not check for an existing vendor, not adding one:', existingVendorErr.message);
           } else if (!existingVendor && vendorType !== 'other') {
-            // Upload contract to storage
-            const contractFileName = `${weddingId}/${Date.now()}_${file.originalname}`;
-            const { error: uploadError } = await supabaseAdmin.storage
-              .from('vendor-contracts')
-              .upload(contractFileName, file.buffer, { contentType: file.mimetype });
-
-            if (!uploadError) {
-              const { data: signedUrlData } = await supabaseAdmin.storage
+            // The file is already in the bucket from storeContractFile above.
+            // This used to upload it a second time under a Date.now() key,
+            // which is neither unique nor safe, and left two copies of every
+            // contract a couple sent Sage.
+            if (chatContractPath) {
+              const { data: signedUrlData, error: signErr } = await supabaseAdmin.storage
                 .from('vendor-contracts')
-                .createSignedUrl(contractFileName, 31536000);
+                .createSignedUrl(chatContractPath, 31536000);
+              if (signErr) console.error('[contracts] could not sign the vendor link:', signErr.message);
 
               if (signedUrlData) {
                 // Create new vendor entry with contract
@@ -3279,7 +3322,7 @@ app.get('/api/contracts/:weddingId', async (req, res) => {
     // screen as "no contracts uploaded yet". That is a lie about a wedding
     // holding eleven of them. Fall back to the columns that have always been
     // there and say so, rather than showing an empty list.
-    const BASE = 'id, wedding_id, filename, file_type, extracted_text, created_at';
+    const BASE = 'id, wedding_id, filename, file_type, extracted_text, created_at, storage_path';
     const VERSIONED = `${BASE}, vendor_name, vendor_type, document_date, version, superseded_by, source`;
 
     const readContracts = (columns) => supabaseAdmin.from('contracts')
@@ -3302,11 +3345,28 @@ app.get('/api/contracts/:weddingId', async (req, res) => {
       .eq('wedding_id', weddingId)
       .eq('contract_uploaded', true);
     if (vErr) throw vErr;
+
+    // A link to the file itself, for the rows that have one.
+    //
+    // The bucket is private, so a path is no use to a browser. An hour is the
+    // right life for a link to somebody's contract: long enough to read it,
+    // short enough that a forwarded URL stops working.
+    //
+    // Signed in parallel, and a failure to sign one row never fails the list —
+    // the contract text is the greater part of what this route is for.
+    const withLinks = await Promise.all((contracts || []).map(async c => {
+      if (!c.storage_path) return { ...c, download_url: null };
+      const { data: signed, error: signErr } = await supabaseAdmin.storage
+        .from('vendor-contracts').createSignedUrl(c.storage_path, 60 * 60);
+      if (signErr) console.error(`[contracts] could not sign ${c.filename}: ${signErr.message}`);
+      return { ...c, download_url: signed?.signedUrl || null };
+    }));
+
     // One line per vendor, newest version first, earlier ones kept underneath
     // rather than listed as though they were separate agreements.
     res.json({
-      contracts: contracts || [],
-      contractLines: groupByVendor(contracts || []),
+      contracts: withLinks,
+      contractLines: groupByVendor(withLinks),
       vendorContracts: vendors || [],
       // The screen needs to know it is showing every upload rather than every
       // current version, so it does not promise something it cannot do.
@@ -14552,18 +14612,34 @@ app.get('/api/admin/documents/:weddingId', requireAdmin, async (req, res) => {
       .from('wedding_documents')
       // extracted_text is deliberately not selected — it is up to 30k characters
       // and the list only needs to say what exists.
-      .select('id, wedding_id, filename, kind, byte_size, page_count, text_hash, parsed_at, parse_error, version, supersedes_id, created_at, sections')
+      .select('id, wedding_id, filename, kind, byte_size, page_count, text_hash, parsed_at, parse_error, version, supersedes_id, created_at, sections, storage_path')
       .eq('wedding_id', req.params.weddingId)
       .order('created_at', { ascending: false });
     if (error) throw error;
-    // Report only whether each section found anything, not the contents.
-    res.json((data || []).map(d => ({
-      ...d,
-      sections: undefined,
-      sectionCounts: d.sections
-        ? Object.fromEntries(Object.entries(d.sections).map(([k, v]) => [k, Array.isArray(v) ? v.length : 0]))
-        : null,
-    })));
+    // Report only whether each section found anything, not the contents, and
+    // hand back a link to the file.
+    //
+    // The couple could download their own documents and the venue, who
+    // uploaded them, could not — the one-hour signed link was on the couple
+    // route only. Same bucket, same life, same shape of answer.
+    const docs = await Promise.all((data || []).map(async d => {
+      let download_url = null;
+      if (d.storage_path) {
+        const { data: signed, error: signErr } = await supabaseAdmin.storage
+          .from('day-of-media').createSignedUrl(d.storage_path, 60 * 60);
+        if (signErr) console.error('[doc-sync] could not sign a link:', signErr.message);
+        download_url = signed?.signedUrl || null;
+      }
+      return {
+        ...d,
+        sections: undefined,
+        sectionCounts: d.sections
+          ? Object.fromEntries(Object.entries(d.sections).map(([k, v]) => [k, Array.isArray(v) ? v.length : 0]))
+          : null,
+        download_url,
+      };
+    }));
+    res.json(docs);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
