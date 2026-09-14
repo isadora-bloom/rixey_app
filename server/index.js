@@ -50,6 +50,7 @@ import {
   detectMigration035, has035, markerExtractionPatch, withSource,
   importWithMarker, normaliseConfidence,
 } from './lib/extraction-markers.js';
+import { detectMigration036, has036 } from './lib/migration-036.js';
 import { safeStorageKey } from './lib/storage-key.js';
 import cron from 'node-cron';
 import { parseSpreadsheet } from './lib/spreadsheet.js';
@@ -3927,7 +3928,9 @@ app.post('/api/admin/sheet-sync/:weddingId/apply', async (req, res) => {
       supabase: supabaseAdmin,
       weddingId,
       decisions,
-      appliedBy: req.userId || null
+      appliedBy: req.userId || null,
+      source: 'sheet',
+      recordSource: has036('syncSource'),
     });
     const failures = (result.results || []).filter((r) => !r.ok && !r.skipped);
     const succeeded = (result.results || []).filter((r) => r.ok && !r.skipped).map((r) => r.entryId);
@@ -6965,6 +6968,64 @@ app.get('/api/admin/sync-jobs', async (req, res) => {
   } catch (error) {
     console.error('sync-jobs error:', error);
     res.status(500).json({ error: 'Could not load sync history' });
+  }
+});
+
+/**
+ * What the sheet and document importers have actually written to a wedding.
+ *
+ * sheet_sync_log has been filling up since the sheet sync shipped and nothing
+ * ever read it, so "what did that import change" had no answer beyond the one
+ * timestamp the panel showed — which a document import then overwrote.
+ *
+ * Shape (binding, W2 renders it):
+ *   {
+ *     entries: [{ id, entry_id, choice, op_type, table_name, executed,
+ *                 error, applied_by, applied_at, source }],
+ *     total, limit, offset, hasMore,
+ *     sourceKnown: boolean
+ *   }
+ * Newest first. `source` is 'sheet', 'document' or null; `sourceKnown` is
+ * false when migration 036 has not been applied, in which case every row comes
+ * back with a null source and ?source= is ignored rather than quietly
+ * returning nothing. The two importers write identical op types, so there is
+ * nothing in an old row to work it out from after the fact.
+ */
+app.get('/api/admin/sync-log/:weddingId', async (req, res) => {
+  try {
+    const sourceKnown = has036('syncSource');
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 500);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const wanted = String(req.query.source || '').toLowerCase();
+
+    const COLUMNS = 'id, wedding_id, entry_id, choice, op_type, table_name, executed, error, applied_by, applied_at';
+
+    let q = supabaseAdmin
+      .from('sheet_sync_log')
+      .select(sourceKnown ? `${COLUMNS}, source` : COLUMNS, { count: 'exact' })
+      .eq('wedding_id', req.params.weddingId)
+      .order('applied_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (sourceKnown && (wanted === 'sheet' || wanted === 'document')) {
+      q = q.eq('source', wanted);
+    }
+
+    const { data, error, count } = await q;
+    if (error) throw error;
+
+    const entries = (data || []).map(r => ({ ...r, source: sourceKnown ? (r.source || null) : null }));
+    res.json({
+      entries,
+      total: count ?? entries.length,
+      limit,
+      offset,
+      hasMore: count != null ? offset + entries.length < count : entries.length === limit,
+      sourceKnown,
+    });
+  } catch (error) {
+    console.error('sync-log error:', error);
+    res.status(500).json({ error: 'Could not load the sync log' });
   }
 });
 
@@ -15264,6 +15325,12 @@ app.post('/api/admin/documents/:id/apply', requireAdmin, async (req, res) => {
       weddingId: doc.wedding_id,
       decisions,
       appliedBy: req.userId || null,
+      // The audit row is the only thing that says a document import happened
+      // at all, and until 036 it looked exactly like a sheet one — which is
+      // how the Sheet Sync panel came to show a document import as the last
+      // time the sheet was synced.
+      source: 'document',
+      recordSource: has036('syncSource'),
     });
     await logActivity(doc.wedding_id, req.userId || null, 'document_imported',
       `${result.appliedCount} item${result.appliedCount === 1 ? '' : 's'} from ${doc.filename}`);
@@ -16210,6 +16277,11 @@ cron.schedule('35 * * * *', async () => {
 // run either way and say clearly what is switched off.
 detectMigration035(supabaseAdmin).catch(err => {
   console.error('[035] could not probe for the new columns:', err.message);
+});
+
+// And the same for 036: sheet_sync_log.source and vendors.logo_url.
+detectMigration036(supabaseAdmin).catch(err => {
+  console.error('[036] could not probe for the new columns:', err.message);
 });
 
 // Look at today's memo without waiting until 8am, and without sending it.
