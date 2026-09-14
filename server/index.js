@@ -2275,9 +2275,15 @@ function formatProfileContext(profile) {
   if (profile.name) parts.push(`Name: ${profile.name}`);
   if (profile.role) parts.push(`Role: ${roleLabels[profile.role] || profile.role}`);
   if (profile.wedding_date) {
-    const date = new Date(profile.wedding_date);
-    const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-    const daysUntil = Math.ceil((date - new Date()) / (1000 * 60 * 60 * 24));
+    // wedding_date is a bare YYYY-MM-DD. Anchor at midday UTC and format in
+    // UTC so it isn't shifted a second time — otherwise this reads a day
+    // early for anyone west of the venue, and "days away" is judged against
+    // whatever timezone the server happens to be in rather than Rixey's.
+    const ymd = String(profile.wedding_date).slice(0, 10);
+    const anchored = /^\d{4}-\d{2}-\d{2}$/.test(ymd) ? new Date(`${ymd}T12:00:00Z`) : new Date(profile.wedding_date);
+    const formatted = anchored.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+    const todayAnchored = new Date(`${venueToday()}T12:00:00Z`);
+    const daysUntil = Math.round((anchored - todayAnchored) / (1000 * 60 * 60 * 24));
     parts.push(`Wedding Date: ${formatted} (${daysUntil > 0 ? daysUntil + ' days away' : 'past'})`);
   }
 
