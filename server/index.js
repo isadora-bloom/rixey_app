@@ -141,6 +141,19 @@ app.use(coerceBody);
 
 // ============ RATE LIMITING ============
 
+// Railway terminates TLS at its own proxy and forwards on, so req.ip is the
+// proxy's address for every single caller. Without this line every limiter
+// below keys on that one address: all users share one 500-per-15-minutes
+// bucket, and one looping browser tab empties it for the whole venue. That is
+// the shape of the August incident where the admin looked empty and the data
+// was fine. It also means the event-code and guest-search limiters cannot tell
+// an attacker apart from a couple, which is the entire point of having them.
+//
+// 1, not true: trust exactly one hop, the Railway proxy. `true` would trust a
+// client-supplied X-Forwarded-For and hand anyone an unlimited number of
+// buckets by spoofing the header.
+app.set('trust proxy', 1);
+
 // General rate limiter: 500 requests per 15 minutes per IP
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
