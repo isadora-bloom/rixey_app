@@ -8173,6 +8173,27 @@ function goLiveOnSave(resolved) {
   return resolved && resolved.is_published == null ? { is_published: true } : {};
 }
 
+// Vendor edit tokens never expired and had no way to be replaced — one
+// leaked link (email, forwarded chat) stayed live for good. Protected by the
+// blanket requireAdmin on the /api/admin prefix (line 356).
+app.post('/api/admin/vendors/:id/regenerate-token', async (req, res) => {
+  try {
+    const newToken = crypto.randomUUID();
+    const { data, error } = await supabaseAdmin
+      .from('vendors')
+      .update({ edit_token: newToken })
+      .eq('id', req.params.id)
+      .select('id, edit_token')
+      .single();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Vendor not found' });
+    res.json({ id: data.id, edit_token: data.edit_token });
+  } catch (err) {
+    console.error('Regenerate vendor token error:', err);
+    res.status(500).json({ error: 'Failed to regenerate token' });
+  }
+});
+
 // GET vendor by token (vendor self-edit portal)
 const PORTAL_FIELDS = 'id, category, name, bio, photos, website, contact, pricing_info, instagram, facebook, special_offer, special_expiry, availability_note, is_published, last_vendor_update, merged_into';
 
