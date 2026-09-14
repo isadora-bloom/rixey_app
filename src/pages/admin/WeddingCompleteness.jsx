@@ -1,8 +1,20 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../../config/api'
-import { authHeaders, apiFetch } from '../../utils/api'
+import { authHeaders, apiFetch, loadJson } from '../../utils/api'
 import { useToast } from '../../components/ui/Toast'
 import { headcount } from '../../../shared/guest-names'
+import LoadError from '../../components/ui/LoadError'
+
+// Mirrors ONBOARDING_STEPS in src/components/OnboardingChecklist.jsx — the
+// couple's own five steps, so the venue sees the same five, not a re-invented
+// list that drifts from what actually gates their checklist.
+const ONBOARDING_STEPS = [
+  { key: 'couple_photo_uploaded', label: 'Uploaded a photo of the couple' },
+  { key: 'first_message_sent', label: 'Said hi to Sage' },
+  { key: 'vendor_added', label: 'Added a vendor' },
+  { key: 'inspo_uploaded', label: 'Shared some inspiration' },
+  { key: 'checklist_item_completed', label: 'Checked off a task' },
+]
 
 // Each check: { label, check: (data) => boolean, tab?, inlineField? }
 // tab = clicking "Go" switches to that admin tab
@@ -107,10 +119,20 @@ export default function WeddingCompleteness({ weddingId, wedding, onSwitchTab })
   const [loading, setLoading] = useState(true)
   const [inlineEdits, setInlineEdits] = useState({})
   const [savingField, setSavingField] = useState(null)
+  const [onboarding, setOnboarding] = useState(null)
+  const [onboardingError, setOnboardingError] = useState(null)
 
   useEffect(() => {
     if (weddingId) load()
   }, [weddingId])
+
+  const loadOnboarding = () => {
+    setOnboardingError(null)
+    loadJson(`${API_URL}/api/admin/onboarding/${weddingId}`)
+      .then(setOnboarding)
+      .catch(err => setOnboardingError(err))
+  }
+  useEffect(() => { if (weddingId) loadOnboarding() }, [weddingId])
 
   const load = async () => {
     try {
@@ -277,6 +299,44 @@ export default function WeddingCompleteness({ weddingId, wedding, onSwitchTab })
           />
         </div>
         <p className="text-xs text-sage-500 mt-1.5">{totalDone} of {totalChecks} items completed</p>
+      </div>
+
+      {/* Onboarding — the couple's own first-five-steps, mirrored here so the
+          venue can see whether a quiet couple has even opened the checklist. */}
+      <div className="bg-white rounded-xl border border-cream-200 overflow-hidden">
+        <div className="px-5 py-3 border-b border-cream-200 bg-cream-50">
+          <h4 className="text-sm font-semibold text-sage-700">Onboarding</h4>
+        </div>
+        {onboardingError ? (
+          <div className="p-4"><LoadError what="onboarding progress" error={onboardingError} onRetry={loadOnboarding} /></div>
+        ) : !onboarding ? (
+          <p className="text-sage-400 text-sm px-5 py-3">Loading…</p>
+        ) : (
+          <div className="divide-y divide-cream-100">
+            {ONBOARDING_STEPS.map(step => {
+              const done = !!onboarding.progress?.[step.key]
+              return (
+                <div key={step.key} className="flex items-center gap-3 px-5 py-2.5">
+                  <span className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 ${
+                    done ? 'bg-green-100 text-green-600' : 'bg-cream-200 text-sage-400'
+                  }`}>
+                    {done ? (
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                      </svg>
+                    ) : (
+                      <span className="w-2 h-2 rounded-full bg-sage-300" />
+                    )}
+                  </span>
+                  <span className={`text-sm ${done ? 'text-sage-700' : 'text-sage-500'}`}>{step.label}</span>
+                </div>
+              )
+            })}
+            {onboarding.progress?.onboarding_dismissed && (
+              <p className="text-xs text-sage-400 px-5 py-2">The couple has dismissed this checklist on their side.</p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Sections */}
