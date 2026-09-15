@@ -14180,18 +14180,9 @@ app.post('/api/guests/bulk', async (req, res) => {
 });
 
 // DELETE guest
-app.delete('/api/guests/:id', async (req, res) => {
-  try {
-    const { error } = await supabaseAdmin.from('wedding_guests').delete().eq('id', req.params.id);
-    if (error) throw error;
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('Delete guest error:', err);
-    res.status(500).json({ error: 'Failed to delete guest' });
-  }
-});
-
-// DELETE every guest on a wedding. Body { weddingId, confirm: 'DELETE' }.
+// DELETE every guest on a wedding. Declared before /api/guests/:id, which
+// would otherwise read "all" as a guest id.
+// Body { weddingId, confirm: 'DELETE' }. Body { weddingId, confirm: 'DELETE' }.
 // weddingAccess scopes it off body.weddingId (members and admins only). The
 // word is required so a stray call cannot empty a list; the client asks for
 // it in a dialog. Plus-one rows go with their hosts because they share the
@@ -14209,6 +14200,17 @@ app.delete('/api/guests/all', async (req, res) => {
   } catch (err) {
     console.error('Delete all guests error:', err.message);
     res.status(500).json({ error: 'Failed to delete the guest list' });
+  }
+});
+
+app.delete('/api/guests/:id', async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin.from('wedding_guests').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Delete guest error:', err);
+    res.status(500).json({ error: 'Failed to delete guest' });
   }
 });
 
