@@ -513,3 +513,17 @@ Then, signed in as ADMIN, change any field on a wedding whose layout has
 already been sent, wait for the save indicator, and run the couple's read
 again: `.tables.guest_count` must not have moved. It moves only after Send to
 Client.
+
+## Guest CSV column reader
+
+It reads column headers and a handful of sample values out of somebody's
+spreadsheet and sends them to Claude, so it is not open to a stranger. Couples
+use it as well as the venue, so it sits outside `/api/admin` and is behind
+`requireAuth` on its own.
+
+```sh
+# 401
+curl -s -o /dev/null -w '%{http_code}\n' -X POST $API/api/guests/map-columns \
+  -H 'Content-Type: application/json' \
+  -d '{"headers":["First Name","Email"],"samples":[["Ana","ana@example.com"]]}'
+```
