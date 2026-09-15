@@ -7259,7 +7259,15 @@ app.get('/api/admin/sync-jobs', async (req, res) => {
     let q = supabaseAdmin.from('sync_jobs').select('*')
       .order('started_at', { ascending: false })
       .limit(Math.min(Number(limit) || 20, 100));
-    if (kind) q = q.eq('kind', kind);
+    if (kind) {
+      q = q.eq('kind', kind);
+    } else {
+      // Answers share this table but are not imports. Twenty rows is the whole
+      // window this panel has, and a busy afternoon of Ask Sage would fill it
+      // with questions and push the Gmail run she came to look at off the end.
+      // Asking for one by kind still works.
+      q = q.not('kind', 'in', `(${ANSWER_JOB_KINDS.map(k => `"${k}"`).join(',')})`);
+    }
     const { data, error } = await q;
     if (error) throw error;
 
@@ -16712,8 +16720,15 @@ async function sendDailyDigest({ dryRun = false } = {}) {
   // this list. It is the exact shape of the 14 August Zoom sync that nothing
   // ever reported.
   const badSyncs = (failedSyncs || []).filter(j =>
-    j.status === 'failed'
-    || (j.status === 'running' && Date.now() - new Date(j.heartbeat_at || j.started_at).getTime() > 60 * 60 * 1000)
+    // A briefing that did not come back is not a sync failure. It is one press
+    // of a button away from being written, she was standing in front of it at
+    // the time, and putting it in the morning memo under "sync failures" would
+    // teach her to skim the section that matters.
+    !ANSWER_JOB_KINDS.includes(j.kind)
+    && (
+      j.status === 'failed'
+      || (j.status === 'running' && Date.now() - new Date(j.heartbeat_at || j.started_at).getTime() > 60 * 60 * 1000)
+    )
   );
 
   const { data: reviewQueue, error: reviewErr } = await supabaseAdmin
