@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { apiFetch } from '../../utils/api'
+import { awaitAnswerJob } from '../../utils/answerJobs'
 import { API_URL } from '../../config/api'
 import { useToast } from '../ui/Toast'
 import { formatDateOnly } from '../../utils/dates'
@@ -27,6 +28,9 @@ export default function AskSageBar({ weddings = [], onOpenProfile }) {
 
   const [text, setText] = useState('')
   const [loading, setLoading] = useState(false)
+  // Seconds spent waiting on the answer, so a long read looks like work rather
+  // than a hang.
+  const [waited, setWaited] = useState(0)
   // The wedding could not be settled from the sentence. Holds what she typed
   // so a chip or the picker can re-send it against a wedding she has named.
   const [asking, setAsking] = useState(null)
@@ -56,6 +60,7 @@ export default function AskSageBar({ weddings = [], onOpenProfile }) {
     if (!asked || loading) return
 
     setLoading(true)
+    setWaited(0)
     setFailed(null)
     setAsking(null)
     try {
@@ -70,12 +75,17 @@ export default function AskSageBar({ weddings = [], onOpenProfile }) {
         return
       }
 
+      // The wedding is settled on the request; the answer is not. Reading a
+      // full file takes a minute or two, which is longer than Railway will
+      // hold a connection open, so it comes back as a job to poll.
+      const job = await awaitAnswerJob(data.jobId, { onTick: setWaited })
+
       const entry = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         asked,
         question: data.question || asked,
         wedding: data.wedding,
-        answer: data.answer || '',
+        answer: job.answer || '',
         confidence: data.confidence,
       }
       // Newest first, five deep. Six answers back is scrollback, not memory.
@@ -129,7 +139,9 @@ export default function AskSageBar({ weddings = [], onOpenProfile }) {
       </form>
 
       {loading && (
-        <p className="mt-3 text-sm text-sage-400">Reading the wedding…</p>
+        <p className="mt-3 text-sm text-sage-400">
+          Reading the wedding (a full file takes a minute or two)…{waited ? ` ${waited}s` : ''}
+        </p>
       )}
 
       {failed && !loading && (
