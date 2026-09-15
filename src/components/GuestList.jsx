@@ -3,6 +3,7 @@ import { API_URL } from '../config/api'
 import { apiFetch, loadJson } from '../utils/api'
 import { describeExtras } from '../../shared/rsvp-fields'
 import { plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, allPeople, headcount, usesPersonModel } from '../../shared/guest-names'
+import { parseGuestCsv } from '../../shared/guest-csv'
 import { useToast } from './ui/Toast'
 import LoadError from './ui/LoadError'
 
@@ -20,49 +21,8 @@ const TAG_PALETTE = [
 
 // ─── CSV Helpers ────────────────────────────────────────────────────────────────
 
-/** Parse a single CSV line, handling quoted fields (commas inside quotes, doubled quotes) */
-function parseCSVLine(line) {
-  const fields = []
-  let current = ''
-  let inQuotes = false
-  let i = 0
-
-  while (i < line.length) {
-    const ch = line[i]
-    if (inQuotes) {
-      if (ch === '"') {
-        // Doubled quote → literal quote character
-        if (i + 1 < line.length && line[i + 1] === '"') {
-          current += '"'
-          i += 2
-          continue
-        }
-        // End of quoted field
-        inQuotes = false
-        i++
-        continue
-      }
-      current += ch
-      i++
-    } else {
-      if (ch === '"') {
-        inQuotes = true
-        i++
-        continue
-      }
-      if (ch === ',') {
-        fields.push(current.trim())
-        current = ''
-        i++
-        continue
-      }
-      current += ch
-      i++
-    }
-  }
-  fields.push(current.trim())
-  return fields
-}
+// parseCSVLine and the header mapping live in shared/guest-csv.js so they
+// can be unit tested; the component keeps the RSVP normalising and tags.
 
 /** Quote a CSV field if it contains commas, quotes, or newlines */
 function csvEscape(value) {
@@ -767,15 +727,15 @@ export default function GuestList({ weddingId, userId }) {
     let text = await file.text()
     // Strip UTF-8 BOM if present
     if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1)
-    const lines = text.split('\n').filter(l => l.trim().length > 0)
-    if (lines.length < 2) { setCsvResult({ success: false, error: 'CSV has no data rows' }); e.target.value = ''; return }
-    const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z_]/g, ''))
-    const guests = lines.slice(1).map(line => {
-      const values = parseCSVLine(line)
-      const obj = {}
-      headers.forEach((h, i) => { obj[h] = values[i] || '' })
-      return obj
-    }).filter(g => g.first_name || g.firstname || g.name)
+    const { rawHeaders, guests } = parseGuestCsv(text)
+    if (rawHeaders.length === 0 || text.trim().split(/\r?\n/).length < 2) {
+      setCsvResult({ success: false, error: 'CSV has no data rows' }); e.target.value = ''; return
+    }
+    if (guests.length === 0) {
+      setCsvResult({ success: false, error: `No rows with a name. Columns found: ${rawHeaders.join(', ')}. The file needs a "First name" column, or a "Name" column holding the full name.` })
+      e.target.value = ''
+      return
+    }
     // Normalise columns into the guest schema
     const normalised = guests.map(g => {
       // Name handling

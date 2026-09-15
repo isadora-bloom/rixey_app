@@ -41,9 +41,13 @@ self.addEventListener('fetch', (event) => {
         }
         return response;
       })
-      .catch(() => {
-        // Network failed, try cache
-        return caches.match(event.request);
+      .catch(async () => {
+        // Network failed, try cache. A miss must still be a Response: handing
+        // undefined back made the browser log "Failed to convert value to
+        // 'Response'" and the page load fail outright instead of showing the
+        // network error it would have shown with no worker at all.
+        const cached = await caches.match(event.request);
+        return cached || Response.error();
       })
   );
 });
