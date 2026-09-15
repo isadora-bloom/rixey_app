@@ -819,7 +819,7 @@ export default function AdminWeddingProfile({
                         disabled={loadingHighlights || planningNotes.length === 0}
                         className="px-3 py-1 bg-sage-600 text-white text-xs rounded-lg hover:bg-sage-700 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        {loadingHighlights ? 'Generating...' : 'Generate Highlights'}
+                        {loadingHighlights ? 'Reading the file…' : (notesHighlights ? 'Regenerate briefing' : 'Generate briefing')}
                       </button>
                     </div>
                     {notesHighlights ? (
@@ -1012,7 +1012,7 @@ export default function AdminWeddingProfile({
                         disabled={loadingHighlights || planningNotes.length === 0}
                         className="px-3 py-1 bg-sage-600 text-white text-sm rounded-lg hover:bg-sage-700 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        {loadingHighlights ? 'Generating...' : 'Generate Highlights'}
+                        {loadingHighlights ? 'Reading the file…' : (notesHighlights ? 'Regenerate briefing' : 'Generate briefing')}
                       </button>
                     </div>
                     {notesHighlights ? (
@@ -1021,7 +1021,7 @@ export default function AdminWeddingProfile({
                       </div>
                     ) : (
                       <p className="text-sage-500 text-sm">
-                        Click "Generate Highlights" to get an AI summary of all planning notes for quick review.
+                        Click "Generate briefing" for a read of the whole file: where they stand, what needs a decision, and what to watch for. Large weddings take a minute or two; the last briefing is kept.
                       </p>
                     )}
                   </div>

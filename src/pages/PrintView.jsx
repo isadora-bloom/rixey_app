@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { authHeaders, apiFetch } from '../utils/api'
+import { awaitAnswerJob } from '../utils/answerJobs'
 import { formatDateOnly } from '../utils/dates'
 import { allPeople, dietaryNotInRegistry } from '../../shared/guest-names'
 import { partnerLabels, fillLabel } from '../../shared/partner-labels'
@@ -247,13 +248,21 @@ export default function PrintView() {
     async function fetchHighlights() {
       setLoadingHighlights(true)
       try {
-        const res = await fetch(`${API_URL}/api/notes-highlights`, {
+        // The briefing runs as a job now (Railway's proxy cut the old direct
+        // call at ~50 seconds on big weddings). Use the last one if there is
+        // one, else start a fresh job and wait for it.
+        const latest = await apiFetch(`${API_URL}/api/answer-jobs/latest?kind=highlights&weddingId=${weddingId}`).catch(() => null)
+        if (latest?.answer) { setHighlights(latest.answer); return }
+        const started = await apiFetch(`${API_URL}/api/notes-highlights`, {
           method: 'POST',
-          headers: await authHeaders(),
           body: JSON.stringify({ weddingId }),
         })
-        const data = await res.json()
-        setHighlights(data.highlights || null)
+        if (started?.jobId) {
+          const job = await awaitAnswerJob(started.jobId)
+          setHighlights(job?.answer || null)
+        } else {
+          setHighlights(started?.highlights || null)
+        }
       } catch (err) {
         console.error('Highlights fetch error:', err)
         setHighlights(null)
