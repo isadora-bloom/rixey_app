@@ -863,25 +863,77 @@ export default function GuestList({ weddingId, userId }) {
     setMealOptions(mo)
   }
 
-  const handleCsvExport = () => {
-    const tagLabels = tagOptions.map(t => t.label)
-    // One column per RSVP question anyone actually answered. Built from the
-    // data rather than the current toggles, so answers to a question since
-    // switched off still come out.
+  // ── CSV export ────────────────────────────────────────────────────────────
+  // Every column is a choice. The fixed set is below; RSVP question answers
+  // and tags are added per wedding from the data. Address was missing
+  // entirely until 15 Sep 2026, which is what couples mail invitations from.
+  const EXPORT_COLUMNS = [
+    { key: 'first_name', label: 'First name', value: g => g.first_name },
+    { key: 'last_name', label: 'Last name', value: g => g.last_name },
+    { key: 'email', label: 'Email', value: g => g.email },
+    { key: 'phone', label: 'Phone', value: g => g.phone },
+    { key: 'address', label: 'Address', value: g => g.address },
+    { key: 'rsvp', label: 'RSVP', value: g => g.rsvp },
+    { key: 'meal_choice', label: 'Meal choice', value: g => g.meal_choice },
+    { key: 'dietary_restrictions', label: 'Dietary', value: g => g.dietary_restrictions },
+    { key: 'table_assignment', label: 'Table', value: g => g.table_assignment },
+    { key: 'plus_one_name', label: 'Plus one', value: g => g.plus_one_name },
+    { key: 'plus_one_rsvp', label: 'Plus one RSVP', value: g => (g.plus_one_name ? plusOneRsvpOf(g) : '') },
+    { key: 'plus_one_meal_choice', label: 'Plus one meal', value: g => (g.plus_one_name ? plusOneMealOf(g) : '') },
+    { key: 'plus_one_dietary', label: 'Plus one dietary', value: g => (g.plus_one_name ? plusOneDietaryOf(g) : '') },
+    { key: 'notes', label: 'Notes', value: g => g.notes },
+  ]
+  const EXPORT_STORE = 'rixey.guestExport.columns'
+  const [exportOpen, setExportOpen] = useState(false)
+  const [exportCols, setExportCols] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(EXPORT_STORE) || 'null')
+      if (Array.isArray(saved) && saved.length) return new Set(saved)
+    } catch { /* fall through to the default */ }
+    return null // null = everything, decided when the picker opens
+  })
+
+  // Columns that exist for THIS wedding: the fixed set, one per tag, one per
+  // RSVP question anyone answered. Built from the data rather than the
+  // current toggles, so answers to a question since switched off still come
+  // out.
+  const exportColumnsFor = () => {
     const answersByGuest = new Map(guests.map(g => [g.id, describeExtras(g.rsvp_extras, rsvpConfig, { plusOneName: plusOneDisplayName(g) })]))
     const answerCols = []
     for (const list of answersByGuest.values()) {
       for (const a of list) if (!answerCols.some(c => c.key === a.key)) answerCols.push({ key: a.key, label: a.label })
     }
-    const headerCols = [
-      'first_name', 'last_name', 'email', 'phone', 'rsvp',
-      'dietary_restrictions', 'meal_choice', 'table_assignment',
-      'plus_one_name', 'plus_one_rsvp', 'plus_one_meal_choice', 'plus_one_dietary',
-      'notes',
-      ...tagLabels,
-      ...answerCols.map(c => c.label),
+    const cols = [
+      ...EXPORT_COLUMNS,
+      ...tagOptions.map(t => ({ key: `tag:${t.label}`, label: `Tag: ${t.label}`, value: g => ((g.tags || []).includes(t.label) ? 'yes' : '') })),
+      ...answerCols.map(c => ({ key: `answer:${c.key}`, label: c.label, value: g => (answersByGuest.get(g.id) || []).find(a => a.key === c.key)?.value || '' })),
     ]
-    const rows = [headerCols.map(csvEscape).join(',')]
+    return cols
+  }
+
+  const openExport = () => {
+    if (!exportCols) setExportCols(new Set(exportColumnsFor().map(c => c.key)))
+    setExportOpen(true)
+  }
+
+  const toggleExportCol = (key) => {
+    setExportCols(prev => {
+      const next = new Set(prev || [])
+      if (next.has(key)) next.delete(key); else next.add(key)
+      try { localStorage.setItem(EXPORT_STORE, JSON.stringify([...next])) } catch { /* private mode */ }
+      return next
+    })
+  }
+  const setAllExportCols = (on) => {
+    const next = on ? new Set(exportColumnsFor().map(c => c.key)) : new Set()
+    try { localStorage.setItem(EXPORT_STORE, JSON.stringify([...next])) } catch { /* private mode */ }
+    setExportCols(next)
+  }
+
+  const handleCsvExport = () => {
+    const cols = exportColumnsFor().filter(c => !exportCols || exportCols.has(c.key))
+    if (!cols.length) { toastError('Pick at least one column to export.'); return }
+    const rows = [cols.map(c => csvEscape(c.label)).join(',')]
     // One line per party. Under the person model a plus one is also its own
     // row (is_plus_one), and walking every row put each plus one out twice:
     // once in the host's plus_one columns and once as a line of its own.
@@ -889,30 +941,11 @@ export default function GuestList({ weddingId, userId }) {
     // one's RSVP, meal and dietary through plusOneRsvpOf and friends.
     const exportRows = usesPersonModel(guests) ? guests.filter(g => !g.is_plus_one) : guests
     exportRows.forEach(g => {
-      const answers = answersByGuest.get(g.id) || []
-      const row = [
-        csvEscape(g.first_name),
-        csvEscape(g.last_name),
-        csvEscape(g.email),
-        csvEscape(g.phone),
-        csvEscape(g.rsvp),
-        csvEscape(g.dietary_restrictions),
-        csvEscape(g.meal_choice),
-        csvEscape(g.table_assignment),
-        csvEscape(g.plus_one_name),
-        csvEscape(g.plus_one_name ? plusOneRsvpOf(g) : ''),
-        csvEscape(g.plus_one_name ? plusOneMealOf(g) : ''),
-        csvEscape(g.plus_one_name ? plusOneDietaryOf(g) : ''),
-        csvEscape(g.notes),
-        ...tagLabels.map(tl => csvEscape((g.tags || []).includes(tl) ? 'yes' : '')),
-        ...answerCols.map(c => csvEscape(answers.find(a => a.key === c.key)?.value || '')),
-      ]
-      rows.push(row.join(','))
+      rows.push(cols.map(c => csvEscape(c.value(g))).join(','))
     })
     // CRLF line endings and a UTF-8 byte-order mark: without the mark, Excel
     // on Windows reads accented names as rubbish, and without CRLF some
-    // versions run the whole file into one row. A couple reported the file
-    // "not downloading properly"; this was the likeliest half of it.
+    // versions run the whole file into one row.
     const csv = '﻿' + rows.join('\r\n')
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
@@ -923,9 +956,10 @@ export default function GuestList({ weddingId, userId }) {
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
-    // Revoking straight away cancels the download on Safari and iPhone, the
-    // other half of the report. Give the browser a moment to take the blob.
+    // Revoking straight away cancels the download on Safari and iPhone. Give
+    // the browser a moment to take the blob.
     setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    setExportOpen(false)
   }
 
   // Assign a guest to a table inline (sends full guest object to preserve all fields)
@@ -1223,7 +1257,7 @@ export default function GuestList({ weddingId, userId }) {
               </button>
             )}
             <button
-              onClick={handleCsvExport}
+              onClick={openExport}
               disabled={guests.length === 0}
               className="flex items-center gap-1.5 border border-sage-300 text-sage-600 px-4 py-2 rounded-xl text-sm font-medium hover:bg-sage-50 disabled:opacity-50 transition"
             >
@@ -1232,6 +1266,39 @@ export default function GuestList({ weddingId, userId }) {
               </svg>
               Export CSV
             </button>
+            {exportOpen && (
+              <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/30 p-4" onClick={() => setExportOpen(false)}>
+                <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+                  <div className="px-5 pt-5 pb-3 border-b border-cream-200">
+                    <h3 className="font-serif text-lg text-sage-800">Export guest list</h3>
+                    <p className="text-sm text-sage-500 mt-1">Tick the columns you want. Your choice is remembered on this device.</p>
+                    <div className="flex gap-3 mt-3 text-sm">
+                      <button type="button" className="text-sage-600 underline" onClick={() => setAllExportCols(true)}>All</button>
+                      <button type="button" className="text-sage-600 underline" onClick={() => setAllExportCols(false)}>None</button>
+                    </div>
+                  </div>
+                  <div className="px-5 py-3 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1">
+                    {exportColumnsFor().map(c => (
+                      <label key={c.key} className="flex items-center gap-2 py-1.5 text-sm text-sage-700 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="accent-sage-600"
+                          checked={!exportCols || exportCols.has(c.key)}
+                          onChange={() => toggleExportCol(c.key)}
+                        />
+                        {c.label}
+                      </label>
+                    ))}
+                  </div>
+                  <div className="px-5 py-4 border-t border-cream-200 flex justify-end gap-3">
+                    <button type="button" className="px-4 py-2 rounded-xl text-sm text-sage-600 hover:bg-sage-50" onClick={() => setExportOpen(false)}>Cancel</button>
+                    <button type="button" className="px-4 py-2 rounded-xl text-sm font-medium bg-sage-600 text-white hover:bg-sage-700" onClick={handleCsvExport}>
+                      Download {exportCols ? exportCols.size : exportColumnsFor().length} column{(exportCols ? exportCols.size : 1) === 1 ? '' : 's'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
             <button
               onClick={() => csvInputRef.current?.click()}
               disabled={csvImporting}
