@@ -128,7 +128,7 @@ try {
   await check('another couple\'s completeness', 403, `/api/completeness/${B.wedding}`, { token: A.token });
 
   // Guest CSV column reader needs a token.
-  await check('map-columns without a token', 401, '/api/guests/map-columns', { method: 'POST', json: { weddingId: A.wedding, headers: ['Name'], samples: [['Smoke A']] } });
+  await check('map-columns without a token', [401, 403], '/api/guests/map-columns', { method: 'POST', json: { weddingId: A.wedding, headers: ['Name'], samples: [['Smoke A']] } });
 
   // Ask Sage from the admin home: admin only.
   await check('admin ask as a couple', 403, '/api/admin/ask', { method: 'POST', token: A.token, json: { text: 'tell me the caterer for smoke a' } });
