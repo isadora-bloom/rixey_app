@@ -14057,6 +14057,27 @@ app.delete('/api/guests/:id', async (req, res) => {
   }
 });
 
+// DELETE every guest on a wedding. Body { weddingId, confirm: 'DELETE' }.
+// weddingAccess scopes it off body.weddingId (members and admins only). The
+// word is required so a stray call cannot empty a list; the client asks for
+// it in a dialog. Plus-one rows go with their hosts because they share the
+// wedding_id.
+app.delete('/api/guests/all', async (req, res) => {
+  try {
+    const { weddingId, confirm } = req.body || {};
+    if (!weddingId) return res.status(400).json({ error: 'weddingId required' });
+    if (confirm !== 'DELETE') return res.status(400).json({ error: 'Send confirm: "DELETE" to empty the guest list' });
+    const { error, count } = await supabaseAdmin
+      .from('wedding_guests').delete({ count: 'exact' }).eq('wedding_id', weddingId);
+    if (error) throw error;
+    console.log(`[guests] emptied the guest list for ${weddingId}: ${count} rows, by ${req.userId}`);
+    res.json({ ok: true, deleted: count || 0 });
+  } catch (err) {
+    console.error('Delete all guests error:', err.message);
+    res.status(500).json({ error: 'Failed to delete the guest list' });
+  }
+});
+
 // POST create tag option
 app.post('/api/guest-tags', async (req, res) => {
   try {

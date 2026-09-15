@@ -703,6 +703,10 @@ export default function GuestList({ weddingId, userId }) {
   const [editingGuest, setEditingGuest] = useState(null)
   const [showSettings, setShowSettings] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState(null)
+  // Empty the whole list: opens a dialog that asks for the word DELETE.
+  const [deleteAllOpen, setDeleteAllOpen] = useState(false)
+  const [deleteAllWord, setDeleteAllWord] = useState('')
+  const [deletingAll, setDeletingAll] = useState(false)
   const [csvImporting, setCsvImporting] = useState(false)
   const [csvResult, setCsvResult] = useState(null)
   const [csvPendingImport, setCsvPendingImport] = useState(null) // parsed rows waiting on a mode choice
@@ -763,6 +767,24 @@ export default function GuestList({ weddingId, userId }) {
     })
     setShowAddModal(false)
     setEditingGuest(null)
+  }
+
+  const handleDeleteAll = async () => {
+    if (deleteAllWord.trim() !== 'DELETE') return
+    setDeletingAll(true)
+    try {
+      const data = await apiFetch(`${API_URL}/api/guests/all`, {
+        method: 'DELETE',
+        body: JSON.stringify({ weddingId, confirm: 'DELETE' }),
+      })
+      setGuests([])
+      setDeleteAllOpen(false)
+      setDeleteAllWord('')
+      setCsvResult({ success: true, message: `Removed ${data?.deleted ?? 'all'} guests. The list is empty.` })
+    } catch (err) {
+      toastError(`Could not empty the guest list: ${err.message}`)
+    }
+    setDeletingAll(false)
   }
 
   const handleDelete = async (id) => {
@@ -1346,6 +1368,14 @@ export default function GuestList({ weddingId, userId }) {
               </button>
             )}
             <button
+              onClick={() => { setDeleteAllWord(''); setDeleteAllOpen(true) }}
+              disabled={guests.length === 0}
+              className="flex items-center gap-1.5 border border-red-200 text-red-600 px-4 py-2 rounded-xl text-sm font-medium hover:bg-red-50 disabled:opacity-50 transition"
+              title="Remove every guest on this list"
+            >
+              Delete all
+            </button>
+            <button
               onClick={openExport}
               disabled={guests.length === 0}
               className="flex items-center gap-1.5 border border-sage-300 text-sage-600 px-4 py-2 rounded-xl text-sm font-medium hover:bg-sage-50 disabled:opacity-50 transition"
@@ -1832,6 +1862,42 @@ export default function GuestList({ weddingId, userId }) {
             <span className="block mt-1 text-xs opacity-90">{csvResult.warning}</span>
           )}
           <button onClick={() => setCsvResult(null)} className="ml-4 opacity-75 hover:opacity-100">×</button>
+        </div>
+      )}
+
+      {deleteAllOpen && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => !deletingAll && setDeleteAllOpen(false)}>
+          <div className="bg-white rounded-2xl shadow-xl p-6 max-w-sm w-full" onClick={e => e.stopPropagation()}>
+            <h3 className="font-semibold text-sage-800 mb-2">Remove every guest?</h3>
+            <p className="text-sm text-sage-500 mb-4">
+              This removes all {guests.length} guests on this list, including plus ones, RSVPs and table assignments. Export a CSV first if you want a copy. Type <span className="font-mono font-semibold text-sage-700">DELETE</span> to confirm.
+            </p>
+            <input
+              type="text"
+              value={deleteAllWord}
+              onChange={e => setDeleteAllWord(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') handleDeleteAll() }}
+              placeholder="DELETE"
+              autoFocus
+              className="w-full border border-cream-300 rounded-xl px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-red-300"
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={handleDeleteAll}
+                disabled={deleteAllWord.trim() !== 'DELETE' || deletingAll}
+                className="flex-1 bg-red-500 text-white rounded-xl py-2.5 text-sm font-medium hover:bg-red-600 disabled:opacity-50 transition"
+              >
+                {deletingAll ? 'Removing…' : 'Remove all'}
+              </button>
+              <button
+                onClick={() => setDeleteAllOpen(false)}
+                disabled={deletingAll}
+                className="flex-1 border border-cream-300 rounded-xl py-2.5 text-sm text-sage-600 hover:bg-cream-50 transition"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
