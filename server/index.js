@@ -58,6 +58,7 @@ import {
   saveTableLayout, readTableLayout, discardDraft,
 } from './lib/table-layout-draft.js';
 import { safeStorageKey } from './lib/storage-key.js';
+import { createAnswerJobs, publicJobView, ANSWER_JOB_KINDS } from './lib/answer-jobs.js';
 import cron from 'node-cron';
 import { parseSpreadsheet } from './lib/spreadsheet.js';
 // PDF parsing removed - using Claude vision for all documents
@@ -354,6 +355,24 @@ if (NODE_MAJOR < MIN_NODE_MAJOR) {
  */
 async function reapOrphanedSyncJobs() {
   try {
+    // Answer jobs live in this table too, and "press Sync again" is not the
+    // instruction for a briefing that was being written when the deploy went
+    // out. Same treatment, words that match the button she actually has.
+    const { data: answers, error: answersErr } = await supabaseAdmin
+      .from('sync_jobs')
+      .update({
+        status: 'failed',
+        finished_at: new Date().toISOString(),
+        last_error: 'The server restarted while this was being written. Ask again to start it off.',
+      })
+      .eq('status', 'running')
+      .in('kind', ANSWER_JOB_KINDS)
+      .select('id, kind');
+    if (answersErr) throw answersErr;
+    for (const j of answers || []) {
+      console.log(`[answers] closed off an interrupted ${j.kind} answer`);
+    }
+
     const { data, error } = await supabaseAdmin
       .from('sync_jobs')
       .update({
@@ -478,6 +497,11 @@ const supabaseAdmin = createClient(
 // Now that there is a client to do it with, close off any sync that was still
 // running when this process last stopped. See reapOrphanedSyncJobs above.
 reapOrphanedSyncJobs();
+
+// Long answers (highlights, both Q&A boxes) run as job rows rather than as one
+// request held open past Railway's fifty-second proxy timeout. See
+// server/lib/answer-jobs.js for why.
+const { startAnswerJob, readAnswerJob, latestAnswerJob } = createAnswerJobs(supabaseAdmin);
 
 // Wedding-scope authorisation. Mounted here rather than beside the other
 // app.use calls above because it needs supabaseAdmin, which is declared on the
@@ -3694,7 +3718,7 @@ async function answerAboutWedding(weddingId, question, { endpoint = 'ask-contrac
   const { context: fullContext, hasAnything } = await buildWeddingContext(weddingId);
 
   if (!hasAnything) {
-    return { answer: 'No planning information has been recorded for this wedding yet.' };
+    return { answer: 'No planning information has been recorded for this wedding yet.', model: null };
   }
 
   console.log(`Answering admin question with ${Math.round(fullContext.length/1000)}K chars of context for wedding ${weddingId}`);
@@ -3721,10 +3745,14 @@ Answer concisely and helpfully:`
   // Log usage (admin query, no userId)
   await logUsage(weddingId, null, endpoint, response);
 
-  return { answer };
+  return { answer, model: response.model || MODEL_SONNET };
 }
 
 // Ask questions about contracts AND planning notes
+//
+// The answer used to come back on this response, which meant holding the
+// connection open for as long as Sonnet took to read the file. Now it starts a
+// job and the browser polls GET /api/answer-jobs/:id. See lib/answer-jobs.js.
 app.post('/api/ask-contracts', async (req, res) => {
   try {
     const { weddingId, question } = req.body;
@@ -3733,8 +3761,15 @@ app.post('/api/ask-contracts', async (req, res) => {
       return res.status(400).json({ error: 'Wedding ID and question required' });
     }
 
-    const { answer } = await answerAboutWedding(weddingId, question);
-    res.json({ answer });
+    const { jobId } = await startAnswerJob({
+      kind: 'ask-contracts',
+      weddingId,
+      userId: req.userId || null,
+      input: { question },
+      worker: () => answerAboutWedding(weddingId, question),
+    });
+
+    res.status(202).json({ jobId, kind: 'ask-contracts' });
 
   } catch (error) {
     console.error('Q&A error:', error);
@@ -3817,19 +3852,86 @@ app.post('/api/admin/ask', async (req, res) => {
       confidence = match.confidence;
     }
 
-    const { answer } = await answerAboutWedding(wedding.id, question, { endpoint: 'admin-ask' });
+    // Matching stays here, on the request: it is a database read and a score,
+    // and the candidates branch above has to answer straight away. Only the
+    // answering half, which is the part that outlives the proxy, becomes a job.
+    const askedId = wedding.id;
+    const { jobId } = await startAnswerJob({
+      kind: 'admin-ask',
+      weddingId: askedId,
+      userId: req.userId || null,
+      input: { question },
+      worker: () => answerAboutWedding(askedId, question, { endpoint: 'admin-ask' }),
+    });
 
-    res.json({
+    res.status(202).json({
       resolved: true,
       wedding: { id: wedding.id, couple_names: wedding.couple_names, wedding_date: wedding.wedding_date },
       question,
-      answer,
+      jobId,
+      kind: 'admin-ask',
       confidence,
     });
 
   } catch (error) {
     console.error('[admin ask] failed:', error);
     res.status(500).json({ error: 'Could not answer that. Try again in a moment.' });
+  }
+});
+
+// ============ ANSWER JOBS ============
+
+/**
+ * How a long answer is collected.
+ *
+ * requireAuth first, so an anonymous caller gets 401 rather than a hint about
+ * which job ids exist. Then the row's own wedding decides: an admin passes,
+ * the couple whose wedding it is passes, anybody else is refused. The wedding
+ * comes off the row, never off the query string, for the same reason
+ * weddingAccess reads the row rather than the body.
+ *
+ * Only the answer is returned. detail also carries the question, and the
+ * context behind it is the venue-side file, which includes calls and emails
+ * migration 028 exists to keep away from the couple.
+ */
+app.get('/api/answer-jobs/latest', requireAuth, async (req, res) => {
+  try {
+    const kind = String(req.query.kind || '');
+    const weddingId = String(req.query.weddingId || '');
+    if (!ANSWER_JOB_KINDS.includes(kind)) {
+      return res.status(400).json({ error: 'Unknown kind' });
+    }
+    if (!weddingId) return res.status(400).json({ error: 'Wedding ID required' });
+
+    const allowed = await assertWeddingMember(supabaseAdmin, req, weddingId);
+    if (!allowed.ok) return res.status(allowed.status).json({ error: 'You do not have access to this wedding' });
+
+    const job = await latestAnswerJob(kind, weddingId);
+    // Nothing written yet is an answer in itself, not a 404: the profile asks
+    // this on open and "no briefing yet" is the normal first visit.
+    if (!job) return res.json({ status: 'none', kind, answer: null });
+
+    res.json({ ...publicJobView(job), kind });
+  } catch (error) {
+    console.error('[answer-jobs] latest failed:', error?.message || error);
+    res.status(500).json({ error: 'Could not read the last answer.' });
+  }
+});
+
+app.get('/api/answer-jobs/:id', requireAuth, async (req, res) => {
+  try {
+    const job = await readAnswerJob(req.params.id);
+    if (!job || !ANSWER_JOB_KINDS.includes(job.kind)) {
+      return res.status(404).json({ error: 'No such job' });
+    }
+
+    const allowed = await assertWeddingMember(supabaseAdmin, req, job.detail?.weddingId);
+    if (!allowed.ok) return res.status(allowed.status).json({ error: 'You do not have access to this wedding' });
+
+    res.json(publicJobView(job));
+  } catch (error) {
+    console.error('[answer-jobs] read failed:', error?.message || error);
+    res.status(500).json({ error: 'Could not read that job.' });
   }
 });
 
@@ -6312,31 +6414,30 @@ async function runQuoSync(body, { jobId, bump }) {
   }
 }
 
-// Generate AI highlights from planning notes
-app.post('/api/notes-highlights', async (req, res) => {
-  try {
-    const { weddingId } = req.body;
+/**
+ * Write the briefing. The slow half, lifted out of the route unchanged.
+ *
+ * On a big wedding this is 50 to 90 seconds: a 60k-token file read by Sonnet.
+ * It runs as a job now rather than on the request, because Railway's proxy
+ * hangs up at about fifty seconds and the admin, told it failed, presses again.
+ */
+async function writeHighlights(weddingId) {
+  // Same context the admin Q&A gets: the wedding row, contracts, allergies,
+  // vendors, timeline, staffing, decor, bedrooms, checklist, and cleaned
+  // planning notes. This used to be planning notes plus a list of contract
+  // filenames, which is why the output read as generic.
+  const { context: fullContext, wedding, hasAnything } = await buildWeddingContext(weddingId);
 
-    if (!weddingId) {
-      return res.status(400).json({ error: 'Wedding ID required' });
-    }
+  if (!hasAnything) {
+    return { answer: 'No planning notes or contracts found for this wedding yet.', model: null };
+  }
 
-    // Same context the admin Q&A gets: the wedding row, contracts, allergies,
-    // vendors, timeline, staffing, decor, bedrooms, checklist, and cleaned
-    // planning notes. This used to be planning notes plus a list of contract
-    // filenames, which is why the output read as generic.
-    const { context: fullContext, wedding, hasAnything } = await buildWeddingContext(weddingId);
+  // Whole days at the venue — see the identical fix on the highlights path.
+  const daysAway = wedding?.wedding_date
+    ? Math.round((new Date(`${wedding.wedding_date}T12:00:00Z`) - new Date(`${venueToday()}T12:00:00Z`)) / 86400000)
+    : null;
 
-    if (!hasAnything) {
-      return res.json({ highlights: 'No planning notes or contracts found for this wedding yet.' });
-    }
-
-    // Whole days at the venue — see the identical fix on the highlights path.
-    const daysAway = wedding?.wedding_date
-      ? Math.round((new Date(`${wedding.wedding_date}T12:00:00Z`) - new Date(`${venueToday()}T12:00:00Z`)) / 86400000)
-      : null;
-
-    const prompt = `You are the senior coordinator at Rixey Manor, briefing the venue owner before she looks at this wedding. She has read the file before. She does not need it read back to her, she needs to know what she would otherwise miss.
+  const prompt = `You are the senior coordinator at Rixey Manor, briefing the venue owner before she looks at this wedding. She has read the file before. She does not need it read back to her, she needs to know what she would otherwise miss.
 
 ${RIXEY_EXTRACTION_CONTEXT}
 
@@ -6360,19 +6461,44 @@ Rules:
 
 ${fullContext}`;
 
-    // Try Sonnet first; fall back to Haiku if the primary model is unavailable
-    let response;
-    try {
-      response = await anthropic.messages.create({ model: MODEL_SONNET, max_tokens: 4000, messages: [{ role: 'user', content: prompt }] });
-    } catch (primaryErr) {
-      console.warn('Highlights: primary model failed, falling back to Haiku:', primaryErr?.message ?? primaryErr);
-      response = await anthropic.messages.create({ model: MODEL_HAIKU, max_tokens: 4000, messages: [{ role: 'user', content: prompt }] });
+  // Try Sonnet first; fall back to Haiku if the primary model is unavailable
+  let response;
+  try {
+    response = await anthropic.messages.create({ model: MODEL_SONNET, max_tokens: 4000, messages: [{ role: 'user', content: prompt }] });
+  } catch (primaryErr) {
+    console.warn('Highlights: primary model failed, falling back to Haiku:', primaryErr?.message ?? primaryErr);
+    response = await anthropic.messages.create({ model: MODEL_HAIKU, max_tokens: 4000, messages: [{ role: 'user', content: prompt }] });
+  }
+
+  await logUsage(weddingId, null, 'notes-highlights', response);
+  console.log(`Highlights for ${weddingId}: ${Math.round(fullContext.length / 1000)}K chars of context in`);
+
+  return { answer: response.content[0].text, model: response.model || MODEL_SONNET };
+}
+
+// Generate AI highlights from planning notes
+//
+// Answers 202 with a job id. The briefing is collected from
+// GET /api/answer-jobs/:id, and the last one written is on
+// GET /api/answer-jobs/latest?kind=highlights so reopening a profile shows the
+// briefing it had rather than an empty box.
+app.post('/api/notes-highlights', async (req, res) => {
+  try {
+    const { weddingId } = req.body;
+
+    if (!weddingId) {
+      return res.status(400).json({ error: 'Wedding ID required' });
     }
 
-    await logUsage(weddingId, null, 'notes-highlights', response);
-    console.log(`Highlights for ${weddingId}: ${Math.round(fullContext.length / 1000)}K chars of context in`);
+    const { jobId } = await startAnswerJob({
+      kind: 'highlights',
+      weddingId,
+      userId: req.userId || null,
+      input: {},
+      worker: () => writeHighlights(weddingId),
+    });
 
-    res.json({ highlights: response.content[0].text });
+    res.status(202).json({ jobId, kind: 'highlights' });
 
   } catch (error) {
     console.error('Highlights error:', error?.message ?? error);
@@ -7134,7 +7260,15 @@ app.get('/api/admin/sync-jobs', async (req, res) => {
     let q = supabaseAdmin.from('sync_jobs').select('*')
       .order('started_at', { ascending: false })
       .limit(Math.min(Number(limit) || 20, 100));
-    if (kind) q = q.eq('kind', kind);
+    if (kind) {
+      q = q.eq('kind', kind);
+    } else {
+      // Answers share this table but are not imports. Twenty rows is the whole
+      // window this panel has, and a busy afternoon of Ask Sage would fill it
+      // with questions and push the Gmail run she came to look at off the end.
+      // Asking for one by kind still works.
+      q = q.not('kind', 'in', `(${ANSWER_JOB_KINDS.map(k => `"${k}"`).join(',')})`);
+    }
     const { data, error } = await q;
     if (error) throw error;
 
@@ -16690,8 +16824,15 @@ async function sendDailyDigest({ dryRun = false } = {}) {
   // this list. It is the exact shape of the 14 August Zoom sync that nothing
   // ever reported.
   const badSyncs = (failedSyncs || []).filter(j =>
-    j.status === 'failed'
-    || (j.status === 'running' && Date.now() - new Date(j.heartbeat_at || j.started_at).getTime() > 60 * 60 * 1000)
+    // A briefing that did not come back is not a sync failure. It is one press
+    // of a button away from being written, she was standing in front of it at
+    // the time, and putting it in the morning memo under "sync failures" would
+    // teach her to skim the section that matters.
+    !ANSWER_JOB_KINDS.includes(j.kind)
+    && (
+      j.status === 'failed'
+      || (j.status === 'running' && Date.now() - new Date(j.heartbeat_at || j.started_at).getTime() > 60 * 60 * 1000)
+    )
   );
 
   const { data: reviewQueue, error: reviewErr } = await supabaseAdmin

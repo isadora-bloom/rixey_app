@@ -15,6 +15,7 @@ import StorefrontAdmin from '../components/StorefrontAdmin'
 import ManorDownloads from '../components/ManorDownloads'
 import { API_URL } from '../config/api'
 import { apiFetch, authHeaders } from '../utils/api'
+import { awaitAnswerJob, timeAgo } from '../utils/answerJobs'
 import { useToast } from '../components/ui/Toast'
 import { ConfirmDialog } from '../components/ui'
 import { parseDateOnly } from '../utils/dates'
@@ -27,6 +28,10 @@ import AdminWeddingList from './admin/AdminWeddingList'
 import AdminWeddingProfile from './admin/AdminWeddingProfile'
 import { detectEscalation, getLastActivityAt } from './admin/adminUtils'
 import { weddingName } from '../../shared/wedding-name.js'
+
+// What the box says while Sonnet is still reading. A big wedding is a minute
+// or two, so say that rather than leave a spinner that looks stuck.
+const WAITING = 'Reading the file (large weddings take a minute or two)…'
 
 // section_finalisations rows keyed by whatever the section was called when
 // they were written, folded onto today's keys. Later writes win, so
@@ -144,6 +149,11 @@ export default function Admin() {
   const [reviewShowAll, setReviewShowAll] = useState({})
   const [notesHighlights, setNotesHighlights] = useState('')
   const [loadingHighlights, setLoadingHighlights] = useState(false)
+  // Which wedding is on screen right now, readable from inside a poll that
+  // started a minute ago. A briefing takes long enough that she can open
+  // another couple while it is being written, and an answer must never land in
+  // the wrong wedding's box.
+  const openWeddingRef = useRef(null)
   const [notesSearchQuery, setNotesSearchQuery] = useState('')
   const [collapsedNoteCategories, setCollapsedNoteCategories] = useState({})
   const [sortBy, setSortBy] = useState('lastActivity') // 'lastActivity' or 'weddingDate'
@@ -662,19 +672,57 @@ export default function Admin() {
     }
   }
 
+  /**
+   * The briefing on file, shown on opening a profile.
+   *
+   * An empty box used to mean "nobody has generated this", which is the same
+   * thing it looked like after a 502. Now the last one written is on screen
+   * with its age, and the existing Generate Highlights button is the
+   * regenerate button.
+   */
+  const loadLatestHighlights = async (weddingId) => {
+    try {
+      const job = await apiFetch(
+        `${API_URL}/api/answer-jobs/latest?kind=highlights&weddingId=${weddingId}`
+      )
+      if (!job?.answer) return
+      if (openWeddingRef.current !== weddingId) return
+      setNotesHighlights(`Generated ${timeAgo(job.finished_at)}\n\n${job.answer}`)
+    } catch {
+      // Nothing on file, or it could not be read. The button still works.
+    }
+  }
+
+  /**
+   * Ask for a briefing and wait for it.
+   *
+   * The POST comes back in milliseconds with a job id; Sonnet is still reading
+   * for the next minute or two. Nothing is held open, so nothing hits Railway's
+   * fifty-second proxy timeout, and pressing the button a second time inside
+   * three minutes joins the job already running rather than paying for another
+   * full call.
+   */
   const getNotesHighlights = async () => {
     if (!viewingWedding) return
+    const weddingId = viewingWedding.id
     setLoadingHighlights(true)
-    setNotesHighlights('')
+    setNotesHighlights(WAITING)
 
     try {
-      const data = await apiFetch(`${API_URL}/api/notes-highlights`, {
+      const started = await apiFetch(`${API_URL}/api/notes-highlights`, {
         method: 'POST',
-        body: JSON.stringify({ weddingId: viewingWedding.id })
+        body: JSON.stringify({ weddingId })
       })
-      setNotesHighlights(data.highlights || data.error)
+      const job = await awaitAnswerJob(started?.jobId, {
+        onTick: (secs) => {
+          if (openWeddingRef.current !== weddingId) return
+          setNotesHighlights(`${WAITING} ${secs}s`)
+        }
+      })
+      if (openWeddingRef.current !== weddingId) return
+      setNotesHighlights(job.answer || 'Nothing came back. Try again.')
     } catch (err) {
-      setNotesHighlights('Failed to generate highlights')
+      if (openWeddingRef.current === weddingId) setNotesHighlights('Failed to generate highlights')
       toastError(`Could not generate highlights: ${err.message}`)
     }
     setLoadingHighlights(false)
@@ -1056,10 +1104,14 @@ export default function Admin() {
   const viewWeddingProfile = async (wedding, opts = {}) => {
     const { focusUserId, focusTab } = opts
     setViewingWedding(wedding)
+    openWeddingRef.current = wedding.id
     setLoadingMessages(true)
     setSearchQuery('')
     setNotesSearchQuery('')
     setNotesHighlights('')
+    // Show the briefing she already has, with its age, rather than an empty
+    // box that costs a minute and a Sonnet call to fill.
+    loadLatestHighlights(wedding.id)
     // Wiped on entry as well as on close: without this, opening a second
     // wedding straight after the first could show its stale contract Q&A,
     // its upload result, its collapsed note categories or a half-typed Sage
@@ -1374,21 +1426,29 @@ export default function Admin() {
   const askContractQuestion = async () => {
     if (!contractQuestion.trim() || !viewingWedding) return
 
+    const weddingId = viewingWedding.id
     setAskingQuestion(true)
-    setContractAnswer('')
+    setContractAnswer(WAITING)
 
     try {
-      const data = await apiFetch(`${API_URL}/api/ask-contracts`, {
+      const started = await apiFetch(`${API_URL}/api/ask-contracts`, {
         method: 'POST',
         body: JSON.stringify({
-          weddingId: viewingWedding.id,
+          weddingId,
           question: contractQuestion
         })
       })
-      setContractAnswer(data.answer || data.error)
+      const job = await awaitAnswerJob(started?.jobId, {
+        onTick: (secs) => {
+          if (openWeddingRef.current !== weddingId) return
+          setContractAnswer(`${WAITING} ${secs}s`)
+        }
+      })
+      if (openWeddingRef.current !== weddingId) return
+      setContractAnswer(job.answer || 'Nothing came back. Try again.')
     } catch (err) {
       console.error('Question error:', err)
-      setContractAnswer('Failed to get answer. Make sure the server is running.')
+      if (openWeddingRef.current === weddingId) setContractAnswer(`Could not get an answer: ${err.message}`)
       toastError(`Could not get answer: ${err.message}`)
     }
 
@@ -1410,6 +1470,7 @@ export default function Admin() {
 
   const closeProfile = () => {
     setViewingWedding(null)
+    openWeddingRef.current = null
     setTabHistory([])
     setWeddingMessages([])
     setSearchQuery('')

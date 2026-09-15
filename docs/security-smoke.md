@@ -526,4 +526,35 @@ use it as well as the venue, so it sits outside `/api/admin` and is behind
 curl -s -o /dev/null -w '%{http_code}\n' -X POST $API/api/guests/map-columns \
   -H 'Content-Type: application/json' \
   -d '{"headers":["First Name","Email"],"samples":[["Ana","ana@example.com"]]}'
+## Long answers as jobs — `GET /api/answer-jobs/:id`
+
+Highlights and both Q&A boxes no longer answer on the request. They open a row
+in `sync_jobs` and the browser polls for the answer, so the job id is now a
+thing worth guessing at: the row holds a briefing built out of the venue-side
+file, which includes the family calls and emails migration 028 keeps from the
+couple. The wedding is read off the row, never off the query string.
+
+```sh
+# Start one as ADMIN and keep the id
+JOB=$(curl -s -X POST $API/api/notes-highlights \
+  -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
+  -d "{\"weddingId\":\"$OURS\"}" | jq -r '.jobId')
+
+# 401 — no token at all
+curl -s -o /dev/null -w '%{http_code}\n' $API/api/answer-jobs/$JOB
+
+# 403 — another couple's job, asked for by a couple who is not on that wedding
+curl -s -o /dev/null -w '%{http_code}\n' $API/api/answer-jobs/$JOB \
+  -H "Authorization: Bearer $OTHER_COUPLE"
+
+# 200 for the admin, and the question and context must not come back with it.
+# Only status, answer, error and the timings.
+curl -s $API/api/answer-jobs/$JOB -H "Authorization: Bearer $ADMIN" | jq 'keys'
+
+# Same two refusals on the latest-answer read
+curl -s -o /dev/null -w '%{http_code}\n' \
+  "$API/api/answer-jobs/latest?kind=highlights&weddingId=$OURS"
+curl -s -o /dev/null -w '%{http_code}\n' \
+  "$API/api/answer-jobs/latest?kind=highlights&weddingId=$OURS" \
+  -H "Authorization: Bearer $OTHER_COUPLE"
 ```
