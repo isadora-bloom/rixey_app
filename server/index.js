@@ -25,6 +25,7 @@ import { buildDiff, applyChoices } from './lib/sheet-diff/index.js';
 import { guestFullName, plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, headcount, parsePlusOneCell, usesPersonModel, personDisplayName, toParties, allPeople } from '../shared/guest-names.js';
 import { sendsConfirmation } from '../shared/rsvp-fields.js';
 import { isSameVendor, vendorKey } from '../shared/vendor-names.js';
+import { GUEST_FIELD_KEYS, ADDRESS_PART_KEYS, isMappableKey, tagLabelOf } from '../shared/guest-csv.js';
 import { vendorInviteEmail } from '../shared/vendor-invite-email.js';
 import { onlyColumns } from './middleware/table-columns.js';
 import { rsvpConfirmationHtml } from './lib/rsvp-confirmation.js';
@@ -13718,6 +13719,88 @@ app.put('/api/guests/:id', async (req, res) => {
   } catch (err) {
     console.error('Update guest error:', err);
     res.status(500).json({ error: `Could not save that guest: ${err.message}` });
+  }
+});
+
+/**
+ * Read a spreadsheet's column headers and say what each one is.
+ *
+ * The client guesses first, on its own, from the aliases and the values; this
+ * is only asked about the columns it is unsure of, and only its answers for
+ * those are taken. So a failure here is not a failure of the import: the
+ * client keeps its own guesses and the person confirms them either way. That
+ * is why it answers 502 with a sentence rather than pretending.
+ *
+ * Not under /api/admin: couples import their own guest list.
+ */
+const MAP_COLUMN_KEYS = [...GUEST_FIELD_KEYS, ...ADDRESS_PART_KEYS, 'ignore'];
+
+app.post('/api/guests/map-columns', requireAuth, async (req, res) => {
+  const headers = Array.isArray(req.body?.headers)
+    ? req.body.headers.slice(0, 60).map(h => String(h == null ? '' : h).slice(0, 300))
+    : [];
+  const samples = Array.isArray(req.body?.samples)
+    ? req.body.samples.slice(0, 5).map(row => (Array.isArray(row)
+      ? row.slice(0, 60).map(v => String(v == null ? '' : v).slice(0, 120))
+      : []))
+    : [];
+  if (!headers.length) return res.status(400).json({ error: 'Send the column headers you want read.' });
+
+  const table = headers.map((h, i) => {
+    const values = samples.map(row => row[i]).filter(v => v && v.trim()).slice(0, 5);
+    return `${i + 1}. ${JSON.stringify(h)} -> ${values.length ? values.map(v => JSON.stringify(v)).join(', ') : '(no values)'}`;
+  }).join('\n');
+
+  try {
+    const response = await anthropic.messages.create({
+      model: MODEL_HAIKU,
+      max_tokens: 1500,
+      messages: [{
+        role: 'user',
+        content: `A couple is importing a wedding guest list. Say what each spreadsheet column holds.
+
+Columns, with a few of the values from each:
+${table}
+
+Answer with one of these keys per column:
+${MAP_COLUMN_KEYS.join(', ')}
+or "tag:<label>" for a column that marks guests as invited to something (a shuttle, a rehearsal dinner, a welcome party), where <label> is a short name for it.
+
+Rules:
+- Exactly one column may be "rsvp". Where several columns hold Accepted/Declined/No Response answers, the one for the wedding itself (the reception or the ceremony) is the RSVP and the others are tags.
+- The address parts (${ADDRESS_PART_KEYS.join(', ')}) are for a sheet that splits the address across columns. A single whole address column is "address".
+- Use "ignore" for anything that is not about the guest: a title, a suffix, an internal id, a party grouping.
+- No key other than a tag may be used twice.
+
+Reply with strict JSON and nothing else:
+{"mapping": {"<the header exactly as given>": "<key>"}, "notes": "<one sentence about anything you were unsure of>"}`,
+      }],
+    });
+    await logUsage(req.body?.weddingId || null, req.userId || null, 'guest-csv-map-columns', response, MODEL_HAIKU);
+
+    const text = (response.content || []).map(b => b.text || '').join('').trim();
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start === -1 || end <= start) throw new Error('no JSON in the reply');
+    const parsed = JSON.parse(text.slice(start, end + 1));
+
+    // Anything that is not one of ours is dropped rather than guessed at, and
+    // a header the model invented is dropped with it.
+    const known = new Set(headers);
+    const mapping = {};
+    for (const [rawHeader, key] of Object.entries(parsed?.mapping || {})) {
+      if (!known.has(rawHeader)) continue;
+      if (typeof key !== 'string') continue;
+      const label = tagLabelOf(key);
+      if (label && label.length > 48) continue;
+      if (!isMappableKey(key)) continue;
+      mapping[rawHeader] = key;
+    }
+    const notes = typeof parsed?.notes === 'string' ? parsed.notes.slice(0, 300) : '';
+    res.json({ mapping, notes });
+  } catch (err) {
+    console.error('[guest import] could not read the columns:', err.message);
+    res.status(502).json({ error: 'The column reader could not be reached, so the portal used its own guesses.' });
   }
 });
 

@@ -3,7 +3,7 @@ import { API_URL } from '../config/api'
 import { apiFetch, loadJson } from '../utils/api'
 import { describeExtras } from '../../shared/rsvp-fields'
 import { plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, allPeople, headcount, usesPersonModel } from '../../shared/guest-names'
-import { parseGuestCsv } from '../../shared/guest-csv'
+import { parseGuestCsv, inferColumns, applyColumnMapping, FIELD_GROUPS, FIELD_LABELS, tagLabelOf, isMappableKey } from '../../shared/guest-csv'
 import { useToast } from './ui/Toast'
 import LoadError from './ui/LoadError'
 
@@ -23,6 +23,62 @@ const TAG_PALETTE = [
 
 // parseCSVLine and the header mapping live in shared/guest-csv.js so they
 // can be unit tested; the component keeps the RSVP normalising and tags.
+
+// A spreadsheet that has been through the check step once is remembered by
+// its exact set of headers, so the same export next month arrives already
+// answered. Only the columns are remembered, never anybody's details.
+const MAPPING_STORE = 'rixey.guestImport.mappings'
+
+function mappingStoreKey(headers) {
+  return headers.map(h => String(h == null ? '' : h).trim()).sort().join('|')
+}
+
+function readMappingStore() {
+  try {
+    const raw = localStorage.getItem(MAPPING_STORE)
+    const parsed = raw ? JSON.parse(raw) : null
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * The keys this exact header set was confirmed with last time, in the current
+ * column order. Headers can repeat (a wedding website asks the same question
+ * of the guest and of their plus one), so they are matched by name and by
+ * which occurrence of that name it is.
+ */
+function rememberedMapping(headers) {
+  const entry = readMappingStore()[mappingStoreKey(headers)]
+  if (!entry || !Array.isArray(entry.headers) || !Array.isArray(entry.keys)) return null
+  const seen = new Map()
+  const keys = headers.map(h => {
+    const name = String(h == null ? '' : h).trim()
+    const nth = seen.get(name) || 0
+    seen.set(name, nth + 1)
+    let count = 0
+    for (let i = 0; i < entry.headers.length; i++) {
+      if (String(entry.headers[i] == null ? '' : entry.headers[i]).trim() !== name) continue
+      if (count === nth) return entry.keys[i]
+      count++
+    }
+    return null
+  })
+  return keys.every(isMappableKey) ? keys : null
+}
+
+function rememberMapping(headers, keys) {
+  try {
+    const store = readMappingStore()
+    store[mappingStoreKey(headers)] = { headers, keys, at: new Date().toISOString() }
+    // Keep the twenty most recent, so this cannot grow without end.
+    const entries = Object.entries(store).sort((a, b) => String(b[1]?.at || '').localeCompare(String(a[1]?.at || '')))
+    localStorage.setItem(MAPPING_STORE, JSON.stringify(Object.fromEntries(entries.slice(0, 20))))
+  } catch {
+    // A private window with storage turned off just means no memory of it.
+  }
+}
 
 /** Quote a CSV field if it contains commas, quotes, or newlines */
 function csvEscape(value) {
@@ -650,6 +706,7 @@ export default function GuestList({ weddingId, userId }) {
   const [csvImporting, setCsvImporting] = useState(false)
   const [csvResult, setCsvResult] = useState(null)
   const [csvPendingImport, setCsvPendingImport] = useState(null) // parsed rows waiting on a mode choice
+  const [csvCheck, setCsvCheck] = useState(null) // the column mapping waiting to be confirmed
   const csvInputRef = useRef(null)
 
   useEffect(() => {
@@ -727,28 +784,99 @@ export default function GuestList({ weddingId, userId }) {
     let text = await file.text()
     // Strip UTF-8 BOM if present
     if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1)
-    const { rawHeaders, guests } = parseGuestCsv(text)
-    if (rawHeaders.length === 0 || text.trim().split(/\r?\n/).length < 2) {
-      setCsvResult({ success: false, error: 'CSV has no data rows' }); e.target.value = ''; return
+    const { rawHeaders, rawRows } = parseGuestCsv(text)
+    e.target.value = ''
+    if (rawHeaders.length === 0 || rawRows.length === 0) {
+      setCsvResult({ success: false, error: 'CSV has no data rows' })
+      return
     }
-    if (guests.length === 0) {
-      setCsvResult({ success: false, error: `No rows with a name. Columns found: ${rawHeaders.join(', ')}. The file needs a "First name" column, or a "Name" column holding the full name.` })
-      e.target.value = ''
+
+    // Guess locally first. A sheet the portal already knows, or one it is sure
+    // about, never leaves the browser.
+    const cols = inferColumns(rawHeaders, rawRows)
+    const remembered = rememberedMapping(rawHeaders)
+    if (remembered) {
+      setCsvCheck({
+        rawHeaders,
+        rawRows,
+        remembered: true,
+        cols: cols.map((c, i) => ({
+          ...c,
+          key: remembered[i],
+          confidence: 'high',
+          reason: 'You checked this spreadsheet before, so these are the answers you gave.',
+        })),
+        keys: remembered,
+      })
+      return
+    }
+
+    setCsvCheck({ rawHeaders, rawRows, cols, keys: cols.map(c => c.key), asking: cols.some(c => c.confidence !== 'high') })
+    if (cols.every(c => c.confidence === 'high')) return
+
+    // Only the columns it could not place are worth asking about, and only
+    // those answers are taken. A failure here changes nothing.
+    try {
+      const data = await apiFetch(`${API_URL}/api/guests/map-columns`, {
+        method: 'POST',
+        body: JSON.stringify({ weddingId, headers: rawHeaders, samples: rawRows.slice(0, 5) }),
+      })
+      const mapping = data?.mapping || {}
+      setCsvCheck(prev => {
+        if (!prev || prev.rawHeaders !== rawHeaders) return prev
+        const keys = prev.keys.slice()
+        const merged = prev.cols.map((c, i) => {
+          if (c.confidence !== 'low') return c
+          const suggested = mapping[c.raw]
+          if (!isMappableKey(suggested) || suggested === c.key) return c
+          const clash = suggested !== 'ignore' && !tagLabelOf(suggested) && keys.some((k, j) => j !== i && k === suggested)
+          if (clash) return c
+          keys[i] = suggested
+          return { ...c, key: suggested, confidence: 'medium', reason: 'Read from the header and the values by Claude.' }
+        })
+        return { ...prev, cols: merged, keys, asking: false }
+      })
+    } catch (err) {
+      console.error('Column mapping request failed, keeping the local guesses:', err)
+      setCsvCheck(prev => (prev && prev.rawHeaders === rawHeaders ? { ...prev, asking: false } : prev))
+    }
+  }
+
+  /** A column the person changed by hand is settled, so it stops asking. */
+  const setCsvColumnKey = (index, key) => {
+    setCsvCheck(prev => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        keys: prev.keys.map((k, j) => (j === index ? key : k)),
+        cols: prev.cols.map((c, j) => (j === index ? { ...c, key, confidence: 'high', reason: 'You chose this one.' } : c)),
+      }
+    })
+  }
+
+  /** The check step is done: build the rows and move on to add-or-update. */
+  const confirmCsvMapping = () => {
+    if (!csvCheck) return
+    const { rawHeaders, rawRows, keys } = csvCheck
+    const built = applyColumnMapping(rawHeaders, rawRows, keys)
+    if (built.length === 0) {
+      setCsvCheck(null)
+      setCsvResult({ success: false, error: `No rows with a name. Columns found: ${rawHeaders.join(', ')}. One column needs to be the first name, or the full name.` })
       return
     }
     // Normalise columns into the guest schema
-    const normalised = guests.map(g => {
+    const normalised = built.map(({ guest: g, raw }) => {
       // Name handling
       if (!g.first_name && g.name) {
         const parts = g.name.split(' ')
         g.first_name = parts[0]
         g.last_name = parts.slice(1).join(' ')
       }
-      if (!g.first_name && g.firstname) g.first_name = g.firstname
-      if (!g.last_name && g.lastname) g.last_name = g.lastname
+      if (!g.first_name && raw.firstname) g.first_name = raw.firstname
+      if (!g.last_name && raw.lastname) g.last_name = raw.lastname
 
       // Phone: handle "phone_number" alias
-      if (!g.phone && g.phone_number) g.phone = g.phone_number
+      if (!g.phone && raw.phone_number) g.phone = raw.phone_number
 
       // RSVP: normalise "Accepted"/"Declined" to yes/no/pending
       if (g.rsvp) {
@@ -759,27 +887,28 @@ export default function GuestList({ weddingId, userId }) {
         else g.rsvp = 'pending'
       }
 
-      // Build tags from known columns
-      const tags = []
+      // Tags mapped column by column, plus the two the old import always knew
+      // about, for a sheet whose columns were not mapped as tags.
+      const tags = Array.isArray(g.tags) ? g.tags.slice() : []
+      const add = label => { if (!tags.includes(label)) tags.push(label) }
       // Rehearsal dinner
-      const rehearsalRsvp = g.rehersal_rsvp || g.rehearsal_rsvp || ''
-      const invitedRehearsal = g.invited_to_rehersal || g.invited_to_rehearsal || ''
+      const rehearsalRsvp = raw.rehersal_rsvp || raw.rehearsal_rsvp || ''
+      const invitedRehearsal = raw.invited_to_rehersal || raw.invited_to_rehearsal || ''
       if (rehearsalRsvp.trim().toLowerCase() === 'accepted' || invitedRehearsal.trim().toLowerCase() === 'yes') {
-        tags.push('Rehearsal Dinner')
+        add('Rehearsal Dinner')
       }
       // Shuttle
-      const shuttle = g.shuttle || ''
-      if (shuttle.trim().toLowerCase() === 'yes') {
-        tags.push('Shuttle')
-      }
+      const shuttle = raw.shuttle || ''
+      if (shuttle.trim().toLowerCase() === 'yes') add('Shuttle')
       g.tags = tags
 
       return g
     })
+    rememberMapping(rawHeaders, keys)
+    setCsvCheck(null)
     // Ask before importing rather than after: whether a re-import doubles the
     // list or updates it in place is a one-way choice about existing data.
     setCsvPendingImport(normalised)
-    e.target.value = ''
   }
 
   const submitCsvImport = async (mode) => {
@@ -1559,6 +1688,102 @@ export default function GuestList({ weddingId, userId }) {
           onUpdate={handleSettingsUpdate}
           onClose={() => setShowSettings(false)}
         />
+      )}
+
+      {csvCheck && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[85vh] flex flex-col">
+            <div className="p-6 pb-3">
+              <h3 className="font-semibold text-sage-800 mb-1">Check the columns</h3>
+              <p className="text-sm text-sage-500">
+                This is what each column in your spreadsheet looks like. Change anything that is wrong,
+                then import. {csvCheck.remembered ? 'You imported this spreadsheet before, so these are the answers you gave last time.' : ''}
+              </p>
+              {csvCheck.asking && (
+                <p className="text-xs text-sage-400 mt-2">Still reading the columns it is unsure of...</p>
+              )}
+            </div>
+            <div className="overflow-y-auto px-6 pb-2">
+              <table className="w-full text-sm">
+                <thead className="text-xs uppercase tracking-wide text-sage-400 text-left">
+                  <tr>
+                    <th className="py-2 pr-3 font-medium">Column</th>
+                    <th className="py-2 pr-3 font-medium">Import as</th>
+                    <th className="py-2 pr-3 font-medium">Sure?</th>
+                    <th className="py-2 font-medium">First few values</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {csvCheck.cols.map((col, i) => {
+                    const taken = new Set(csvCheck.keys.filter((k, j) => j !== i && k !== 'ignore' && !tagLabelOf(k)))
+                    const currentTag = tagLabelOf(csvCheck.keys[i])
+                    const newTag = String(col.raw || '').replace(/\s+/g, ' ').trim().slice(0, 48)
+                    const tagChoices = tagOptions.map(t => t.label)
+                    if (newTag && !tagChoices.includes(newTag)) tagChoices.push(newTag)
+                    if (currentTag && !tagChoices.includes(currentTag)) tagChoices.push(currentTag)
+                    return (
+                      <tr key={`${col.raw}-${i}`} className="border-t border-cream-200 align-top">
+                        <td className="py-2.5 pr-3 max-w-[14rem]">
+                          <span className="text-sage-800 break-words">{col.raw || <em className="text-sage-400">no header</em>}</span>
+                          {col.reason && <span className="block text-xs text-sage-400 mt-0.5">{col.reason}</span>}
+                        </td>
+                        <td className="py-2.5 pr-3">
+                          <select
+                            value={csvCheck.keys[i]}
+                            onChange={e => setCsvColumnKey(i, e.target.value)}
+                            className="border border-cream-300 rounded-lg px-2 py-1.5 text-sm bg-white max-w-[12rem]"
+                          >
+                            {FIELD_GROUPS.map(group => (
+                              <optgroup key={group.label} label={group.label}>
+                                {group.keys.map(k => (
+                                  <option key={k} value={k} disabled={taken.has(k)}>
+                                    {FIELD_LABELS[k]}{taken.has(k) ? ' (taken)' : ''}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            ))}
+                            <optgroup label="Tags">
+                              {tagChoices.map(label => (
+                                <option key={label} value={`tag:${label}`}>
+                                  {tagOptions.some(t => t.label === label) ? label : `New tag: ${label}`}
+                                </option>
+                              ))}
+                            </optgroup>
+                            <optgroup label="Leave out">
+                              <option value="ignore">Do not import</option>
+                            </optgroup>
+                          </select>
+                        </td>
+                        <td className="py-2.5 pr-3 whitespace-nowrap">
+                          {col.confidence === 'high'
+                            ? <span className="text-sage-400" title={col.reason}>✓</span>
+                            : <span className="text-amber-700 bg-amber-50 rounded px-1.5 py-0.5 text-xs" title={col.reason}>check</span>}
+                        </td>
+                        <td className="py-2.5 text-xs text-sage-500 break-words max-w-[16rem]">
+                          {col.samples.length ? col.samples.join(' · ') : <em className="text-sage-300">empty</em>}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div className="p-6 pt-4 border-t border-cream-200 flex gap-3">
+              <button
+                onClick={confirmCsvMapping}
+                className="flex-1 bg-sage-600 text-white rounded-xl py-2.5 text-sm font-medium hover:bg-sage-700 transition"
+              >
+                Looks right
+              </button>
+              <button
+                onClick={() => setCsvCheck(null)}
+                className="px-5 border border-cream-300 rounded-xl py-2.5 text-sm text-sage-600 hover:bg-cream-50 transition"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {csvPendingImport && (
