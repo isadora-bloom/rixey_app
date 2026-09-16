@@ -8800,26 +8800,34 @@ app.delete('/api/inspo/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Get image URL to delete from storage
-    const { data: image } = await supabaseAdmin
+    const { data: image, error: readErr } = await supabaseAdmin
       .from('inspo_gallery')
-      .select('image_url')
+      .select('wedding_id, image_url')
       .eq('id', id)
-      .single();
+      .maybeSingle();
+    if (readErr) throw readErr;
+    if (!image) return res.status(404).json({ error: 'No such image' });
 
-    if (image?.image_url) {
+    const { data, error } = await supabaseAdmin
+      .from('inspo_gallery')
+      .delete()
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such image' });
+
+    // Row first: the gallery must not keep showing an image someone asked to
+    // remove just because the object in storage refuses to go.
+    if (image.image_url) {
       const urlParts = image.image_url.split('/inspo-gallery/');
       if (urlParts[1]) {
-        await supabaseAdmin.storage.from('inspo-gallery').remove([urlParts[1]]);
+        const { error: rmErr } = await supabaseAdmin.storage.from('inspo-gallery').remove([urlParts[1]]);
+        if (rmErr) console.error('Inspo image file not removed from storage:', urlParts[1], rmErr.message);
       }
     }
 
-    const { error } = await supabaseAdmin
-      .from('inspo_gallery')
-      .delete()
-      .eq('id', id);
-
-    if (error) throw error;
+    await logActivity(image.wedding_id, req.userId, 'inspo_deleted', 'Inspiration image removed');
     res.json({ success: true });
   } catch (error) {
     console.error('Delete inspo error:', error);
