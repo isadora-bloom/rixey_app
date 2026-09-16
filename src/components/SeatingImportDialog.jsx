@@ -18,6 +18,11 @@ export default function SeatingImportDialog({ weddingId, onComplete }) {
   const [result, setResult] = useState(null);
   const [errorMsg, setErrorMsg] = useState('');
   const [dragging, setDragging] = useState(false);
+  // One entry per row the parser dropped (a blank name, an unrecognised
+  // column) — capped at 25 by the server. skippedRows is the true count, which
+  // can be larger than the warnings shown.
+  const [parseWarnings, setParseWarnings] = useState([]);
+  const [skippedRows, setSkippedRows] = useState(0);
   const inputRef = useRef();
 
   function reset() {
@@ -26,6 +31,8 @@ export default function SeatingImportDialog({ weddingId, onComplete }) {
     setResult(null);
     setErrorMsg('');
     setReplaceExisting(false);
+    setParseWarnings([]);
+    setSkippedRows(0);
   }
 
   function handleClose() {
@@ -45,6 +52,8 @@ export default function SeatingImportDialog({ weddingId, onComplete }) {
       const data = await r.json();
       if (!r.ok || !data.ok) throw new Error(data.error || 'Parse failed');
       setChart(data.chart);
+      setParseWarnings(data.warnings || []);
+      setSkippedRows(data.skippedRows || 0);
       setStep('preview');
     } catch (err) {
       setErrorMsg(err.message);
@@ -172,6 +181,27 @@ export default function SeatingImportDialog({ weddingId, onComplete }) {
                       </div>
                     ))}
                   </div>
+
+                  {/* Rows the parser could not place — a blank name, a column
+                      it did not recognise. Silence here reads as a clean
+                      import when rows were quietly dropped. */}
+                  {skippedRows > 0 && (
+                    <div className="w-full text-left bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 mt-4">
+                      <p className="text-xs font-semibold text-amber-800 mb-1">
+                        {skippedRows} row{skippedRows === 1 ? '' : 's'} skipped
+                      </p>
+                      {parseWarnings.length > 0 && (
+                        <ul className="text-xs text-amber-700 space-y-1 list-disc list-inside">
+                          {parseWarnings.map((w, i) => <li key={i}>{w}</li>)}
+                        </ul>
+                      )}
+                      {skippedRows > parseWarnings.length && (
+                        <p className="text-xs text-amber-700 mt-1">
+                          …and {skippedRows - parseWarnings.length} more.
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   {/* Replace toggle */}
                   <label className="flex items-start gap-2.5 mt-4 cursor-pointer">

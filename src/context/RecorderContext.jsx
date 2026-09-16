@@ -1,12 +1,11 @@
 import { createContext, useContext, useState, useRef, useEffect, useCallback } from 'react'
-import { API_URL } from '../config/api'
-import { apiFetch } from '../utils/api'
 import { toast } from '../components/ui/Toast'
 import {
   recordingStoreAvailable, beginRecording, appendChunk, finishRecording,
   noteUploadError, listPending, getRecordingBlob, discardRecording,
   downloadRecording, extensionFor,
 } from '../utils/recordingStore'
+import { uploadMediaDirect } from '../utils/directUpload'
 
 /**
  * One recorder for the whole app, living above the router.
@@ -149,29 +148,31 @@ export function RecorderProvider({ children }) {
       const blob = await getRecordingBlob(rec.id)
       if (!blob) throw new Error('The audio for that recording is no longer on this device.')
       blobSize = blob.size
-      const form = new FormData()
-      form.append('file', new File([blob], `voice-note.${extensionFor(rec.mimeType)}`, { type: rec.mimeType }))
-      if (rec.durationSecs) form.append('duration_secs', String(rec.durationSecs))
-      // Back to the meeting it was recorded against, never whichever one is on
-      // screen. Filing a walkthrough's audio under the wrong couple is its own
-      // kind of lost.
-      const saved = await apiFetch(
-        `${API_URL}/api/admin/walkthroughs/${rec.walkthroughId}/media`,
-        { method: 'POST', body: form }
-      )
-      if (!saved?.id) throw new Error('The server did not confirm it saved.')
+      // Uploads straight to Supabase Storage rather than through the Railway
+      // proxy — see directUpload.js. Back to the meeting it was recorded
+      // against, never whichever one is on screen: filing a walkthrough's
+      // audio under the wrong couple is its own kind of lost.
+      const saved = await uploadMediaDirect({
+        walkthroughId: rec.walkthroughId,
+        blob,
+        kind: 'audio',
+        mimetype: rec.mimeType,
+        filename: `voice-note.${extensionFor(rec.mimeType)}`,
+        extra: rec.durationSecs ? { duration_secs: rec.durationSecs } : {},
+      })
+      // Only ever deleted once the server has confirmed it holds a copy.
       await discardRecording(rec.id)
       setLastSaved({ walkthroughId: rec.walkthroughId, media: saved, at: Date.now() })
       toast.success('Recording saved. Transcribing now.')
       ok = true
     } catch (err) {
       // "The object exceeded the maximum allowed size" is storage's wording and
-      // it tells you nothing you can act on: not how big, not how big is
-      // allowed, not whether the audio still exists. Say all three.
+      // it tells you nothing you can act on: not how big, not whether the
+      // audio still exists. Say what we can.
       const tooBig = /exceeded the maximum allowed size/i.test(err.message || '')
       const sizeMb = blobSize ? (blobSize / 1024 / 1024).toFixed(0) : null
       const message = tooBig
-        ? `it is ${sizeMb ? `${sizeMb}MB, over the ` : 'over the '}50MB limit for a single upload. The audio is still here, and recordings made from now on are far smaller.`
+        ? `it is ${sizeMb ? `${sizeMb}MB, ` : ''}over the limit for a single upload. The audio is still here, and recordings made from now on are far smaller.`
         : err.message
       await noteUploadError(rec.id, message)
       toast.error(`That recording is safe on this device but did not upload: ${message}`)
@@ -249,10 +250,16 @@ export function RecorderProvider({ children }) {
       await refreshPending()
       return true
     } catch (err) {
+      // getUserMedia can succeed and then MediaRecorder or IndexedDB fail —
+      // the level watcher was left running against a stream nobody was
+      // recording from, and the microphone stayed open with nothing using it.
+      stopWatchingLevel()
+      streamRef.current?.getTracks().forEach(t => t.stop())
+      streamRef.current = null
       toast.error(`Could not start recording: ${err.message}. Check the browser has microphone permission.`)
       return false
     }
-  }, [holdScreenAwake, releaseScreen, refreshPending, uploadStored])
+  }, [holdScreenAwake, releaseScreen, refreshPending, uploadStored, stopWatchingLevel])
 
   const stop = useCallback(() => {
     const rec = recorderRef.current

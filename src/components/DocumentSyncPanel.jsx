@@ -37,6 +37,11 @@ export default function DocumentSyncPanel({ weddingId }) {
   // Without it, a successful import left the screen identical to before.
   const [lastImport, setLastImport] = useState(null)
   const fileRef = useRef(null)
+  // Checked on every pass of the parse-status poll below, so closing this
+  // panel (or navigating away) actually stops it rather than leaving it
+  // running against a wedding nobody is looking at for up to ten minutes.
+  const cancelledRef = useRef(false)
+  useEffect(() => () => { cancelledRef.current = true }, [])
 
   useEffect(() => { if (weddingId) load() }, [weddingId])
 
@@ -72,8 +77,11 @@ export default function DocumentSyncPanel({ weddingId }) {
 
       const startedAt = Date.now()
       while (Date.now() - startedAt < 10 * 60 * 1000) {
+        if (cancelledRef.current) return
         await new Promise(r => setTimeout(r, 5000))
+        if (cancelledRef.current) return
         const list = await apiFetch(`${API_URL}/api/admin/documents/${weddingId}`) || []
+        if (cancelledRef.current) return
         setDocs(list)
         const doc = list.find(d => d.id === id)
         if (doc?.parse_error && !doc?.parsed_at) { toastError(`Could not read it: ${doc.parse_error}`); break }
@@ -85,8 +93,10 @@ export default function DocumentSyncPanel({ weddingId }) {
           break
         }
       }
-    } catch (err) { toastError(`Could not read it: ${err.message}`) }
-    setBusy('')
+    } catch (err) {
+      if (!cancelledRef.current) toastError(`Could not read it: ${err.message}`)
+    }
+    if (!cancelledRef.current) setBusy('')
   }
 
   const openDiff = async (id) => {

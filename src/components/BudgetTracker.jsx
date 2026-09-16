@@ -3,6 +3,7 @@ import { API_URL } from '../config/api'
 import { apiFetch, loadJson } from '../utils/api'
 import { useToast } from './ui/Toast'
 import LoadError from './ui/LoadError'
+import ConfirmDialog from './ui/ConfirmDialog'
 import { useAutosave } from '../hooks/useAutosave'
 import SaveIndicator from './ui/SaveIndicator'
 
@@ -119,6 +120,9 @@ export default function BudgetTracker({ weddingId }) {
       [key]: { ...prev[key], label }
     }))
   }
+
+  const [confirmDeleteKey, setConfirmDeleteKey] = useState(null)
+  const requestDeleteCategory = (key) => setConfirmDeleteKey(key)
 
   const deleteCategory = (key) => {
     setCategories(prev => {
@@ -279,7 +283,7 @@ export default function BudgetTracker({ weddingId }) {
                     {cat.budgeted > 0 ? `${catPercent}%` : '—'}
                   </span>
                   <button
-                    onClick={() => deleteCategory(key)}
+                    onClick={() => requestDeleteCategory(key)}
                     title="Remove row"
                     className="flex items-center justify-center w-6 h-6 rounded-full text-sage-300 hover:text-red-500 hover:bg-red-50 transition"
                   >
@@ -304,7 +308,7 @@ export default function BudgetTracker({ weddingId }) {
                       <span className="text-sm font-medium text-sage-800">{cat.label}</span>
                     )}
                     <button
-                      onClick={() => deleteCategory(key)}
+                      onClick={() => requestDeleteCategory(key)}
                       title="Remove row"
                       className="flex items-center justify-center w-6 h-6 rounded-full text-sage-300 hover:text-red-500 hover:bg-red-50 transition flex-shrink-0"
                     >
@@ -412,6 +416,15 @@ export default function BudgetTracker({ weddingId }) {
         </label>
       </div>
 
+      <ConfirmDialog
+        open={confirmDeleteKey !== null}
+        onClose={() => setConfirmDeleteKey(null)}
+        onConfirm={() => { const key = confirmDeleteKey; setConfirmDeleteKey(null); if (key) deleteCategory(key); }}
+        title="Remove this category?"
+        message={confirmDeleteKey ? `Remove "${categories[confirmDeleteKey]?.label || 'this category'}"? Its budgeted, committed and paid figures go with it.` : ''}
+        confirmLabel="Remove"
+        danger
+      />
     </div>
   )
 }

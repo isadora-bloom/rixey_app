@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import { Button, Input, ConfirmDialog } from './ui'
 import { useToast } from './ui/Toast'
 
@@ -309,13 +309,14 @@ export default function DecorInventory({ weddingId, userId }) {
   const [customSpaceInput, setCustomSpaceInput] = useState('');
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmTarget, setConfirmTarget] = useState(null);
+  // A single item's delete, separate from the whole-space confirm above —
+  // different message, different target, same dialog component.
+  const [confirmItemId, setConfirmItemId] = useState(null);
 
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await fetch(`${API_URL}/api/decor/${weddingId}`, { headers: await authHeaders() });
-      if (!res.ok) throw new Error('Failed to load decor inventory');
-      const data = await res.json();
+      const data = await loadJson(`${API_URL}/api/decor/${weddingId}`);
       setItems(data);
       // Derive active spaces from DB items
       const existingSpaces = [...new Set(data.map((i) => i.space_name))];
@@ -393,6 +394,8 @@ export default function DecorInventory({ weddingId, userId }) {
       toastError(`Could not add decor item: ${err.message}`);
     }
   };
+
+  const requestDeleteItem = (id) => setConfirmItemId(id);
 
   const handleDeleteItem = async (id) => {
     const snapshot = items;
@@ -521,7 +524,7 @@ export default function DecorInventory({ weddingId, userId }) {
             spaceName={spaceName}
             items={itemsForSpace(spaceName)}
             onAddItem={handleAddItem}
-            onDeleteItem={handleDeleteItem}
+            onDeleteItem={requestDeleteItem}
             onUpdateItem={handleUpdateItem}
             onDeleteSpace={handleDeleteSpaceClick}
           />
@@ -534,6 +537,19 @@ export default function DecorInventory({ weddingId, userId }) {
         onConfirm={handleDeleteSpaceConfirm}
         title="Remove space"
         message={confirmTarget ? `Remove "${confirmTarget}" and all its items?` : ''}
+        confirmLabel="Remove"
+        danger
+      />
+
+      <ConfirmDialog
+        open={confirmItemId !== null}
+        onClose={() => setConfirmItemId(null)}
+        onConfirm={() => { const id = confirmItemId; setConfirmItemId(null); if (id) handleDeleteItem(id); }}
+        title="Remove this item?"
+        message={(() => {
+          const item = items.find((i) => i.id === confirmItemId);
+          return item?.item_name ? `Remove "${item.item_name}"?` : 'Remove this decor item?';
+        })()}
         confirmLabel="Remove"
         danger
       />

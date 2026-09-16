@@ -62,8 +62,11 @@ export async function createWeddingAccount({
     .select()
     .single()
 
+  // A signup that "succeeds" with no wedding row leaves someone signed in with
+  // nowhere to go, and the old code only logged this to a console nobody was
+  // watching. Fail loudly instead, so the sign-up screen can say so.
   if (weddingCreateError) {
-    console.error('Wedding creation error:', weddingCreateError)
+    throw new Error(weddingCreateError.message || 'Could not create your wedding record.')
   }
 
   const weddingId = wedding?.id || null
@@ -84,38 +87,40 @@ export async function createWeddingAccount({
     }])
 
   if (profileError) {
-    console.error('Profile creation error:', profileError)
+    throw new Error(profileError.message || 'Could not create your profile.')
   }
 
   // 4. Initialize default planning checklist
   if (weddingId) {
-    try {
-      const headers = typeof authHeaders === 'function' ? await authHeaders() : { 'Content-Type': 'application/json' }
-      await fetch(`${API_URL}/api/checklist/initialize/${weddingId}`, {
-        method: 'POST',
-        headers,
-      })
-    } catch (checklistErr) {
-      console.error('Checklist initialization error:', checklistErr)
+    const headers = typeof authHeaders === 'function' ? await authHeaders() : { 'Content-Type': 'application/json' }
+    const res = await fetch(`${API_URL}/api/checklist/initialize/${weddingId}`, {
+      method: 'POST',
+      headers,
+    })
+    if (!res.ok) {
+      let msg
+      try { msg = (await res.json()).error } catch { msg = res.statusText }
+      throw new Error(msg || 'Could not set up your planning checklist.')
     }
   }
 
   // 5. Create admin notification
   if (weddingId) {
-    try {
-      const headers = typeof authHeaders === 'function' ? await authHeaders() : { 'Content-Type': 'application/json' }
-      await fetch(`${API_URL}/api/admin/notifications`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          type: 'new_wedding',
-          message: `New wedding created: ${coupleNames?.trim() || email} on ${weddingDate}. Event code: ${eventCode}. Please add HoneyBook and Google Sheets links.`,
-          wedding_id: weddingId,
-          user_id: user.id,
-        }),
-      })
-    } catch (notifErr) {
-      console.error('Admin notification error:', notifErr)
+    const headers = typeof authHeaders === 'function' ? await authHeaders() : { 'Content-Type': 'application/json' }
+    const res = await fetch(`${API_URL}/api/admin/notifications`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        type: 'new_wedding',
+        message: `New wedding created: ${coupleNames?.trim() || email} on ${weddingDate}. Event code: ${eventCode}. Please add HoneyBook and Google Sheets links.`,
+        wedding_id: weddingId,
+        user_id: user.id,
+      }),
+    })
+    if (!res.ok) {
+      let msg
+      try { msg = (await res.json()).error } catch { msg = res.statusText }
+      throw new Error(msg || 'Could not notify the venue about your new wedding.')
     }
   }
 

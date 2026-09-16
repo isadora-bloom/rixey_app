@@ -511,11 +511,18 @@ export default function Dashboard() {
     }
   }
 
-  // Countdown tick — when it hits 0 auto-retry
+  // Automatic retries used to loop for ever every 60s against a server that
+  // was going to keep failing — silent to the couple beyond one bubble that
+  // never went away. Three tries, then stop the clock and ask for a manual
+  // retry instead.
+  const MAX_AUTO_SAGE_RETRIES = 3
+
+  // Countdown tick — when it hits 0 auto-retry, unless the auto-retries are
+  // used up, in which case it waits for a manual retry (see retrySageNow).
   useEffect(() => {
-    if (!retryState) return
+    if (!retryState || retryState.exhausted) return
     if (retryState.secondsLeft <= 0) {
-      doSageRequest(retryState.userMessage, retryState.baseMessages)
+      doSageRequest(retryState.userMessage, retryState.baseMessages, retryState.attempt)
       return
     }
     const t = setTimeout(() => {
@@ -523,6 +530,13 @@ export default function Dashboard() {
     }, 1000)
     return () => clearTimeout(t)
   }, [retryState]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Bound to the manual "Retry" action once the automatic attempts are used
+  // up (or to jump the countdown early while they aren't).
+  const retrySageNow = () => {
+    if (!retryState) return
+    doSageRequest(retryState.userMessage, retryState.baseMessages, retryState.exhausted ? 0 : retryState.attempt)
+  }
 
   // Take the couple to the section Sage offered to file something into, and
   // carry the detail across so they aren't retyping what they just said. The
@@ -544,7 +558,7 @@ export default function Dashboard() {
   }
 
   // Extracted Sage API call — used by sendMessage and the retry loop
-  const doSageRequest = async (userMessage, baseMessages) => {
+  const doSageRequest = async (userMessage, baseMessages, attempt = 0) => {
     setSending(true)
     try {
       const data = await apiFetch(`${API_URL}/api/chat`, {
@@ -579,8 +593,15 @@ export default function Dashboard() {
       }
     } catch (error) {
       console.error('Error getting Sage response:', error)
-      // Show countdown bubble and auto-retry in 60 s
-      setRetryState({ userMessage, baseMessages, secondsLeft: 60 })
+      const nextAttempt = attempt + 1
+      if (nextAttempt > MAX_AUTO_SAGE_RETRIES) {
+        // A server that keeps failing was retried silently for ever before.
+        // Say so plainly and wait for the couple to ask again.
+        setRetryState({ userMessage, baseMessages, secondsLeft: 0, attempt: nextAttempt, exhausted: true })
+      } else {
+        // Show countdown bubble and auto-retry in 60 s
+        setRetryState({ userMessage, baseMessages, secondsLeft: 60, attempt: nextAttempt })
+      }
     }
     setSending(false)
   }
@@ -1013,7 +1034,7 @@ export default function Dashboard() {
                   clearSelectedFile={clearSelectedFile}
                   uploadingFile={uploadingFile}
                   retryState={retryState}
-                  setRetryState={setRetryState}
+                  onRetryNow={retrySageNow}
                   chatContainerRef={chatContainerRef}
                   messagesEndRef={messagesEndRef}
                   fileInputRef={fileInputRef}
@@ -1206,7 +1227,7 @@ export default function Dashboard() {
               )}
               {activeSection === 'table-map' && profile?.wedding_id && (
                 <div className="p-4 sm:p-6">
-                  <TableCanvas weddingId={profile.wedding_id} />
+                  <TableCanvas weddingId={profile.wedding_id} coupleNames={wedding?.couple_names} />
                 </div>
               )}
               {activeSection === 'rsvp-settings' && profile?.wedding_id && (

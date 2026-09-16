@@ -6,6 +6,7 @@ import { useToast } from './ui/Toast'
 import LoadError from './ui/LoadError'
 import { useAutosave } from '../hooks/useAutosave'
 import SaveIndicator from './ui/SaveIndicator'
+import ConfirmDialog from './ui/ConfirmDialog'
 
 
 // Events organized by section
@@ -1017,6 +1018,13 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, weddin
     setter(prev => prev.filter(s => s.id !== id))
   }
 
+  // One dialog covers both a shuttle run and a custom event — different data,
+  // same "remove this and its time from the timeline" action, and neither had
+  // any confirm before this.
+  const [confirmRemove, setConfirmRemove] = useState(null) // { kind: 'shuttle', type, id } | { kind: 'event', id, label }
+
+  const requestRemoveShuttle = (type, id) => setConfirmRemove({ kind: 'shuttle', type, id })
+
   const addCustomEvent = () => {
     if (!newCustomEvent.name.trim()) return
     setCustomEvents(prev => [...prev, { ...newCustomEvent, id: `custom-${Date.now()}` }])
@@ -1031,6 +1039,11 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, weddin
   const removeCustomEvent = (id) => {
     setCustomEvents(prev => prev.filter(e => e.id !== id))
     setEditingCustomEvent(null)
+  }
+
+  const requestRemoveCustomEvent = (id) => {
+    const ev = customEvents.find(e => e.id === id)
+    setConfirmRemove({ kind: 'event', id, label: ev?.name || 'this event' })
   }
 
   const CUSTOM_SECTIONS = [
@@ -1450,7 +1463,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, weddin
                   placeholder="Hotel name / notes"
                   className="flex-1 px-2 py-1 border border-cream-300 rounded text-sm"
                 />
-                <button onClick={() => removeShuttle('arrival', shuttle.id)} className="text-red-400 hover:text-red-600 text-lg">×</button>
+                <button onClick={() => requestRemoveShuttle('arrival', shuttle.id)} className="text-red-400 hover:text-red-600 text-lg">×</button>
               </div>
             ))}
           </div>
@@ -1608,7 +1621,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, weddin
                   placeholder="Notes"
                   className="flex-1 px-2 py-1 border border-cream-300 rounded text-sm"
                 />
-                <button onClick={() => removeShuttle('departure', shuttle.id)} className="text-red-400 hover:text-red-600 text-lg">×</button>
+                <button onClick={() => requestRemoveShuttle('departure', shuttle.id)} className="text-red-400 hover:text-red-600 text-lg">×</button>
               </div>
             ))}
           </div>
@@ -1680,7 +1693,7 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, weddin
                     />
                     <div className="flex gap-2">
                       <button onClick={() => setEditingCustomEvent(null)} className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700">Done</button>
-                      <button onClick={() => removeCustomEvent(event.id)} className="px-4 py-2 text-red-500 text-sm hover:text-red-700">Delete</button>
+                      <button onClick={() => requestRemoveCustomEvent(event.id)} className="px-4 py-2 text-red-500 text-sm hover:text-red-700">Delete</button>
                     </div>
                   </div>
                 ) : (
@@ -1808,6 +1821,23 @@ export default function TimelineBuilder({ weddingId, weddingDate, userId, weddin
         </div>
       </div>
 
+      <ConfirmDialog
+        open={confirmRemove !== null}
+        onClose={() => setConfirmRemove(null)}
+        onConfirm={() => {
+          const target = confirmRemove
+          setConfirmRemove(null)
+          if (!target) return
+          if (target.kind === 'shuttle') removeShuttle(target.type, target.id)
+          else removeCustomEvent(target.id)
+        }}
+        title={confirmRemove?.kind === 'shuttle' ? 'Remove this shuttle run?' : 'Remove this event?'}
+        message={confirmRemove?.kind === 'shuttle'
+          ? 'This takes the run off the timeline.'
+          : `This takes "${confirmRemove?.label}" off the timeline.`}
+        confirmLabel="Remove"
+        danger
+      />
     </div>
   )
 }

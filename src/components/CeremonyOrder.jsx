@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import SaveIndicator from './ui/SaveIndicator'
-import { Button } from './ui'
+import { Button, ConfirmDialog } from './ui'
 import { useToast } from './ui/Toast'
 import { partnerLabels } from '../../shared/partner-labels'
 
@@ -448,9 +448,7 @@ export default function CeremonyOrder({ weddingId, wedding }) {
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await fetch(`${API_URL}/api/ceremony-order/${weddingId}`, { headers: await authHeaders() });
-      if (!res.ok) throw new Error('Failed to load');
-      const data = await res.json();
+      const data = await loadJson(`${API_URL}/api/ceremony-order/${weddingId}`);
       setEntries(Array.isArray(data) ? data : []);
     } catch (err) {
       setError(err.message);
@@ -488,7 +486,18 @@ export default function CeremonyOrder({ weddingId, wedding }) {
     }
   };
 
-  const handleDelete = async (id) => {
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  // The person's own card, kept for the confirm message — by the time it
+  // confirms, sectionEntries may already have moved on.
+  const [confirmDeleteName, setConfirmDeleteName] = useState('');
+
+  const requestDelete = (id) => {
+    const entry = entries.find(e => e.id === id);
+    setConfirmDeleteName(entry?.participant_name || 'this person');
+    setConfirmDeleteId(id);
+  };
+
+  const performDelete = async (id) => {
     const snapshot = entries;
     setSaveState('saving');
     setEntries(prev => prev.filter(e => e.id !== id));
@@ -549,12 +558,22 @@ export default function CeremonyOrder({ weddingId, wedding }) {
           <SectionBuilder labels={labels} section={key}
             sectionEntries={entries.filter(e => e.section === key)}
             onAdd={handleAdd}
-            onDelete={handleDelete}
+            onDelete={requestDelete}
             onReorder={handleReorder}
             onSaveStateChange={setSaveState}
           />
         </section>
       ))}
+
+      <ConfirmDialog
+        open={confirmDeleteId !== null}
+        onClose={() => setConfirmDeleteId(null)}
+        onConfirm={() => { const id = confirmDeleteId; setConfirmDeleteId(null); if (id) performDelete(id); }}
+        title="Remove from the ceremony order?"
+        message={`This takes ${confirmDeleteName} off the processional.`}
+        confirmLabel="Remove"
+        danger
+      />
     </div>
   );
 }

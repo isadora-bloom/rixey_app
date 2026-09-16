@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../../config/api'
-import { authHeaders } from '../../utils/api'
+import { loadJson } from '../../utils/api'
+import LoadError from '../../components/ui/LoadError'
 
 export default function ContractPanel({ weddingId, uploadingContract, handleContractUpload, uploadResult }) {
   const [contractLines, setContractLines] = useState([])
@@ -10,24 +11,25 @@ export default function ContractPanel({ weddingId, uploadingContract, handleCont
   const [openHistory, setOpenHistory] = useState({})
   const [loading, setLoading] = useState(true)
   const [expandedId, setExpandedId] = useState(null)
+  const [loadError, setLoadError] = useState(null)
 
   useEffect(() => {
     loadContracts()
   }, [weddingId])
 
   const loadContracts = async () => {
+    setLoadError(null)
     try {
-      const res = await fetch(`${API_URL}/api/contracts/${weddingId}`, {
-        headers: await authHeaders(),
-      })
-      if (res.ok) {
-        const data = await res.json()
-        setContractLines(data.contractLines || [])
-        setVersioned(data.versioned !== false)
-        setVendorContracts(data.vendorContracts || [])
-      }
+      const data = await loadJson(`${API_URL}/api/contracts/${weddingId}`)
+      setContractLines(data.contractLines || [])
+      setVersioned(data.versioned !== false)
+      setVendorContracts(data.vendorContracts || [])
     } catch (err) {
+      // A failed read used to leave the lists empty with only a
+      // console.error, which read exactly like a couple with no contracts on
+      // file at all.
       console.error('Failed to load contracts:', err)
+      setLoadError(err)
     }
     setLoading(false)
   }
@@ -95,6 +97,8 @@ export default function ContractPanel({ weddingId, uploadingContract, handleCont
 
         {loading ? (
           <p className="text-sage-400 text-sm">Loading...</p>
+        ) : loadError ? (
+          <LoadError what="contracts" error={loadError} onRetry={loadContracts} />
         ) : total === 0 ? (
           <p className="text-sage-400 text-sm py-4 text-center bg-cream-50 rounded-lg">
             No contracts uploaded yet

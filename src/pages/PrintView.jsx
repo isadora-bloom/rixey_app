@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import { awaitAnswerJob } from '../utils/answerJobs'
 import { formatDateOnly } from '../utils/dates'
-import { allPeople, dietaryNotInRegistry } from '../../shared/guest-names'
+import { allPeople, dietaryNotInRegistry, headcount } from '../../shared/guest-names'
 import { partnerLabels, fillLabel } from '../../shared/partner-labels'
+import { formatGuestCare } from '../../shared/guest-care'
 
 
 // All timeline event definitions (mirrored from TimelineBuilder for rendering).
@@ -97,11 +98,26 @@ function DataRow({ label, value }) {
   )
 }
 
+// A section that failed to load used to render as though there were simply
+// nothing to print — indistinguishable from a couple who left it blank. Say
+// so instead, in the section itself, so the rest of the pack still prints.
+function SectionErrorNote({ label }) {
+  return (
+    <p className="empty-note" style={{ color: '#b91c1c', fontStyle: 'normal' }}>
+      Could not load {label}. Reload this page to try again.
+    </p>
+  )
+}
+
 export default function PrintView() {
   const { weddingId } = useParams()
   const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  // Per-section: which reads actually failed, keyed the same as the fetch
+  // spec below, so a failure prints a message in its own section instead of
+  // taking down — or silently blanking — the rest of the pack.
+  const [sectionErrors, setSectionErrors] = useState({})
   const [sections, setSections] = useState({
     timeline: false,
     tables: false,
@@ -140,7 +156,12 @@ export default function PrintView() {
   const [allergies, setAllergies] = useState([])
   const [weddingDetails, setWeddingDetails] = useState(null)
   const [ceremonyChairs, setCeremonyChairs] = useState(null)
-  const [guestCare, setGuestCare] = useState([])
+  // The raw { children: { has, notes }, mobility: { has, notes }, ... } blob,
+  // not an array — see shared/guest-care.js. This used to be read as an array
+  // of { guest_name, category, content } rows that were never the actual
+  // shape, so the section always rendered nothing at all, whatever the couple
+  // had told us.
+  const [guestCare, setGuestCare] = useState({})
   const [guests, setGuests] = useState([])
   // The bar and the borrow list are things the couple fills in and the venue
   // has to act on: somebody pulls those items off a shelf and somebody mixes
@@ -155,88 +176,84 @@ export default function PrintView() {
   const [borrowItems, setBorrowItems] = useState([])
   const [highlights, setHighlights] = useState(null)
   const [loadingHighlights, setLoadingHighlights] = useState(true)
+  const [highlightsError, setHighlightsError] = useState(null)
 
   useEffect(() => {
     async function fetchAll() {
+      setLoading(true)
+      setError(null)
+      // Every read for this pack, table-driven so each one gets the same
+      // treatment: fetched in parallel, checked for a real HTTP failure
+      // (loadJson throws rather than a bare fetch's silent res.ok === false),
+      // and — if it fails — recorded against its own section rather than
+      // thrown away in a bare catch or left to blank the whole page.
+      const specs = [
+        { key: 'wedding', label: 'this wedding', url: `${API_URL}/api/admin/weddings`,
+          apply: d => setWedding((d.weddings || []).find(w => w.id === weddingId) || null) },
+        { key: 'timeline', label: 'the timeline', url: `${API_URL}/api/timeline/${weddingId}`,
+          apply: d => setTimeline(d.timeline || null) },
+        { key: 'tables', label: 'table setup', url: `${API_URL}/api/tables/${weddingId}`,
+          apply: d => setTables(d.tables || null) },
+        { key: 'staffing', label: 'the staffing estimate', url: `${API_URL}/api/staffing/${weddingId}`,
+          apply: d => setStaffing(d.staffing || null) },
+        { key: 'ceremony', label: 'the ceremony order', url: `${API_URL}/api/ceremony-order/${weddingId}`,
+          apply: d => setCeremonyOrder(d || []) },
+        { key: 'bedrooms', label: 'bedroom assignments', url: `${API_URL}/api/bedrooms/${weddingId}`,
+          apply: d => setBedrooms(d || []) },
+        { key: 'rehearsal', label: 'the rehearsal dinner', url: `${API_URL}/api/rehearsal-dinner/${weddingId}`,
+          apply: d => setRehearsal(d || null) },
+        { key: 'shuttle', label: 'the shuttle schedule', url: `${API_URL}/api/shuttle/${weddingId}`,
+          apply: d => setShuttle(d || []) },
+        { key: 'makeup', label: 'the hair & makeup schedule', url: `${API_URL}/api/makeup/${weddingId}`,
+          apply: d => setMakeup(d || []) },
+        { key: 'decor', label: 'the decor inventory', url: `${API_URL}/api/decor/${weddingId}`,
+          apply: d => setDecor(d || []) },
+        { key: 'vendors', label: 'vendors', url: `${API_URL}/api/vendors/${weddingId}`,
+          apply: d => setVendors(d.vendors || []) },
+        { key: 'allergies', label: 'the allergy registry', url: `${API_URL}/api/allergies/${weddingId}`,
+          apply: d => setAllergies(d || []) },
+        { key: 'ceremonyChairs', label: 'the ceremony chair plan', url: `${API_URL}/api/ceremony-plan/${weddingId}`,
+          apply: d => setCeremonyChairs(d?.plan || null) },
+        { key: 'guestCare', label: 'guest care notes', url: `${API_URL}/api/guest-care/${weddingId}`,
+          apply: d => setGuestCare(d?.data || {}) },
+        { key: 'guests', label: 'the guest list', url: `${API_URL}/api/guests/${weddingId}`,
+          apply: d => setGuests(d?.guests || []) },
+        { key: 'details', label: 'wedding details', url: `${API_URL}/api/wedding-details/${weddingId}`,
+          apply: d => setWeddingDetails(d || null) },
+        { key: 'barItems', label: 'the bar shopping list', url: `${API_URL}/api/bar-shopping/${weddingId}`,
+          apply: d => setBarItems(Array.isArray(d) ? d : []) },
+        { key: 'barRecipes', label: 'bar recipes', url: `${API_URL}/api/bar-recipes/${weddingId}`,
+          apply: d => setBarRecipes(Array.isArray(d) ? d : []) },
+        { key: 'barNotes', label: 'bar notes', url: `${API_URL}/api/bar-notes/${weddingId}`,
+          apply: d => setBarNotes(d || null) },
+        { key: 'borrow', label: 'borrowed items', url: `${API_URL}/api/borrow-selections/${weddingId}`,
+          apply: d => setBorrowItems(Array.isArray(d) ? d : (d?.selections || [])) },
+        { key: 'weddingParty', label: 'the wedding party', url: `${API_URL}/api/wedding-party/${weddingId}`,
+          apply: d => setWeddingParty(Array.isArray(d) ? d : []) },
+      ]
+
       try {
-        const hdrs = await authHeaders()
-        const [
-          weddingsRes, timelineRes, tablesRes, staffingRes,
-          ceremonyRes, bedroomsRes, rehearsalRes, shuttleRes,
-          makeupRes, decorRes, vendorsRes, allergiesRes,
-          ceremonyChairsRes, guestCareRes, guestsRes,
-          detailsRes, barItemsRes, barRecipesRes, barNotesRes, borrowRes, partyRes,
-        ] = await Promise.all([
-          fetch(`${API_URL}/api/admin/weddings`, { headers: hdrs }),
-          fetch(`${API_URL}/api/timeline/${weddingId}`, { headers: hdrs }),
-          fetch(`${API_URL}/api/tables/${weddingId}`, { headers: hdrs }),
-          fetch(`${API_URL}/api/staffing/${weddingId}`, { headers: hdrs }),
-          fetch(`${API_URL}/api/ceremony-order/${weddingId}`, { headers: hdrs }),
-          fetch(`${API_URL}/api/bedrooms/${weddingId}`, { headers: hdrs }),
-          fetch(`${API_URL}/api/rehearsal-dinner/${weddingId}`, { headers: hdrs }),
-          fetch(`${API_URL}/api/shuttle/${weddingId}`, { headers: hdrs }),
-          fetch(`${API_URL}/api/makeup/${weddingId}`, { headers: hdrs }),
-          fetch(`${API_URL}/api/decor/${weddingId}`, { headers: hdrs }),
-          fetch(`${API_URL}/api/vendors/${weddingId}`, { headers: hdrs }),
-          fetch(`${API_URL}/api/allergies/${weddingId}`, { headers: hdrs }),
-          fetch(`${API_URL}/api/ceremony-plan/${weddingId}`, { headers: hdrs }),
-          fetch(`${API_URL}/api/guest-care/${weddingId}`, { headers: hdrs }),
-          fetch(`${API_URL}/api/guests/${weddingId}`, { headers: hdrs }),
-          fetch(`${API_URL}/api/wedding-details/${weddingId}`, { headers: hdrs }),
-          fetch(`${API_URL}/api/bar-shopping/${weddingId}`, { headers: hdrs }),
-          fetch(`${API_URL}/api/bar-recipes/${weddingId}`, { headers: hdrs }),
-          fetch(`${API_URL}/api/bar-notes/${weddingId}`, { headers: hdrs }),
-          fetch(`${API_URL}/api/borrow-selections/${weddingId}`, { headers: hdrs }),
-          fetch(`${API_URL}/api/wedding-party/${weddingId}`, { headers: hdrs }),
-        ])
-
-        const weddingsData = await weddingsRes.json()
-        const found = (weddingsData.weddings || []).find(w => w.id === weddingId)
-        setWedding(found || null)
-
-        const tl = await timelineRes.json()
-        setTimeline(tl.timeline || null)
-
-        const tb = await tablesRes.json()
-        setTables(tb.tables || null)
-
-        const st = await staffingRes.json()
-        setStaffing(st.staffing || null)
-
-        setCeremonyOrder(await ceremonyRes.json() || [])
-        setBedrooms(await bedroomsRes.json() || [])
-        setRehearsal(await rehearsalRes.json() || null)
-        setShuttle(await shuttleRes.json() || [])
-        setMakeup(await makeupRes.json() || [])
-        setDecor(await decorRes.json() || [])
-
-        const vd = await vendorsRes.json()
-        setVendors(vd.vendors || [])
-
-        setAllergies(await allergiesRes.json() || [])
-
-        try { const cp = await ceremonyChairsRes.json(); setCeremonyChairs(cp?.plan || null) } catch {}
-        try { const gc = await guestCareRes.json(); setGuestCare(Array.isArray(gc) ? gc : []) } catch {}
-        try { const gd = await guestsRes.json(); setGuests(gd?.guests || []) } catch {}
-
-        setWeddingDetails(await detailsRes.json() || null)
-
-        // Optional sections: a failure here must not take down the whole pack,
-        // but it must not be silent either. A section that quietly prints
-        // nothing looks exactly like a couple who planned nothing.
-        const optional = async (label, res, apply) => {
-          try { apply(await res.json()) }
-          catch (e) { console.error(`PrintView: could not load ${label} —`, e.message) }
-        }
-        await optional('bar shopping list', barItemsRes, d => setBarItems(Array.isArray(d) ? d : []))
-        await optional('bar recipes', barRecipesRes, d => setBarRecipes(Array.isArray(d) ? d : []))
-        await optional('bar notes', barNotesRes, d => setBarNotes(d || null))
-        await optional('borrow selections', borrowRes, d => setBorrowItems(Array.isArray(d) ? d : (d?.selections || [])))
-        await optional('wedding party', partyRes, d => setWeddingParty(Array.isArray(d) ? d : []))
-
+        const results = await Promise.allSettled(specs.map(s => loadJson(s.url)))
+        const errs = {}
+        results.forEach((result, i) => {
+          const spec = specs[i]
+          if (result.status === 'fulfilled') {
+            try { spec.apply(result.value) }
+            catch (err) {
+              console.error(`PrintView: could not use ${spec.label} —`, err.message)
+              errs[spec.key] = `Could not load ${spec.label}.`
+            }
+          } else {
+            console.error(`PrintView: could not load ${spec.label} —`, result.reason?.message)
+            errs[spec.key] = `Could not load ${spec.label}.`
+          }
+        })
+        setSectionErrors(errs)
       } catch (err) {
+        // Only a genuinely unexpected failure — e.g. no session at all —
+        // reaches here; every per-section read failure is handled above.
         console.error('PrintView fetch error:', err)
-        setError('Failed to load wedding data.')
+        setError(err.message || 'Failed to load wedding data.')
       }
       setLoading(false)
     }
@@ -245,8 +262,10 @@ export default function PrintView() {
 
   // Generate highlights separately (slower AI call — don't block the page)
   useEffect(() => {
+    const controller = new AbortController()
     async function fetchHighlights() {
       setLoadingHighlights(true)
+      setHighlightsError(null)
       try {
         // The briefing runs as a job now (Railway's proxy cut the old direct
         // call at ~50 seconds on big weddings). Use the last one if there is
@@ -258,18 +277,21 @@ export default function PrintView() {
           body: JSON.stringify({ weddingId }),
         })
         if (started?.jobId) {
-          const job = await awaitAnswerJob(started.jobId)
+          const job = await awaitAnswerJob(started.jobId, { signal: controller.signal })
           setHighlights(job?.answer || null)
         } else {
           setHighlights(started?.highlights || null)
         }
       } catch (err) {
+        if (controller.signal.aborted) return
         console.error('Highlights fetch error:', err)
         setHighlights(null)
+        setHighlightsError(err.message || 'Could not generate highlights.')
       }
-      setLoadingHighlights(false)
+      if (!controller.signal.aborted) setLoadingHighlights(false)
     }
     fetchHighlights()
+    return () => controller.abort()
   }, [weddingId])
 
   // Build sorted timeline events
@@ -337,6 +359,7 @@ export default function PrintView() {
   const timelineEvents = getTimelineEvents()
   const decorBySpace = getDecorBySpace()
   const bookedVendors = vendors.filter(v => v.vendor_name)
+  const guestCareLines = formatGuestCare(guestCare)
 
   return (
     <>
@@ -687,42 +710,54 @@ export default function PrintView() {
         </div>
 
         {/* TIMELINE */}
-        {sections.timeline && timelineEvents.length > 0 && (
+        {sections.timeline && (timelineEvents.length > 0 || sectionErrors.timeline) && (
           <div className="print-section section-start">
             <SectionHeader title="Wedding Day Timeline" icon="📋" />
-            {timeline?.ceremony_start && (
-              <div style={{ marginBottom: 16, fontSize: 12, color: '#7a6b5a' }}>
-                Ceremony: <strong>{formatTime12h(timeline.ceremony_start)}</strong>
-                {timeline?.reception_end && <> · End: <strong>{formatTime12h(timeline.reception_end)}</strong></>}
-              </div>
-            )}
-            <div className="timeline-grid">
-              {timelineEvents.map((ev, i) => (
-                <>
-                  <div key={`t-${i}`} className="tl-time">{ev.time}</div>
-                  <div key={`e-${i}`} className="tl-event">
-                    {ev.name}
-                    {ev.duration > 0 && <span className="tl-duration">({ev.duration} min)</span>}
+            {sectionErrors.timeline ? <SectionErrorNote label="the timeline" /> : (
+              <>
+                {timeline?.ceremony_start && (
+                  <div style={{ marginBottom: 16, fontSize: 12, color: '#7a6b5a' }}>
+                    Ceremony: <strong>{formatTime12h(timeline.ceremony_start)}</strong>
+                    {timeline?.reception_end && <> · End: <strong>{formatTime12h(timeline.reception_end)}</strong></>}
                   </div>
-                </>
-              ))}
-            </div>
-            {timeline?.notes && (
-              <div style={{ marginTop: 16, fontSize: 12, color: '#4a5568', background: '#faf8f5', padding: '10px 14px', borderRadius: 6 }}>
-                <strong>Notes:</strong> {timeline.notes}
-              </div>
+                )}
+                <div className="timeline-grid">
+                  {timelineEvents.map((ev, i) => (
+                    <>
+                      <div key={`t-${i}`} className="tl-time">{ev.time}</div>
+                      <div key={`e-${i}`} className="tl-event">
+                        {ev.name}
+                        {ev.duration > 0 && <span className="tl-duration">({ev.duration} min)</span>}
+                      </div>
+                    </>
+                  ))}
+                </div>
+                {timeline?.notes && (
+                  <div style={{ marginTop: 16, fontSize: 12, color: '#4a5568', background: '#faf8f5', padding: '10px 14px', borderRadius: 6 }}>
+                    <strong>Notes:</strong> {timeline.notes}
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}
 
         {/* TABLES & STAFFING */}
-        {(sections.tables && tables) || (sections.staffing && staffing) ? (
+        {(sections.tables && (tables || sectionErrors.tables)) || (sections.staffing && (staffing || sectionErrors.staffing)) ? (
           <div className="print-section section-start">
-            {sections.tables && tables && (
+            {sections.tables && (tables || sectionErrors.tables) && (
               <>
                 <SectionHeader title="Table Setup" icon="🪑" />
+                {sectionErrors.tables ? <SectionErrorNote label="table setup" /> : (
                 <div className="info-grid" style={{ marginBottom: sections.staffing && staffing ? 28 : 0 }}>
-                  <DataRow label="Guest Count" value={tables.guest_count} />
+                  <DataRow
+                    label="Guest Count"
+                    value={
+                      tables.guest_count != null && !sectionErrors.guests && headcount(guests).total !== tables.guest_count
+                        ? `${tables.guest_count} (guest list says ${headcount(guests).total})`
+                        : tables.guest_count
+                    }
+                  />
                   <DataRow label="Table Shape" value={tables.table_shape} />
                   <DataRow label="Guests per Table" value={tables.guests_per_table} />
                   <DataRow label="Chargers" value={tables.chair_sash ? `Yes — ${tables.guest_count || ''} needed (reduces ~2 seats per round; ~6" centre space on rectangles)` : 'No'} />
@@ -741,11 +776,13 @@ export default function PrintView() {
                   <DataRow label="Extra Round Tables" value={tables.extra_rounds > 0 ? tables.extra_rounds : null} />
                   <DataRow label="Extra Long Tables" value={tables.extra_longs > 0 ? tables.extra_longs : null} />
                 </div>
+                )}
               </>
             )}
-            {sections.staffing && staffing && (
+            {sections.staffing && (staffing || sectionErrors.staffing) && (
               <>
                 <SectionHeader title="Staffing Estimate" icon="👥" />
+                {sectionErrors.staffing ? <SectionErrorNote label="the staffing estimate" /> : (
                 <div className="info-grid">
                   <DataRow label="Friday Bartenders" value={staffing.friday_bartenders} />
                   <DataRow label="Friday Extra Hands" value={staffing.friday_extra_hands} />
@@ -754,15 +791,17 @@ export default function PrintView() {
                   <DataRow label="Total Staff" value={staffing.total_staff} />
                   <DataRow label="Estimated Cost" value={staffing.total_cost ? `$${staffing.total_cost.toLocaleString()}` : null} />
                 </div>
+                )}
               </>
             )}
           </div>
         ) : null}
 
         {/* CEREMONY ORDER */}
-        {sections.ceremony && ceremonyOrder.length > 0 && (
+        {sections.ceremony && (ceremonyOrder.length > 0 || sectionErrors.ceremony) && (
           <div className="print-section section-start">
             <SectionHeader title="Ceremony Processional Order" icon="💒" />
+            {sectionErrors.ceremony ? <SectionErrorNote label="the ceremony order" /> : (
             <ul className="ceremony-list">
               {(() => {
                 // Group by sort_order (same sort_order = walk together)
@@ -795,13 +834,15 @@ export default function PrintView() {
                 ))
               })()}
             </ul>
+            )}
           </div>
         )}
 
         {/* BEDROOMS */}
-        {sections.bedrooms && bedrooms.length > 0 && (
+        {sections.bedrooms && (bedrooms.length > 0 || sectionErrors.bedrooms) && (
           <div className="print-section section-start">
             <SectionHeader title="Bedroom Assignments" icon="🛏" />
+            {sectionErrors.bedrooms ? <SectionErrorNote label="bedroom assignments" /> : (
             <div className="bedroom-list">
               {bedrooms.map(room => {
                 const fri = (room.guest_friday || '').trim()
@@ -829,13 +870,15 @@ export default function PrintView() {
                 )
               })}
             </div>
+            )}
           </div>
         )}
 
         {/* REHEARSAL DINNER */}
-        {sections.rehearsal && rehearsal && (
+        {sections.rehearsal && (rehearsal || sectionErrors.rehearsal) && (
           <div className="print-section section-start">
             <SectionHeader title="Rehearsal Dinner" icon="🍽" />
+            {sectionErrors.rehearsal ? <SectionErrorNote label="the rehearsal dinner" /> : (
             <div className="info-grid">
               <DataRow label="Guest Count" value={rehearsal.guest_count} />
               <DataRow label="Location" value={rehearsal.location} />
@@ -850,17 +893,18 @@ export default function PrintView() {
               <DataRow label="Linens" value={rehearsal.linens_source} />
               <DataRow label="Decor" value={rehearsal.decor_source} />
             </div>
-            {rehearsal.food_notes && (
+            )}
+            {!sectionErrors.rehearsal && rehearsal.food_notes && (
               <div style={{ marginTop: 12, fontSize: 12, color: '#4a5568', background: '#faf8f5', padding: '10px 14px', borderRadius: 6 }}>
                 <strong>Food notes:</strong> {rehearsal.food_notes}
               </div>
             )}
-            {rehearsal.location_notes && (
+            {!sectionErrors.rehearsal && rehearsal.location_notes && (
               <div style={{ marginTop: 8, fontSize: 12, color: '#4a5568', background: '#faf8f5', padding: '10px 14px', borderRadius: 6 }}>
                 <strong>Location notes:</strong> {rehearsal.location_notes}
               </div>
             )}
-            {rehearsal.notes && (
+            {!sectionErrors.rehearsal && rehearsal.notes && (
               <div style={{ marginTop: 8, fontSize: 12, color: '#4a5568', background: '#faf8f5', padding: '10px 14px', borderRadius: 6 }}>
                 <strong>Notes:</strong> {rehearsal.notes}
               </div>
@@ -869,10 +913,10 @@ export default function PrintView() {
         )}
 
         {/* SHUTTLE */}
-        {sections.shuttle && shuttle.length > 0 && (
+        {sections.shuttle && (shuttle.length > 0 || sectionErrors.shuttle) && (
           <div className="print-section section-start">
             <SectionHeader title="Shuttle Schedule" icon="🚌" />
-            {shuttle.map(run => (
+            {sectionErrors.shuttle ? <SectionErrorNote label="the shuttle schedule" /> : shuttle.map(run => (
               <div key={run.id} className="shuttle-run">
                 <div className="shuttle-label">{run.run_label || `Run ${run.sort_order + 1}`}</div>
                 <div className="shuttle-detail">📍 Pickup: {run.pickup_location} · {run.pickup_time}</div>
@@ -884,9 +928,10 @@ export default function PrintView() {
         )}
 
         {/* MAKEUP SCHEDULE */}
-        {sections.makeup && makeup.length > 0 && (
+        {sections.makeup && (makeup.length > 0 || sectionErrors.makeup) && (
           <div className="print-section section-start">
             <SectionHeader title="Hair & Makeup Schedule" icon="💄" />
+            {sectionErrors.makeup ? <SectionErrorNote label="the hair & makeup schedule" /> : (
             <table className="makeup-table">
               <thead>
                 <tr>
@@ -909,14 +954,15 @@ export default function PrintView() {
                 ))}
               </tbody>
             </table>
+            )}
           </div>
         )}
 
         {/* DECOR INVENTORY */}
-        {sections.decor && Object.keys(decorBySpace).length > 0 && (
+        {sections.decor && (Object.keys(decorBySpace).length > 0 || sectionErrors.decor) && (
           <div className="print-section section-start">
             <SectionHeader title="Decor Inventory" icon="🌿" />
-            {Object.entries(decorBySpace).map(([space, items]) => (
+            {sectionErrors.decor ? <SectionErrorNote label="the decor inventory" /> : Object.entries(decorBySpace).map(([space, items]) => (
               <div key={space} className="decor-space">
                 <div className="decor-space-name">{space}</div>
                 <table className="decor-table">
@@ -949,10 +995,10 @@ export default function PrintView() {
         )}
 
         {/* WEDDING PARTY — names and roles, not just how many of them there are */}
-        {sections.weddingParty && weddingParty.length > 0 && (
+        {sections.weddingParty && (weddingParty.length > 0 || sectionErrors.weddingParty) && (
           <div className="print-section section-start">
             <SectionHeader title="Wedding Party" icon="👰" />
-            {(() => {
+            {sectionErrors.weddingParty ? <SectionErrorNote label="the wedding party" /> : (() => {
               const byGroup = {}
               for (const m of weddingParty) {
                 ;(byGroup[m.group_label || m.role || 'Wedding Party'] ||= []).push(m)
@@ -979,10 +1025,10 @@ export default function PrintView() {
         )}
 
         {/* BORROWING FROM THE MANOR — somebody has to pull these off a shelf */}
-        {sections.borrow && borrowItems.length > 0 && (
+        {sections.borrow && (borrowItems.length > 0 || sectionErrors.borrow) && (
           <div className="print-section section-start">
             <SectionHeader title="Borrowing From Rixey" icon="📦" />
-            {(() => {
+            {sectionErrors.borrow ? <SectionErrorNote label="borrowed items" /> : (() => {
               const byCategory = {}
               for (const it of borrowItems) {
                 const cat = it.category || it.borrow_catalog?.category || 'Other'
@@ -1011,9 +1057,20 @@ export default function PrintView() {
         )}
 
         {/* BAR — what is being poured, and what the couple wrote about it */}
-        {sections.bar && (barItems.length > 0 || barRecipes.length > 0 || (barNotes && Object.values(barNotes).some(v => String(v || '').trim()))) && (
+        {sections.bar && (
+          barItems.length > 0 || barRecipes.length > 0
+          || (barNotes && Object.values(barNotes).some(v => String(v || '').trim()))
+          || sectionErrors.barItems || sectionErrors.barRecipes || sectionErrors.barNotes
+        ) && (
           <div className="print-section section-start">
             <SectionHeader title="Bar" icon="🍸" />
+            {(sectionErrors.barItems || sectionErrors.barRecipes || sectionErrors.barNotes) && (
+              <SectionErrorNote label={[
+                sectionErrors.barItems && 'the shopping list',
+                sectionErrors.barRecipes && 'the cocktails',
+                sectionErrors.barNotes && 'the notes',
+              ].filter(Boolean).join(', ') || 'part of the bar section'} />
+            )}
             <div style={{ fontSize: 12 }}>
               {barItems.length > 0 && (
                 <div style={{ marginBottom: 12 }}>
@@ -1062,9 +1119,10 @@ export default function PrintView() {
         )}
 
         {/* VENDORS */}
-        {sections.vendors && bookedVendors.length > 0 && (
+        {sections.vendors && (bookedVendors.length > 0 || sectionErrors.vendors) && (
           <div className="print-section section-start">
             <SectionHeader title="Vendors" icon="📇" />
+            {sectionErrors.vendors ? <SectionErrorNote label="vendors" /> : (
             <table className="vendor-table">
               <thead>
                 <tr>
@@ -1087,6 +1145,7 @@ export default function PrintView() {
                 ))}
               </tbody>
             </table>
+            )}
           </div>
         )}
 
@@ -1096,11 +1155,14 @@ export default function PrintView() {
           // anything a guest typed into their own RSVP never reached the
           // kitchen. Both are printed now, kept visibly separate because only
           // the registry has been checked and passed to the caterer.
-          const fromGuests = dietaryNotInRegistry(guests, allergies)
-          if (!sections.allergies || (allergies.length === 0 && fromGuests.length === 0)) return null
+          const fromGuests = sectionErrors.guests ? [] : dietaryNotInRegistry(guests, allergies)
+          const hasError = sectionErrors.allergies || sectionErrors.guests
+          if (!sections.allergies || (allergies.length === 0 && fromGuests.length === 0 && !hasError)) return null
           return (
           <div className="print-section section-start">
             <SectionHeader title="Dietary Restrictions & Allergies" icon="⚠️" />
+            {sectionErrors.allergies && <SectionErrorNote label="the allergy registry" />}
+            {sectionErrors.guests && <SectionErrorNote label="the guest list, so anything told to us only at RSVP is missing here" />}
             {allergies.length > 0 && (
               <table className="allergy-table">
                 <thead>
@@ -1162,9 +1224,10 @@ export default function PrintView() {
         })()}
 
         {/* WEDDING DETAILS */}
-        {sections.details && weddingDetails && (
+        {sections.details && (weddingDetails || sectionErrors.details) && (
           <div className="print-section section-start">
             <SectionHeader title="Wedding Details" icon="📋" />
+            {sectionErrors.details ? <SectionErrorNote label="wedding details" /> : (
             <div className="info-grid">
               <DataRow label="Colors" value={weddingDetails.wedding_colors} />
               <DataRow label="Ceremony Location" value={weddingDetails.ceremony_location} />
@@ -1180,17 +1243,18 @@ export default function PrintView() {
               <DataRow label="Cake Topper" value={weddingDetails.providing_cake_topper === true ? 'Couple providing' : weddingDetails.providing_cake_topper === false ? 'Not providing' : null} />
               <DataRow label="Favors" value={weddingDetails.favors_description} />
             </div>
-            {weddingDetails.ceremony_notes && (
+            )}
+            {!sectionErrors.details && weddingDetails.ceremony_notes && (
               <div style={{ marginTop: 12, fontSize: 12, color: '#4a5568', background: '#faf8f5', padding: '10px 14px', borderRadius: 6 }}>
                 <strong>Ceremony notes:</strong> {weddingDetails.ceremony_notes}
               </div>
             )}
-            {weddingDetails.reception_notes && (
+            {!sectionErrors.details && weddingDetails.reception_notes && (
               <div style={{ marginTop: 8, fontSize: 12, color: '#4a5568', background: '#faf8f5', padding: '10px 14px', borderRadius: 6 }}>
                 <strong>Reception notes:</strong> {weddingDetails.reception_notes}
               </div>
             )}
-            {weddingDetails.send_off_notes && (
+            {!sectionErrors.details && weddingDetails.send_off_notes && (
               <div style={{ marginTop: 8, fontSize: 12, color: '#4a5568', background: '#faf8f5', padding: '10px 14px', borderRadius: 6 }}>
                 <strong>Send-off notes:</strong> {weddingDetails.send_off_notes}
               </div>
@@ -1209,12 +1273,13 @@ export default function PrintView() {
           const row2R = row2Enabled ? splitNames(fr?.row2?.right) : []
           const hasFrontRows = row1L.length + row1R.length + row2L.length + row2R.length > 0
           const hasChairRows = ceremonyChairs?.rows?.length > 0
-          if (!sections.ceremonyChairs || (!hasChairRows && !hasFrontRows)) return null
+          if (!sections.ceremonyChairs || (!hasChairRows && !hasFrontRows && !sectionErrors.ceremonyChairs)) return null
           return (
           <div className="print-section section-start">
             <SectionHeader title="Ceremony Chair Plan" icon="🪑" />
+            {sectionErrors.ceremonyChairs && <SectionErrorNote label="the ceremony chair plan" />}
 
-            {hasFrontRows && (
+            {!sectionErrors.ceremonyChairs && hasFrontRows && (
               <div style={{ fontSize: 12, marginBottom: 14 }}>
                 <p style={{ fontWeight: 600, marginBottom: 6 }}>Front row seating</p>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
@@ -1243,7 +1308,7 @@ export default function PrintView() {
               </div>
             )}
 
-            {hasChairRows && (
+            {!sectionErrors.ceremonyChairs && hasChairRows && (
               <div style={{ fontSize: 12 }}>
                 <p style={{ marginBottom: 8 }}>
                   <strong>{ceremonyChairs.rows.reduce((s, r) => s + (r.left || 0) + (r.right || 0), 0)} total chairs</strong> across {ceremonyChairs.rows.length} rows
@@ -1277,10 +1342,10 @@ export default function PrintView() {
         })()}
 
         {/* SEATING BY TABLE */}
-        {sections.seating && guests.length > 0 && (
+        {sections.seating && (guests.length > 0 || sectionErrors.guests) && (
           <div className="print-section section-start">
             <SectionHeader title="Seating Chart" icon="🪑" />
-            {(() => {
+            {sectionErrors.guests ? <SectionErrorNote label="the guest list" /> : (() => {
               // A table seats people, not rows. Plus ones used to be dropped
               // here entirely, so a table of two printed one name and "(1
               // guest)" on the document the venue works from.
@@ -1299,12 +1364,17 @@ export default function PrintView() {
                   unassigned.push(p)
                 }
               })
+              // The day-of team calling a table to sort a seating question
+              // needed a phone number and had to go find the guest list —
+              // print it here, against the host's row, since a plus one has
+              // no number of their own.
               const Person = ({ p }) => (
                 <p style={{ paddingLeft: p.isPlusOne ? 26 : 12, lineHeight: 1.6, color: p.isPlusOne ? '#555' : undefined }}>
                   {p.name}
                   {p.isPlusOne && <span style={{ color: '#888', fontSize: 10, marginLeft: 6 }}>+1, {p.host}</span>}
                   {p.dietary && <span style={{ color: '#c53030', marginLeft: 8, fontSize: 10 }}>⚠ {p.dietary}</span>}
                   {p.mealChoice && <span style={{ color: '#666', marginLeft: 8, fontSize: 10 }}>({p.mealChoice})</span>}
+                  {!p.isPlusOne && p.row?.phone && <span style={{ color: '#9a8b7a', marginLeft: 8, fontSize: 10 }}>☎ {p.row.phone}</span>}
                 </p>
               )
               return (
@@ -1331,35 +1401,39 @@ export default function PrintView() {
           </div>
         )}
 
-        {/* GUEST CARE NOTES */}
-        {sections.guestCare && guestCare.length > 0 && (
+        {/* GUEST CARE NOTES — a per-wedding blob keyed by section, not one row
+            per guest. This used to be read as { guest_name, category, content }
+            rows that were never the shape the server actually returns, so this
+            section always printed nothing at all, whatever the couple had told
+            us. See shared/guest-care.js. */}
+        {sections.guestCare && (guestCareLines.length > 0 || sectionErrors.guestCare) && (
           <div className="print-section section-start">
             <SectionHeader title="Guest Care Notes" icon="💝" />
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-              <thead>
-                <tr style={{ borderBottom: '2px solid #333' }}>
-                  <th style={{ textAlign: 'left', padding: '4px 8px' }}>Guest</th>
-                  <th style={{ textAlign: 'left', padding: '4px 8px' }}>Category</th>
-                  <th style={{ textAlign: 'left', padding: '4px 8px' }}>Note</th>
-                </tr>
-              </thead>
-              <tbody>
-                {guestCare.map((n, i) => (
-                  <tr key={i} style={{ borderBottom: '1px solid #eee' }}>
-                    <td style={{ padding: '4px 8px' }}>{n.guest_name || '—'}</td>
-                    <td style={{ padding: '4px 8px' }}>{n.category || '—'}</td>
-                    <td style={{ padding: '4px 8px' }}>{n.content || n.note || '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            {sectionErrors.guestCare ? <SectionErrorNote label="guest care notes" /> : (
+              <div style={{ fontSize: 12 }}>
+                <p style={{ fontSize: 10, color: '#888', marginTop: 0, marginBottom: 8 }}>
+                  What the couple told us about their guests as a whole. Treat as sensitive.
+                </p>
+                {guestCareLines.map((line, i) => {
+                  const splitAt = line.indexOf(': ')
+                  const label = splitAt === -1 ? line : line.slice(0, splitAt)
+                  const rest = splitAt === -1 ? '' : line.slice(splitAt + 2)
+                  return (
+                    <p key={i} style={{ marginBottom: 4, paddingBottom: 4, borderBottom: '1px solid #f0ebe3' }}>
+                      <strong>{label}:</strong> {rest}
+                    </p>
+                  )
+                })}
+              </div>
+            )}
           </div>
         )}
 
         {/* PARENTS INFO */}
-        {sections.parents && weddingDetails && (weddingDetails.partner1_parents || weddingDetails.partner2_parents) && (
+        {sections.parents && (sectionErrors.details || (weddingDetails && (weddingDetails.partner1_parents || weddingDetails.partner2_parents))) && (
           <div className="print-section section-start">
             <SectionHeader title="Parents & Family" icon="👨‍👩‍👧" />
+            {sectionErrors.details ? <SectionErrorNote label="wedding details" /> : (
             <div className="info-grid">
               <DataRow label="Partner 1 Parents" value={weddingDetails.partner1_parents} />
               {weddingDetails.partner1_parents_met !== null && (
@@ -1379,6 +1453,7 @@ export default function PrintView() {
                 </>
               )}
             </div>
+            )}
           </div>
         )}
 
@@ -1423,6 +1498,8 @@ export default function PrintView() {
                   )
                 })}
               </div>
+            ) : highlightsError ? (
+              <SectionErrorNote label="planning highlights" />
             ) : (
               <p className="empty-note">No planning notes found for this wedding.</p>
             )}

@@ -116,12 +116,36 @@ export default function Login() {
         }
 
         // Server-side so the browser never reads the weddings table.
-        const lookupRes = await fetch(`${API_URL}/api/join/lookup`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ event_code: eventCode.trim().toUpperCase() }),
-        })
-        const wedding = lookupRes.ok ? await lookupRes.json() : null
+        let wedding = null
+        try {
+          const lookupRes = await fetch(`${API_URL}/api/join/lookup`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ event_code: eventCode.trim().toUpperCase() }),
+          })
+          const body = await lookupRes.json().catch(() => null)
+          if (lookupRes.ok) {
+            wedding = body
+          } else if (lookupRes.status === 404) {
+            // A real "no such code" — worth telling them to check it.
+            setError(body?.error || 'Event code not found. Please check and try again.')
+            setLoading(false)
+            return
+          } else {
+            // A 5xx here used to read identically to "no such code", which
+            // sends someone hunting for a typo in a code that was fine all
+            // along. Say what actually happened instead.
+            setError(body?.error || 'Could not check that event code right now. Please try again.')
+            setLoading(false)
+            return
+          }
+        } catch {
+          // The fetch itself failed with no res at all — used to fall through
+          // uncaught and leave the form stuck on "Please wait...".
+          setError('Could not reach the server to check that code. Check your connection and try again.')
+          setLoading(false)
+          return
+        }
 
         if (!wedding?.id) {
           setError('Event code not found. Please check and try again.')

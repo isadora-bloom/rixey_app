@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { loadJson } from '../utils/api'
 import { weddingName } from '../../shared/wedding-name.js'
+import LoadError from './ui/LoadError'
 
 
 export default function UsageStats({ weddingId, weddings = [] }) {
   const [stats, setStats] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
   const [selectedWedding, setSelectedWedding] = useState(null)
   const [weddingDetails, setWeddingDetails] = useState(null)
 
@@ -19,24 +21,30 @@ export default function UsageStats({ weddingId, weddings = [] }) {
   }, [weddingId])
 
   const loadAllStats = async () => {
+    setLoading(true)
+    setLoadError(null)
     try {
-      const response = await fetch(`${API_URL}/api/usage/stats`, { headers: await authHeaders() })
-      const data = await response.json()
+      const data = await loadJson(`${API_URL}/api/usage/stats`)
       setStats(data.stats || [])
     } catch (err) {
+      // A failed load used to leave stats at [], which rendered exactly like
+      // "No usage data yet" — a fine thing to say about a brand new venue,
+      // wrong to say about one whose read just failed.
       console.error('Failed to load usage stats:', err)
+      setLoadError(err)
     }
     setLoading(false)
   }
 
   const loadWeddingUsage = async (id) => {
     setLoading(true)
+    setLoadError(null)
     try {
-      const response = await fetch(`${API_URL}/api/usage/${id}`, { headers: await authHeaders() })
-      const data = await response.json()
+      const data = await loadJson(`${API_URL}/api/usage/${id}`)
       setWeddingDetails(data)
     } catch (err) {
       console.error('Failed to load wedding usage:', err)
+      setLoadError(err)
     }
     setLoading(false)
   }
@@ -59,6 +67,10 @@ export default function UsageStats({ weddingId, weddings = [] }) {
 
   if (loading) {
     return <p className="text-sage-400 text-center py-4">Loading usage data...</p>
+  }
+
+  if (loadError) {
+    return <LoadError what="usage data" error={loadError} onRetry={() => weddingId ? loadWeddingUsage(weddingId) : loadAllStats()} />
   }
 
   // Single wedding view

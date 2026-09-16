@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import { useToast } from './ui/Toast'
+import ConfirmDialog from './ui/ConfirmDialog'
+import LoadError from './ui/LoadError'
 
 const DEFAULT_SIDES = 6
 const EMPTY_FRONT_ROWS = {
@@ -21,6 +23,8 @@ export default function CeremonyChairPlan({ weddingId, userId, isAdmin = false }
   const [saved, setSaved] = useState(false)
   const [aisleLabel, setAisleLabel] = useState('Aisle')
   const [frontRows, setFrontRows] = useState(EMPTY_FRONT_ROWS)
+  const [loadError, setLoadError] = useState(null)
+  const [confirmRemoveIdx, setConfirmRemoveIdx] = useState(null)
   const saveTimer = useRef()
 
   useEffect(() => {
@@ -28,11 +32,9 @@ export default function CeremonyChairPlan({ weddingId, userId, isAdmin = false }
   }, [weddingId])
 
   const load = async () => {
+    setLoadError(null)
     try {
-      const res = await fetch(`${API_URL}/api/ceremony-plan/${weddingId}`, {
-        headers: await authHeaders(),
-      })
-      const data = await res.json()
+      const data = await loadJson(`${API_URL}/api/ceremony-plan/${weddingId}`)
       if (data.plan?.rows?.length) {
         setRows(data.plan.rows)
         if (data.plan.aisleLabel) setAisleLabel(data.plan.aisleLabel)
@@ -49,6 +51,7 @@ export default function CeremonyChairPlan({ weddingId, userId, isAdmin = false }
       }
     } catch (err) {
       console.error('Failed to load ceremony plan:', err)
+      setLoadError(err)
     }
     setLoading(false)
   }
@@ -122,6 +125,8 @@ export default function CeremonyChairPlan({ weddingId, userId, isAdmin = false }
     autoSave(next)
   }
 
+  const requestRemoveRow = (idx) => setConfirmRemoveIdx(idx)
+
   const removeRow = (idx) => {
     const next = rows.filter((_, i) => i !== idx)
     setRows(next)
@@ -142,6 +147,7 @@ export default function CeremonyChairPlan({ weddingId, userId, isAdmin = false }
   const maxSide = Math.max(...rows.map(r => Math.max(r.left || 0, r.right || 0)), 1)
 
   if (loading) return <div className="text-sage-500 text-center py-8">Loading ceremony plan...</div>
+  if (loadError) return <LoadError what="the ceremony chair plan" error={loadError} onRetry={load} />
 
   const row1LeftCount = countNames(frontRows.row1.left)
   const row1RightCount = countNames(frontRows.row1.right)
@@ -432,7 +438,7 @@ export default function CeremonyChairPlan({ weddingId, userId, isAdmin = false }
                   {(row.left || 0) + (row.right || 0)}
                 </span>
 
-                <button onClick={() => removeRow(idx)}
+                <button onClick={() => requestRemoveRow(idx)}
                   className="text-sage-300 hover:text-red-500 transition flex-shrink-0" title="Remove row">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -464,6 +470,16 @@ export default function CeremonyChairPlan({ weddingId, userId, isAdmin = false }
           </button>
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmRemoveIdx !== null}
+        onClose={() => setConfirmRemoveIdx(null)}
+        onConfirm={() => { const idx = confirmRemoveIdx; setConfirmRemoveIdx(null); if (idx !== null) removeRow(idx); }}
+        title="Remove this row?"
+        message="This removes the row and its chair count from the plan."
+        confirmLabel="Remove"
+        danger
+      />
     </div>
   )
 }

@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import { Button, Input, ConfirmDialog } from './ui'
 import { useToast } from './ui/Toast'
+import LoadError from './ui/LoadError'
 
 
 const CATEGORIES = ['Partyware & Serving', 'Guest Experience', 'Décor & Lighting']
@@ -52,16 +53,20 @@ export default function StorefrontAdmin() {
   const [search, setSearch] = useState('')
   const [editingId, setEditingId] = useState(null)
   const [confirmDelete, setConfirmDelete] = useState(null)
+  const [loadError, setLoadError] = useState(null)
 
   useEffect(() => { loadItems() }, [])
 
   const loadItems = async () => {
+    setLoadError(null)
     try {
-      const res = await fetch(`${API_URL}/api/storefront/all`, { headers: await authHeaders() })
-      const data = await res.json()
+      const data = await loadJson(`${API_URL}/api/storefront/all`)
       setItems(data.items || [])
     } catch (err) {
+      // A failed read used to leave items at [], which the filtered list
+      // below renders identically to "no items match your filters".
       console.error('Load storefront error:', err)
+      setLoadError(err)
     }
     setLoading(false)
   }
@@ -341,6 +346,8 @@ export default function StorefrontAdmin() {
       {/* Item table */}
       {loading ? (
         <p className="text-sage-400 text-sm">Loading…</p>
+      ) : loadError ? (
+        <LoadError what="the storefront" error={loadError} onRetry={loadItems} />
       ) : (
         <div className="space-y-2">
           {filtered.map(item => (

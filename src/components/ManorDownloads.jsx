@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { apiFetch, authHeaders } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import { useToast } from './ui/Toast'
+import ConfirmDialog from './ui/ConfirmDialog'
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
 
@@ -12,9 +13,11 @@ function publicUrl(storagePath) {
 // ── Asset Card ─────────────────────────────────────────────────────────────
 
 function AssetCard({ asset, isAdmin, onUpdate, onDelete }) {
+  const { error: toastError } = useToast()
   const [editing, setEditing] = useState(false)
   const [draft, setDraft]     = useState({ title: asset.title, description: asset.description || '' })
   const [saving, setSaving]   = useState(false)
+  const [downloading, setDownloading] = useState(false)
   const url = publicUrl(asset.storage_path)
 
   const save = async () => {
@@ -22,6 +25,31 @@ function AssetCard({ asset, isAdmin, onUpdate, onDelete }) {
     await onUpdate(asset.id, draft)
     setSaving(false)
     setEditing(false)
+  }
+
+  // A plain <a download> is ignored by the browser once the href crosses
+  // origins — and Supabase Storage is always a different origin from the
+  // app — so this just opened the file in a new tab instead of saving it.
+  // Fetching the bytes ourselves and handing the browser a same-origin blob
+  // URL is the only way "download" actually means download here.
+  const download = async () => {
+    setDownloading(true)
+    try {
+      const res = await fetch(url)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const blob = await res.blob()
+      const blobUrl = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = blobUrl
+      a.download = asset.file_name || asset.title || 'download'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000)
+    } catch (err) {
+      toastError(`Could not download ${asset.title}: ${err.message}`)
+    }
+    setDownloading(false)
   }
 
   return (
@@ -59,13 +87,13 @@ function AssetCard({ asset, isAdmin, onUpdate, onDelete }) {
               <p className="text-xs text-sage-500 leading-relaxed mb-3">{asset.description}</p>
             )}
             <div className="flex gap-2">
-              <a href={url} download={asset.file_name} target="_blank" rel="noreferrer"
-                className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-sage-600 text-white text-xs font-medium rounded-lg hover:bg-sage-700 transition">
+              <button onClick={download} disabled={downloading}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-sage-600 text-white text-xs font-medium rounded-lg hover:bg-sage-700 disabled:opacity-50 transition">
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                 </svg>
-                Download
-              </a>
+                {downloading ? 'Downloading…' : 'Download'}
+              </button>
               {isAdmin && (
                 <>
                   <button onClick={() => setEditing(true)}
@@ -175,15 +203,18 @@ export default function ManorDownloads({ isAdmin = false }) {
   const { error: toastError } = useToast()
   const [assets, setAssets]   = useState([])
   const [loading, setLoading] = useState(true)
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null)
 
   useEffect(() => { load() }, [])
 
   const load = async () => {
     try {
-      const res  = await fetch(`${API_URL}/api/manor-assets`, { headers: await authHeaders() })
-      const data = await res.json()
+      const data = await loadJson(`${API_URL}/api/manor-assets`)
       setAssets(Array.isArray(data) ? data : [])
-    } catch (err) { console.error(err) }
+    } catch (err) {
+      console.error(err)
+      toastError(`Could not load manor downloads: ${err.message}`)
+    }
     setLoading(false)
   }
 
@@ -202,7 +233,6 @@ export default function ManorDownloads({ isAdmin = false }) {
   }
 
   const handleDelete = async (id) => {
-    if (!confirm('Remove this asset?')) return
     const snapshot = assets
     setAssets(prev => prev.filter(a => a.id !== id))
     try {
@@ -231,10 +261,20 @@ export default function ManorDownloads({ isAdmin = false }) {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {assets.map(asset => (
           <AssetCard key={asset.id} asset={asset} isAdmin={isAdmin}
-            onUpdate={handleUpdate} onDelete={handleDelete} />
+            onUpdate={handleUpdate} onDelete={setConfirmDeleteId} />
         ))}
         {isAdmin && <UploadForm onUploaded={newAsset => setAssets(prev => [...prev, newAsset])} />}
       </div>
+
+      <ConfirmDialog
+        open={confirmDeleteId !== null}
+        onClose={() => setConfirmDeleteId(null)}
+        onConfirm={() => { const id = confirmDeleteId; setConfirmDeleteId(null); if (id) handleDelete(id) }}
+        title="Remove this asset?"
+        message="Couples with the link will no longer be able to download it."
+        confirmLabel="Remove"
+        danger
+      />
     </div>
   )
 }

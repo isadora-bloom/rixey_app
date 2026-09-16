@@ -3,6 +3,7 @@ import { API_URL } from '../config/api'
 import { apiFetch, loadJson } from '../utils/api'
 import { useToast } from './ui/Toast'
 import LoadError from './ui/LoadError'
+import ConfirmDialog from './ui/ConfirmDialog'
 import { formatDateOnly } from '../utils/dates'
 
 
@@ -32,6 +33,8 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
   const [customVendorType, setCustomVendorType] = useState('')
   const [saving, setSaving] = useState(false)
   const [uploadingContract, setUploadingContract] = useState(null)
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null)
+  const [confirmRemoveContractId, setConfirmRemoveContractId] = useState(null)
   const fileInputRef = useRef(null)
 
   useEffect(() => {
@@ -110,8 +113,6 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
   }
 
   const handleDelete = async (id) => {
-    if (!confirm('Delete this vendor?')) return
-
     const snapshot = vendors
     setVendors(vendors.filter(v => v.id !== id))
     try {
@@ -144,8 +145,6 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
   }
 
   const handleRemoveContract = async (vendorId) => {
-    if (!confirm('Remove this contract?')) return
-
     try {
       const data = await apiFetch(`${API_URL}/api/vendors/${vendorId}/contract`, {
         method: 'DELETE'
@@ -414,7 +413,7 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
                         View
                       </a>
                       <button
-                        onClick={() => handleRemoveContract(vendor.id)}
+                        onClick={() => setConfirmRemoveContractId(vendor.id)}
                         className="text-red-500 hover:text-red-700 text-xs"
                       >
                         Remove
@@ -422,7 +421,7 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
                     </>
                   )}
                   <button
-                    onClick={() => handleDelete(vendor.id)}
+                    onClick={() => setConfirmDeleteId(vendor.id)}
                     className="text-red-400 hover:text-red-600 text-xs"
                   >
                     Delete
@@ -433,6 +432,26 @@ export default function VendorChecklist({ weddingId, isAdmin = false }) {
           ))
         )}
       </div>
+
+      <ConfirmDialog
+        open={confirmDeleteId !== null}
+        onClose={() => setConfirmDeleteId(null)}
+        onConfirm={() => { const id = confirmDeleteId; setConfirmDeleteId(null); if (id) handleDelete(id); }}
+        title="Delete this vendor?"
+        message="This removes them from the checklist, along with any contract on file."
+        confirmLabel="Delete"
+        danger
+      />
+
+      <ConfirmDialog
+        open={confirmRemoveContractId !== null}
+        onClose={() => setConfirmRemoveContractId(null)}
+        onConfirm={() => { const id = confirmRemoveContractId; setConfirmRemoveContractId(null); if (id) handleRemoveContract(id); }}
+        title="Remove this contract?"
+        message="The vendor stays on the checklist; only the uploaded file goes."
+        confirmLabel="Remove"
+        danger
+      />
     </div>
   )
 }

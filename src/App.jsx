@@ -17,11 +17,44 @@ import VendorPortal from './pages/VendorPortal'
 import WeddingWebsite from './pages/WeddingWebsite'
 import NotFound from './pages/NotFound'
 
+// A tab left open across a deploy asks for a chunk that no longer exists on
+// the server once the old build is gone, and the browser reports that as
+// "Failed to fetch dynamically imported module" (Firefox and Safari word it
+// differently, but mean the same thing). That used to land straight on the
+// error boundary, which reads like the app broke when really it just needs
+// the new index.html. Reload once — sessionStorage stops a genuinely broken
+// chunk from reloading forever — and only fall through to the error boundary
+// if it still fails after that.
+const STALE_CHUNK_RELOAD_KEY = 'rp-stale-chunk-reload'
+const STALE_CHUNK_PATTERN = /fetch dynamically imported module|error loading dynamically imported module|importing a module script failed/i
+
+function lazyWithReload(factory) {
+  return lazy(() =>
+    factory()
+      .then(mod => {
+        // A later deploy during the same tab session deserves its own retry.
+        sessionStorage.removeItem(STALE_CHUNK_RELOAD_KEY)
+        return mod
+      })
+      .catch(err => {
+        const isStaleChunk = STALE_CHUNK_PATTERN.test(String(err?.message || ''))
+        if (isStaleChunk && !sessionStorage.getItem(STALE_CHUNK_RELOAD_KEY)) {
+          sessionStorage.setItem(STALE_CHUNK_RELOAD_KEY, '1')
+          window.location.reload()
+          // The reload is already underway; never settle so nothing renders
+          // an error in the moment before the page goes away.
+          return new Promise(() => {})
+        }
+        throw err
+      })
+  )
+}
+
 // Lazy-load admin routes to keep couples' bundle smaller
-const Admin = lazy(() => import('./pages/Admin'))
-const GmailCallback = lazy(() => import('./pages/GmailCallback'))
-const ZoomCallback = lazy(() => import('./pages/ZoomCallback'))
-const PrintView = lazy(() => import('./pages/PrintView'))
+const Admin = lazyWithReload(() => import('./pages/Admin'))
+const GmailCallback = lazyWithReload(() => import('./pages/GmailCallback'))
+const ZoomCallback = lazyWithReload(() => import('./pages/ZoomCallback'))
+const PrintView = lazyWithReload(() => import('./pages/PrintView'))
 
 // Loading fallback for lazy routes
 function AdminLoadingFallback() {

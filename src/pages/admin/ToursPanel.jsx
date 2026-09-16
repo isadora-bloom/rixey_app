@@ -316,11 +316,44 @@ export default function ToursPanel({ onCountChange }) {
   }
   useEffect(() => { load() }, [])
 
+  /**
+   * The sync now answers with a job id and runs in the background rather than
+   * finishing before the request returns, so it is followed here the same way
+   * Admin.jsx follows a Zoom or Gmail job, rather than assuming the work is
+   * done and reloading a list that has not changed yet.
+   */
+  const followEnquiriesSync = async (jobId) => {
+    const started = Date.now()
+    while (Date.now() - started < 5 * 60 * 1000) {
+      await new Promise(r => setTimeout(r, 3000))
+      let job
+      try {
+        const data = await apiFetch(`${API_URL}/api/admin/sync-jobs?limit=25`)
+        job = (data.jobs || []).find(j => j.id === jobId)
+      } catch {
+        continue   // a blip in polling is not a failed sync
+      }
+      if (!job || job.status === 'running') continue
+      return job
+    }
+    return null
+  }
+
   const sync = async () => {
     setSyncing(true)
     try {
       const r = await apiFetch(`${API_URL}/api/admin/enquiries/sync`, { method: 'POST' })
-      toastSuccess(r.message)
+      if (r.jobId) {
+        toastSuccess(r.message || 'Reading Calendly…')
+        const job = await followEnquiriesSync(r.jobId)
+        if (job?.status === 'failed') {
+          toastError(`Calendly sync failed: ${job.last_error || 'unknown error'}`)
+        } else if (job) {
+          toastSuccess(job.detail?.message || 'Calendly sync finished.')
+        }
+      } else {
+        toastSuccess(r.message)
+      }
       await load()
     } catch (err) {
       toastError(`Could not read Calendly: ${err.message}`)

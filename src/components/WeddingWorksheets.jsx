@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import { Button, Input } from './ui'
 import { useToast } from './ui/Toast'
 import { useAutosave } from '../hooks/useAutosave'
 import SaveIndicator from './ui/SaveIndicator'
+import LoadError from './ui/LoadError'
 
 
 const PRIORITY_CATS = [
@@ -77,6 +78,7 @@ function SectionCard({ title, isOpen, onToggle, hasData, headerExtra, children }
 
 export default function WeddingWorksheets({ weddingId, userId }) {
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
   const [worksheets, setWorksheets] = useState({})
   const [openSection, setOpenSection] = useState('priorities')
 
@@ -93,7 +95,12 @@ export default function WeddingWorksheets({ weddingId, userId }) {
   })
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
+  // Arms only once loadWorksheets has actually succeeded (see below) —
+  // never on a failed load, which would otherwise leave every field at its
+  // blank default and the next edit's autosave would PUT that straight over
+  // whatever was really saved.
   const prioritiesLoadedRef = useRef(false)
+  const prioritiesSkipRef = useRef(true)
 
   // Section 2 — Guest rules
   const [guestRules, setGuestRules] = useState({
@@ -101,6 +108,7 @@ export default function WeddingWorksheets({ weddingId, userId }) {
     rule_family: '', rule_friends: '', rule_work: '', rule_plusones: '', rule_children: '',
   })
   const guestLoadedRef = useRef(false)
+  const guestSkipRef = useRef(true)
 
   // Section 3 — Budget
   const [budget, setBudget] = useState({
@@ -109,13 +117,14 @@ export default function WeddingWorksheets({ weddingId, userId }) {
     family: '',
   })
   const budgetLoadedRef = useRef(false)
+  const budgetSkipRef = useRef(true)
   const { error: toastError } = useToast()
 
-  // Load data
-  useEffect(() => {
+  const loadWorksheets = () => {
     if (!weddingId) return
-    authHeaders().then(hdrs => fetch(`${API_URL}/api/worksheets/${weddingId}`, { headers: hdrs }))
-      .then(r => r.json())
+    setLoading(true)
+    setLoadError(null)
+    loadJson(`${API_URL}/api/worksheets/${weddingId}`)
       .then(({ worksheets: ws }) => {
         setWorksheets(ws || {})
         if (ws?.worksheet_priorities && Object.keys(ws.worksheet_priorities).length > 0) {
@@ -132,10 +141,24 @@ export default function WeddingWorksheets({ weddingId, userId }) {
         if (ws?.worksheet_budget_alignment && Object.keys(ws.worksheet_budget_alignment).length > 0) {
           setBudget(b => ({ ...b, ...ws.worksheet_budget_alignment }))
         }
+        // Only a real, successful response arms the three autosave effects
+        // below.
+        prioritiesLoadedRef.current = true
+        guestLoadedRef.current = true
+        budgetLoadedRef.current = true
+        prioritiesSkipRef.current = true
+        guestSkipRef.current = true
+        budgetSkipRef.current = true
       })
-      .catch(err => console.error('Load worksheets error:', err))
+      .catch(err => {
+        console.error('Load worksheets error:', err)
+        setLoadError(err)
+      })
       .finally(() => setLoading(false))
-  }, [weddingId])
+  }
+
+  // Load data
+  useEffect(() => { loadWorksheets() }, [weddingId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Alignment check
   const agreements = PRIORITY_CATS.filter(cat => {
@@ -192,8 +215,9 @@ export default function WeddingWorksheets({ weddingId, userId }) {
   useEffect(() => {
     if (loading) return
     if (!weddingId) return
-    if (!prioritiesLoadedRef.current) {
-      prioritiesLoadedRef.current = true
+    if (!prioritiesLoadedRef.current) return
+    if (prioritiesSkipRef.current) {
+      prioritiesSkipRef.current = false
       return
     }
     schedulePrioritiesSave({
@@ -208,8 +232,9 @@ export default function WeddingWorksheets({ weddingId, userId }) {
   useEffect(() => {
     if (loading) return
     if (!weddingId) return
-    if (!guestLoadedRef.current) {
-      guestLoadedRef.current = true
+    if (!guestLoadedRef.current) return
+    if (guestSkipRef.current) {
+      guestSkipRef.current = false
       return
     }
     scheduleGuestSave(guestRules)
@@ -219,8 +244,9 @@ export default function WeddingWorksheets({ weddingId, userId }) {
   useEffect(() => {
     if (loading) return
     if (!weddingId) return
-    if (!budgetLoadedRef.current) {
-      budgetLoadedRef.current = true
+    if (!budgetLoadedRef.current) return
+    if (budgetSkipRef.current) {
+      budgetSkipRef.current = false
       return
     }
     scheduleBudgetSave({ ...budget, total: budgetTotal })
@@ -257,6 +283,10 @@ export default function WeddingWorksheets({ weddingId, userId }) {
     return (
       <div className="text-sage-500 text-sm py-8 text-center">Loading worksheets…</div>
     )
+  }
+
+  if (loadError) {
+    return <LoadError what="your worksheets" error={loadError} onRetry={loadWorksheets} />
   }
 
   return (

@@ -578,8 +578,16 @@ function RsvpSection({ t, slug, settings, platedMeal, mealOptions, sitePassword 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       })
-      if (!res.ok) throw new Error()
       const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        // A deadline that passed between opening the form and submitting it,
+        // or a plus one the couple has since removed, used to read as the
+        // same generic "something went wrong" as a dropped connection. The
+        // server already says which; show that instead of guessing.
+        setError(body?.error || 'Something went wrong. Please try again or contact us directly.')
+        setSubmitting(false)
+        return
+      }
       setSentTo(body?.confirmationSentTo || null)
       setDone(true)
     } catch {
