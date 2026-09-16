@@ -258,8 +258,13 @@ Not a refusal, a count. Behind Railway's proxy every caller shared one
 500-per-15-minutes bucket, so one looping tab emptied it for the whole venue.
 
 ```sh
-curl -sI $API/api/health | grep -i ratelimit
+curl -sI $API/api/manor-assets | grep -i ratelimit
 ```
+
+`/` and `/api/health` no longer carry these headers and no longer count: they
+are what Railway polls to decide whether the container is alive, and a 429 on
+that reads as a dead container and restarts the server mid-sync. Use any other
+public route to watch the limiter.
 
 `RateLimit-Remaining` should now fall as *you* make requests and should not
 already be low on a quiet morning. Two different networks hitting the API at

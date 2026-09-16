@@ -213,6 +213,21 @@ const aiLimiter = rateLimit({
   message: { error: 'Too many requests, please try again later' }
 });
 
+// Uploads that each cost a Claude call on the way in.
+//
+// aiLimiter's twenty in fifteen minutes is right for a question box and wrong
+// here: a couple filling their inspiration gallery uploads up to twenty images
+// in a sitting, one request each, and would be refused on the last one for
+// doing exactly what the page invites. Sixty leaves room for that and for a
+// second sitting, and still stops a loop.
+const aiUploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'That is a lot of uploads at once. Please wait a few minutes and carry on.' },
+});
+
 // Guest-name lookup on a public wedding website. Two letters at a time, an
 // unthrottled search will enumerate a couple's entire guest list, so this is
 // deliberately tighter than the general limit while still leaving room for
@@ -239,8 +254,18 @@ const vendorPhotoDeleteLimiter = rateLimit({
   message: { error: 'Too many photo deletions. Please wait a few minutes and try again.' },
 });
 
-// Apply general rate limiter to all routes
-app.use(generalLimiter);
+// Apply general rate limiter to all routes, except the two Railway polls to
+// decide whether this container is alive.
+//
+// Behind the general limiter a busy quarter of an hour makes the health check
+// 429. Railway reads that as a dead container and restarts it, which kills
+// every sync that was running: a rate limit turning itself into an outage, and
+// an outage that looks like the thing the limiter was there to prevent. They
+// answer from memory and touch no database, so there is nothing to protect.
+app.use((req, res, next) => {
+  if (req.path === '/' || req.path === '/api/health') return next();
+  return generalLimiter(req, res, next);
+});
 
 // Apply stricter AI rate limiter to chat/AI endpoints
 app.use('/api/chat', aiLimiter);
@@ -250,6 +275,16 @@ app.use('/api/sage-preview', aiLimiter);
 app.use('/api/ask-contracts', aiLimiter);
 app.use('/api/bar-recipes/extract-url', aiLimiter);
 app.use('/api/bar-recipes/extract-upload', aiLimiter);
+// Every other route that spends money at Anthropic. These were behind nothing
+// but an auth check, so a loop by a signed-in caller — or a screen retrying a
+// failed call — billed without limit. The ones taking a path parameter get it
+// inline at the route instead, because a prefix mount cannot express them:
+// /api/vendors/:id/contract, /api/uncertain-questions/:id/draft-client-message
+// and /api/admin/documents/:id/parse.
+app.use('/api/extract-contract', aiLimiter);
+app.use('/api/admin/ask', aiLimiter);
+app.use('/api/notes-highlights', aiLimiter);
+app.use('/api/guests/map-columns', aiLimiter);
 
 // Health check endpoint for Railway (public)
 app.get('/', (req, res) => {
@@ -2867,7 +2902,7 @@ async function storeContractFile(weddingId, file) {
 // looked to it like a request about no wedding at all and went straight
 // through with no token. The membership check has to happen here, on the first
 // line after multer has parsed the form.
-app.post('/api/extract-contract', requireAuth, aiLimiter, upload.single('contract'), async (req, res) => {
+app.post('/api/extract-contract', requireAuth, upload.single('contract'), async (req, res) => {
   try {
     const { weddingId } = req.body;
     const file = req.file;
@@ -8188,7 +8223,7 @@ app.post('/api/uncertain-questions/:id/answer', async (req, res) => {
 // Turn the knowledge-base answer into something you would actually send a
 // person. The KB entry is written for Sage to read; this is written for the
 // couple, and it opens by referring back to what they asked.
-app.post('/api/uncertain-questions/:id/draft-client-message', async (req, res) => {
+app.post('/api/uncertain-questions/:id/draft-client-message', aiLimiter, async (req, res) => {
   try {
     const { id } = req.params;
     const { answer } = req.body;
@@ -8456,7 +8491,7 @@ app.delete('/api/vendors/:id', async (req, res) => {
 });
 
 // Upload vendor contract
-app.post('/api/vendors/:id/contract', upload.single('contract'), async (req, res) => {
+app.post('/api/vendors/:id/contract', aiUploadLimiter, upload.single('contract'), async (req, res) => {
   try {
     const { id } = req.params;
     const file = req.file;
@@ -8730,7 +8765,7 @@ app.get('/api/inspo/:weddingId', async (req, res) => {
 // Upload inspo image
 // Multipart, so weddingAccess saw an empty body and could not scope it. See
 // the note on /api/extract-contract.
-app.post('/api/inspo', requireAuth, upload.single('image'), async (req, res) => {
+app.post('/api/inspo', requireAuth, aiUploadLimiter, upload.single('image'), async (req, res) => {
   try {
     const { weddingId, caption, uploadedBy, category } = req.body;
     const file = req.file;
@@ -14713,24 +14748,39 @@ app.post('/api/bar-recipes/extract-url', requireAuth, async (req, res) => {
     // Redirects are followed by hand so every hop is checked, not just the one
     // the caller typed. Left to fetch, a public URL that 302s to 169.254.169.254
     // would defeat the whole check.
+    //
+    // One clock for the whole chain, not one per hop. Five hops at fifteen
+    // seconds each is seventy-five seconds of fetching before Claude is even
+    // asked, and Railway closes the connection at about fifty, so a slow site
+    // redirecting a few times produced a proxy error rather than a message
+    // about a slow site. Twenty seconds, shared: a recipe page that cannot
+    // answer in that is not going to.
+    const pageBudget = AbortSignal.timeout(20_000);
     let target = url;
     let pageRes = null;
-    for (let hop = 0; hop < 5; hop++) {
-      const safe = await assertFetchableUrl(target);
-      if (!safe.ok) return res.status(400).json({ error: safe.why });
+    try {
+      for (let hop = 0; hop < 5; hop++) {
+        const safe = await assertFetchableUrl(target);
+        if (!safe.ok) return res.status(400).json({ error: safe.why });
 
-      pageRes = await fetch(safe.url, {
-        redirect: 'manual',
-        signal: AbortSignal.timeout(15_000),
-        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
-      });
+        pageRes = await fetch(safe.url, {
+          redirect: 'manual',
+          signal: pageBudget,
+          headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
+        });
 
-      if (pageRes.status >= 300 && pageRes.status < 400 && pageRes.headers.get('location')) {
-        target = new URL(pageRes.headers.get('location'), safe.url).toString();
-        pageRes = null;
-        continue;
+        if (pageRes.status >= 300 && pageRes.status < 400 && pageRes.headers.get('location')) {
+          target = new URL(pageRes.headers.get('location'), safe.url).toString();
+          pageRes = null;
+          continue;
+        }
+        break;
       }
-      break;
+    } catch (fetchErr) {
+      if (pageBudget.aborted) {
+        return res.status(504).json({ error: 'That page took too long to answer. Try a different link, or type the ingredients in.' });
+      }
+      throw fetchErr;
     }
     if (!pageRes) return res.status(400).json({ error: 'That page redirects too many times.' });
     if (!pageRes.ok) return res.status(422).json({ error: 'That page could not be read.' });
