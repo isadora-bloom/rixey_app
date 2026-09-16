@@ -41,7 +41,7 @@ import WeddingContacts from '../../components/admin/WeddingContacts'
 import ZoomTranscriptsPanel from '../../components/admin/ZoomTranscriptsPanel'
 import CommunicationPulseCard from '../../components/admin/CommunicationPulseCard'
 import { API_URL } from '../../config/api'
-import { apiFetch } from '../../utils/api'
+import { apiFetch, loadJson } from '../../utils/api'
 import DocumentSyncPanel from '../../components/DocumentSyncPanel'
 import { getLastActivity, getCategoryIcon, getCategoryLabel } from './adminUtils'
 import { weddingTabs } from './weddingTabs'
@@ -52,6 +52,7 @@ import SectionJump from '../../components/ui/SectionJump'
 import useCollapsedGroups from '../../hooks/useCollapsedGroups'
 import RsvpSettingsTab from '../../components/admin/RsvpSettingsTab'
 import { weddingName } from '../../../shared/wedding-name.js'
+import { headcount } from '../../../shared/guest-names.js'
 import { ConfirmDialog } from '../../components/ui'
 
 // Sections that exist on the venue side. Coming out of couple view lands on
@@ -209,6 +210,21 @@ export default function AdminWeddingProfile({
     apiFetch(`${API_URL}/api/admin/contact-messages/${viewingWedding.id}`)
       .then(data => { if (alive) setContactMessageCount((data?.messages || []).length) })
       .catch(() => { if (alive) setContactMessageCount(0) })
+    return () => { alive = false }
+  }, [viewingWedding?.id])
+
+  // The attending headcount for the Staffing tab. Nothing else on this page
+  // loads the guest list itself, since the Guests tab and ShuttleSchedule
+  // each fetch their own copy, so StaffingCalculator was always seeded with
+  // its own default of 100 rather than this wedding's real numbers. A failed
+  // read just leaves the calculator on that same default.
+  const [attendingGuestCount, setAttendingGuestCount] = useState(0)
+  useEffect(() => {
+    let alive = true
+    if (!viewingWedding?.id) return
+    loadJson(`${API_URL}/api/guests/${viewingWedding.id}`)
+      .then(data => { if (alive) setAttendingGuestCount(headcount(data?.guests || []).attending) })
+      .catch(() => { if (alive) setAttendingGuestCount(0) })
     return () => { alive = false }
   }, [viewingWedding?.id])
 
@@ -1702,7 +1718,7 @@ export default function AdminWeddingProfile({
               )}
 
               {activeTab === 'staffing' && (
-                <StaffingCalculator weddingId={viewingWedding.id} userId={null} isAdmin />
+                <StaffingCalculator weddingId={viewingWedding.id} userId={null} isAdmin guestCount={attendingGuestCount} />
               )}
 
               {activeTab === 'bar' && (
