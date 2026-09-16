@@ -1227,7 +1227,7 @@ export default function Dashboard() {
               )}
               {activeSection === 'table-map' && profile?.wedding_id && (
                 <div className="p-4 sm:p-6">
-                  <TableCanvas weddingId={profile.wedding_id} />
+                  <TableCanvas weddingId={profile.wedding_id} coupleNames={wedding?.couple_names} />
                 </div>
               )}
               {activeSection === 'rsvp-settings' && profile?.wedding_id && (
