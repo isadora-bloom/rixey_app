@@ -317,6 +317,7 @@ export default function AdminWeddingProfile({
   const [nameDraft, setNameDraft] = useState('')
   const [savingName, setSavingName] = useState(false)
   const [confirmDeleteNoteId, setConfirmDeleteNoteId] = useState(null)
+  const [confirmDeleteQuestionId, setConfirmDeleteQuestionId] = useState(null)
 
   const startEditName = () => {
     setNameDraft(viewingWedding.project_name || viewingWedding.couple_names || '')
@@ -1599,7 +1600,7 @@ export default function AdminWeddingProfile({
                                   </p>
                                 </div>
                                 <button
-                                  onClick={() => deleteUncertainQuestion(q.id)}
+                                  onClick={() => setConfirmDeleteQuestionId(q.id)}
                                   className="text-sage-400 hover:text-red-500 text-sm"
                                   title="Delete question"
                                 >
@@ -1944,6 +1945,16 @@ export default function AdminWeddingProfile({
         onConfirm={() => deleteInternalNote(confirmDeleteNoteId)}
         title="Delete internal note?"
         message="This is admin-only and cannot be recovered."
+        confirmLabel="Delete"
+        danger
+      />
+
+      <ConfirmDialog
+        open={confirmDeleteQuestionId !== null}
+        onClose={() => setConfirmDeleteQuestionId(null)}
+        onConfirm={() => deleteUncertainQuestion(confirmDeleteQuestionId)}
+        title="Delete this question?"
+        message="This removes it from the uncertain-questions list for good."
         confirmLabel="Delete"
         danger
       />
