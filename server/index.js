@@ -3002,7 +3002,7 @@ app.post('/api/extract-contract', requireAuth, upload.single('contract'), async 
 
   } catch (error) {
     console.error('Contract extraction error:', error);
-    res.status(500).json({ error: 'Failed to process contract' });
+    sendDbError(res, error, { fallback: 'Failed to process contract' });
   }
 });
 
@@ -3219,7 +3219,7 @@ app.post('/api/sage-preview', async (req, res) => {
     res.json({ reply });
   } catch (err) {
     console.error('Sage preview error:', err);
-    res.status(500).json({ error: 'Failed to get response' });
+    sendDbError(res, err, { fallback: 'Failed to get response' });
   }
 });
 
@@ -3312,7 +3312,7 @@ app.post('/api/chat-with-file', requireAuth, upload.single('file'), async (req, 
 
   } catch (error) {
     console.error('Chat with file error:', error);
-    res.status(500).json({ error: 'Failed to process file' });
+    sendDbError(res, error, { fallback: 'Failed to process file' });
   }
 });
 
@@ -3960,7 +3960,7 @@ app.post('/api/ask-contracts', async (req, res) => {
 
   } catch (error) {
     console.error('Q&A error:', error);
-    res.status(500).json({ error: 'Failed to answer question' });
+    sendDbError(res, error, { fallback: 'Failed to answer question' });
   }
 });
 
@@ -4062,7 +4062,7 @@ app.post('/api/admin/ask', async (req, res) => {
 
   } catch (error) {
     console.error('[admin ask] failed:', error);
-    res.status(500).json({ error: 'Could not answer that. Try again in a moment.' });
+    sendDbError(res, error, { fallback: 'Could not answer that. Try again in a moment.' });
   }
 });
 
@@ -4101,7 +4101,7 @@ app.get('/api/answer-jobs/latest', requireAuth, async (req, res) => {
     res.json({ ...publicJobView(job), kind });
   } catch (error) {
     console.error('[answer-jobs] latest failed:', error?.message || error);
-    res.status(500).json({ error: 'Could not read the last answer.' });
+    sendDbError(res, error, { fallback: 'Could not read the last answer.' });
   }
 });
 
@@ -4118,7 +4118,7 @@ app.get('/api/answer-jobs/:id', requireAuth, async (req, res) => {
     res.json(publicJobView(job));
   } catch (error) {
     console.error('[answer-jobs] read failed:', error?.message || error);
-    res.status(500).json({ error: 'Could not read that job.' });
+    sendDbError(res, error, { fallback: 'Could not read that job.' });
   }
 });
 
@@ -5235,7 +5235,7 @@ app.post('/api/gmail/disconnect', async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error('Gmail disconnect error:', error.message);
-    res.status(500).json({ error: 'Failed to disconnect' });
+    sendDbError(res, error, { fallback: 'Failed to disconnect' });
   }
 });
 
@@ -6778,7 +6778,7 @@ app.post('/api/zoom/callback', async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error('Zoom auth error:', error);
-    res.status(500).json({ error: 'Failed to connect Zoom' });
+    sendDbError(res, error, { fallback: 'Failed to connect Zoom' });
   }
 });
 
@@ -7563,7 +7563,7 @@ app.get('/api/admin/sync-jobs', async (req, res) => {
     res.json({ jobs });
   } catch (error) {
     console.error('sync-jobs error:', error);
-    res.status(500).json({ error: 'Could not load sync history' });
+    sendDbError(res, error, { fallback: 'Could not load sync history' });
   }
 });
 
@@ -7621,7 +7621,7 @@ app.get('/api/admin/sync-log/:weddingId', async (req, res) => {
     });
   } catch (error) {
     console.error('sync-log error:', error);
-    res.status(500).json({ error: 'Could not load the sync log' });
+    sendDbError(res, error, { fallback: 'Could not load the sync log' });
   }
 });
 
@@ -7662,7 +7662,7 @@ app.get('/api/admin/wedding-contacts/:weddingId', async (req, res) => {
     res.json({ contacts: data || [] });
   } catch (error) {
     console.error('wedding-contacts read error:', error);
-    res.status(500).json({ error: 'Could not load the contacts for this wedding' });
+    sendDbError(res, error, { fallback: 'Could not load the contacts for this wedding' });
   }
 });
 
@@ -7750,7 +7750,7 @@ app.delete('/api/admin/wedding-contacts/:id', async (req, res) => {
     res.json({ ok: true });
   } catch (error) {
     console.error('wedding-contacts delete error:', error);
-    res.status(500).json({ error: 'Could not remove that contact' });
+    sendDbError(res, error, { fallback: 'Could not remove that contact' });
   }
 });
 
@@ -7770,7 +7770,7 @@ app.get('/api/admin/contact-messages/:weddingId', async (req, res) => {
     res.json({ messages: data || [] });
   } catch (error) {
     console.error('contact-messages read error:', error);
-    res.status(500).json({ error: 'Could not load those calls and emails' });
+    sendDbError(res, error, { fallback: 'Could not load those calls and emails' });
   }
 });
 
@@ -7848,7 +7848,7 @@ app.get('/api/admin/ingest-review', async (req, res) => {
     res.json({ items: data || [] });
   } catch (error) {
     console.error('ingest-review error:', error);
-    res.status(500).json({ error: 'Could not load items needing review' });
+    sendDbError(res, error, { fallback: 'Could not load items needing review' });
   }
 });
 
@@ -7960,7 +7960,7 @@ app.post('/api/admin/ingest-review/:id/ignore', async (req, res) => {
     res.json({ ok: true });
   } catch (error) {
     console.error('ignore review item error:', error);
-    res.status(500).json({ error: 'Could not dismiss that item' });
+    sendDbError(res, error, { fallback: 'Could not dismiss that item' });
   }
 });
 
@@ -8239,7 +8239,7 @@ app.post('/api/zoom/disconnect', async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error('Zoom disconnect error:', error.message);
-    res.status(500).json({ error: 'Failed to disconnect' });
+    sendDbError(res, error, { fallback: 'Failed to disconnect' });
   }
 });
 
@@ -8279,7 +8279,7 @@ app.get('/api/uncertain-questions', async (req, res) => {
     res.json({ questions: data || [] });
   } catch (error) {
     console.error('Get uncertain questions error:', error);
-    res.status(500).json({ error: 'Failed to get questions' });
+    sendDbError(res, error, { fallback: 'Failed to get questions' });
   }
 });
 
@@ -8295,7 +8295,7 @@ app.get('/api/uncertain-questions/count', async (req, res) => {
     res.json({ count: count || 0 });
   } catch (error) {
     console.error('Count error:', error);
-    res.status(500).json({ error: 'Failed to count questions' });
+    sendDbError(res, error, { fallback: 'Failed to count questions' });
   }
 });
 
@@ -8347,7 +8347,7 @@ app.post('/api/uncertain-questions/:id/answer', async (req, res) => {
     res.json({ question, success: true });
   } catch (error) {
     console.error('Answer question error:', error);
-    res.status(500).json({ error: 'Failed to save answer' });
+    sendDbError(res, error, { fallback: 'Failed to save answer' });
   }
 });
 
@@ -8510,7 +8510,7 @@ app.delete('/api/uncertain-questions/:id', async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error('Delete question error:', error);
-    res.status(500).json({ error: 'Failed to delete question' });
+    sendDbError(res, error, { fallback: 'Failed to delete question' });
   }
 });
 
@@ -8537,7 +8537,7 @@ app.get('/api/vendors/:weddingId', async (req, res) => {
     res.json({ vendors: data || [], vendorTypes: VENDOR_TYPES });
   } catch (error) {
     console.error('Get vendors error:', error);
-    res.status(500).json({ error: 'Failed to get vendors' });
+    sendDbError(res, error, { fallback: 'Failed to get vendors' });
   }
 });
 
@@ -8645,7 +8645,7 @@ app.delete('/api/vendors/:id', async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error('Delete vendor error:', error);
-    res.status(500).json({ error: 'Failed to delete vendor' });
+    sendDbError(res, error, { fallback: 'Failed to delete vendor' });
   }
 });
 
@@ -8843,7 +8843,7 @@ Return ONLY a valid JSON array like: [{"category": "vendor", "content": "Photogr
     res.json({ vendor: data });
   } catch (error) {
     console.error('Contract upload error:', error);
-    res.status(500).json({ error: 'Failed to upload contract' });
+    sendDbError(res, error, { fallback: 'Failed to upload contract' });
   }
 });
 
@@ -8897,7 +8897,7 @@ app.delete('/api/vendors/:id/contract', async (req, res) => {
     res.json({ vendor: data });
   } catch (error) {
     console.error('Remove contract error:', error);
-    res.status(500).json({ error: 'Failed to remove contract' });
+    sendDbError(res, error, { fallback: 'Failed to remove contract' });
   }
 });
 
@@ -8920,7 +8920,7 @@ app.get('/api/inspo/:weddingId', async (req, res) => {
     res.json({ images: data || [], maxImages: MAX_INSPO_IMAGES });
   } catch (error) {
     console.error('Get inspo error:', error);
-    res.status(500).json({ error: 'Failed to get inspiration images' });
+    sendDbError(res, error, { fallback: 'Failed to get inspiration images' });
   }
 });
 
@@ -9071,7 +9071,7 @@ Example: [{"category": "colors", "content": "Color palette: dusty rose, sage gre
     res.json({ image: data });
   } catch (error) {
     console.error('Upload inspo error:', error);
-    res.status(500).json({ error: 'Failed to upload image' });
+    sendDbError(res, error, { fallback: 'Failed to upload image' });
   }
 });
 
@@ -9096,7 +9096,7 @@ app.put('/api/inspo/:id', async (req, res) => {
     res.json({ image: data });
   } catch (error) {
     console.error('Update inspo error:', error);
-    res.status(500).json({ error: 'Failed to update image' });
+    sendDbError(res, error, { fallback: 'Failed to update image' });
   }
 });
 
@@ -9136,7 +9136,7 @@ app.delete('/api/inspo/:id', async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error('Delete inspo error:', error);
-    res.status(500).json({ error: 'Failed to delete image' });
+    sendDbError(res, error, { fallback: 'Failed to delete image' });
   }
 });
 
@@ -9158,7 +9158,7 @@ app.get('/api/couple-photo/:weddingId', async (req, res) => {
     res.json({ photo: data || null });
   } catch (error) {
     console.error('Get couple photo error:', error);
-    res.status(500).json({ error: 'Failed to get photo' });
+    sendDbError(res, error, { fallback: 'Failed to get photo' });
   }
 });
 
@@ -9254,7 +9254,7 @@ app.post('/api/couple-photo', requireAuth, upload.single('photo'), async (req, r
     res.json({ photo: data });
   } catch (error) {
     console.error('Upload couple photo error:', error);
-    res.status(500).json({ error: 'Failed to upload photo' });
+    sendDbError(res, error, { fallback: 'Failed to upload photo' });
   }
 });
 
@@ -9294,7 +9294,7 @@ app.delete('/api/couple-photo/:weddingId', async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error('Delete couple photo error:', error);
-    res.status(500).json({ error: 'Failed to delete photo' });
+    sendDbError(res, error, { fallback: 'Failed to delete photo' });
   }
 });
 
@@ -9364,7 +9364,7 @@ app.get('/api/checklist/:weddingId', async (req, res) => {
     res.json({ tasks: data || [] });
   } catch (error) {
     console.error('Get checklist error:', error);
-    res.status(500).json({ error: 'Failed to get checklist' });
+    sendDbError(res, error, { fallback: 'Failed to get checklist' });
   }
 });
 
@@ -9405,7 +9405,7 @@ app.post('/api/checklist/initialize/:weddingId', async (req, res) => {
     res.json({ tasks: data, initialized: true });
   } catch (error) {
     console.error('Initialize checklist error:', error);
-    res.status(500).json({ error: 'Failed to initialize checklist' });
+    sendDbError(res, error, { fallback: 'Failed to initialize checklist' });
   }
 });
 
@@ -9444,7 +9444,7 @@ app.post('/api/checklist', async (req, res) => {
     res.json({ task: data });
   } catch (error) {
     console.error('Add task error:', error);
-    res.status(500).json({ error: 'Failed to add task' });
+    sendDbError(res, error, { fallback: 'Failed to add task' });
   }
 });
 
@@ -9490,7 +9490,7 @@ app.put('/api/checklist/:id', async (req, res) => {
     res.json({ task: data });
   } catch (error) {
     console.error('Update task error:', error);
-    res.status(500).json({ error: 'Failed to update task' });
+    sendDbError(res, error, { fallback: 'Failed to update task' });
   }
 });
 
@@ -9519,7 +9519,7 @@ app.delete('/api/checklist/:id', async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error('Delete task error:', error);
-    res.status(500).json({ error: 'Failed to delete task' });
+    sendDbError(res, error, { fallback: 'Failed to delete task' });
   }
 });
 
@@ -9604,7 +9604,7 @@ app.post('/api/checklist/sage-complete', async (req, res) => {
     res.json({ task: data, success: true });
   } catch (error) {
     console.error('Sage complete error:', error);
-    res.status(500).json({ error: 'Failed to complete task' });
+    sendDbError(res, error, { fallback: 'Failed to complete task' });
   }
 });
 
@@ -9617,7 +9617,7 @@ app.post('/api/checklist/find-match', async (req, res) => {
     res.json({ task: task || null });
   } catch (error) {
     console.error('Find match error:', error);
-    res.status(500).json({ error: 'Failed to find matching task' });
+    sendDbError(res, error, { fallback: 'Failed to find matching task' });
   }
 });
 
@@ -9673,7 +9673,7 @@ app.get('/api/usage/stats', async (req, res) => {
     res.json({ stats: Object.values(weddingStats) });
   } catch (error) {
     console.error('Usage stats error:', error);
-    res.status(500).json({ error: 'Failed to get usage stats' });
+    sendDbError(res, error, { fallback: 'Failed to get usage stats' });
   }
 });
 
@@ -9708,7 +9708,7 @@ app.get('/api/usage/:weddingId', async (req, res) => {
     });
   } catch (error) {
     console.error('Wedding usage error:', error);
-    res.status(500).json({ error: 'Failed to get wedding usage' });
+    sendDbError(res, error, { fallback: 'Failed to get wedding usage' });
   }
 });
 
@@ -9733,7 +9733,7 @@ app.get('/api/knowledge-base', async (req, res) => {
     res.json({ entries: data || [] });
   } catch (error) {
     console.error('Get KB error:', error);
-    res.status(500).json({ error: 'Failed to get knowledge base' });
+    sendDbError(res, error, { fallback: 'Failed to get knowledge base' });
   }
 });
 
@@ -9762,7 +9762,7 @@ app.post('/api/knowledge-base', async (req, res) => {
     res.json({ entry: data });
   } catch (error) {
     console.error('Create KB error:', error);
-    res.status(500).json({ error: 'Failed to create entry' });
+    sendDbError(res, error, { fallback: 'Failed to create entry' });
   }
 });
 
@@ -9790,7 +9790,7 @@ app.put('/api/knowledge-base/:id', async (req, res) => {
     res.json({ entry: data });
   } catch (error) {
     console.error('Update KB error:', error);
-    res.status(500).json({ error: 'Failed to update entry' });
+    sendDbError(res, error, { fallback: 'Failed to update entry' });
   }
 });
 
@@ -9808,7 +9808,7 @@ app.delete('/api/knowledge-base/:id', async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error('Delete KB error:', error);
-    res.status(500).json({ error: 'Failed to delete entry' });
+    sendDbError(res, error, { fallback: 'Failed to delete entry' });
   }
 });
 
@@ -9839,7 +9839,7 @@ app.get('/api/recommended-vendors', async (req, res) => {
     res.json({ vendors: data || [], categories });
   } catch (error) {
     console.error('Get recommended vendors error:', error);
-    res.status(500).json({ error: 'Failed to get vendors' });
+    sendDbError(res, error, { fallback: 'Failed to get vendors' });
   }
 });
 
@@ -9858,7 +9858,7 @@ app.get('/api/recommended-vendors/:id', async (req, res) => {
     res.json({ vendor: data });
   } catch (error) {
     console.error('Get vendor error:', error);
-    res.status(500).json({ error: 'Failed to get vendor' });
+    sendDbError(res, error, { fallback: 'Failed to get vendor' });
   }
 });
 
@@ -9903,7 +9903,7 @@ app.post('/api/recommended-vendors', async (req, res) => {
     res.json({ vendor: data });
   } catch (error) {
     console.error('Create vendor error:', error);
-    res.status(500).json({ error: 'Failed to create vendor' });
+    sendDbError(res, error, { fallback: 'Failed to create vendor' });
   }
 });
 
@@ -9926,7 +9926,7 @@ app.put('/api/recommended-vendors/:id', async (req, res) => {
     res.json({ vendor: data });
   } catch (error) {
     console.error('Update vendor error:', error);
-    res.status(500).json({ error: 'Failed to update vendor' });
+    sendDbError(res, error, { fallback: 'Failed to update vendor' });
   }
 });
 
@@ -9949,7 +9949,7 @@ app.delete('/api/recommended-vendors/:id', async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error('Delete vendor error:', error);
-    res.status(500).json({ error: 'Failed to delete vendor' });
+    sendDbError(res, error, { fallback: 'Failed to delete vendor' });
   }
 });
 
@@ -10027,7 +10027,7 @@ app.get('/api/vendor-directory', async (req, res) => {
     res.json({ vendors, categories });
   } catch (err) {
     console.error('Vendor directory error:', err);
-    res.status(500).json({ error: 'Failed to load vendor directory' });
+    sendDbError(res, err, { fallback: 'Failed to load vendor directory' });
   }
 });
 
@@ -10074,7 +10074,7 @@ app.post('/api/admin/vendors/:id/regenerate-token', async (req, res) => {
     res.json({ id: data.id, edit_token: data.edit_token });
   } catch (err) {
     console.error('Regenerate vendor token error:', err);
-    res.status(500).json({ error: 'Failed to regenerate token' });
+    sendDbError(res, err, { fallback: 'Failed to regenerate token' });
   }
 });
 
@@ -10108,7 +10108,7 @@ app.get('/api/vendor-portal/:token', async (req, res) => {
     }
     res.json({ vendor: data });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to load vendor' });
+    sendDbError(res, err, { fallback: 'Failed to load vendor' });
   }
 });
 
@@ -10131,7 +10131,7 @@ app.put('/api/vendor-portal/:token', async (req, res) => {
     if (error || !data) return res.status(404).json({ error: 'Vendor not found' });
     res.json({ vendor: data });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to update vendor' });
+    sendDbError(res, err, { fallback: 'Failed to update vendor' });
   }
 });
 
@@ -10273,7 +10273,7 @@ app.delete('/api/vendor-portal/:token/photos', vendorPhotoDeleteLimiter, async (
     if (error) throw error;
     res.json({ photos: data.photos });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to remove photo' });
+    sendDbError(res, err, { fallback: 'Failed to remove photo' });
   }
 });
 
@@ -10292,7 +10292,7 @@ app.put('/api/recommended-vendors/:id/publish', async (req, res) => {
     if (error) throw error;
     res.json({ vendor: data });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to update publish status' });
+    sendDbError(res, err, { fallback: 'Failed to update publish status' });
   }
 });
 
@@ -10404,7 +10404,7 @@ app.get('/api/venue-vendors', async (req, res) => {
     });
   } catch (err) {
     console.error('Venue vendors error:', err);
-    res.status(500).json({ error: 'Failed to load vendors' });
+    sendDbError(res, err, { fallback: 'Failed to load vendors' });
   }
 });
 
@@ -10521,7 +10521,7 @@ app.get('/api/venue-vendors/:id', async (req, res) => {
     });
   } catch (err) {
     console.error('Venue vendor error:', err);
-    res.status(500).json({ error: 'Failed to load vendor' });
+    sendDbError(res, err, { fallback: 'Failed to load vendor' });
   }
 });
 
@@ -10558,7 +10558,7 @@ app.post('/api/venue-vendors', async (req, res) => {
     res.json({ vendor: data });
   } catch (err) {
     console.error('Create vendor error:', err);
-    res.status(500).json({ error: 'Failed to create vendor' });
+    sendDbError(res, err, { fallback: 'Failed to create vendor' });
   }
 });
 
@@ -10584,7 +10584,7 @@ app.put('/api/venue-vendors/:id', async (req, res) => {
     res.json({ vendor: data });
   } catch (err) {
     console.error('Update venue vendor error:', err);
-    res.status(500).json({ error: 'Failed to save vendor' });
+    sendDbError(res, err, { fallback: 'Failed to save vendor' });
   }
 });
 
@@ -10616,7 +10616,7 @@ app.post('/api/venue-vendors/:id/contact-evidence/:evidenceId', async (req, res)
     res.json({ ok: true, field, value: row.value });
   } catch (err) {
     console.error('Contact evidence error:', err);
-    res.status(500).json({ error: 'Failed to update that' });
+    sendDbError(res, err, { fallback: 'Failed to update that' });
   }
 });
 
@@ -10687,7 +10687,7 @@ app.put('/api/venue-vendors/:id/recommend', async (req, res) => {
     res.json({ vendor: data });
   } catch (err) {
     console.error('Recommend toggle error:', err);
-    res.status(500).json({ error: 'Failed to update' });
+    sendDbError(res, err, { fallback: 'Failed to update' });
   }
 });
 
@@ -10836,7 +10836,7 @@ app.get('/api/vendor-merge-review', async (req, res) => {
     });
   } catch (err) {
     console.error('Merge review error:', err);
-    res.status(500).json({ error: 'Failed to load questions' });
+    sendDbError(res, err, { fallback: 'Failed to load questions' });
   }
 });
 
@@ -10900,7 +10900,7 @@ app.get('/api/venue-vendors-unlinked', async (req, res) => {
     });
   } catch (err) {
     console.error('Unlinked bookings error:', err);
-    res.status(500).json({ error: 'Failed to load unlinked bookings' });
+    sendDbError(res, err, { fallback: 'Failed to load unlinked bookings' });
   }
 });
 
@@ -10932,7 +10932,7 @@ app.put('/api/venue-vendors-unlinked/:bookingId', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('Link booking error:', err);
-    res.status(500).json({ error: 'Failed to link that booking' });
+    sendDbError(res, err, { fallback: 'Failed to link that booking' });
   }
 });
 
@@ -11060,7 +11060,7 @@ app.get('/api/onboarding/:weddingId', async (req, res) => {
     res.json({ progress });
   } catch (error) {
     console.error('Get onboarding error:', error);
-    res.status(500).json({ error: 'Failed to get onboarding progress' });
+    sendDbError(res, error, { fallback: 'Failed to get onboarding progress' });
   }
 });
 
@@ -11084,7 +11084,7 @@ app.put('/api/onboarding/:weddingId', async (req, res) => {
     res.json({ progress: data });
   } catch (error) {
     console.error('Update onboarding error:', error);
-    res.status(500).json({ error: 'Failed to update onboarding' });
+    sendDbError(res, error, { fallback: 'Failed to update onboarding' });
   }
 });
 
@@ -11119,7 +11119,7 @@ app.get('/api/admin/accommodations', async (req, res) => {
     res.json({ accommodations: rows });
   } catch (error) {
     console.error('Accommodations list error:', error);
-    res.status(500).json({ error: 'Could not load the accommodation list' });
+    sendDbError(res, error, { fallback: 'Could not load the accommodation list' });
   }
 });
 
@@ -11206,7 +11206,7 @@ app.get('/api/admin/onboarding/:weddingId', async (req, res) => {
     res.json({ exists: !!data, progress: data || null });
   } catch (error) {
     console.error('Admin onboarding read error:', error);
-    res.status(500).json({ error: 'Could not read onboarding progress' });
+    sendDbError(res, error, { fallback: 'Could not read onboarding progress' });
   }
 });
 
@@ -11427,7 +11427,7 @@ app.get('/api/admin/enquiries', requireAdmin, async (req, res) => {
     res.json({ enquiries });
   } catch (error) {
     console.error('List enquiries error:', error);
-    res.status(500).json({ error: 'Could not load the diary' });
+    sendDbError(res, error, { fallback: 'Could not load the diary' });
   }
 });
 
@@ -11590,7 +11590,7 @@ app.get('/api/admin/enquiries/:id/brief', requireAdmin, async (req, res) => {
     });
   } catch (error) {
     console.error('Enquiry brief error:', error);
-    res.status(500).json({ error: 'Could not build the brief' });
+    sendDbError(res, error, { fallback: 'Could not build the brief' });
   }
 });
 
@@ -11672,7 +11672,7 @@ app.patch('/api/admin/enquiries/:id', requireAdmin, async (req, res) => {
     res.json(data);
   } catch (error) {
     console.error('Update enquiry error:', error);
-    res.status(500).json({ error: 'Could not save that' });
+    sendDbError(res, error, { fallback: 'Could not save that' });
   }
 });
 
@@ -11880,7 +11880,7 @@ app.get('/api/messages/:weddingId', async (req, res) => {
     res.json({ messages: data });
   } catch (error) {
     console.error('Get messages error:', error);
-    res.status(500).json({ error: 'Failed to fetch messages' });
+    sendDbError(res, error, { fallback: 'Failed to fetch messages' });
   }
 });
 
@@ -11944,7 +11944,7 @@ app.post('/api/messages', async (req, res) => {
     res.json({ message: data });
   } catch (error) {
     console.error('Send message error:', error);
-    res.status(500).json({ error: 'Failed to send message' });
+    sendDbError(res, error, { fallback: 'Failed to send message' });
   }
 });
 
@@ -11966,7 +11966,7 @@ app.put('/api/messages/read/:weddingId', async (req, res) => {
     res.json({ updated: data?.length || 0 });
   } catch (error) {
     console.error('Mark read error:', error);
-    res.status(500).json({ error: 'Failed to mark messages as read' });
+    sendDbError(res, error, { fallback: 'Failed to mark messages as read' });
   }
 });
 
@@ -11986,7 +11986,7 @@ app.get('/api/messages/unread/:weddingId', async (req, res) => {
     res.json({ unread: count || 0 });
   } catch (error) {
     console.error('Unread count error:', error);
-    res.status(500).json({ error: 'Failed to get unread count' });
+    sendDbError(res, error, { fallback: 'Failed to get unread count' });
   }
 });
 
@@ -12011,7 +12011,7 @@ app.get('/api/messages/admin/unread', requireAdmin, async (req, res) => {
     res.json({ total, byWedding: counts });
   } catch (error) {
     console.error('Admin unread error:', error);
-    res.status(500).json({ error: 'Failed to get unread counts' });
+    sendDbError(res, error, { fallback: 'Failed to get unread counts' });
   }
 });
 
@@ -12062,7 +12062,7 @@ app.get('/api/messages/admin/conversations', requireAdmin, async (req, res) => {
     res.json({ conversations });
   } catch (error) {
     console.error('Get conversations error:', error);
-    res.status(500).json({ error: 'Failed to fetch conversations' });
+    sendDbError(res, error, { fallback: 'Failed to fetch conversations' });
   }
 });
 
@@ -12094,7 +12094,7 @@ app.get('/api/admin/last-24h', async (req, res) => {
     });
   } catch (err) {
     console.error('Last 24h error:', err);
-    res.status(500).json({ error: 'Failed to fetch last 24h data' });
+    sendDbError(res, err, { fallback: 'Failed to fetch last 24h data' });
   }
 });
 
@@ -12135,7 +12135,7 @@ app.get('/api/admin/notifications', async (req, res) => {
     res.json({ notifications: (data || []).map(asAdminNotification) });
   } catch (error) {
     console.error('Get admin notifications error:', error);
-    res.status(500).json({ error: 'Failed to load notifications' });
+    sendDbError(res, error, { fallback: 'Failed to load notifications' });
   }
 });
 
@@ -12156,7 +12156,7 @@ app.put('/api/admin/notifications/:id/read', async (req, res) => {
     res.json({ notification: asAdminNotification(data) });
   } catch (error) {
     console.error('Mark notification read error:', error);
-    res.status(500).json({ error: 'Failed to mark notification as read' });
+    sendDbError(res, error, { fallback: 'Failed to mark notification as read' });
   }
 });
 
@@ -12183,7 +12183,7 @@ app.post('/api/admin/notifications', async (req, res) => {
     res.json({ notification: asAdminNotification(data) });
   } catch (error) {
     console.error('Create admin notification error:', error);
-    res.status(500).json({ error: 'Failed to create notification' });
+    sendDbError(res, error, { fallback: 'Failed to create notification' });
   }
 });
 
@@ -12271,7 +12271,7 @@ app.get('/api/admin/weddings', async (req, res) => {
     res.json({ weddings: weddingsWithActivity });
   } catch (error) {
     console.error('Get admin weddings error:', error);
-    res.status(500).json({ error: 'Failed to fetch weddings' });
+    sendDbError(res, error, { fallback: 'Failed to fetch weddings' });
   }
 });
 
@@ -12403,7 +12403,7 @@ app.get('/api/communication-pulse/:weddingId', async (req, res) => {
     });
   } catch (error) {
     console.error('Communication pulse error:', error);
-    res.status(500).json({ error: 'Failed to calculate pulse' });
+    sendDbError(res, error, { fallback: 'Failed to calculate pulse' });
   }
 });
 
@@ -12494,7 +12494,7 @@ app.get('/api/communication-pulse', requireAdmin, async (req, res) => {
     res.json({ pulses, partial: missing.length > 0, missing });
   } catch (error) {
     console.error('Batch pulse error:', error);
-    res.status(500).json({ error: 'Failed to calculate pulses' });
+    sendDbError(res, error, { fallback: 'Failed to calculate pulses' });
   }
 });
 
@@ -12510,7 +12510,7 @@ app.get('/api/couple-photos/all', requireAdmin, async (req, res) => {
     res.json({ photos: photos || [] });
   } catch (error) {
     console.error('Get all couple photos error:', error);
-    res.status(500).json({ error: 'Failed to fetch couple photos' });
+    sendDbError(res, error, { fallback: 'Failed to fetch couple photos' });
   }
 });
 
@@ -12537,7 +12537,7 @@ app.put('/api/weddings/:weddingId/links', async (req, res) => {
     res.json({ wedding: data });
   } catch (error) {
     console.error('Update wedding links error:', error);
-    res.status(500).json({ error: 'Failed to update wedding links' });
+    sendDbError(res, error, { fallback: 'Failed to update wedding links' });
   }
 });
 
@@ -12559,7 +12559,7 @@ app.put('/api/weddings/:weddingId/archive', async (req, res) => {
     res.json({ wedding: data });
   } catch (error) {
     console.error('Toggle archive error:', error);
-    res.status(500).json({ error: 'Failed to toggle archive status' });
+    sendDbError(res, error, { fallback: 'Failed to toggle archive status' });
   }
 });
 
@@ -12601,7 +12601,7 @@ app.post('/api/admin/weddings/archive-past', async (req, res) => {
     res.json({ count: (data || []).length, weddingIds: (data || []).map(w => w.id) });
   } catch (error) {
     console.error('Archive past weddings error:', error);
-    res.status(500).json({ error: 'Failed to archive past weddings' });
+    sendDbError(res, error, { fallback: 'Failed to archive past weddings' });
   }
 });
 
@@ -12623,7 +12623,7 @@ app.put('/api/weddings/:weddingId/escalation', async (req, res) => {
     res.json({ wedding: data });
   } catch (error) {
     console.error('Mark escalation handled error:', error);
-    res.status(500).json({ error: 'Failed to mark escalation as handled' });
+    sendDbError(res, error, { fallback: 'Failed to mark escalation as handled' });
   }
 });
 
@@ -12647,7 +12647,7 @@ app.get('/api/borrow-selections/:weddingId', async (req, res) => {
     res.json({ selections });
   } catch (error) {
     console.error('Get borrow selections error:', error);
-    res.status(500).json({ error: 'Failed to fetch borrow selections' });
+    sendDbError(res, error, { fallback: 'Failed to fetch borrow selections' });
   }
 });
 
@@ -12705,7 +12705,7 @@ app.post('/api/borrow-selections', async (req, res) => {
     res.json({ success: true, selectedCount: itemNames.length });
   } catch (error) {
     console.error('Toggle borrow selection error:', error);
-    res.status(500).json({ error: 'Failed to update borrow selection' });
+    sendDbError(res, error, { fallback: 'Failed to update borrow selection' });
   }
 });
 
@@ -12748,7 +12748,7 @@ app.post('/api/admin/borrow-catalog', upload.single('image'), async (req, res) =
     res.json({ item: newItem });
   } catch (error) {
     console.error('Admin add borrow catalog error:', error);
-    res.status(500).json({ error: 'Failed to add catalog item' });
+    sendDbError(res, error, { fallback: 'Failed to add catalog item' });
   }
 });
 
@@ -12764,7 +12764,7 @@ app.get('/api/borrow-catalog', async (req, res) => {
     res.json({ items: data || [] });
   } catch (error) {
     console.error('Borrow catalog error:', error);
-    res.status(500).json({ error: 'Failed to fetch borrow catalog' });
+    sendDbError(res, error, { fallback: 'Failed to fetch borrow catalog' });
   }
 });
 
@@ -12794,7 +12794,7 @@ app.get('/api/sage-messages/user/:userId', requireAuth, async (req, res) => {
     res.json({ messages: messages || [] });
   } catch (error) {
     console.error('Get user messages error:', error);
-    res.status(500).json({ error: 'Failed to fetch messages' });
+    sendDbError(res, error, { fallback: 'Failed to fetch messages' });
   }
 });
 
@@ -12836,7 +12836,7 @@ app.post('/api/sage-messages', requireAuth, async (req, res) => {
     res.json({ message: data });
   } catch (error) {
     console.error('Save sage message error:', error);
-    res.status(500).json({ error: 'Failed to save message' });
+    sendDbError(res, error, { fallback: 'Failed to save message' });
   }
 });
 
@@ -12893,7 +12893,7 @@ app.post('/api/checkin/:weddingId', async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error('Check-in error:', error);
-    res.status(500).json({ error: 'Failed to send check-in' });
+    sendDbError(res, error, { fallback: 'Failed to send check-in' });
   }
 });
 
@@ -12927,7 +12927,7 @@ app.post('/api/sage-messages/inject', requireAdmin, async (req, res) => {
     res.json({ message: data });
   } catch (error) {
     console.error('Inject team note error:', error);
-    res.status(500).json({ error: 'Failed to inject note' });
+    sendDbError(res, error, { fallback: 'Failed to inject note' });
   }
 });
 
@@ -12956,7 +12956,7 @@ app.get('/api/sage-messages/all', requireAdmin, async (req, res) => {
     res.json({ messages });
   } catch (error) {
     console.error('Get all sage messages error:', error);
-    res.status(500).json({ error: 'Failed to fetch Sage messages' });
+    sendDbError(res, error, { fallback: 'Failed to fetch Sage messages' });
   }
 });
 
@@ -12993,7 +12993,7 @@ app.get('/api/sage-messages/:weddingId', async (req, res) => {
     res.json({ messages: messages || [] });
   } catch (error) {
     console.error('Get sage messages error:', error);
-    res.status(500).json({ error: 'Failed to fetch Sage messages' });
+    sendDbError(res, error, { fallback: 'Failed to fetch Sage messages' });
   }
 });
 
@@ -13042,7 +13042,7 @@ app.get('/api/planning-notes/couple/:weddingId', async (req, res) => {
     res.json({ notes, total: notes.length });
   } catch (error) {
     console.error('Get couple planning notes error:', error);
-    res.status(500).json({ error: 'Failed to fetch notes' });
+    sendDbError(res, error, { fallback: 'Failed to fetch notes' });
   }
 });
 
@@ -13068,7 +13068,7 @@ app.get('/api/planning-notes/:weddingId', async (req, res) => {
     res.json({ notes });
   } catch (error) {
     console.error('Get planning notes error:', error);
-    res.status(500).json({ error: 'Failed to fetch planning notes' });
+    sendDbError(res, error, { fallback: 'Failed to fetch planning notes' });
   }
 });
 
@@ -13090,7 +13090,7 @@ app.get('/api/activities/:weddingId', async (req, res) => {
     res.json({ activities: activities || [] });
   } catch (error) {
     console.error('Get activities error:', error);
-    res.status(500).json({ error: 'Failed to fetch activities' });
+    sendDbError(res, error, { fallback: 'Failed to fetch activities' });
   }
 });
 
@@ -13112,7 +13112,7 @@ app.put('/api/planning-notes/:noteId', async (req, res) => {
     res.json({ note: data });
   } catch (error) {
     console.error('Update planning note error:', error);
-    res.status(500).json({ error: 'Failed to update planning note' });
+    sendDbError(res, error, { fallback: 'Failed to update planning note' });
   }
 });
 
@@ -13133,7 +13133,7 @@ app.get('/api/timeline/:weddingId', async (req, res) => {
     res.json({ timeline: data || null });
   } catch (error) {
     console.error('Get timeline error:', error);
-    res.status(500).json({ error: 'Failed to fetch timeline' });
+    sendDbError(res, error, { fallback: 'Failed to fetch timeline' });
   }
 });
 
@@ -13188,7 +13188,7 @@ app.get('/api/tables/:weddingId', async (req, res) => {
     res.status(result.status).json(result.body);
   } catch (error) {
     console.error('Get tables error:', error);
-    res.status(500).json({ error: 'Failed to fetch table setup' });
+    sendDbError(res, error, { fallback: 'Failed to fetch table setup' });
   }
 });
 
@@ -13233,7 +13233,7 @@ app.post('/api/tables', async (req, res) => {
     res.json(result.body);
   } catch (error) {
     console.error('Save tables error:', error);
-    res.status(500).json({ error: 'Failed to save table setup' });
+    sendDbError(res, error, { fallback: 'Failed to save table setup' });
   }
 });
 
@@ -13247,7 +13247,7 @@ app.post('/api/tables/:weddingId/discard-draft', async (req, res) => {
     res.status(result.status).json(result.body);
   } catch (error) {
     console.error('Discard table draft error:', error);
-    res.status(500).json({ error: 'Failed to discard draft' });
+    sendDbError(res, error, { fallback: 'Failed to discard draft' });
   }
 });
 
@@ -13264,7 +13264,7 @@ app.get('/api/manor-assets', async (req, res) => {
     res.json(data || []);
   } catch (err) {
     console.error('Get manor assets error:', err);
-    res.status(500).json({ error: 'Failed to fetch assets' });
+    sendDbError(res, err, { fallback: 'Failed to fetch assets' });
   }
 });
 
@@ -13321,7 +13321,7 @@ app.put('/api/manor-assets/:id', async (req, res) => {
     res.json(data);
   } catch (err) {
     console.error('Update manor asset error:', err);
-    res.status(500).json({ error: 'Failed to update asset' });
+    sendDbError(res, err, { fallback: 'Failed to update asset' });
   }
 });
 
@@ -13354,7 +13354,7 @@ app.delete('/api/manor-assets/:id', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('Delete manor asset error:', err);
-    res.status(500).json({ error: 'Failed to delete asset' });
+    sendDbError(res, err, { fallback: 'Failed to delete asset' });
   }
 });
 
@@ -13375,7 +13375,7 @@ app.get('/api/staffing/:weddingId', async (req, res) => {
     res.json({ staffing: data || null });
   } catch (error) {
     console.error('Get staffing error:', error);
-    res.status(500).json({ error: 'Failed to fetch staffing estimate' });
+    sendDbError(res, error, { fallback: 'Failed to fetch staffing estimate' });
   }
 });
 
@@ -13423,7 +13423,7 @@ app.post('/api/staffing', async (req, res) => {
     res.json({ staffing: data });
   } catch (error) {
     console.error('Save staffing error:', error);
-    res.status(500).json({ error: 'Failed to save staffing estimate' });
+    sendDbError(res, error, { fallback: 'Failed to save staffing estimate' });
   }
 });
 
@@ -13446,7 +13446,7 @@ app.get('/api/budget/:weddingId', async (req, res) => {
     res.json({ budget: data });
   } catch (error) {
     console.error('Get budget error:', error);
-    res.status(500).json({ error: 'Failed to load budget' });
+    sendDbError(res, error, { fallback: 'Failed to load budget' });
   }
 });
 
@@ -13490,7 +13490,7 @@ app.get('/api/guest-care/:weddingId', async (req, res) => {
     res.json({ data: data?.data || {}, updated_at: data?.updated_at || null });
   } catch (error) {
     console.error('Get guest care error:', error);
-    res.status(500).json({ error: 'Failed to fetch guest care notes' });
+    sendDbError(res, error, { fallback: 'Failed to fetch guest care notes' });
   }
 });
 
@@ -13511,7 +13511,7 @@ app.post('/api/guest-care', async (req, res) => {
     res.json({ success: true, data: saved.data });
   } catch (error) {
     console.error('Save guest care error:', error);
-    res.status(500).json({ error: 'Failed to save guest care notes' });
+    sendDbError(res, error, { fallback: 'Failed to save guest care notes' });
   }
 });
 
@@ -13529,7 +13529,7 @@ app.get('/api/internal-notes/:weddingId', requireAdmin, async (req, res) => {
     res.json({ notes: data || [] });
   } catch (error) {
     console.error('Get internal notes error:', error);
-    res.status(500).json({ error: 'Failed to fetch notes' });
+    sendDbError(res, error, { fallback: 'Failed to fetch notes' });
   }
 });
 
@@ -13549,7 +13549,7 @@ app.post('/api/internal-notes', async (req, res) => {
     res.json({ note: data });
   } catch (error) {
     console.error('Add internal note error:', error);
-    res.status(500).json({ error: 'Failed to add note' });
+    sendDbError(res, error, { fallback: 'Failed to add note' });
   }
 });
 
@@ -13577,7 +13577,7 @@ app.delete('/api/internal-notes/:id', requireAdmin, async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error('Delete internal note error:', error);
-    res.status(500).json({ error: 'Failed to delete note' });
+    sendDbError(res, error, { fallback: 'Failed to delete note' });
   }
 });
 
@@ -13598,7 +13598,7 @@ app.get('/api/notifications/admin', async (req, res) => {
     res.json({ notifications: data || [], unreadCount });
   } catch (error) {
     console.error('Get admin notifications error:', error);
-    res.status(500).json({ error: 'Failed to fetch notifications' });
+    sendDbError(res, error, { fallback: 'Failed to fetch notifications' });
   }
 });
 
@@ -13625,7 +13625,7 @@ app.get('/api/notifications/client/:weddingId', async (req, res) => {
     res.json({ notifications: data || [], unreadCount });
   } catch (error) {
     console.error('Get client notifications error:', error);
-    res.status(500).json({ error: 'Failed to fetch notifications' });
+    sendDbError(res, error, { fallback: 'Failed to fetch notifications' });
   }
 });
 
@@ -13654,7 +13654,7 @@ app.put('/api/notifications/read', requireAuth, async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error('Mark notifications read error:', error);
-    res.status(500).json({ error: 'Failed to mark notifications as read' });
+    sendDbError(res, error, { fallback: 'Failed to mark notifications as read' });
   }
 });
 
@@ -13674,7 +13674,7 @@ app.get('/api/storefront', async (req, res) => {
     res.json({ items: data || [] });
   } catch (error) {
     console.error('Storefront error:', error);
-    res.status(500).json({ error: 'Failed to fetch storefront items' });
+    sendDbError(res, error, { fallback: 'Failed to fetch storefront items' });
   }
 });
 
@@ -13691,7 +13691,7 @@ app.get('/api/storefront/all', async (req, res) => {
     res.json({ items: data || [] });
   } catch (error) {
     console.error('Storefront all error:', error);
-    res.status(500).json({ error: 'Failed to fetch storefront items' });
+    sendDbError(res, error, { fallback: 'Failed to fetch storefront items' });
   }
 });
 
@@ -13708,7 +13708,7 @@ app.post('/api/storefront', async (req, res) => {
     res.json({ success: true, item: data });
   } catch (error) {
     console.error('Storefront add error:', error);
-    res.status(500).json({ error: 'Failed to add storefront item' });
+    sendDbError(res, error, { fallback: 'Failed to add storefront item' });
   }
 });
 
@@ -13727,7 +13727,7 @@ app.put('/api/storefront/:id', async (req, res) => {
     res.json({ success: true, item: data });
   } catch (error) {
     console.error('Storefront update error:', error);
-    res.status(500).json({ error: 'Failed to update storefront item' });
+    sendDbError(res, error, { fallback: 'Failed to update storefront item' });
   }
 });
 
@@ -13743,7 +13743,7 @@ app.delete('/api/storefront/:id', async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error('Storefront delete error:', error);
-    res.status(500).json({ error: 'Failed to delete storefront item' });
+    sendDbError(res, error, { fallback: 'Failed to delete storefront item' });
   }
 });
 
@@ -14063,7 +14063,7 @@ app.get('/api/table-layout/:weddingId', async (req, res) => {
     res.json({ layout: data || null });
   } catch (err) {
     console.error('Get table layout error:', err);
-    res.status(500).json({ error: 'Failed to get layout' });
+    sendDbError(res, err, { fallback: 'Failed to get layout' });
   }
 });
 
@@ -14084,7 +14084,7 @@ app.post('/api/table-layout', async (req, res) => {
     res.json({ layout: data });
   } catch (err) {
     console.error('Save table layout error:', err);
-    res.status(500).json({ error: 'Failed to save layout' });
+    sendDbError(res, err, { fallback: 'Failed to save layout' });
   }
 });
 
@@ -14192,7 +14192,7 @@ app.get('/api/guest-settings/:weddingId', async (req, res) => {
     });
   } catch (err) {
     console.error('Get guest settings error:', err);
-    res.status(500).json({ error: 'Failed to get guest settings' });
+    sendDbError(res, err, { fallback: 'Failed to get guest settings' });
   }
 });
 
@@ -14208,7 +14208,7 @@ app.put('/api/guest-settings/:weddingId', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('Update guest settings error:', err);
-    res.status(500).json({ error: 'Failed to update settings' });
+    sendDbError(res, err, { fallback: 'Failed to update settings' });
   }
 });
 
@@ -14702,7 +14702,7 @@ app.post('/api/guests/bulk', async (req, res) => {
     });
   } catch (err) {
     console.error('Bulk import error:', err);
-    res.status(500).json({ error: 'Failed to import guests' });
+    sendDbError(res, err, { fallback: 'Failed to import guests' });
   }
 });
 
@@ -14726,7 +14726,7 @@ app.delete('/api/guests/all', async (req, res) => {
     res.json({ ok: true, deleted: count || 0 });
   } catch (err) {
     console.error('Delete all guests error:', err.message);
-    res.status(500).json({ error: 'Failed to delete the guest list' });
+    sendDbError(res, err, { fallback: 'Failed to delete the guest list' });
   }
 });
 
@@ -14785,7 +14785,7 @@ app.post('/api/guest-tags', async (req, res) => {
     res.json({ tag: data });
   } catch (err) {
     console.error('Create tag error:', err);
-    res.status(500).json({ error: 'Failed to create tag' });
+    sendDbError(res, err, { fallback: 'Failed to create tag' });
   }
 });
 
@@ -14825,7 +14825,7 @@ app.delete('/api/guest-tags/:id', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('Delete tag error:', err);
-    res.status(500).json({ error: 'Failed to delete tag' });
+    sendDbError(res, err, { fallback: 'Failed to delete tag' });
   }
 });
 
@@ -14842,7 +14842,7 @@ app.post('/api/meal-options', async (req, res) => {
     res.json({ option: data });
   } catch (err) {
     console.error('Create meal option error:', err);
-    res.status(500).json({ error: 'Failed to create meal option' });
+    sendDbError(res, err, { fallback: 'Failed to create meal option' });
   }
 });
 
@@ -14876,7 +14876,7 @@ app.delete('/api/meal-options/:id', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('Delete meal option error:', err);
-    res.status(500).json({ error: 'Failed to delete meal option' });
+    sendDbError(res, err, { fallback: 'Failed to delete meal option' });
   }
 });
 
@@ -14894,7 +14894,7 @@ app.get('/api/worksheets/:weddingId', async (req, res) => {
     res.json({ worksheets: data || {} });
   } catch (err) {
     console.error('Get worksheets error:', err);
-    res.status(500).json({ error: 'Failed to get worksheets' });
+    sendDbError(res, err, { fallback: 'Failed to get worksheets' });
   }
 });
 
@@ -14924,7 +14924,7 @@ app.put('/api/worksheets/:weddingId', async (req, res) => {
     res.json({ success: true, wedding: data });
   } catch (err) {
     console.error('Save worksheet error:', err);
-    res.status(500).json({ error: 'Failed to save worksheet' });
+    sendDbError(res, err, { fallback: 'Failed to save worksheet' });
   }
 });
 
@@ -15861,7 +15861,7 @@ app.get('/api/join/date-available', joinLimiter, async (req, res) => {
     res.json({ taken: (data || []).length > 0 });
   } catch (e) {
     console.error('Date availability error:', e);
-    res.status(500).json({ error: 'Could not check that date' });
+    sendDbError(res, e, { fallback: 'Could not check that date' });
   }
 });
 
@@ -15882,7 +15882,7 @@ app.post('/api/join/lookup', joinLimiter, async (req, res) => {
     res.json({ id: data.id, wedding_date: data.wedding_date });
   } catch (e) {
     console.error('Event code lookup error:', e);
-    res.status(500).json({ error: 'Could not check that code' });
+    sendDbError(res, e, { fallback: 'Could not check that code' });
   }
 });
 
@@ -15971,7 +15971,7 @@ app.post('/api/join/complete', joinLimiter, requireAuth, async (req, res) => {
     res.json({ wedding_id: wedding.id });
   } catch (e) {
     console.error('Join complete error:', e);
-    res.status(500).json({ error: 'Could not finish joining that wedding' });
+    sendDbError(res, e, { fallback: 'Could not finish joining that wedding' });
   }
 });
 
@@ -16020,7 +16020,7 @@ app.patch('/api/admin/profiles/:id', async (req, res) => {
     res.json(data);
   } catch (e) {
     console.error('Link profile to wedding error:', e);
-    res.status(500).json({ error: 'Could not link that login to a wedding' });
+    sendDbError(res, e, { fallback: 'Could not link that login to a wedding' });
   }
 });
 
