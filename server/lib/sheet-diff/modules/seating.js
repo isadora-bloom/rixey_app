@@ -1,5 +1,6 @@
 import { makeEntry } from '../types.js';
 import { getTab, cellAt } from './_helpers.js';
+import { allPeople } from '../../../../shared/guest-names.js';
 
 const SECTION = 'Seating Chart';
 
@@ -17,7 +18,12 @@ export default {
     if (!rows) return [];
 
     const wt = portal.wedding_tables || {};
-    const guests = portal.wedding_guests || [];
+    // People, not rows. The sheet grid holds one name per seat, so comparing it
+    // against a count of rows compared two different things: before 025 a party
+    // of two counted as one, after it a plus one counted as a guest with no
+    // party. A failed read arrives as an object, not a list.
+    const guests = Array.isArray(portal.wedding_guests) ? portal.wedding_guests : [];
+    const people = allPeople(guests);
 
     // Sheet grid is rows 3-14 approximately, cols 2-13
     let sheetNamesFilled = 0;
@@ -27,7 +33,7 @@ export default {
         if (v && v !== '-' && !/^\d+$/.test(v) && v.length > 1) sheetNamesFilled += 1;
       }
     }
-    const portalAssigned = guests.filter((g) => g.table_assignment).length;
+    const portalAssigned = people.filter((p) => p.row?.table_assignment).length;
 
     const entries = [];
     entries.push(makeEntry({
@@ -35,7 +41,7 @@ export default {
       section: SECTION,
       field: 'Seated guests',
       sheetValue: `${sheetNamesFilled} names in sheet grid`,
-      portalValue: `${portalAssigned} of ${guests.length} guests assigned to a table`,
+      portalValue: `${portalAssigned} of ${people.length} guests assigned to a table`,
       status: sheetNamesFilled === 0 && portalAssigned === 0 ? 'both-missing'
         : sheetNamesFilled > 0 && portalAssigned === 0 ? 'missing'
         : 'agree',
