@@ -127,6 +127,13 @@ try {
   await check('own completeness', 200, `/api/completeness/${A.wedding}`, { token: A.token });
   await check('another couple\'s completeness', 403, `/api/completeness/${B.wedding}`, { token: A.token });
 
+  // Pattern sweep, 16 Sep: walkthrough direct upload is admin only; internal notes are admin only;
+  // unknown API paths answer JSON; a bad uuid is a readable 400, not a leaked Postgres message.
+  await check('walkthrough upload begin as a couple', 403, `/api/admin/walkthroughs/${A.wedding}/media/begin`, { method: 'POST', token: A.token, json: { kind: 'audio', mimetype: 'audio/webm', filename: 'x.webm', size: 10 } });
+  await check('internal notes as a couple', [401, 403], `/api/internal-notes/${A.wedding}`, { token: A.token });
+  await check('unknown api path answers json 404', 404, '/api/no-such-thing-here');
+  await check('bad uuid is a 400 not a 500', [400, 404], '/api/guests/not-a-uuid', { method: 'PUT', token: A.token, json: { first_name: 'x' } });
+
   // Emptying a guest list: another couple's list is refused, and the word is required.
   await check('delete all guests on another wedding', 403, '/api/guests/all', { method: 'DELETE', token: A.token, json: { weddingId: B.wedding, confirm: 'DELETE' } });
   await check('delete all guests without the word', 400, '/api/guests/all', { method: 'DELETE', token: A.token, json: { weddingId: A.wedding } });
