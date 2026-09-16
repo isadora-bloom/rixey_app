@@ -154,7 +154,26 @@ async function executeOp(supabase, op, weddingId) {
       // snapshot being complete, and when the equivalent check was missing
       // entirely this table gained 212 duplicate notes, some of them three deep.
       // A row identical to one already there is never new information.
-      const DEDUP_ON = { planning_notes: 'content', planning_checklist: 'task_text' };
+      //
+      // Started as the two tables that had actually been hit by the bug; every
+      // other table this apply path can insert into shares the same exposure —
+      // one field close enough to a natural key that a second import of the
+      // same source should not create a second row.
+      const DEDUP_ON = {
+        planning_notes: 'content',
+        planning_checklist: 'task_text',
+        bedroom_assignments: 'room_name',
+        ceremony_order: 'participant_name',
+        decor_inventory: 'item_name',
+        bar_shopping_list: 'item_name',
+        vendor_checklist: 'vendor_name',
+        allergy_registry: 'guest_name',
+        wedding_guests: 'first_name',
+        makeup_schedule: 'participant_name',
+        // One row per wedding by design (see UPSERTABLE_SINGLE_ROW_TABLES); a
+        // second insert for the same wedding is never correct.
+        rehearsal_dinner: 'wedding_id',
+      };
       const field = DEDUP_ON[op.table];
       if (field && row[field] != null) {
         const { data: prior, error: checkErr } = await supabase
