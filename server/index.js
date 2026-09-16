@@ -4610,13 +4610,18 @@ async function runGmailSync(body, { bump }) {
           ];
           if (automatedSenderPatterns.some(p => p.test(fromEmail))) {
             processedIds.add(msg.id);
-            await supabaseAdmin.from('processed_emails').insert({
+            const { error: markerErr } = await supabaseAdmin.from('processed_emails').insert({
               gmail_message_id: msg.id,
               wedding_id: emailToWedding[clientEmail],
               from_email: fromEmail,
               subject: subject,
               body_text: '[Automated sender — skipped]'
-            }).then(() => {});
+            });
+            // Same rule as everywhere else in this file: a marker that did not
+            // save is not a marker, and the item comes round again next run.
+            if (markerErr && markerErr.code !== '23505') {
+              console.error(`[gmail] marker failed for ${msg.id}, skipping it: ${markerErr.message}`);
+            }
             continue;
           }
 
@@ -4772,13 +4777,19 @@ async function runGmailSync(body, { bump }) {
             // onto whichever wedding was being searched for, and rather than
             // being dropped, which is the same thing as losing it.
             processedIds.add(msg.id);
-            await supabaseAdmin.from('processed_emails').insert({
+            const { error: markerErr } = await supabaseAdmin.from('processed_emails').insert({
               gmail_message_id: msg.id,
               wedding_id: null,
               from_email: fromEmail,
               subject,
               body_text: bodyText.substring(0, 10000),
             });
+            // Same rule as everywhere else in this file: if the marker did not
+            // save, skip the item rather than queuing it for review twice.
+            if (markerErr && markerErr.code !== '23505') {
+              console.error(`[gmail] marker failed for ${msg.id}, skipping it: ${markerErr.message}`);
+              continue;
+            }
             const { error: reviewErr } = await supabaseAdmin.from('ingest_review').upsert({
               source: 'gmail',
               external_id: msg.id,
@@ -5219,9 +5230,11 @@ app.post('/api/gmail/backfill-bodies', requireAdmin, backgroundSync('gmail-backf
 // Disconnect Gmail
 app.post('/api/gmail/disconnect', async (req, res) => {
   try {
-    await supabaseAdmin.from('gmail_tokens').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    const { error } = await supabaseAdmin.from('gmail_tokens').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    if (error) throw error;
     res.json({ success: true });
   } catch (error) {
+    console.error('Gmail disconnect error:', error.message);
     res.status(500).json({ error: 'Failed to disconnect' });
   }
 });
@@ -5886,10 +5899,17 @@ async function runQuoSync(body, { jobId, bump }) {
       throw new Error('Quo API key is not configured');
     }
 
-    const { forceReprocess } = body || {};
+    const { forceReprocess, confirm } = body || {};
 
-    // If force reprocess, clear the processed table first
+    // If force reprocess, clear the processed table first.
+    //
+    // This does exactly what /api/quo/clear-processed does — wipes every
+    // processed-message marker for the number — so it takes the same
+    // confirm word, not a bare boolean a stray retry could carry.
     if (forceReprocess) {
+      if (confirm !== true) {
+        throw new Error('Force reprocess clears every processed-message marker, the same as Clear Processed. Send confirm: true if that is what you want.');
+      }
       const { error: clearErr } = await supabaseAdmin
         .from('processed_quo_messages')
         .delete()
@@ -7714,10 +7734,19 @@ app.patch('/api/admin/wedding-contacts/:id', async (req, res) => {
 
 app.delete('/api/admin/wedding-contacts/:id', async (req, res) => {
   try {
+    const { data: row, error: readErr } = await supabaseAdmin
+      .from('wedding_contacts').select('wedding_id, name').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!row) return res.status(404).json({ error: 'No such contact' });
+
     // Their calls and emails stay. contact_id goes null on delete, so removing
     // a person from the list does not delete what they said.
-    const { error } = await supabaseAdmin.from('wedding_contacts').delete().eq('id', req.params.id);
+    const { data, error } = await supabaseAdmin
+      .from('wedding_contacts').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such contact' });
+
+    await logActivity(row.wedding_id, req.userId, 'wedding_contact_deleted', row.name || `id ${req.params.id}`);
     res.json({ ok: true });
   } catch (error) {
     console.error('wedding-contacts delete error:', error);
@@ -8142,25 +8171,61 @@ app.post('/api/zoom/reextract', backgroundSync('zoom-reextract', async (body, { 
   }
 }));
 
-// Force resync: clear all processed Zoom data so next Sync re-downloads everything fresh
+/**
+ * Force resync: clear processed Zoom data so the next Sync re-downloads it.
+ *
+ * Same shape as /api/quo/clear-processed: this is the whole record of what has
+ * already been imported for every wedding at once unless weddingId is given,
+ * so it takes { confirm: true } and reports what it actually cleared rather
+ * than a blanket "success" that may have half-happened.
+ */
 app.post('/api/zoom/clear', async (req, res) => {
   try {
-    // Delete all processed meeting records (dedup table)
-    const { error: pmErr } = await supabaseAdmin
+    const { confirm, weddingId } = req.body || {};
+    if (confirm !== true) {
+      return res.status(400).json({
+        error: `This clears every processed Zoom transcript${weddingId ? ' for this wedding' : ' for every wedding'} and makes the next sync re-download them. Send { "confirm": true } if that is what you want.`,
+      });
+    }
+
+    let meetingsQuery = supabaseAdmin
       .from('processed_zoom_meetings')
-      .delete()
+      .delete({ count: 'exact' })
       .neq('id', '00000000-0000-0000-0000-000000000000');
-
-    // Delete all zoom_transcript planning notes (they'll be re-created by next sync)
-    const { error: pnErr } = await supabaseAdmin
+    let notesQuery = supabaseAdmin
       .from('planning_notes')
-      .delete()
+      .delete({ count: 'exact' })
       .eq('category', 'zoom_transcript');
+    if (weddingId) {
+      meetingsQuery = meetingsQuery.eq('wedding_id', weddingId);
+      notesQuery = notesQuery.eq('wedding_id', weddingId);
+    }
 
-    if (pmErr) console.error('Error clearing processed_zoom_meetings:', pmErr.message);
-    if (pnErr) console.error('Error clearing zoom_transcript notes:', pnErr.message);
+    // Meetings first. If this fails, nothing has changed and it is safe to
+    // just report the error.
+    const { error: pmErr, count: meetingsCleared } = await meetingsQuery;
+    if (pmErr) {
+      console.error('Error clearing processed_zoom_meetings:', pmErr.message);
+      return res.status(500).json({ error: `Could not clear the processed meetings (${pmErr.message}); nothing was cleared.` });
+    }
 
-    res.json({ success: true, message: 'Cleared all processed Zoom transcripts. Click Sync to re-download everything.' });
+    // The notes delete can still fail after the meetings delete has already
+    // succeeded. That is a half-clear, and it must not be reported as success.
+    const { error: pnErr, count: notesCleared } = await notesQuery;
+    if (pnErr) {
+      console.error('Error clearing zoom_transcript notes:', pnErr.message);
+      return res.status(500).json({
+        error: `Cleared ${meetingsCleared || 0} processed meeting(s), but the transcript notes could not be cleared (${pnErr.message}). Re-syncing now would create duplicate notes; clear again before syncing.`,
+      });
+    }
+
+    console.log(`[zoom] cleared ${meetingsCleared || 0} processed meeting(s) and ${notesCleared || 0} transcript note(s)${weddingId ? ` for wedding ${weddingId}` : ''}, by ${req.userId || 'an admin'}`);
+    res.json({
+      success: true,
+      meetingsCleared: meetingsCleared || 0,
+      notesCleared: notesCleared || 0,
+      message: `Cleared ${meetingsCleared || 0} processed meeting(s) and ${notesCleared || 0} transcript note(s). Click Sync to re-download.`,
+    });
   } catch (error) {
     res.status(500).json({ error: 'Failed to clear: ' + error.message });
   }
@@ -8169,9 +8234,11 @@ app.post('/api/zoom/clear', async (req, res) => {
 // Disconnect Zoom
 app.post('/api/zoom/disconnect', async (req, res) => {
   try {
-    await supabaseAdmin.from('zoom_tokens').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    const { error } = await supabaseAdmin.from('zoom_tokens').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    if (error) throw error;
     res.json({ success: true });
   } catch (error) {
+    console.error('Zoom disconnect error:', error.message);
     res.status(500).json({ error: 'Failed to disconnect' });
   }
 });
@@ -8541,12 +8608,40 @@ app.delete('/api/vendors/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const { error } = await supabaseAdmin
+    const { data: vendor, error: readErr } = await supabaseAdmin
+      .from('vendor_checklist')
+      .select('wedding_id, vendor_type, vendor_name, contract_path, contract_url')
+      .eq('id', id)
+      .maybeSingle();
+    if (readErr) throw readErr;
+    if (!vendor) return res.status(404).json({ error: 'No such vendor' });
+
+    // The contract file first, and stop if it will not go — deleting the
+    // vendor first would orphan it in storage with nothing pointing at it.
+    const key = vendor.contract_path || (() => {
+      const after = String(vendor.contract_url || '').split('/vendor-contracts/')[1];
+      if (!after) return null;
+      try { return decodeURIComponent(after.split('?')[0]); } catch { return after.split('?')[0]; }
+    })();
+    if (key) {
+      const { error: rmErr } = await supabaseAdmin.storage.from('vendor-contracts').remove([key]);
+      if (rmErr) {
+        console.error('Vendor contract file remove failed:', rmErr.message);
+        return res.status(500).json({ error: `The contract file could not be deleted (${rmErr.message}), so the vendor has been left alone.` });
+      }
+    }
+
+    const { data, error } = await supabaseAdmin
       .from('vendor_checklist')
       .delete()
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
 
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such vendor' });
+
+    await logActivity(vendor.wedding_id, req.userId, 'vendor_deleted', `${vendor.vendor_type}: ${vendor.vendor_name || 'TBD'}`);
     res.json({ success: true });
   } catch (error) {
     console.error('Delete vendor error:', error);
@@ -8760,7 +8855,7 @@ app.delete('/api/vendors/:id/contract', async (req, res) => {
     // Get current contract URL to delete from storage
     const { data: vendor, error: readErr } = await supabaseAdmin
       .from('vendor_checklist')
-      .select('contract_url, contract_path')
+      .select('wedding_id, vendor_type, contract_url, contract_path')
       .eq('id', id)
       .single();
     if (readErr) throw readErr;
@@ -8777,9 +8872,11 @@ app.delete('/api/vendors/:id/contract', async (req, res) => {
 
     if (key) {
       const { error: rmErr } = await supabaseAdmin.storage.from('vendor-contracts').remove([key]);
-      // Not fatal: the row should still lose its contract even if the object
-      // has already gone. But it should not go unsaid.
-      if (rmErr) console.error('Contract file not removed from storage:', key, rmErr.message);
+      // The row must not say the contract is gone if the object refused to go.
+      if (rmErr) {
+        console.error('Contract file not removed from storage:', key, rmErr.message);
+        return res.status(500).json({ error: `The contract file could not be deleted (${rmErr.message}), so nothing has changed.` });
+      }
     }
 
     // Update vendor record
@@ -8796,6 +8893,7 @@ app.delete('/api/vendors/:id/contract', async (req, res) => {
       .single();
 
     if (error) throw error;
+    await logActivity(vendor.wedding_id, req.userId, 'vendor_contract_removed', `${vendor.vendor_type} contract removed`);
     res.json({ vendor: data });
   } catch (error) {
     console.error('Remove contract error:', error);
@@ -9007,26 +9105,34 @@ app.delete('/api/inspo/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Get image URL to delete from storage
-    const { data: image } = await supabaseAdmin
+    const { data: image, error: readErr } = await supabaseAdmin
       .from('inspo_gallery')
-      .select('image_url')
+      .select('wedding_id, image_url')
       .eq('id', id)
-      .single();
+      .maybeSingle();
+    if (readErr) throw readErr;
+    if (!image) return res.status(404).json({ error: 'No such image' });
 
-    if (image?.image_url) {
+    const { data, error } = await supabaseAdmin
+      .from('inspo_gallery')
+      .delete()
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such image' });
+
+    // Row first: the gallery must not keep showing an image someone asked to
+    // remove just because the object in storage refuses to go.
+    if (image.image_url) {
       const urlParts = image.image_url.split('/inspo-gallery/');
       if (urlParts[1]) {
-        await supabaseAdmin.storage.from('inspo-gallery').remove([urlParts[1]]);
+        const { error: rmErr } = await supabaseAdmin.storage.from('inspo-gallery').remove([urlParts[1]]);
+        if (rmErr) console.error('Inspo image file not removed from storage:', urlParts[1], rmErr.message);
       }
     }
 
-    const { error } = await supabaseAdmin
-      .from('inspo_gallery')
-      .delete()
-      .eq('id', id);
-
-    if (error) throw error;
+    await logActivity(image.wedding_id, req.userId, 'inspo_deleted', 'Inspiration image removed');
     res.json({ success: true });
   } catch (error) {
     console.error('Delete inspo error:', error);
@@ -9086,15 +9192,9 @@ app.post('/api/couple-photo', requireAuth, upload.single('photo'), async (req, r
 
     if (existingErr) throw new Error(`Could not check for an existing photo: ${existingErr.message}`);
 
-    // Delete old image from storage if exists
-    if (existing?.image_url) {
-      const urlParts = existing.image_url.split('/couple-photos/');
-      if (urlParts[1]) {
-        await supabaseAdmin.storage.from('couple-photos').remove([urlParts[1]]);
-      }
-    }
-
-    // Upload new image
+    // Upload the new image first. Deleting the old one and then failing to
+    // upload the new one leaves the couple with no photo at all; uploading
+    // first means a failure here changes nothing they can see.
     const fileName = `${weddingId}/${Date.now()}_${file.originalname}`;
     const { error: uploadError } = await supabaseAdmin.storage
       .from('couple-photos')
@@ -9103,6 +9203,15 @@ app.post('/api/couple-photo', requireAuth, upload.single('photo'), async (req, r
       });
 
     if (uploadError) throw uploadError;
+
+    // Old image after: cleanup, not the point of the request.
+    if (existing?.image_url) {
+      const urlParts = existing.image_url.split('/couple-photos/');
+      if (urlParts[1]) {
+        const { error: rmErr } = await supabaseAdmin.storage.from('couple-photos').remove([urlParts[1]]);
+        if (rmErr) console.error('Old couple photo not removed from storage:', urlParts[1], rmErr.message);
+      }
+    }
 
     // Generate signed URL (expires in 1 year)
     const { data: signedUrlData, error: signedError } = await supabaseAdmin.storage
@@ -9154,26 +9263,34 @@ app.delete('/api/couple-photo/:weddingId', async (req, res) => {
   try {
     const { weddingId } = req.params;
 
-    // Get photo to delete from storage
-    const { data: photo } = await supabaseAdmin
+    const { data: photo, error: readErr } = await supabaseAdmin
       .from('couple_photos')
       .select('image_url')
       .eq('wedding_id', weddingId)
-      .single();
+      .maybeSingle();
+    if (readErr) throw readErr;
+    if (!photo) return res.status(404).json({ error: 'No photo on file for this wedding' });
 
-    if (photo?.image_url) {
+    const { data, error } = await supabaseAdmin
+      .from('couple_photos')
+      .delete()
+      .eq('wedding_id', weddingId)
+      .select('id')
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No photo on file for this wedding' });
+
+    // Row first, same reasoning as inspo: a couple asking for their photo
+    // gone must see it gone even if the object in storage refuses to go.
+    if (photo.image_url) {
       const urlParts = photo.image_url.split('/couple-photos/');
       if (urlParts[1]) {
-        await supabaseAdmin.storage.from('couple-photos').remove([urlParts[1]]);
+        const { error: rmErr } = await supabaseAdmin.storage.from('couple-photos').remove([urlParts[1]]);
+        if (rmErr) console.error('Couple photo file not removed from storage:', urlParts[1], rmErr.message);
       }
     }
 
-    const { error } = await supabaseAdmin
-      .from('couple_photos')
-      .delete()
-      .eq('wedding_id', weddingId);
-
-    if (error) throw error;
+    await logActivity(weddingId, req.userId, 'couple_photo_deleted', 'Couple photo removed');
     res.json({ success: true });
   } catch (error) {
     console.error('Delete couple photo error:', error);
@@ -9818,12 +9935,17 @@ app.delete('/api/recommended-vendors/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const { error } = await supabaseAdmin
+    const { data, error } = await supabaseAdmin
       .from('vendors')
       .delete()
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
 
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such vendor' });
+
+    console.log(`[recommended-vendors] deleted ${id}, by ${req.userId}`);
     res.json({ success: true });
   } catch (error) {
     console.error('Delete vendor error:', error);
@@ -10028,8 +10150,7 @@ app.post('/api/vendor-portal/:token/photos', upload.single('photo'), async (req,
 
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
-    const ext = req.file.originalname.split('.').pop().toLowerCase();
-    const filename = `${vendor.id}/${Date.now()}.${ext}`;
+    const filename = `${vendor.id}/${safeStorageKey(req.file.originalname)}`;
     const { error: upErr } = await supabaseAdmin.storage
       .from('vendor-photos')
       .upload(filename, req.file.buffer, { contentType: req.file.mimetype, upsert: false });
@@ -12551,24 +12672,26 @@ app.post('/api/borrow-selections', async (req, res) => {
     }
 
     // Fetch all currently selected item names for this wedding
-    const { data: allSelections } = await supabaseAdmin
+    const { data: allSelections, error: listErr } = await supabaseAdmin
       .from('wedding_borrow_selections')
       .select('borrow_catalog(item_name)')
       .eq('wedding_id', weddingId);
+    if (listErr) throw listErr;
 
     const itemNames = (allSelections || [])
       .map(s => s.borrow_catalog?.item_name)
       .filter(Boolean);
 
     // Replace existing borrow_selection note with updated list (delete + insert)
-    await supabaseAdmin
+    const { error: clearErr } = await supabaseAdmin
       .from('planning_notes')
       .delete()
       .eq('wedding_id', weddingId)
       .eq('category', 'borrow_selection');
+    if (clearErr) throw clearErr;
 
     if (itemNames.length > 0) {
-      await supabaseAdmin
+      const { error: noteErr } = await supabaseAdmin
         .from('planning_notes')
         .insert({
           wedding_id: weddingId,
@@ -12576,6 +12699,7 @@ app.post('/api/borrow-selections', async (req, res) => {
           content: `Couple wants to borrow: ${itemNames.join(', ')}`,
           status: 'confirmed',
         });
+      if (noteErr) throw noteErr;
     }
 
     res.json({ success: true, selectedCount: itemNames.length });
@@ -12595,22 +12719,23 @@ app.post('/api/admin/borrow-catalog', upload.single('image'), async (req, res) =
 
     // Upload image to Supabase storage if provided
     if (req.file) {
-      const ext = req.file.mimetype.split('/')[1] || 'jpg';
-      const fileName = `${Date.now()}-${item_name.replace(/\s+/g, '-').toLowerCase()}.${ext}`;
-      const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
+      const fileName = safeStorageKey(req.file.originalname);
+      const { error: uploadError } = await supabaseAdmin.storage
         .from('borrow-catalog')
         .upload(fileName, req.file.buffer, {
           contentType: req.file.mimetype,
           upsert: false,
         });
+      // A silently dropped image used to mean the item was created anyway,
+      // captioned with a picture nobody uploaded. Refuse instead.
       if (uploadError) {
-        console.error('Image upload error:', uploadError);
-      } else {
-        const { data: urlData } = supabaseAdmin.storage
-          .from('borrow-catalog')
-          .getPublicUrl(fileName);
-        image_url = urlData?.publicUrl || null;
+        console.error('Borrow catalog image upload error:', uploadError);
+        return res.status(500).json({ error: `Could not store the image (${uploadError.message}); the item was not created.` });
       }
+      const { data: urlData } = supabaseAdmin.storage
+        .from('borrow-catalog')
+        .getPublicUrl(fileName);
+      image_url = urlData?.publicUrl || null;
     }
 
     const { data: newItem, error } = await supabaseAdmin
@@ -13207,14 +13332,25 @@ app.delete('/api/manor-assets/:id', async (req, res) => {
       .from('manor_assets')
       .select('storage_path')
       .eq('id', req.params.id)
-      .single();
+      .maybeSingle();
     if (fetchErr) throw fetchErr;
+    if (!asset) return res.status(404).json({ error: 'No such asset' });
 
-    // Remove from storage
-    await supabaseAdmin.storage.from('manor-assets').remove([asset.storage_path]);
+    // The file first, and stop if it will not go.
+    if (asset.storage_path) {
+      const { error: rmErr } = await supabaseAdmin.storage.from('manor-assets').remove([asset.storage_path]);
+      if (rmErr) {
+        console.error('Manor asset file remove failed:', rmErr.message);
+        return res.status(500).json({ error: `The file itself could not be deleted (${rmErr.message}), so nothing was removed.` });
+      }
+    }
 
-    const { error } = await supabaseAdmin.from('manor_assets').delete().eq('id', req.params.id);
+    const { data, error } = await supabaseAdmin
+      .from('manor_assets').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such asset' });
+
+    console.log(`[manor-assets] deleted ${req.params.id}, by ${req.userId}`);
     res.json({ ok: true });
   } catch (err) {
     console.error('Delete manor asset error:', err);
@@ -13382,7 +13518,7 @@ app.post('/api/guest-care', async (req, res) => {
 // ============ INTERNAL NOTES API ============
 
 // Get internal notes for a wedding (admin only)
-app.get('/api/internal-notes/:weddingId', async (req, res) => {
+app.get('/api/internal-notes/:weddingId', requireAdmin, async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
       .from('wedding_internal_notes')
@@ -13418,13 +13554,26 @@ app.post('/api/internal-notes', async (req, res) => {
 });
 
 // Delete an internal note
-app.delete('/api/internal-notes/:id', async (req, res) => {
+app.delete('/api/internal-notes/:id', requireAdmin, async (req, res) => {
   try {
-    const { error } = await supabaseAdmin
+    const { data: note, error: readErr } = await supabaseAdmin
+      .from('wedding_internal_notes')
+      .select('wedding_id')
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (readErr) throw readErr;
+    if (!note) return res.status(404).json({ error: 'No such note' });
+
+    const { data, error } = await supabaseAdmin
       .from('wedding_internal_notes')
       .delete()
-      .eq('id', req.params.id);
+      .eq('id', req.params.id)
+      .select('id')
+      .maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such note' });
+
+    await logActivity(note.wedding_id, req.userId, 'internal_note_deleted', `id ${req.params.id}`);
     res.json({ success: true });
   } catch (error) {
     console.error('Delete internal note error:', error);
@@ -13649,8 +13798,17 @@ app.put('/api/allergies/:id', validateBody(['guest_name', 'allergy', 'severity',
 });
 app.delete('/api/allergies/:id', async (req, res) => {
   try {
-    const { error } = await supabaseAdmin.from('allergy_registry').delete().eq('id', req.params.id);
+    const { data: row, error: readErr } = await supabaseAdmin
+      .from('allergy_registry').select('wedding_id, guest_name').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!row) return res.status(404).json({ error: 'No such entry' });
+
+    const { data, error } = await supabaseAdmin
+      .from('allergy_registry').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such entry' });
+
+    await logActivity(row.wedding_id, req.userId, 'allergy_deleted', row.guest_name || `id ${req.params.id}`);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -13710,8 +13868,17 @@ app.put('/api/ceremony-order/:id', validateBody(['participant_name', 'role', 'se
 });
 app.delete('/api/ceremony-order/:id', async (req, res) => {
   try {
-    const { error } = await supabaseAdmin.from('ceremony_order').delete().eq('id', req.params.id);
+    const { data: row, error: readErr } = await supabaseAdmin
+      .from('ceremony_order').select('wedding_id, participant_name').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!row) return res.status(404).json({ error: 'No such entry' });
+
+    const { data, error } = await supabaseAdmin
+      .from('ceremony_order').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such entry' });
+
+    await logActivity(row.wedding_id, req.userId, 'ceremony_order_deleted', row.participant_name || `id ${req.params.id}`);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -13740,8 +13907,17 @@ app.put('/api/decor/:id', validateBody(['space_name', 'item_name', 'quantity', '
 });
 app.delete('/api/decor/:id', async (req, res) => {
   try {
-    const { error } = await supabaseAdmin.from('decor_inventory').delete().eq('id', req.params.id);
+    const { data: row, error: readErr } = await supabaseAdmin
+      .from('decor_inventory').select('wedding_id, item_name').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!row) return res.status(404).json({ error: 'No such item' });
+
+    const { data, error } = await supabaseAdmin
+      .from('decor_inventory').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such item' });
+
+    await logActivity(row.wedding_id, req.userId, 'decor_deleted', row.item_name || `id ${req.params.id}`);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -13770,8 +13946,17 @@ app.put('/api/makeup/:id', validateBody(['participant_name', 'role', 'hair_start
 });
 app.delete('/api/makeup/:id', async (req, res) => {
   try {
-    const { error } = await supabaseAdmin.from('makeup_schedule').delete().eq('id', req.params.id);
+    const { data: row, error: readErr } = await supabaseAdmin
+      .from('makeup_schedule').select('wedding_id, participant_name').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!row) return res.status(404).json({ error: 'No such entry' });
+
+    const { data, error } = await supabaseAdmin
+      .from('makeup_schedule').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such entry' });
+
+    await logActivity(row.wedding_id, req.userId, 'makeup_schedule_deleted', row.participant_name || `id ${req.params.id}`);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -13800,8 +13985,17 @@ app.put('/api/shuttle/:id', validateBody(['run_label', 'pickup_time', 'pickup_lo
 });
 app.delete('/api/shuttle/:id', async (req, res) => {
   try {
-    const { error } = await supabaseAdmin.from('shuttle_schedule').delete().eq('id', req.params.id);
+    const { data: row, error: readErr } = await supabaseAdmin
+      .from('shuttle_schedule').select('wedding_id, run_label').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!row) return res.status(404).json({ error: 'No such run' });
+
+    const { data, error } = await supabaseAdmin
+      .from('shuttle_schedule').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such run' });
+
+    await logActivity(row.wedding_id, req.userId, 'shuttle_run_deleted', row.run_label || `id ${req.params.id}`);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -14598,8 +14792,36 @@ app.post('/api/guest-tags', async (req, res) => {
 // DELETE tag option
 app.delete('/api/guest-tags/:id', async (req, res) => {
   try {
-    const { error } = await supabaseAdmin.from('guest_tag_options').delete().eq('id', req.params.id);
+    const { data: tag, error: readErr } = await supabaseAdmin
+      .from('guest_tag_options').select('wedding_id, label').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!tag) return res.status(404).json({ error: 'No such tag' });
+
+    const { data, error } = await supabaseAdmin
+      .from('guest_tag_options').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such tag' });
+
+    // A deleted tag comes off every guest carrying it. Tags are stored on
+    // wedding_guests as label text, not an id, so a guest kept it forever
+    // otherwise — visible on their row with nothing left to edit or remove it.
+    const { data: carriers, error: findErr } = await supabaseAdmin
+      .from('wedding_guests').select('id, tags')
+      .eq('wedding_id', tag.wedding_id)
+      .contains('tags', [tag.label]);
+    if (findErr) {
+      console.error(`[guest-tags] could not find guests carrying "${tag.label}" after deleting it: ${findErr.message}`);
+    } else if (carriers?.length) {
+      for (const guest of carriers) {
+        const { error: clearErr } = await supabaseAdmin
+          .from('wedding_guests')
+          .update({ tags: (guest.tags || []).filter(t => t !== tag.label) })
+          .eq('id', guest.id);
+        if (clearErr) console.error(`[guest-tags] could not clear "${tag.label}" off guest ${guest.id}: ${clearErr.message}`);
+      }
+    }
+
+    await logActivity(tag.wedding_id, req.userId, 'guest_tag_deleted', tag.label);
     res.json({ ok: true });
   } catch (err) {
     console.error('Delete tag error:', err);
@@ -14627,8 +14849,30 @@ app.post('/api/meal-options', async (req, res) => {
 // DELETE meal option
 app.delete('/api/meal-options/:id', async (req, res) => {
   try {
-    const { error } = await supabaseAdmin.from('guest_meal_options').delete().eq('id', req.params.id);
+    const { data: option, error: readErr } = await supabaseAdmin
+      .from('guest_meal_options').select('wedding_id, label').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!option) return res.status(404).json({ error: 'No such meal option' });
+
+    const { data, error } = await supabaseAdmin
+      .from('guest_meal_options').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such meal option' });
+
+    // Same reasoning as tags: meal_choice is the option's label text, so a
+    // guest's choice must not keep pointing at an option nobody can pick from
+    // any more, on the host row or the plus one's.
+    const { error: clearErr } = await supabaseAdmin
+      .from('wedding_guests').update({ meal_choice: null })
+      .eq('wedding_id', option.wedding_id).eq('meal_choice', option.label);
+    if (clearErr) console.error(`[meal-options] could not clear "${option.label}" off guests: ${clearErr.message}`);
+
+    const { error: clearPlusErr } = await supabaseAdmin
+      .from('wedding_guests').update({ plus_one_meal_choice: null })
+      .eq('wedding_id', option.wedding_id).eq('plus_one_meal_choice', option.label);
+    if (clearPlusErr) console.error(`[meal-options] could not clear "${option.label}" off plus ones: ${clearPlusErr.message}`);
+
+    await logActivity(option.wedding_id, req.userId, 'meal_option_deleted', option.label);
     res.json({ ok: true });
   } catch (err) {
     console.error('Delete meal option error:', err);
@@ -14734,10 +14978,22 @@ app.put('/api/bar-shopping/:id', async (req, res) => {
 
 app.delete('/api/bar-shopping/:id', async (req, res) => {
   try {
-    const { error } = await supabaseAdmin.from('bar_shopping_list').delete().eq('id', req.params.id);
+    const { data: row, error: readErr } = await supabaseAdmin
+      .from('bar_shopping_list').select('wedding_id, item_name').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!row) return res.status(404).json({ error: 'No such item' });
+
+    const { data, error } = await supabaseAdmin
+      .from('bar_shopping_list').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such item' });
+
+    await logActivity(row.wedding_id, req.userId, 'bar_shopping_item_deleted', row.item_name || `id ${req.params.id}`);
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    console.error('Delete bar shopping item error:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Recipes
@@ -15030,10 +15286,22 @@ app.post('/api/bar-recipes/:weddingId', async (req, res) => {
 
 app.delete('/api/bar-recipes/:id', async (req, res) => {
   try {
-    const { error } = await supabaseAdmin.from('bar_recipes').delete().eq('id', req.params.id);
+    const { data: row, error: readErr } = await supabaseAdmin
+      .from('bar_recipes').select('wedding_id, name').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!row) return res.status(404).json({ error: 'No such recipe' });
+
+    const { data, error } = await supabaseAdmin
+      .from('bar_recipes').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such recipe' });
+
+    await logActivity(row.wedding_id, req.userId, 'bar_recipe_deleted', row.name || `id ${req.params.id}`);
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    console.error('Delete bar recipe error:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ============ WEDDING WEBSITE FEATURE ============
@@ -15235,22 +15503,34 @@ app.delete('/api/day-of-media/:id', async (req, res) => {
   try {
     const { data: item, error: readError } = await supabaseAdmin
       .from('day_of_media')
-      .select('storage_path')
+      .select('wedding_id, storage_path, filename')
       .eq('id', req.params.id)
-      .single();
+      .maybeSingle();
     // A failed read is not "no storage path" — deleting the row anyway would
     // orphan whatever is sitting in storage with nothing left pointing at it.
     if (readError) return res.status(500).json({ error: readError.message });
-    if (item?.storage_path) {
-      await supabaseAdmin.storage.from('day-of-media').remove([item.storage_path]);
+    if (!item) return res.status(404).json({ error: 'No such file' });
+
+    if (item.storage_path) {
+      const { error: rmErr } = await supabaseAdmin.storage.from('day-of-media').remove([item.storage_path]);
+      if (rmErr) {
+        console.error('Day-of media file remove failed:', rmErr.message);
+        return res.status(500).json({ error: `The file itself could not be deleted (${rmErr.message}), so it has been left alone. Nothing was removed.` });
+      }
     }
-    const { error } = await supabaseAdmin
+    const { data, error } = await supabaseAdmin
       .from('day_of_media')
       .delete()
-      .eq('id', req.params.id);
+      .eq('id', req.params.id)
+      .select('id')
+      .maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such file' });
+
+    await logActivity(item.wedding_id, req.userId, 'day_of_media_deleted', item.filename || `id ${req.params.id}`);
     res.json({ success: true });
   } catch (err) {
+    console.error('Delete day-of media error:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -15304,10 +15584,20 @@ app.put('/api/wedding-party/:id', async (req, res) => {
 
 app.delete('/api/wedding-party/:id', async (req, res) => {
   try {
-    const { error } = await supabaseAdmin.from('wedding_party').delete().eq('id', req.params.id);
+    const { data: row, error: readErr } = await supabaseAdmin
+      .from('wedding_party').select('wedding_id, member_name').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!row) return res.status(404).json({ error: 'No such person' });
+
+    const { data, error } = await supabaseAdmin
+      .from('wedding_party').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such person' });
+
+    await logActivity(row.wedding_id, req.userId, 'wedding_party_deleted', row.member_name || `id ${req.params.id}`);
     res.json({ success: true });
   } catch (err) {
+    console.error('Delete wedding party error:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -16625,16 +16915,28 @@ app.post('/api/admin/documents/:id/apply', requireAdmin, async (req, res) => {
 
 app.delete('/api/admin/documents/:id', requireAdmin, async (req, res) => {
   try {
-    const { data: row } = await supabaseAdmin
-      .from('wedding_documents').select('storage_path').eq('id', req.params.id).maybeSingle();
-    if (row?.storage_path) {
+    const { data: row, error: readErr } = await supabaseAdmin
+      .from('wedding_documents').select('wedding_id, storage_path, filename').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!row) return res.status(404).json({ error: 'Document not found' });
+
+    // The file first, and stop if it will not go — the row going first would
+    // orphan whatever is in storage with nothing left pointing at it.
+    if (row.storage_path) {
       const { error: rmErr } = await supabaseAdmin.storage.from('day-of-media').remove([row.storage_path]);
-      if (rmErr) console.error('[doc-sync] file remove failed:', rmErr.message);
+      if (rmErr) {
+        console.error('[doc-sync] file remove failed:', rmErr.message);
+        return res.status(500).json({ error: `The file itself could not be deleted (${rmErr.message}), so it has been left alone. Nothing was removed.` });
+      }
     }
-    const { error } = await supabaseAdmin.from('wedding_documents').delete().eq('id', req.params.id);
+    const { data, error } = await supabaseAdmin
+      .from('wedding_documents').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Document not found' });
+
+    await logActivity(row.wedding_id, req.userId, 'document_deleted', row.filename || `id ${req.params.id}`);
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { console.error('Document delete error:', e); res.status(500).json({ error: e.message }); }
 });
 
 // ============ WALKTHROUGHS ============
@@ -16716,10 +17018,40 @@ app.put('/api/admin/walkthroughs/:id', requireAdmin, async (req, res) => {
 
 app.delete('/api/admin/walkthroughs/:id', requireAdmin, async (req, res) => {
   try {
-    const { error } = await supabaseAdmin.from('walkthroughs').delete().eq('id', req.params.id);
+    const { data: wt, error: readErr } = await supabaseAdmin
+      .from('walkthroughs').select('wedding_id, kind').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!wt) return res.status(404).json({ error: 'Walkthrough not found' });
+
+    // Deleting the walkthrough cascades away its media rows in the database
+    // (walkthrough_media references it ON DELETE CASCADE), but nothing tells
+    // storage. Remove the files first, or every photo and recording taken on
+    // the walkthrough is left in the bucket with nothing left pointing at it.
+    const { data: media, error: mediaErr } = await supabaseAdmin
+      .from('walkthrough_media').select('storage_path').eq('walkthrough_id', req.params.id);
+    if (mediaErr) throw mediaErr;
+    const paths = (media || []).map(m => m.storage_path).filter(Boolean);
+    if (paths.length) {
+      const { error: rmErr } = await supabaseAdmin.storage.from('day-of-media').remove(paths);
+      if (rmErr) {
+        console.error('Walkthrough media remove failed:', rmErr.message);
+        return res.status(500).json({ error: `The recordings and photos could not be deleted (${rmErr.message}), so the walkthrough has been left alone.` });
+      }
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('walkthroughs').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Walkthrough not found' });
+
+    // A tour has no wedding, and logActivity writes against one.
+    if (wt.wedding_id) {
+      await logActivity(wt.wedding_id, req.userId, 'walkthrough_deleted', wt.kind || `id ${req.params.id}`);
+    } else {
+      console.log(`[walkthroughs] deleted tour walkthrough ${req.params.id}, by ${req.userId}`);
+    }
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { console.error('Delete walkthrough error:', e); res.status(500).json({ error: e.message }); }
 });
 
 // Photos and voice notes. Stored under the existing day-of-media bucket with a
@@ -17056,10 +17388,11 @@ app.post('/api/admin/walkthroughs/:id/media', requireAdmin, dayOfMediaUpload.sin
 app.delete('/api/admin/walkthrough-media/:id', requireAdmin, async (req, res) => {
   try {
     const { data: row, error: readErr } = await supabaseAdmin
-      .from('walkthrough_media').select('storage_path').eq('id', req.params.id).maybeSingle();
+      .from('walkthrough_media').select('wedding_id, storage_path, kind').eq('id', req.params.id).maybeSingle();
     // Not knowing whether there is a file means not deleting the row. Carrying
     // on would orphan whatever is in the bucket with nothing left pointing at it.
     if (readErr) throw new Error(`Could not read the recording: ${readErr.message}`);
+    if (!row) return res.status(404).json({ error: 'No such recording' });
 
     // The file first, and stop if it will not go.
     //
@@ -17076,10 +17409,16 @@ app.delete('/api/admin/walkthrough-media/:id', requireAdmin, async (req, res) =>
         });
       }
     }
-    const { error } = await supabaseAdmin.from('walkthrough_media').delete().eq('id', req.params.id);
+    const { data, error } = await supabaseAdmin
+      .from('walkthrough_media').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such recording' });
+
+    if (row.wedding_id) {
+      await logActivity(row.wedding_id, req.userId, 'walkthrough_media_deleted', row.kind || `id ${req.params.id}`);
+    }
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { console.error('Delete walkthrough media error:', e); res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/admin/walkthroughs/:id/items', requireAdmin, async (req, res) => {
@@ -17270,6 +17609,12 @@ app.post('/api/admin/walkthroughs/:id/apply', requireAdmin, async (req, res) => 
       });
     }
 
+    // Two clicks on Apply both pass every check above, since nothing here yet
+    // says an apply is already under way. Refuse the second one outright.
+    if (wt.status === 'applying') {
+      return res.status(409).json({ error: 'Already applying — this walkthrough is mid-apply from another request.' });
+    }
+
     const { data: items, error: itemsError } = await supabaseAdmin
       .from('walkthrough_items').select('*')
       .eq('walkthrough_id', wt.id).eq('status', 'accepted');
@@ -17278,41 +17623,55 @@ app.post('/api/admin/walkthroughs/:id/apply', requireAdmin, async (req, res) => 
     if (itemsError) return res.status(500).json({ error: itemsError.message });
     if (!items?.length) return res.json({ ok: true, applied: 0, results: [] });
 
+    // Marked before the first insert, not after the last, so the guard above
+    // actually catches a second request that arrives mid-loop.
+    const { error: markErr } = await supabaseAdmin.from('walkthroughs')
+      .update({ status: 'applying', updated_at: new Date().toISOString() }).eq('id', wt.id);
+    if (markErr) return res.status(500).json({ error: markErr.message });
+
     const label = `${(wt.kind || 'walkthrough').replace(/_/g, ' ')} on ${wt.occurred_on}`;
     const results = [];
 
-    for (const item of items) {
-      const target = item.section ? WALKTHROUGH_TARGETS[item.section] : null;
-      // No destination, or the parser did not get enough to build a real row:
-      // it becomes a planning note rather than nothing. Losing it is the one
-      // outcome that is not allowed.
-      const useNote = !target || !target.valid(item.proposed || {});
-      const table = useNote ? 'planning_notes' : target.table;
-      const row = useNote ? buildNote(item, wt.wedding_id, label) : target.build(item.proposed || {}, wt.wedding_id);
+    try {
+      for (const item of items) {
+        const target = item.section ? WALKTHROUGH_TARGETS[item.section] : null;
+        // No destination, or the parser did not get enough to build a real row:
+        // it becomes a planning note rather than nothing. Losing it is the one
+        // outcome that is not allowed.
+        const useNote = !target || !target.valid(item.proposed || {});
+        const table = useNote ? 'planning_notes' : target.table;
+        const row = useNote ? buildNote(item, wt.wedding_id, label) : target.build(item.proposed || {}, wt.wedding_id);
 
-      const { data: written, error: werr } = await supabaseAdmin.from(table).insert(row).select('id').single();
-      if (werr) {
-        await supabaseAdmin.from('walkthrough_items')
-          .update({ status: 'failed', apply_error: werr.message, updated_at: new Date().toISOString() })
-          .eq('id', item.id);
-        results.push({ id: item.id, ok: false, table, error: werr.message });
-        continue;
+        const { data: written, error: werr } = await supabaseAdmin.from(table).insert(row).select('id').single();
+        if (werr) {
+          await supabaseAdmin.from('walkthrough_items')
+            .update({ status: 'failed', apply_error: werr.message, updated_at: new Date().toISOString() })
+            .eq('id', item.id);
+          results.push({ id: item.id, ok: false, table, error: werr.message });
+          continue;
+        }
+        await supabaseAdmin.from('walkthrough_items').update({
+          status: 'applied',
+          applied_at: new Date().toISOString(),
+          applied_table: table,
+          applied_row_id: written?.id || null,
+          apply_error: null,
+          updated_at: new Date().toISOString(),
+        }).eq('id', item.id);
+        results.push({ id: item.id, ok: true, table, rowId: written?.id, filedAsNote: useNote });
       }
-      await supabaseAdmin.from('walkthrough_items').update({
-        status: 'applied',
-        applied_at: new Date().toISOString(),
-        applied_table: table,
-        applied_row_id: written?.id || null,
-        apply_error: null,
-        updated_at: new Date().toISOString(),
-      }).eq('id', item.id);
-      results.push({ id: item.id, ok: true, table, rowId: written?.id, filedAsNote: useNote });
+    } catch (loopErr) {
+      // Back to organised rather than left saying "applying" forever — whatever
+      // items got through above are already marked applied and stay that way.
+      await supabaseAdmin.from('walkthroughs')
+        .update({ status: 'organised', updated_at: new Date().toISOString() }).eq('id', wt.id);
+      throw loopErr;
     }
 
     const applied = results.filter(r => r.ok).length;
     await supabaseAdmin.from('walkthroughs')
       .update({ status: 'applied', updated_at: new Date().toISOString() }).eq('id', wt.id);
-    await logActivity(wt.wedding_id, null, 'walkthrough_applied', `${applied} item${applied === 1 ? '' : 's'} filed from the ${label}`);
+    await logActivity(wt.wedding_id, req.userId || null, 'walkthrough_applied', `${applied} item${applied === 1 ? '' : 's'} filed from the ${label}`);
 
     res.json({ ok: true, applied, failed: results.length - applied, results });
   } catch (e) {
