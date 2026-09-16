@@ -8887,15 +8887,9 @@ app.post('/api/couple-photo', requireAuth, upload.single('photo'), async (req, r
 
     if (existingErr) throw new Error(`Could not check for an existing photo: ${existingErr.message}`);
 
-    // Delete old image from storage if exists
-    if (existing?.image_url) {
-      const urlParts = existing.image_url.split('/couple-photos/');
-      if (urlParts[1]) {
-        await supabaseAdmin.storage.from('couple-photos').remove([urlParts[1]]);
-      }
-    }
-
-    // Upload new image
+    // Upload the new image first. Deleting the old one and then failing to
+    // upload the new one leaves the couple with no photo at all; uploading
+    // first means a failure here changes nothing they can see.
     const fileName = `${weddingId}/${Date.now()}_${file.originalname}`;
     const { error: uploadError } = await supabaseAdmin.storage
       .from('couple-photos')
@@ -8904,6 +8898,15 @@ app.post('/api/couple-photo', requireAuth, upload.single('photo'), async (req, r
       });
 
     if (uploadError) throw uploadError;
+
+    // Old image after: cleanup, not the point of the request.
+    if (existing?.image_url) {
+      const urlParts = existing.image_url.split('/couple-photos/');
+      if (urlParts[1]) {
+        const { error: rmErr } = await supabaseAdmin.storage.from('couple-photos').remove([urlParts[1]]);
+        if (rmErr) console.error('Old couple photo not removed from storage:', urlParts[1], rmErr.message);
+      }
+    }
 
     // Generate signed URL (expires in 1 year)
     const { data: signedUrlData, error: signedError } = await supabaseAdmin.storage
@@ -8955,26 +8958,34 @@ app.delete('/api/couple-photo/:weddingId', async (req, res) => {
   try {
     const { weddingId } = req.params;
 
-    // Get photo to delete from storage
-    const { data: photo } = await supabaseAdmin
+    const { data: photo, error: readErr } = await supabaseAdmin
       .from('couple_photos')
       .select('image_url')
       .eq('wedding_id', weddingId)
-      .single();
+      .maybeSingle();
+    if (readErr) throw readErr;
+    if (!photo) return res.status(404).json({ error: 'No photo on file for this wedding' });
 
-    if (photo?.image_url) {
+    const { data, error } = await supabaseAdmin
+      .from('couple_photos')
+      .delete()
+      .eq('wedding_id', weddingId)
+      .select('id')
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No photo on file for this wedding' });
+
+    // Row first, same reasoning as inspo: a couple asking for their photo
+    // gone must see it gone even if the object in storage refuses to go.
+    if (photo.image_url) {
       const urlParts = photo.image_url.split('/couple-photos/');
       if (urlParts[1]) {
-        await supabaseAdmin.storage.from('couple-photos').remove([urlParts[1]]);
+        const { error: rmErr } = await supabaseAdmin.storage.from('couple-photos').remove([urlParts[1]]);
+        if (rmErr) console.error('Couple photo file not removed from storage:', urlParts[1], rmErr.message);
       }
     }
 
-    const { error } = await supabaseAdmin
-      .from('couple_photos')
-      .delete()
-      .eq('wedding_id', weddingId);
-
-    if (error) throw error;
+    await logActivity(weddingId, req.userId, 'couple_photo_deleted', 'Couple photo removed');
     res.json({ success: true });
   } catch (error) {
     console.error('Delete couple photo error:', error);
