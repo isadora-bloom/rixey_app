@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
+import { shrinkImageForUpload } from '../utils/image'
 import { useToast } from './ui/Toast'
+import ConfirmDialog from './ui/ConfirmDialog'
 
 const CATEGORIES = [
   { key: 'video_message', label: 'Video messages', hint: 'Short phone clips captured during the day' },
@@ -19,9 +21,11 @@ function formatSize(bytes) {
 }
 
 function MediaTile({ item, isAdmin, onDelete, onCaptionChange, onReorder, canMoveUp, canMoveDown }) {
+  const { error: toastError } = useToast()
   const video = isVideo(item.mime_type)
   const [caption, setCaption] = useState(item.caption || '')
   const [savingCaption, setSavingCaption] = useState(false)
+  const [downloading, setDownloading] = useState(false)
 
   const handleBlur = async () => {
     if (caption === (item.caption || '')) return
@@ -31,6 +35,29 @@ function MediaTile({ item, isAdmin, onDelete, onCaptionChange, onReorder, canMov
     } finally {
       setSavingCaption(false)
     }
+  }
+
+  // A plain <a download> is ignored once the href crosses origins, and
+  // storage is always a different origin from the app — this used to just
+  // open the file in a new tab instead of saving it.
+  const download = async () => {
+    setDownloading(true)
+    try {
+      const res = await fetch(item.url)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const blob = await res.blob()
+      const blobUrl = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = blobUrl
+      a.download = item.filename || 'download'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000)
+    } catch (err) {
+      toastError(`Could not download that: ${err.message}`)
+    }
+    setDownloading(false)
   }
 
   return (
@@ -84,13 +111,14 @@ function MediaTile({ item, isAdmin, onDelete, onCaptionChange, onReorder, canMov
         <div className="flex items-center justify-between text-xs text-sage-400 mt-auto">
           <span className="truncate">{formatSize(item.size_bytes)}</span>
           <div className="flex items-center gap-3">
-            <a
-              href={item.url}
-              download={item.filename || true}
-              className="text-sage-600 hover:text-sage-800 underline"
+            <button
+              type="button"
+              onClick={download}
+              disabled={downloading}
+              className="text-sage-600 hover:text-sage-800 underline disabled:opacity-50"
             >
-              Download
-            </a>
+              {downloading ? 'Downloading…' : 'Download'}
+            </button>
             {isAdmin && (
               <button
                 onClick={() => onDelete(item.id)}
@@ -115,6 +143,7 @@ export default function DayOfMemories({ weddingId, isAdmin = false }) {
   const [uploadProgress, setUploadProgress] = useState(null)
   const [error, setError] = useState(null)
   const [selectedCategory, setSelectedCategory] = useState('media')
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null)
   const fileInputRef = useRef(null)
 
   useEffect(() => {
@@ -125,9 +154,7 @@ export default function DayOfMemories({ weddingId, isAdmin = false }) {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(`${API_URL}/api/day-of-media/${weddingId}`, { headers: await authHeaders() })
-      if (!res.ok) throw new Error('Failed to load media')
-      setItems(await res.json())
+      setItems(await loadJson(`${API_URL}/api/day-of-media/${weddingId}`))
     } catch (err) {
       setError(err.message)
     } finally {
@@ -144,11 +171,15 @@ export default function DayOfMemories({ weddingId, isAdmin = false }) {
     const total = files.length
     let done = 0
     const uploaded = []
+    // One failed upload used to abandon the whole batch — someone dropping in
+    // twenty photos lost everything after the one that was too big or timed
+    // out, with no way to tell which had actually made it.
+    const failed = []
 
     for (const file of files) {
       setUploadProgress({ current: done + 1, total, name: file.name })
       const fd = new FormData()
-      fd.append('file', file)
+      fd.append('file', await shrinkImageForUpload(file))
       fd.append('category', category)
       try {
         const result = await apiFetch(`${API_URL}/api/day-of-media/${weddingId}/upload`, {
@@ -157,21 +188,25 @@ export default function DayOfMemories({ weddingId, isAdmin = false }) {
         })
         if (result) uploaded.push(result)
       } catch (err) {
-        setError(`Couldn't upload ${file.name}: ${err.message}`)
-        toastError(`Could not upload ${file.name}: ${err.message}`)
-        break
+        failed.push({ name: file.name, message: err.message })
       }
       done++
     }
 
     if (uploaded.length) setItems(prev => [...prev, ...uploaded])
+    if (failed.length) {
+      const msg = failed.length === 1
+        ? `Couldn't upload ${failed[0].name}: ${failed[0].message}`
+        : `${failed.length} of ${total} failed to upload: ${failed.map(f => f.name).join(', ')}`
+      setError(msg)
+      toastError(msg)
+    }
     setUploading(false)
     setUploadProgress(null)
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
   async function handleDelete(id) {
-    if (!window.confirm('Delete this item? This cannot be undone.')) return
     const snapshot = items
     setItems(prev => prev.filter(i => i.id !== id))
     try {
@@ -302,7 +337,7 @@ export default function DayOfMemories({ weddingId, isAdmin = false }) {
                     key={item.id}
                     item={item}
                     isAdmin={isAdmin}
-                    onDelete={handleDelete}
+                    onDelete={setConfirmDeleteId}
                     onCaptionChange={handleCaptionChange}
                     onReorder={(it, dir) => handleReorder(it, dir, categoryItems)}
                     canMoveUp={i > 0}
@@ -314,6 +349,16 @@ export default function DayOfMemories({ weddingId, isAdmin = false }) {
           </section>
         )
       })}
+
+      <ConfirmDialog
+        open={confirmDeleteId !== null}
+        onClose={() => setConfirmDeleteId(null)}
+        onConfirm={() => { const id = confirmDeleteId; setConfirmDeleteId(null); if (id) handleDelete(id) }}
+        title="Delete this item?"
+        message="This cannot be undone."
+        confirmLabel="Delete"
+        danger
+      />
     </div>
   )
 }
