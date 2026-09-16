@@ -17,8 +17,18 @@
  */
 
 import { makeEntry } from '../sheet-diff/types.js';
+import { allPeople } from '../../../shared/guest-names.js';
 
 const norm = s => String(s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+/** The guest list out of a portal snapshot, which reports a failed read as an object. */
+const guestRowsOf = portal => (Array.isArray(portal?.wedding_guests) ? portal.wedding_guests : []);
+
+/** "Audrey Ayala" the way a document often writes it: "Ayala, Audrey". */
+const surnameFirst = full => {
+  const parts = String(full ?? '').trim().split(/\s+/);
+  return parts.length < 2 ? String(full ?? '') : `${parts[parts.length - 1]} ${parts.slice(0, -1).join(' ')}`;
+};
 const present = v => v !== null && v !== undefined && String(v).trim() !== '';
 
 // Words that carry no meaning when comparing two ways of writing the same
@@ -322,11 +332,15 @@ function questionEntries(docRows, portal) {
  * person is. Same rule as everywhere else in this codebase.
  */
 function guestEntries(docRows, portal) {
-  const existing = portal.wedding_guests || [];
-  const known = new Set(existing.map(g => norm(`${g.first_name || ''} ${g.last_name || ''}`)));
+  const existing = guestRowsOf(portal);
+  // People, not rows. A plus one is a person on this list whichever shape the
+  // wedding is in, and reading rows meant a document naming one was offered as
+  // a guest to add: accepted, and the wedding had them twice.
+  const people = allPeople(existing);
+  const known = new Set(people.map(p => norm(p.name)));
   // Also index by surname-first, since a document may write "Ayala, Audrey"
   // for a guest the portal holds as "Audrey Ayala".
-  const flipped = new Set(existing.map(g => norm(`${g.last_name || ''} ${g.first_name || ''}`)));
+  const flipped = new Set(people.map(p => norm(surnameFirst(p.name))));
 
   return (docRows || []).filter(g => present(g.name)).map((g, i) => {
     const name = String(g.name).trim();
@@ -366,16 +380,23 @@ function guestEntries(docRows, portal) {
 
 /** Table assignments. Only ever offered for guests the portal already knows. */
 function seatingEntries(docRows, portal) {
-  const existing = portal.wedding_guests || [];
+  const existing = guestRowsOf(portal);
   const byName = new Map();
-  for (const g of existing) {
-    byName.set(norm(`${g.first_name || ''} ${g.last_name || ''}`), g);
-    byName.set(norm(`${g.last_name || ''} ${g.first_name || ''}`), g);
+  // p.row is the row carrying that person's table: their own since 025, their
+  // host's before it. Matching rows instead moved the host whenever a document
+  // seated their plus one.
+  for (const p of allPeople(existing)) {
+    if (!p.name || !p.row?.id) continue;
+    const entry = { row: p.row, sharesRow: p.isPlusOne && !p.row.is_plus_one, host: p.host };
+    for (const k of [norm(p.name), norm(surnameFirst(p.name))]) {
+      if (k && !byName.has(k)) byName.set(k, entry);
+    }
   }
 
   return (docRows || []).filter(s => present(s.guest_name) && present(s.table_name)).map((s, i) => {
     const n = norm(s.guest_name);
-    const match = byName.get(n) || byName.get(norm(String(s.guest_name).split(',').reverse().join(' ')));
+    const hit = byName.get(n) || byName.get(norm(String(s.guest_name).split(',').reverse().join(' ')));
+    const match = hit?.row;
     const table = String(s.table_name).trim().slice(0, 120);
 
     return makeEntry({
@@ -386,7 +407,11 @@ function seatingEntries(docRows, portal) {
       portalValue: match?.table_assignment || (match ? 'no table set' : null),
       status: !match ? 'sheet-only'
         : (sameish(match.table_assignment, table) ? 'agree' : (match.table_assignment ? 'conflict' : 'missing')),
-      notes: !match ? 'Not on the guest list yet — add them first, then this can be seated.' : undefined,
+      notes: !match ? 'Not on the guest list yet — add them first, then this can be seated.'
+        // Before 025 a plus one has no row, so the only seat there is belongs
+        // to the whole party. Worth saying before somebody accepts it.
+        : hit.sharesRow ? `A plus one of ${hit.host || 'another guest'}, who has no row of their own yet, so this seats the pair of them together.`
+        : undefined,
       applyOp: !match ? { type: 'noop' } : {
         type: 'patch',
         table: 'wedding_guests',
