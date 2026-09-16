@@ -617,7 +617,7 @@ const { startAnswerJob, readAnswerJob, latestAnswerJob } = createAnswerJobs(supa
 app.use('/api', createWeddingAccess(supabaseAdmin));
 
 // Maps a Postgres/PostgREST error to a response a couple can read, instead of
-// the raw database text that `res.status(500).json({ error: e.message })`
+// the raw database text that `sendDbError(res, e)`
 // hands the browser at 111 call sites across this file today. The mapper
 // itself lives in server/lib/db-error.js, pure and Express-free, so it can be
 // unit tested with a bare error object. sendDbError is the thin wrapper this
@@ -3590,7 +3590,7 @@ app.get('/api/contracts/:weddingId', async (req, res) => {
       versioned,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -5333,7 +5333,7 @@ app.get('/api/admin/client-errors', requireAdmin, async (req, res) => {
       .limit(50);
     if (error) throw error;
     res.json(data || []);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 
 app.post('/api/admin/client-errors/:id/resolve', requireAdmin, async (req, res) => {
@@ -5343,7 +5343,7 @@ app.post('/api/admin/client-errors/:id/resolve', requireAdmin, async (req, res) 
       .eq('id', req.params.id);
     if (error) throw error;
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 
 /**
@@ -5390,7 +5390,7 @@ app.patch('/api/client-errors/:id', requireAdmin, async (req, res) => {
     if (error) throw error;
     if (!data) return res.status(404).json({ error: 'No such crash report' });
     res.json(data);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 
 
@@ -7828,7 +7828,7 @@ app.post('/api/admin/contact-messages/:id/share', async (req, res) => {
     res.json(data);
   } catch (error) {
     console.error('contact-message share error:', error);
-    res.status(500).json({ error: error.message });
+    sendDbError(res, error);
   }
 });
 
@@ -8076,7 +8076,7 @@ app.get('/api/zoom/transcripts', async (req, res) => {
     });
   } catch (error) {
     console.error('Zoom transcripts error:', error);
-    res.status(500).json({ error: error.message });
+    sendDbError(res, error);
   }
 });
 
@@ -11138,7 +11138,7 @@ app.post('/api/admin/accommodations', async (req, res) => {
     res.json(data);
   } catch (error) {
     console.error('Accommodation create error:', error);
-    res.status(500).json({ error: error.message });
+    sendDbError(res, error);
   }
 });
 
@@ -11156,7 +11156,7 @@ app.put('/api/admin/accommodations/:id', async (req, res) => {
     res.json(data);
   } catch (error) {
     console.error('Accommodation update error:', error);
-    res.status(500).json({ error: error.message });
+    sendDbError(res, error);
   }
 });
 
@@ -11171,7 +11171,7 @@ app.delete('/api/admin/accommodations/:id', async (req, res) => {
     res.json({ ok: true, id: data.id });
   } catch (error) {
     console.error('Accommodation delete error:', error);
-    res.status(500).json({ error: error.message });
+    sendDbError(res, error);
   }
 });
 
@@ -11640,7 +11640,7 @@ app.post('/api/admin/enquiries/:id/dismiss-suggestion', requireAdmin, async (req
     if (error) throw error;
     res.json({ ok: true });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendDbError(res, error);
   }
 });
 
@@ -11653,7 +11653,7 @@ app.get('/api/admin/enquiries/:id/walkthroughs', requireAdmin, async (req, res) 
       .order('occurred_on', { ascending: false });
     if (error) throw error;
     res.json(data || []);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 
 /** Status, notes, outcome. Everything the venue types rather than imports. */
@@ -11827,7 +11827,7 @@ app.get('/api/calendly/events', requireAdmin, async (req, res) => {
     res.json({ events: eventsWithInvitees });
   } catch (error) {
     console.error('Calendly API error:', error);
-    res.status(500).json({ error: error.message });
+    sendDbError(res, error);
   }
 });
 
@@ -11859,7 +11859,7 @@ app.get('/api/calendly/events/:eventUuid', requireAdmin, async (req, res) => {
     res.json(eventData);
   } catch (error) {
     console.error('Calendly event fetch error:', error);
-    res.status(500).json({ error: error.message });
+    sendDbError(res, error);
   }
 });
 
@@ -12202,7 +12202,7 @@ app.get('/api/admin/unlinked-profiles', async (req, res) => {
       .order('created_at');
     if (error) throw error;
     res.json(data || []);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 
 // The newest timestamp across every inbound channel for one wedding. Each
@@ -13755,7 +13755,7 @@ app.get('/api/wedding-details/:weddingId', async (req, res) => {
     const { data, error } = await supabaseAdmin.from('wedding_details').select('*').eq('wedding_id', req.params.weddingId).maybeSingle();
     if (error) throw error;
     res.json(data);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 app.post('/api/wedding-details', async (req, res) => {
   try {
@@ -13771,7 +13771,7 @@ app.post('/api/wedding-details', async (req, res) => {
       .select().single();
     if (error) throw error;
     res.json(data);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 
 // --- Allergy Registry ---
@@ -13780,21 +13780,21 @@ app.get('/api/allergies/:weddingId', async (req, res) => {
     const { data, error } = await supabaseAdmin.from('allergy_registry').select('*').eq('wedding_id', req.params.weddingId).order('sort_order');
     if (error) throw error;
     res.json(data || []);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 app.post('/api/allergies', validateBody(['wedding_id', 'guest_name', 'allergy', 'severity', 'caterer_alerted', 'staying_overnight', 'notes', 'sort_order']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('allergy_registry').insert(req.body).select().single();
     if (error) throw error;
     res.json(data);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 app.put('/api/allergies/:id', validateBody(['guest_name', 'allergy', 'severity', 'caterer_alerted', 'staying_overnight', 'notes', 'sort_order']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('allergy_registry').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
     res.json(data);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 app.delete('/api/allergies/:id', async (req, res) => {
   try {
@@ -13810,7 +13810,7 @@ app.delete('/api/allergies/:id', async (req, res) => {
 
     await logActivity(row.wedding_id, req.userId, 'allergy_deleted', row.guest_name || `id ${req.params.id}`);
     res.json({ success: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 
 // --- Bedroom Assignments ---
@@ -13834,14 +13834,14 @@ app.get('/api/bedrooms/:weddingId', async (req, res) => {
       data = inserted;
     }
     res.json(data);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 app.put('/api/bedrooms/:id', validateBody(['guest_friday', 'guest_saturday', 'notes', 'room_name', 'room_description', 'sort_order']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('bedroom_assignments').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
     res.json(data);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 
 // --- Ceremony Order ---
@@ -13850,21 +13850,21 @@ app.get('/api/ceremony-order/:weddingId', async (req, res) => {
     const { data, error } = await supabaseAdmin.from('ceremony_order').select('*').eq('wedding_id', req.params.weddingId).order('sort_order');
     if (error) throw error;
     res.json(data || []);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 app.post('/api/ceremony-order', validateBody(['wedding_id', 'participant_name', 'role', 'section', 'side', 'walk_with', 'sort_order', 'notes']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('ceremony_order').insert(req.body).select().single();
     if (error) throw error;
     res.json(data);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 app.put('/api/ceremony-order/:id', validateBody(['participant_name', 'role', 'section', 'side', 'walk_with', 'sort_order', 'notes']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('ceremony_order').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
     res.json(data);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 app.delete('/api/ceremony-order/:id', async (req, res) => {
   try {
@@ -13880,7 +13880,7 @@ app.delete('/api/ceremony-order/:id', async (req, res) => {
 
     await logActivity(row.wedding_id, req.userId, 'ceremony_order_deleted', row.participant_name || `id ${req.params.id}`);
     res.json({ success: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 
 // --- Decor Inventory ---
@@ -13889,21 +13889,21 @@ app.get('/api/decor/:weddingId', async (req, res) => {
     const { data, error } = await supabaseAdmin.from('decor_inventory').select('*').eq('wedding_id', req.params.weddingId).order('space_name').order('sort_order');
     if (error) throw error;
     res.json(data || []);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 app.post('/api/decor', validateBody(['wedding_id', 'space_name', 'item_name', 'quantity', 'source', 'goes_home_with', 'leaving_it', 'notes', 'sort_order']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('decor_inventory').insert(req.body).select().single();
     if (error) throw error;
     res.json(data);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 app.put('/api/decor/:id', validateBody(['space_name', 'item_name', 'quantity', 'source', 'goes_home_with', 'leaving_it', 'notes', 'sort_order']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('decor_inventory').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
     res.json(data);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 app.delete('/api/decor/:id', async (req, res) => {
   try {
@@ -13919,7 +13919,7 @@ app.delete('/api/decor/:id', async (req, res) => {
 
     await logActivity(row.wedding_id, req.userId, 'decor_deleted', row.item_name || `id ${req.params.id}`);
     res.json({ success: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 
 // --- Makeup Schedule ---
@@ -13928,21 +13928,21 @@ app.get('/api/makeup/:weddingId', async (req, res) => {
     const { data, error } = await supabaseAdmin.from('makeup_schedule').select('*').eq('wedding_id', req.params.weddingId).order('sort_order');
     if (error) throw error;
     res.json(data || []);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 app.post('/api/makeup', validateBody(['wedding_id', 'participant_name', 'role', 'hair_start_time', 'makeup_start_time', 'notes', 'sort_order']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('makeup_schedule').insert(req.body).select().single();
     if (error) throw error;
     res.json(data);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 app.put('/api/makeup/:id', validateBody(['participant_name', 'role', 'hair_start_time', 'makeup_start_time', 'notes', 'sort_order']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('makeup_schedule').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
     res.json(data);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 app.delete('/api/makeup/:id', async (req, res) => {
   try {
@@ -13958,7 +13958,7 @@ app.delete('/api/makeup/:id', async (req, res) => {
 
     await logActivity(row.wedding_id, req.userId, 'makeup_schedule_deleted', row.participant_name || `id ${req.params.id}`);
     res.json({ success: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 
 // --- Shuttle Schedule ---
@@ -13967,21 +13967,21 @@ app.get('/api/shuttle/:weddingId', async (req, res) => {
     const { data, error } = await supabaseAdmin.from('shuttle_schedule').select('*').eq('wedding_id', req.params.weddingId).order('sort_order');
     if (error) throw error;
     res.json(data || []);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 app.post('/api/shuttle', validateBody(['wedding_id', 'run_label', 'pickup_time', 'pickup_location', 'dropoff_time', 'dropoff_location', 'notes', 'sort_order', 'seat_count']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('shuttle_schedule').insert(req.body).select().single();
     if (error) throw error;
     res.json(data);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 app.put('/api/shuttle/:id', validateBody(['run_label', 'pickup_time', 'pickup_location', 'dropoff_time', 'dropoff_location', 'notes', 'sort_order', 'seat_count']), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('shuttle_schedule').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
     res.json(data);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 app.delete('/api/shuttle/:id', async (req, res) => {
   try {
@@ -13997,7 +13997,7 @@ app.delete('/api/shuttle/:id', async (req, res) => {
 
     await logActivity(row.wedding_id, req.userId, 'shuttle_run_deleted', row.run_label || `id ${req.params.id}`);
     res.json({ success: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 
 // --- Rehearsal Dinner (upsert) ---
@@ -14006,7 +14006,7 @@ app.get('/api/rehearsal-dinner/:weddingId', async (req, res) => {
     const { data, error } = await supabaseAdmin.from('rehearsal_dinner').select('*').eq('wedding_id', req.params.weddingId).maybeSingle();
     if (error) throw error;
     res.json(data);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 // The columns this table actually has. Everything else in the body is dropped.
 //
@@ -14046,7 +14046,7 @@ app.post('/api/rehearsal-dinner', async (req, res) => {
     res.json(data);
   } catch (e) {
     console.error('Save rehearsal dinner error:', e);
-    res.status(500).json({ error: e.message });
+    sendDbError(res, e);
   }
 });
 
@@ -14100,7 +14100,7 @@ app.get('/api/ceremony-plan/:weddingId', async (req, res) => {
     if (error && error.code !== 'PGRST116') throw error;
     res.json({ plan: data?.ceremony_plan || { rows: [] } });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -14119,7 +14119,7 @@ app.post('/api/ceremony-plan/:weddingId', async (req, res) => {
     if (error) throw error;
     res.json({ plan: data.ceremony_plan });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -14936,7 +14936,7 @@ app.get('/api/bar-notes/:weddingId', async (req, res) => {
     const { data, error } = await supabaseAdmin.from('weddings').select('bar_notes').eq('id', req.params.weddingId).single();
     if (error) throw error;
     res.json(data?.bar_notes || {});
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 app.put('/api/bar-notes/:weddingId', async (req, res) => {
@@ -14944,7 +14944,7 @@ app.put('/api/bar-notes/:weddingId', async (req, res) => {
     const { error } = await supabaseAdmin.from('weddings').update({ bar_notes: req.body }).eq('id', req.params.weddingId);
     if (error) throw error;
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 // Shopping list
@@ -14953,7 +14953,7 @@ app.get('/api/bar-shopping/:weddingId', async (req, res) => {
     const { data, error } = await supabaseAdmin.from('bar_shopping_list').select('*').eq('wedding_id', req.params.weddingId).order('category').order('sort_order');
     if (error) throw error;
     res.json(data || []);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 app.post('/api/bar-shopping/:weddingId', async (req, res) => {
@@ -14965,7 +14965,7 @@ app.post('/api/bar-shopping/:weddingId', async (req, res) => {
       .select().single();
     if (error) throw error;
     res.json(data);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 app.put('/api/bar-shopping/:id', async (req, res) => {
@@ -14973,7 +14973,7 @@ app.put('/api/bar-shopping/:id', async (req, res) => {
     const { data, error } = await supabaseAdmin.from('bar_shopping_list').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
     res.json(data);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 app.delete('/api/bar-shopping/:id', async (req, res) => {
@@ -14992,7 +14992,7 @@ app.delete('/api/bar-shopping/:id', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('Delete bar shopping item error:', err);
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -15208,7 +15208,7 @@ app.post('/api/bar-recipes/extract-url', requireAuth, async (req, res) => {
     res.json({ recipe: saved, saved: true, ingredients });
   } catch (err) {
     console.error('Recipe URL extract error:', err);
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -15261,7 +15261,7 @@ app.post('/api/bar-recipes/extract-upload', requireAuth, upload.single('file'), 
     res.json({ recipe: saved, saved: true, ingredients });
   } catch (err) {
     console.error('Recipe upload extract error:', err);
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -15270,7 +15270,7 @@ app.get('/api/bar-recipes/:weddingId', async (req, res) => {
     const { data, error } = await supabaseAdmin.from('bar_recipes').select('*').eq('wedding_id', req.params.weddingId).order('created_at');
     if (error) throw error;
     res.json(data || []);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 app.post('/api/bar-recipes/:weddingId', async (req, res) => {
@@ -15281,7 +15281,7 @@ app.post('/api/bar-recipes/:weddingId', async (req, res) => {
       .select().single();
     if (error) throw error;
     res.json(data);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 app.delete('/api/bar-recipes/:id', async (req, res) => {
@@ -15300,7 +15300,7 @@ app.delete('/api/bar-recipes/:id', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('Delete bar recipe error:', err);
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -15319,7 +15319,7 @@ app.put('/api/weddings/:id/partners', async (req, res) => {
     if (error) throw error;
     res.json(data);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -15335,7 +15335,7 @@ app.get('/api/wedding-photos/:weddingId', async (req, res) => {
     if (error) throw error;
     res.json(data || []);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -15369,7 +15369,7 @@ app.post('/api/wedding-photos/:weddingId/upload', upload.single('photo'), async 
     res.json(data);
   } catch (err) {
     console.error('Photo upload error:', err);
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -15389,7 +15389,7 @@ app.put('/api/wedding-photos/:photoId', async (req, res) => {
     if (error) throw error;
     res.json(data);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -15416,7 +15416,7 @@ app.delete('/api/wedding-photos/:photoId', async (req, res) => {
     if (error) throw error;
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -15433,7 +15433,7 @@ app.get('/api/day-of-media/:weddingId', async (req, res) => {
     if (error) throw error;
     res.json(data || []);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -15477,7 +15477,7 @@ app.post('/api/day-of-media/:weddingId/upload', dayOfMediaUpload.single('file'),
     res.json(data);
   } catch (err) {
     console.error('Day-of media upload error:', err);
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -15495,7 +15495,7 @@ app.put('/api/day-of-media/:id', validateBody(['caption', 'category', 'sort_orde
     if (error) throw error;
     res.json(data);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -15531,7 +15531,7 @@ app.delete('/api/day-of-media/:id', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('Delete day-of media error:', err);
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -15547,7 +15547,7 @@ app.get('/api/wedding-party/:weddingId', async (req, res) => {
     if (error) throw error;
     res.json(data || []);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -15563,7 +15563,7 @@ app.post('/api/wedding-party/:weddingId', async (req, res) => {
     if (error) throw error;
     res.json(data);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -15578,7 +15578,7 @@ app.put('/api/wedding-party/:id', async (req, res) => {
     if (error) throw error;
     res.json(data);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -15598,7 +15598,7 @@ app.delete('/api/wedding-party/:id', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('Delete wedding party error:', err);
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -15620,7 +15620,7 @@ app.get('/api/wedding-website/check-slug/:slug', async (req, res) => {
     res.json({ available: !data || data.length === 0 });
   } catch (err) {
     console.error('Check slug error:', err);
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -15634,7 +15634,7 @@ app.get('/api/wedding-website/:weddingId', async (req, res) => {
     if (error && error.code !== 'PGRST116') throw error;
     res.json(data || {});
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -15698,7 +15698,7 @@ app.put('/api/wedding-website/:weddingId', async (req, res) => {
     if (error) throw error;
     res.json(data);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -15716,7 +15716,7 @@ app.get('/api/venue-settings', async (req, res) => {
     if (error && error.code !== 'PGRST116') throw error;
     res.json(data || {});
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -15742,7 +15742,7 @@ app.put('/api/venue-settings', async (req, res) => {
     if (error) throw error;
     res.json(data);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -15823,7 +15823,7 @@ app.get('/api/w/:slug', async (req, res) => {
     });
   } catch (err) {
     console.error('Public website error:', err);
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -16073,7 +16073,7 @@ app.get('/api/rsvp/:slug/guest/:guestId', rsvpSearchLimiter, async (req, res) =>
     if (error || !guest) return res.status(404).json({ error: 'Not found' });
     res.json(guest);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -16189,7 +16189,7 @@ app.get('/api/rsvp/:slug/search', rsvpSearchLimiter, async (req, res) => {
     res.json(results.slice(0, 12));
   } catch (err) {
     console.error('RSVP search error:', err);
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -16340,7 +16340,7 @@ app.post('/api/rsvp/:slug', async (req, res) => {
     res.json({ ok: true, confirmationSentTo });
   } catch (err) {
     console.error('RSVP submit error:', err);
-    res.status(500).json({ error: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -16385,7 +16385,7 @@ app.get('/api/admin/documents/:weddingId', requireAdmin, async (req, res) => {
       };
     }));
     res.json(docs);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 
 // Couple-facing mirror of the route above. No requireAdmin: weddingAccess
@@ -16424,7 +16424,7 @@ app.get('/api/documents/:weddingId', async (req, res) => {
       };
     }));
     res.json(docs);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 
 // The couple's own view of how complete their file is: the same aspects
@@ -16551,7 +16551,7 @@ app.get('/api/completeness/:weddingId', async (req, res) => {
       totalCount: sections.length,
       percent: sections.length ? Math.round((doneCount / sections.length) * 100) : 0,
     });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 
 app.post('/api/admin/documents/:weddingId/upload', requireAdmin, documentUpload.single('file'), async (req, res) => {
@@ -16818,7 +16818,7 @@ app.post('/api/admin/documents/:id/parse', requireAdmin, aiLimiter, async (req, 
     console.error('Document parse error:', e);
     await supabaseAdmin.from('wedding_documents')
       .update({ parse_error: String(e.message).slice(0, 500) }).eq('id', req.params.id);
-    if (!res.headersSent) res.status(500).json({ error: e.message });
+    if (!res.headersSent) sendDbError(res, e);
   }
 });
 
@@ -16876,7 +16876,7 @@ app.get('/api/admin/documents/:id/diff', requireAdmin, async (req, res) => {
     res.json({ entries, counts, sinceLast, document: { id: doc.id, filename: doc.filename, version: doc.version } });
   } catch (e) {
     console.error('Document diff error:', e);
-    res.status(500).json({ error: e.message });
+    sendDbError(res, e);
   }
 });
 
@@ -16909,7 +16909,7 @@ app.post('/api/admin/documents/:id/apply', requireAdmin, async (req, res) => {
     res.json(result);
   } catch (e) {
     console.error('Document apply error:', e);
-    res.status(500).json({ error: e.message });
+    sendDbError(res, e);
   }
 });
 
@@ -16936,7 +16936,7 @@ app.delete('/api/admin/documents/:id', requireAdmin, async (req, res) => {
 
     await logActivity(row.wedding_id, req.userId, 'document_deleted', row.filename || `id ${req.params.id}`);
     res.json({ ok: true });
-  } catch (e) { console.error('Document delete error:', e); res.status(500).json({ error: e.message }); }
+  } catch (e) { console.error('Document delete error:', e); sendDbError(res, e); }
 });
 
 // ============ WALKTHROUGHS ============
@@ -16958,7 +16958,7 @@ app.get('/api/walkthroughs/:weddingId/shared', requireAuth, async (req, res) => 
       .order('occurred_on', { ascending: false });
     if (error) throw error;
     res.json(data || []);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 
 app.get('/api/admin/walkthroughs/:weddingId', requireAdmin, async (req, res) => {
@@ -16970,7 +16970,7 @@ app.get('/api/admin/walkthroughs/:weddingId', requireAdmin, async (req, res) => 
       .order('occurred_on', { ascending: false });
     if (error) throw error;
     res.json(data || []);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 
 app.post('/api/admin/walkthroughs', requireAdmin, async (req, res) => {
@@ -16995,7 +16995,7 @@ app.post('/api/admin/walkthroughs', requireAdmin, async (req, res) => {
       .select().single();
     if (error) throw error;
     res.json(data);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 
 app.put('/api/admin/walkthroughs/:id', requireAdmin, async (req, res) => {
@@ -17013,7 +17013,7 @@ app.put('/api/admin/walkthroughs/:id', requireAdmin, async (req, res) => {
       .from('walkthroughs').update(patch).eq('id', req.params.id).select().single();
     if (error) throw error;
     res.json(data);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 
 app.delete('/api/admin/walkthroughs/:id', requireAdmin, async (req, res) => {
@@ -17051,7 +17051,7 @@ app.delete('/api/admin/walkthroughs/:id', requireAdmin, async (req, res) => {
       console.log(`[walkthroughs] deleted tour walkthrough ${req.params.id}, by ${req.userId}`);
     }
     res.json({ ok: true });
-  } catch (e) { console.error('Delete walkthrough error:', e); res.status(500).json({ error: e.message }); }
+  } catch (e) { console.error('Delete walkthrough error:', e); sendDbError(res, e); }
 });
 
 // Photos and voice notes. Stored under the existing day-of-media bucket with a
@@ -17074,7 +17074,7 @@ app.get('/api/admin/walkthroughs/:id/media', requireAdmin, async (req, res) => {
       transcript_error: has035('transcript') ? (m.transcript_error || null) : null,
       transcriptErrorKnown: has035('transcript'),
     })));
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 
 // ── Getting a two-hour recording into the bucket ───────────────────────────
@@ -17279,7 +17279,7 @@ app.post('/api/admin/walkthroughs/:id/media/begin', requireAdmin, async (req, re
     });
   } catch (e) {
     console.error('Walkthrough media begin error:', e);
-    res.status(500).json({ error: e.message });
+    sendDbError(res, e);
   }
 });
 
@@ -17348,7 +17348,7 @@ app.post('/api/admin/walkthroughs/:id/media/complete', requireAdmin, async (req,
     res.json(media);
   } catch (e) {
     console.error('Walkthrough media complete error:', e);
-    res.status(500).json({ error: e.message });
+    sendDbError(res, e);
   }
 });
 
@@ -17381,7 +17381,7 @@ app.post('/api/admin/walkthroughs/:id/media', requireAdmin, dayOfMediaUpload.sin
     res.json(media);
   } catch (e) {
     console.error('Walkthrough media upload error:', e);
-    res.status(500).json({ error: e.message });
+    sendDbError(res, e);
   }
 });
 
@@ -17418,7 +17418,7 @@ app.delete('/api/admin/walkthrough-media/:id', requireAdmin, async (req, res) =>
       await logActivity(row.wedding_id, req.userId, 'walkthrough_media_deleted', row.kind || `id ${req.params.id}`);
     }
     res.json({ ok: true });
-  } catch (e) { console.error('Delete walkthrough media error:', e); res.status(500).json({ error: e.message }); }
+  } catch (e) { console.error('Delete walkthrough media error:', e); sendDbError(res, e); }
 });
 
 app.get('/api/admin/walkthroughs/:id/items', requireAdmin, async (req, res) => {
@@ -17436,7 +17436,7 @@ app.get('/api/admin/walkthroughs/:id/items', requireAdmin, async (req, res) => {
     const { data: wt } = await supabaseAdmin
       .from('walkthroughs').select('status').eq('id', req.params.id).maybeSingle();
     res.json({ items: data || [], status: wt?.status || null });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 
 // Read the notes and propose where each piece goes. Writes nothing outside
@@ -17572,7 +17572,7 @@ This is part ${i + 1} of ${chunks.length} of one long meeting. Only pull out wha
     })();
   } catch (e) {
     console.error('Walkthrough organise error:', e);
-    if (!res.headersSent) res.status(500).json({ error: e.message });
+    if (!res.headersSent) sendDbError(res, e);
   }
 });
 
@@ -17589,7 +17589,7 @@ app.put('/api/admin/walkthrough-items/:id', requireAdmin, async (req, res) => {
       .from('walkthrough_items').update(patch).eq('id', req.params.id).select().single();
     if (error) throw error;
     res.json(data);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 
 // Write the accepted items into the portal for real.
@@ -17676,7 +17676,7 @@ app.post('/api/admin/walkthroughs/:id/apply', requireAdmin, async (req, res) => 
     res.json({ ok: true, applied, failed: results.length - applied, results });
   } catch (e) {
     console.error('Walkthrough apply error:', e);
-    res.status(500).json({ error: e.message });
+    sendDbError(res, e);
   }
 });
 
@@ -17693,7 +17693,7 @@ app.get('/api/finalisations/:weddingId', async (req, res) => {
     const map = {};
     (data || []).forEach(row => { map[row.section] = row; });
     res.json(map);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 
 /**
@@ -17747,7 +17747,7 @@ app.post('/api/finalisations/:weddingId', async (req, res) => {
 
     if (error) throw error;
     res.json(data);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendDbError(res, e); }
 });
 
 // ============ DAILY DIGEST ============
@@ -18259,7 +18259,7 @@ app.post('/api/admin/daily-memo', async (req, res) => {
     res.json({ sent: false, ...preview });
   } catch (error) {
     console.error('[Digest] Preview error:', error);
-    res.status(500).json({ error: error.message });
+    sendDbError(res, error);
   }
 });
 
