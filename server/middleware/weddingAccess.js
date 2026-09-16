@@ -56,11 +56,40 @@ const PUBLIC_PREFIXES = [
   '/api/health',
 ];
 
-/** Admin groups already gated by requireAdmin upstream; do not double-check. */
+/**
+ * Admin groups already gated by requireAdmin upstream; do not double-check.
+ *
+ * This is the one list — the mounts in index.js (`app.use('/api/admin',
+ * requireAdmin)` and its siblings, around line 440) are meant to read off
+ * this array rather than repeat it, so the two cannot drift apart. Anything
+ * added here that is not also mounted with requireAdmin would be let through
+ * with no check at all, so keep it to prefixes that really are
+ * unconditionally admin-only end to end.
+ */
 const ADMIN_PREFIXES = [
   '/api/admin', '/api/gmail', '/api/zoom', '/api/quo', '/api/uncertain-questions',
   '/api/knowledge-base', '/api/recommended-vendors', '/api/venue-settings', '/api/usage',
+  '/api/venue-vendors', '/api/venue-vendors-unlinked', '/api/vendor-merge-review',
+  '/api/vendor-invites',
 ];
+
+/**
+ * Prefix match on a segment boundary, not a bare substring. `/api/admin`
+ * must match `/api/admin/x` and `/api/admin` itself, but not
+ * `/api/admin-tools` — the naive `fullPath.startsWith(prefix)` this replaced
+ * would have waved that second one straight past every check below, admin or
+ * not, on the strength of eight matching characters. A prefix that already
+ * ends in a slash (the public ones mostly do) already states its own
+ * boundary and is used as-is.
+ */
+function matchesPrefix(fullPath, prefix) {
+  if (prefix.endsWith('/')) return fullPath.startsWith(prefix);
+  return fullPath === prefix || fullPath.startsWith(prefix + '/');
+}
+
+function matchesAnyPrefix(fullPath, prefixes) {
+  return prefixes.some(p => matchesPrefix(fullPath, p));
+}
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -193,8 +222,8 @@ export function createWeddingAccess(supabaseAdmin) {
 
   return async function weddingAccess(req, res, next) {
     const fullPath = (req.baseUrl || '') + (req.path || '');
-    if (PUBLIC_PREFIXES.some(p => fullPath.startsWith(p))) return next();
-    if (ADMIN_PREFIXES.some(p => fullPath.startsWith(p))) return next();
+    if (matchesAnyPrefix(fullPath, PUBLIC_PREFIXES)) return next();
+    if (matchesAnyPrefix(fullPath, ADMIN_PREFIXES)) return next();
 
     // A lookup we could not complete. In audit mode it carries on as before; in
     // enforce mode it stops the request, because the alternative is that a
@@ -343,4 +372,4 @@ export async function assertWeddingMember(supabaseAdmin, req, weddingId) {
   return { ok: false, status: 403, why: `belongs to ${profile.wedding_id || 'no wedding'}` };
 }
 
-export { PUBLIC_PREFIXES, ADMIN_PREFIXES, ROW_TABLES, weddingIdFrom, rowLookupFor };
+export { PUBLIC_PREFIXES, ADMIN_PREFIXES, ROW_TABLES, weddingIdFrom, rowLookupFor, matchesPrefix, matchesAnyPrefix };
