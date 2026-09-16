@@ -191,8 +191,12 @@ async function executeOp(supabase, op, weddingId) {
     }
 
     case 'delete': {
+      // Pinned to this wedding regardless of what op.match says — a delete op
+      // missing wedding_id, or naming the wrong one, must not be able to reach
+      // another wedding's row. Applied last so nothing in op.match can override it.
+      const match = { ...(op.match || {}), wedding_id: weddingId };
       let q = supabase.from(op.table).delete();
-      for (const [k, v] of Object.entries(op.match || {})) q = q.eq(k, v);
+      for (const [k, v] of Object.entries(match)) q = q.eq(k, v);
       const { error } = await q;
       if (error) throw new Error(error.message);
       return {};
