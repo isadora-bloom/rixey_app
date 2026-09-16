@@ -8324,12 +8324,40 @@ app.delete('/api/vendors/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const { error } = await supabaseAdmin
+    const { data: vendor, error: readErr } = await supabaseAdmin
+      .from('vendor_checklist')
+      .select('wedding_id, vendor_type, vendor_name, contract_path, contract_url')
+      .eq('id', id)
+      .maybeSingle();
+    if (readErr) throw readErr;
+    if (!vendor) return res.status(404).json({ error: 'No such vendor' });
+
+    // The contract file first, and stop if it will not go — deleting the
+    // vendor first would orphan it in storage with nothing pointing at it.
+    const key = vendor.contract_path || (() => {
+      const after = String(vendor.contract_url || '').split('/vendor-contracts/')[1];
+      if (!after) return null;
+      try { return decodeURIComponent(after.split('?')[0]); } catch { return after.split('?')[0]; }
+    })();
+    if (key) {
+      const { error: rmErr } = await supabaseAdmin.storage.from('vendor-contracts').remove([key]);
+      if (rmErr) {
+        console.error('Vendor contract file remove failed:', rmErr.message);
+        return res.status(500).json({ error: `The contract file could not be deleted (${rmErr.message}), so the vendor has been left alone.` });
+      }
+    }
+
+    const { data, error } = await supabaseAdmin
       .from('vendor_checklist')
       .delete()
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
 
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such vendor' });
+
+    await logActivity(vendor.wedding_id, req.userId, 'vendor_deleted', `${vendor.vendor_type}: ${vendor.vendor_name || 'TBD'}`);
     res.json({ success: true });
   } catch (error) {
     console.error('Delete vendor error:', error);
@@ -8530,7 +8558,7 @@ app.delete('/api/vendors/:id/contract', async (req, res) => {
     // Get current contract URL to delete from storage
     const { data: vendor, error: readErr } = await supabaseAdmin
       .from('vendor_checklist')
-      .select('contract_url, contract_path')
+      .select('wedding_id, vendor_type, contract_url, contract_path')
       .eq('id', id)
       .single();
     if (readErr) throw readErr;
@@ -8547,9 +8575,11 @@ app.delete('/api/vendors/:id/contract', async (req, res) => {
 
     if (key) {
       const { error: rmErr } = await supabaseAdmin.storage.from('vendor-contracts').remove([key]);
-      // Not fatal: the row should still lose its contract even if the object
-      // has already gone. But it should not go unsaid.
-      if (rmErr) console.error('Contract file not removed from storage:', key, rmErr.message);
+      // The row must not say the contract is gone if the object refused to go.
+      if (rmErr) {
+        console.error('Contract file not removed from storage:', key, rmErr.message);
+        return res.status(500).json({ error: `The contract file could not be deleted (${rmErr.message}), so nothing has changed.` });
+      }
     }
 
     // Update vendor record
@@ -8566,6 +8596,7 @@ app.delete('/api/vendors/:id/contract', async (req, res) => {
       .single();
 
     if (error) throw error;
+    await logActivity(vendor.wedding_id, req.userId, 'vendor_contract_removed', `${vendor.vendor_type} contract removed`);
     res.json({ vendor: data });
   } catch (error) {
     console.error('Remove contract error:', error);
