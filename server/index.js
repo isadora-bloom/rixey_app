@@ -7867,25 +7867,61 @@ app.post('/api/zoom/reextract', async (req, res) => {
   }
 });
 
-// Force resync: clear all processed Zoom data so next Sync re-downloads everything fresh
+/**
+ * Force resync: clear processed Zoom data so the next Sync re-downloads it.
+ *
+ * Same shape as /api/quo/clear-processed: this is the whole record of what has
+ * already been imported for every wedding at once unless weddingId is given,
+ * so it takes { confirm: true } and reports what it actually cleared rather
+ * than a blanket "success" that may have half-happened.
+ */
 app.post('/api/zoom/clear', async (req, res) => {
   try {
-    // Delete all processed meeting records (dedup table)
-    const { error: pmErr } = await supabaseAdmin
+    const { confirm, weddingId } = req.body || {};
+    if (confirm !== true) {
+      return res.status(400).json({
+        error: `This clears every processed Zoom transcript${weddingId ? ' for this wedding' : ' for every wedding'} and makes the next sync re-download them. Send { "confirm": true } if that is what you want.`,
+      });
+    }
+
+    let meetingsQuery = supabaseAdmin
       .from('processed_zoom_meetings')
-      .delete()
+      .delete({ count: 'exact' })
       .neq('id', '00000000-0000-0000-0000-000000000000');
-
-    // Delete all zoom_transcript planning notes (they'll be re-created by next sync)
-    const { error: pnErr } = await supabaseAdmin
+    let notesQuery = supabaseAdmin
       .from('planning_notes')
-      .delete()
+      .delete({ count: 'exact' })
       .eq('category', 'zoom_transcript');
+    if (weddingId) {
+      meetingsQuery = meetingsQuery.eq('wedding_id', weddingId);
+      notesQuery = notesQuery.eq('wedding_id', weddingId);
+    }
 
-    if (pmErr) console.error('Error clearing processed_zoom_meetings:', pmErr.message);
-    if (pnErr) console.error('Error clearing zoom_transcript notes:', pnErr.message);
+    // Meetings first. If this fails, nothing has changed and it is safe to
+    // just report the error.
+    const { error: pmErr, count: meetingsCleared } = await meetingsQuery;
+    if (pmErr) {
+      console.error('Error clearing processed_zoom_meetings:', pmErr.message);
+      return res.status(500).json({ error: `Could not clear the processed meetings (${pmErr.message}); nothing was cleared.` });
+    }
 
-    res.json({ success: true, message: 'Cleared all processed Zoom transcripts. Click Sync to re-download everything.' });
+    // The notes delete can still fail after the meetings delete has already
+    // succeeded. That is a half-clear, and it must not be reported as success.
+    const { error: pnErr, count: notesCleared } = await notesQuery;
+    if (pnErr) {
+      console.error('Error clearing zoom_transcript notes:', pnErr.message);
+      return res.status(500).json({
+        error: `Cleared ${meetingsCleared || 0} processed meeting(s), but the transcript notes could not be cleared (${pnErr.message}). Re-syncing now would create duplicate notes; clear again before syncing.`,
+      });
+    }
+
+    console.log(`[zoom] cleared ${meetingsCleared || 0} processed meeting(s) and ${notesCleared || 0} transcript note(s)${weddingId ? ` for wedding ${weddingId}` : ''}, by ${req.userId || 'an admin'}`);
+    res.json({
+      success: true,
+      meetingsCleared: meetingsCleared || 0,
+      notesCleared: notesCleared || 0,
+      message: `Cleared ${meetingsCleared || 0} processed meeting(s) and ${notesCleared || 0} transcript note(s). Click Sync to re-download.`,
+    });
   } catch (error) {
     res.status(500).json({ error: 'Failed to clear: ' + error.message });
   }
