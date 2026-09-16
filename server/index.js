@@ -16848,6 +16848,12 @@ app.post('/api/admin/walkthroughs/:id/apply', requireAdmin, async (req, res) => 
       });
     }
 
+    // Two clicks on Apply both pass every check above, since nothing here yet
+    // says an apply is already under way. Refuse the second one outright.
+    if (wt.status === 'applying') {
+      return res.status(409).json({ error: 'Already applying — this walkthrough is mid-apply from another request.' });
+    }
+
     const { data: items, error: itemsError } = await supabaseAdmin
       .from('walkthrough_items').select('*')
       .eq('walkthrough_id', wt.id).eq('status', 'accepted');
@@ -16856,41 +16862,55 @@ app.post('/api/admin/walkthroughs/:id/apply', requireAdmin, async (req, res) => 
     if (itemsError) return res.status(500).json({ error: itemsError.message });
     if (!items?.length) return res.json({ ok: true, applied: 0, results: [] });
 
+    // Marked before the first insert, not after the last, so the guard above
+    // actually catches a second request that arrives mid-loop.
+    const { error: markErr } = await supabaseAdmin.from('walkthroughs')
+      .update({ status: 'applying', updated_at: new Date().toISOString() }).eq('id', wt.id);
+    if (markErr) return res.status(500).json({ error: markErr.message });
+
     const label = `${(wt.kind || 'walkthrough').replace(/_/g, ' ')} on ${wt.occurred_on}`;
     const results = [];
 
-    for (const item of items) {
-      const target = item.section ? WALKTHROUGH_TARGETS[item.section] : null;
-      // No destination, or the parser did not get enough to build a real row:
-      // it becomes a planning note rather than nothing. Losing it is the one
-      // outcome that is not allowed.
-      const useNote = !target || !target.valid(item.proposed || {});
-      const table = useNote ? 'planning_notes' : target.table;
-      const row = useNote ? buildNote(item, wt.wedding_id, label) : target.build(item.proposed || {}, wt.wedding_id);
+    try {
+      for (const item of items) {
+        const target = item.section ? WALKTHROUGH_TARGETS[item.section] : null;
+        // No destination, or the parser did not get enough to build a real row:
+        // it becomes a planning note rather than nothing. Losing it is the one
+        // outcome that is not allowed.
+        const useNote = !target || !target.valid(item.proposed || {});
+        const table = useNote ? 'planning_notes' : target.table;
+        const row = useNote ? buildNote(item, wt.wedding_id, label) : target.build(item.proposed || {}, wt.wedding_id);
 
-      const { data: written, error: werr } = await supabaseAdmin.from(table).insert(row).select('id').single();
-      if (werr) {
-        await supabaseAdmin.from('walkthrough_items')
-          .update({ status: 'failed', apply_error: werr.message, updated_at: new Date().toISOString() })
-          .eq('id', item.id);
-        results.push({ id: item.id, ok: false, table, error: werr.message });
-        continue;
+        const { data: written, error: werr } = await supabaseAdmin.from(table).insert(row).select('id').single();
+        if (werr) {
+          await supabaseAdmin.from('walkthrough_items')
+            .update({ status: 'failed', apply_error: werr.message, updated_at: new Date().toISOString() })
+            .eq('id', item.id);
+          results.push({ id: item.id, ok: false, table, error: werr.message });
+          continue;
+        }
+        await supabaseAdmin.from('walkthrough_items').update({
+          status: 'applied',
+          applied_at: new Date().toISOString(),
+          applied_table: table,
+          applied_row_id: written?.id || null,
+          apply_error: null,
+          updated_at: new Date().toISOString(),
+        }).eq('id', item.id);
+        results.push({ id: item.id, ok: true, table, rowId: written?.id, filedAsNote: useNote });
       }
-      await supabaseAdmin.from('walkthrough_items').update({
-        status: 'applied',
-        applied_at: new Date().toISOString(),
-        applied_table: table,
-        applied_row_id: written?.id || null,
-        apply_error: null,
-        updated_at: new Date().toISOString(),
-      }).eq('id', item.id);
-      results.push({ id: item.id, ok: true, table, rowId: written?.id, filedAsNote: useNote });
+    } catch (loopErr) {
+      // Back to organised rather than left saying "applying" forever — whatever
+      // items got through above are already marked applied and stay that way.
+      await supabaseAdmin.from('walkthroughs')
+        .update({ status: 'organised', updated_at: new Date().toISOString() }).eq('id', wt.id);
+      throw loopErr;
     }
 
     const applied = results.filter(r => r.ok).length;
     await supabaseAdmin.from('walkthroughs')
       .update({ status: 'applied', updated_at: new Date().toISOString() }).eq('id', wt.id);
-    await logActivity(wt.wedding_id, null, 'walkthrough_applied', `${applied} item${applied === 1 ? '' : 's'} filed from the ${label}`);
+    await logActivity(wt.wedding_id, req.userId || null, 'walkthrough_applied', `${applied} item${applied === 1 ? '' : 's'} filed from the ${label}`);
 
     res.json({ ok: true, applied, failed: results.length - applied, results });
   } catch (e) {
