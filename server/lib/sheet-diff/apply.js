@@ -93,15 +93,19 @@ export async function applyChoices({ supabase, weddingId, decisions, appliedBy, 
     }
   }
 
+  let auditWarning = null;
   if (auditRows.length > 0) {
     const { error: auditErr } = await supabase.from('sheet_sync_log').insert(auditRows);
     if (auditErr) {
-      // Log table may not exist yet — surface but don't fail the apply
+      // Log table may not exist yet — surface but don't fail the apply. The
+      // writes above already happened; losing only the record of them still
+      // has to reach whoever is looking at the result, not just the server log.
       console.warn('[sheet-sync] audit insert failed (table missing?):', auditErr.message);
+      auditWarning = `The changes were applied, but the audit log could not be written: ${auditErr.message}`;
     }
   }
 
-  return { results, appliedCount };
+  return { results, appliedCount, ...(auditWarning ? { auditWarning } : {}) };
 }
 
 // Tables that are guaranteed to have at most one row per wedding. A PATCH against one
