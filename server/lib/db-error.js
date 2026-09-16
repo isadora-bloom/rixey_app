@@ -112,9 +112,14 @@ export function dbErrorToResponse(err, opts = {}) {
  * the caller sees, only for the unmapped (500) case — the mapped cases are
  * expected shapes, not incidents, and logging every unique-constraint hit
  * would just be noise.
+ *
+ * `opts.requestId` lets a caller that already generated one for its own log
+ * line (the global handler does, to log every unhandled error regardless of
+ * shape) hand it in, so the id printed in the log and the id returned to the
+ * browser are the same string rather than two.
  */
-export function sendDbError(res, err) {
-  const requestId = newRequestId();
+export function sendDbError(res, err, opts = {}) {
+  const requestId = opts.requestId || newRequestId();
   const { status, body } = dbErrorToResponse(err, { requestId });
   if (status === 500) {
     console.error(`[${requestId}] Database error:`, err?.stack || err);

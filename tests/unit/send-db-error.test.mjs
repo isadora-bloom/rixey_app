@@ -132,6 +132,18 @@ test('sendDbError sends the mapped status and body', () => {
   assert.deepEqual(res.body, { error: 'Not found' });
 });
 
+test('sendDbError uses a requestId handed in, so a caller\'s own log line matches the response', () => {
+  const res = fakeRes();
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    sendDbError(res, new Error('boom'), { requestId: 'handler-generated-id' });
+  } finally {
+    console.error = originalError;
+  }
+  assert.equal(res.body.requestId, 'handler-generated-id');
+});
+
 test('sendDbError still answers with a requestId on an unmapped error, and does not throw', () => {
   const res = fakeRes();
   const originalError = console.error;

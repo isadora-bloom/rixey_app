@@ -555,6 +555,17 @@ const { startAnswerJob, readAnswerJob, latestAnswerJob } = createAnswerJobs(supa
 // WEDDING_ACCESS_MODE=enforce once the audit log is quiet.
 app.use('/api', createWeddingAccess(supabaseAdmin));
 
+// Maps a Postgres/PostgREST error to a response a couple can read, instead of
+// the raw database text that `res.status(500).json({ error: e.message })`
+// hands the browser at 111 call sites across this file today. The mapper
+// itself lives in server/lib/db-error.js, pure and Express-free, so it can be
+// unit tested with a bare error object. sendDbError is the thin wrapper this
+// file calls; for now that is only the global error handler, at the bottom of
+// this file — sweeping the 111 existing call sites over to it is a separate,
+// mechanical pass done after this merges, to avoid every other change in
+// flight touching the same lines.
+import { sendDbError } from './lib/db-error.js';
+
 // ============ USAGE TRACKING ============
 
 // Token costs (approximate, as of 2024)
@@ -17623,6 +17634,15 @@ app.post('/api/seating/import', requireAuth, spreadsheetUpload.single('file'), a
   }
 });
 
+// Any /api path that reached here matched no route at all. Express's default
+// 404 is an HTML page, which a JSON-only client renders as a parse error that
+// hides the actual 404 behind it. Mounted after every real route and before
+// the error handler, so it only ever catches a genuine typo or a removed
+// endpoint an old client is still calling.
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: 'Not found' });
+});
+
 // Global error handler — ensures all unhandled Express errors return JSON, not HTML
 app.use((err, req, res, next) => {
   // A short id that appears in both the log line and the reply, so a couple can
@@ -17639,12 +17659,40 @@ app.use((err, req, res, next) => {
   // A file rejected by multer never reaches its route, so the route's own
   // careful error message never runs. "File too large" with a 500 beside it
   // reads as a crash rather than as a file that needs compressing, and the one
-  // thing it does not say is how large is too large.
+  // thing it used not to say is how large is too large — boundedUpload (see
+  // the multer setup near the top of this file) tags the error with the cap
+  // that was actually configured for that route, 20MB to 100MB depending on
+  // which one it was.
   if (err.code === 'LIMIT_FILE_SIZE') {
-    return res.status(413).json({ error: 'That file is too large to upload. Compress it, or send a smaller scan.', requestId });
+    const capMB = err.uploadCapBytes ? Math.round(err.uploadCapBytes / (1024 * 1024)) : null;
+    const capMsg = capMB ? `The limit here is ${capMB}MB.` : '';
+    return res.status(413).json({
+      error: `That file is too large to upload. ${capMsg} Compress it, or send a smaller file.`.trim(),
+      requestId,
+    });
   }
+  // The three shapes multer's fileFilter callbacks in this file reject with —
+  // one per upload config, worded for what that route actually accepts.
   if (/^File type not allowed:/.test(err.message || '')) {
     return res.status(415).json({ error: `${err.message}. PDFs and images are accepted.`, requestId });
+  }
+  if (/^Not a document we can read:/.test(err.message || '')) {
+    return res.status(415).json({ error: `${err.message} PDF, Word, Excel or CSV only.`, requestId });
+  }
+  if (/^Only Excel \(\.xlsx, \.xls\) and CSV files are supported\./.test(err.message || '')) {
+    return res.status(415).json({ error: err.message, requestId });
+  }
+
+  // A Postgres SQLSTATE is always five characters (22P02, 23505, …);
+  // PostgREST's own codes are prefixed PGRST (PGRST116, …). Route only these
+  // through the mapper — a route that escaped its try/catch with a genuine
+  // database error most often looks exactly like this — and leave anything
+  // else, including a deliberately-set err.status/statusCode, to the plain
+  // reply this always gave.
+  const looksLikeDbError = typeof err.code === 'string'
+    && (/^[0-9A-Z]{5}$/.test(err.code) || err.code.startsWith('PGRST'));
+  if (looksLikeDbError) {
+    return sendDbError(res, err, { requestId });
   }
 
   // Everything else gets one sentence. err.message here is whatever threw,
