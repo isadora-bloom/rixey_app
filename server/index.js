@@ -3159,7 +3159,7 @@ app.post('/api/chat-with-file', requireAuth, upload.single('file'), async (req, 
 
     let response;
     if (isPdf) {
-      response = await anthropic.messages.create({
+      response = await anthropicSage.messages.create({
         model: MODEL_SONNET,
         max_tokens: 1500,
         system: SAGE_SYSTEM_PROMPT,
@@ -3175,7 +3175,7 @@ app.post('/api/chat-with-file', requireAuth, upload.single('file'), async (req, 
         }]
       });
     } else {
-      response = await anthropic.messages.create({
+      response = await anthropicSage.messages.create({
         model: MODEL_SONNET,
         max_tokens: 1500,
         system: SAGE_SYSTEM_PROMPT,
@@ -3197,218 +3197,244 @@ app.post('/api/chat-with-file', requireAuth, upload.single('file'), async (req, 
     // Log usage for the main chat response
     await logUsage(weddingId, userId, 'chat-with-file', response);
 
-    // If there's a weddingId, also save the file to appropriate places
-    if (weddingId) {
-      try {
-        const isImage = file.mimetype.startsWith('image/');
-        const isDocument = isPdf || file.mimetype.includes('document');
-
-        // Determine if this is an inspo image or a contract/document
-        let fileType = 'unknown';
-        const classifyResponse = await anthropic.messages.create({
-          model: MODEL_SONNET,
-          max_tokens: 100,
-          messages: [{
-            role: 'user',
-            content: isImage ? [
-              { type: 'image', source: { type: 'base64', media_type: file.mimetype, data: base64Data } },
-              { type: 'text', text: 'Classify this image. Reply with ONLY one word: "inspo" if this is wedding inspiration/decor/style, "contract" if this is a contract/invoice/document, or "other" if neither.' }
-            ] : [
-              { type: 'document', source: { type: 'base64', media_type: file.mimetype, data: base64Data } },
-              { type: 'text', text: 'Classify this document. Reply with ONLY one word: "contract" if this is a vendor contract/invoice/quote, or "other" if not.' }
-            ]
-          }]
-        });
-        fileType = classifyResponse.content[0].text.toLowerCase().trim();
-        console.log(`File classified as: ${fileType}`);
-
-        // Handle inspiration images
-        if (fileType === 'inspo' && isImage) {
-          // Check if they haven't exceeded max inspo images
-          const { count } = await supabaseAdmin
-            .from('inspo_gallery')
-            .select('*', { count: 'exact', head: true })
-            .eq('wedding_id', weddingId);
-
-          if (count < 20) {
-            // Upload to inspo-gallery bucket
-            const fileName = `${weddingId}/${safeStorageKey(file.originalname)}`;
-            const { error: uploadError } = await supabaseAdmin.storage
-              .from('inspo-gallery')
-              .upload(fileName, file.buffer, { contentType: file.mimetype });
-
-            if (!uploadError) {
-              const { data: signedUrlData } = await supabaseAdmin.storage
-                .from('inspo-gallery')
-                .createSignedUrl(fileName, 31536000);
-
-              if (signedUrlData) {
-                // Get a caption for the image
-                const captionResponse = await anthropic.messages.create({
-                  model: MODEL_SONNET,
-                  max_tokens: 50,
-                  messages: [{
-                    role: 'user',
-                    content: [
-                      { type: 'image', source: { type: 'base64', media_type: file.mimetype, data: base64Data } },
-                      { type: 'text', text: 'Describe this wedding inspiration image in 5-10 words for a gallery caption. Be specific about colors, style, or elements shown.' }
-                    ]
-                  }]
-                });
-
-                await supabaseAdmin.from('inspo_gallery').insert({
-                  wedding_id: weddingId,
-                  image_url: signedUrlData.signedUrl,
-                  caption: captionResponse.content[0].text,
-                  uploaded_by: userId
-                });
-                console.log(`Added inspo image from chat: ${file.originalname}`);
-              }
-            }
-          }
-        }
-
-        // Handle contracts/documents
-        if (fileType === 'contract' || isDocument) {
-          // Extract full text for storage
-          const textResponse = await anthropic.messages.create({
-            model: MODEL_SONNET,
-            max_tokens: 8000,
-            messages: [{
-              role: 'user',
-              content: isPdf ? [
-                { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64Data } },
-                { type: 'text', text: 'Extract ALL text from this document exactly as it appears. Return only the text.' }
-              ] : [
-                { type: 'image', source: { type: 'base64', media_type: file.mimetype, data: base64Data } },
-                { type: 'text', text: 'Extract ALL text from this image exactly as it appears. Return only the text.' }
-              ]
-            }]
-          });
-
-          // Vendor, type and date read once off the extracted text, then reused
-          // below. This used to be a second and third upload of the same PDF.
-          const contractText = textResponse.content[0].text;
-          const contractFacts = await readContractFacts(contractText, file.originalname);
-
-          // Same as the admin path: keep the file itself, under a key that is
-          // safe to store. This one used to upload the document twice, once
-          // here with a Date.now() key and once further down for the vendor
-          // checklist, and neither key ever reached the contracts row.
-          const chatContractPath = await storeContractFile(weddingId, file);
-
-          await saveContract({
-            weddingId,
-            filename: file.originalname,
-            fileType: file.mimetype,
-            text: contractText,
-            source: 'chat',
-            facts: contractFacts,
-            storagePath: chatContractPath,
-          });
-
-          const vendorType = contractFacts.vendorType || 'other';
-
-          // Check if this vendor type already exists
-          // maybeSingle, not single: single() treats zero rows as an error, so
-          // the old code could only work by ignoring errors, and a genuine
-          // failure was indistinguishable from "no such vendor yet".
-          const { data: existingVendor, error: existingVendorErr } = await supabaseAdmin
-            .from('vendor_checklist')
-            .select('id')
-            .eq('wedding_id', weddingId)
-            .eq('vendor_type', vendorType)
-            .maybeSingle();
-
-          if (existingVendorErr) {
-            console.error('Could not check for an existing vendor, not adding one:', existingVendorErr.message);
-          } else if (!existingVendor && vendorType !== 'other') {
-            // The file is already in the bucket from storeContractFile above.
-            // This used to upload it a second time under a Date.now() key,
-            // which is neither unique nor safe, and left two copies of every
-            // contract a couple sent Sage.
-            if (chatContractPath) {
-              const { data: signedUrlData, error: signErr } = await supabaseAdmin.storage
-                .from('vendor-contracts')
-                .createSignedUrl(chatContractPath, 31536000);
-              if (signErr) console.error('[contracts] could not sign the vendor link:', signErr.message);
-
-              if (signedUrlData) {
-                // Create new vendor entry with contract
-                await supabaseAdmin.from('vendor_checklist').insert({
-                  wedding_id: weddingId,
-                  vendor_type: vendorType,
-                  contract_uploaded: true,
-                  contract_url: signedUrlData.signedUrl,
-                  // Not "the day it was signed at the venue", whatever the old
-                  // comment said. This is the day somebody pressed upload, and
-                  // the vendor screen was rendering it as the contract's date.
-                  contract_date: venueToday(),
-                  contract_document_date: contractFacts.documentDate,
-                  is_booked: true
-                });
-                console.log(`Created vendor checklist entry for ${vendorType} from chat upload`);
-              }
-            }
-          }
-
-          // Also extract planning notes from the contract
-          const extractionPrompt = `Extract key planning details from this document as a JSON array. For each item include:
-- category: one of "vendor", "timeline", "cost", "note", "allergy", "guest_count"
-- content: brief description
-
-Focus on: vendor names, contact info, costs, dates, deadlines, special requirements.
-Return ONLY a valid JSON array like: [{"category": "vendor", "content": "Caterer: ABC Catering"}]`;
-
-          const notesResponse = await anthropic.messages.create({
-            model: MODEL_SONNET,
-            max_tokens: 2000,
-            messages: [{
-              role: 'user',
-              content: isPdf ? [
-                { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64Data } },
-                { type: 'text', text: extractionPrompt }
-              ] : [
-                { type: 'image', source: { type: 'base64', media_type: file.mimetype, data: base64Data } },
-                { type: 'text', text: extractionPrompt }
-              ]
-            }]
-          });
-
-          // Parse and save planning notes
-          try {
-            const notesText = notesResponse.content[0].text;
-            const jsonMatch = notesText.match(/\[[\s\S]*\]/);
-            if (jsonMatch) {
-              const extractedNotes = JSON.parse(jsonMatch[0]);
-              if (extractedNotes.length > 0) {
-                const notesToSave = extractedNotes.map(note => ({
-                  wedding_id: weddingId,
-                  category: note.category || 'note',
-                  content: note.content,
-                  source_message: `Extracted from: ${file.originalname}`,
-                  status: 'pending'
-                }));
-                await supabaseAdmin.from('planning_notes').insert(notesToSave);
-                console.log(`Extracted ${notesToSave.length} planning notes from chat upload`);
-              }
-            }
-          } catch (notesErr) {
-            console.error('Error extracting notes from chat upload:', notesErr);
-          }
-        }
-      } catch (saveErr) {
-        console.error('Error processing file from chat:', saveErr);
-      }
-    }
-
+    // Answer first, file afterwards.
+    //
+    // The answer is one Sonnet call. The filing underneath is four more, one of
+    // them an eight-thousand-token transcription of the whole document, and it
+    // ran before the reply went out. So a couple who asked Sage a question
+    // about their caterer's quote waited on the classification, the
+    // transcription, the vendor lookup and the note extraction before reading a
+    // word of her answer, and past fifty seconds read nothing at all. What the
+    // proxy killed then was the reply; the filing carried on regardless, which
+    // is why some of those uploads are on file with no conversation attached.
     res.json({ message: sageResponse });
+
+    if (weddingId) {
+      runDetachedJob(
+        'chat-file',
+        { weddingId, userId: userId || null, filename: file.originalname },
+        () => fileChatUpload({ weddingId, userId, file, base64Data, isPdf }),
+      ).catch(err => console.error('Could not start the chat-file job:', err?.message || err));
+    }
 
   } catch (error) {
     console.error('Chat with file error:', error);
     res.status(500).json({ error: 'Failed to process file' });
   }
 });
+
+/**
+ * Put a file a couple sent Sage where it belongs.
+ *
+ * Inspiration goes to the gallery, a contract to the contracts table with a
+ * vendor checklist row and planning notes behind it. Every branch here is one
+ * or more Claude calls, which is why it runs against a job row rather than on
+ * the request that answered the couple.
+ *
+ * The outer try/catch it used to sit in swallowed everything and logged a line,
+ * so a couple's contract could fail to file with nobody any the wiser. It
+ * throws now; the job row carries the reason.
+ */
+async function fileChatUpload({ weddingId, userId, file, base64Data, isPdf }) {
+  const isImage = file.mimetype.startsWith('image/');
+  const isDocument = isPdf || file.mimetype.includes('document');
+
+  // Determine if this is an inspo image or a contract/document
+  let fileType = 'unknown';
+  const classifyResponse = await anthropic.messages.create({
+    model: MODEL_SONNET,
+    max_tokens: 100,
+    messages: [{
+      role: 'user',
+      content: isImage ? [
+        { type: 'image', source: { type: 'base64', media_type: file.mimetype, data: base64Data } },
+        { type: 'text', text: 'Classify this image. Reply with ONLY one word: "inspo" if this is wedding inspiration/decor/style, "contract" if this is a contract/invoice/document, or "other" if neither.' }
+      ] : [
+        { type: 'document', source: { type: 'base64', media_type: file.mimetype, data: base64Data } },
+        { type: 'text', text: 'Classify this document. Reply with ONLY one word: "contract" if this is a vendor contract/invoice/quote, or "other" if not.' }
+      ]
+    }]
+  });
+  fileType = classifyResponse.content[0].text.toLowerCase().trim();
+  console.log(`File classified as: ${fileType}`);
+
+  // Handle inspiration images
+  if (fileType === 'inspo' && isImage) {
+    // Check if they haven't exceeded max inspo images
+    const { count } = await supabaseAdmin
+      .from('inspo_gallery')
+      .select('*', { count: 'exact', head: true })
+      .eq('wedding_id', weddingId);
+
+    if (count < 20) {
+      // Upload to inspo-gallery bucket
+      const fileName = `${weddingId}/${safeStorageKey(file.originalname)}`;
+      const { error: uploadError } = await supabaseAdmin.storage
+        .from('inspo-gallery')
+        .upload(fileName, file.buffer, { contentType: file.mimetype });
+
+      if (!uploadError) {
+        const { data: signedUrlData } = await supabaseAdmin.storage
+          .from('inspo-gallery')
+          .createSignedUrl(fileName, 31536000);
+
+        if (signedUrlData) {
+          // Get a caption for the image
+          const captionResponse = await anthropic.messages.create({
+            model: MODEL_SONNET,
+            max_tokens: 50,
+            messages: [{
+              role: 'user',
+              content: [
+                { type: 'image', source: { type: 'base64', media_type: file.mimetype, data: base64Data } },
+                { type: 'text', text: 'Describe this wedding inspiration image in 5-10 words for a gallery caption. Be specific about colors, style, or elements shown.' }
+              ]
+            }]
+          });
+
+          await supabaseAdmin.from('inspo_gallery').insert({
+            wedding_id: weddingId,
+            image_url: signedUrlData.signedUrl,
+            caption: captionResponse.content[0].text,
+            uploaded_by: userId
+          });
+          console.log(`Added inspo image from chat: ${file.originalname}`);
+        }
+      }
+    }
+  }
+
+  // Handle contracts/documents
+  if (fileType === 'contract' || isDocument) {
+    // Extract full text for storage
+    const textResponse = await anthropic.messages.create({
+      model: MODEL_SONNET,
+      max_tokens: 8000,
+      messages: [{
+        role: 'user',
+        content: isPdf ? [
+          { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64Data } },
+          { type: 'text', text: 'Extract ALL text from this document exactly as it appears. Return only the text.' }
+        ] : [
+          { type: 'image', source: { type: 'base64', media_type: file.mimetype, data: base64Data } },
+          { type: 'text', text: 'Extract ALL text from this image exactly as it appears. Return only the text.' }
+        ]
+      }]
+    });
+
+    // Vendor, type and date read once off the extracted text, then reused
+    // below. This used to be a second and third upload of the same PDF.
+    const contractText = textResponse.content[0].text;
+    const contractFacts = await readContractFacts(contractText, file.originalname);
+
+    // Same as the admin path: keep the file itself, under a key that is
+    // safe to store. This one used to upload the document twice, once
+    // here with a Date.now() key and once further down for the vendor
+    // checklist, and neither key ever reached the contracts row.
+    const chatContractPath = await storeContractFile(weddingId, file);
+
+    await saveContract({
+      weddingId,
+      filename: file.originalname,
+      fileType: file.mimetype,
+      text: contractText,
+      source: 'chat',
+      facts: contractFacts,
+      storagePath: chatContractPath,
+    });
+
+    const vendorType = contractFacts.vendorType || 'other';
+
+    // Check if this vendor type already exists
+    // maybeSingle, not single: single() treats zero rows as an error, so
+    // the old code could only work by ignoring errors, and a genuine
+    // failure was indistinguishable from "no such vendor yet".
+    const { data: existingVendor, error: existingVendorErr } = await supabaseAdmin
+      .from('vendor_checklist')
+      .select('id')
+      .eq('wedding_id', weddingId)
+      .eq('vendor_type', vendorType)
+      .maybeSingle();
+
+    if (existingVendorErr) {
+      console.error('Could not check for an existing vendor, not adding one:', existingVendorErr.message);
+    } else if (!existingVendor && vendorType !== 'other') {
+      // The file is already in the bucket from storeContractFile above.
+      // This used to upload it a second time under a Date.now() key,
+      // which is neither unique nor safe, and left two copies of every
+      // contract a couple sent Sage.
+      if (chatContractPath) {
+        const { data: signedUrlData, error: signErr } = await supabaseAdmin.storage
+          .from('vendor-contracts')
+          .createSignedUrl(chatContractPath, 31536000);
+        if (signErr) console.error('[contracts] could not sign the vendor link:', signErr.message);
+
+        if (signedUrlData) {
+          // Create new vendor entry with contract
+          await supabaseAdmin.from('vendor_checklist').insert({
+            wedding_id: weddingId,
+            vendor_type: vendorType,
+            contract_uploaded: true,
+            contract_url: signedUrlData.signedUrl,
+            // Not "the day it was signed at the venue", whatever the old
+            // comment said. This is the day somebody pressed upload, and
+            // the vendor screen was rendering it as the contract's date.
+            contract_date: venueToday(),
+            contract_document_date: contractFacts.documentDate,
+            is_booked: true
+          });
+          console.log(`Created vendor checklist entry for ${vendorType} from chat upload`);
+        }
+      }
+    }
+
+    // Also extract planning notes from the contract
+    const extractionPrompt = `Extract key planning details from this document as a JSON array. For each item include:
+- category: one of "vendor", "timeline", "cost", "note", "allergy", "guest_count"
+- content: brief description
+
+Focus on: vendor names, contact info, costs, dates, deadlines, special requirements.
+Return ONLY a valid JSON array like: [{"category": "vendor", "content": "Caterer: ABC Catering"}]`;
+
+    const notesResponse = await anthropic.messages.create({
+      model: MODEL_SONNET,
+      max_tokens: 2000,
+      messages: [{
+        role: 'user',
+        content: isPdf ? [
+          { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64Data } },
+          { type: 'text', text: extractionPrompt }
+        ] : [
+          { type: 'image', source: { type: 'base64', media_type: file.mimetype, data: base64Data } },
+          { type: 'text', text: extractionPrompt }
+        ]
+      }]
+    });
+
+    // Parse and save planning notes
+    try {
+      const notesText = notesResponse.content[0].text;
+      const jsonMatch = notesText.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        const extractedNotes = JSON.parse(jsonMatch[0]);
+        if (extractedNotes.length > 0) {
+          const notesToSave = extractedNotes.map(note => ({
+            wedding_id: weddingId,
+            category: note.category || 'note',
+            content: note.content,
+            source_message: `Extracted from: ${file.originalname}`,
+            status: 'pending'
+          }));
+          await supabaseAdmin.from('planning_notes').insert(notesToSave);
+          console.log(`Extracted ${notesToSave.length} planning notes from chat upload`);
+        }
+      }
+    } catch (notesErr) {
+      console.error('Error extracting notes from chat upload:', notesErr);
+    }
+  }
+  return { processed: 1, detail: { filename: file.originalname } };
+}
 
 // List all contracts for a wedding (extracted docs + vendor contract URLs)
 app.get('/api/contracts/:weddingId', async (req, res) => {
@@ -8515,9 +8541,18 @@ app.post('/api/vendors/:id/contract', upload.single('contract'), async (req, res
 
     if (error) throw error;
 
-    // Also extract planning notes from the contract (async, don't block response)
-    (async () => {
-      try {
+    // Read the contract after answering, against a row that says how it went.
+    //
+    // This was a bare `(async () => {…})()` whose only record of failure was a
+    // console line. Two Sonnet calls, one of them an eight-thousand-token
+    // transcription, and if either died, whether on a restart, an overload or
+    // a bad response, the vendor screen still said the contract was uploaded
+    // and nothing said its details had never been read. A job row is the
+    // difference between "not extracted yet" and "extraction failed in March".
+    runDetachedJob(
+      'vendor-contract',
+      { weddingId: vendor.wedding_id, vendorId: id, filename: file.originalname },
+      async () => {
         const base64Data = file.buffer.toString('base64');
         const isPdf = file.mimetype === 'application/pdf';
 
@@ -8584,6 +8619,7 @@ Return ONLY a valid JSON array like: [{"category": "vendor", "content": "Photogr
 
         const notesText = notesResponse.content[0].text;
         const jsonMatch = notesText.match(/\[[\s\S]*\]/);
+        let saved = 0;
         if (jsonMatch) {
           const extractedNotes = JSON.parse(jsonMatch[0]);
           if (extractedNotes.length > 0) {
@@ -8594,14 +8630,17 @@ Return ONLY a valid JSON array like: [{"category": "vendor", "content": "Photogr
               source_message: `Extracted from ${vendor.vendor_type} contract: ${file.originalname}`,
               status: 'pending'
             }));
-            await supabaseAdmin.from('planning_notes').insert(notesToSave);
-            console.log(`Extracted ${notesToSave.length} planning notes from vendor contract upload`);
+            const { error: notesErr } = await supabaseAdmin.from('planning_notes').insert(notesToSave);
+            // The details are the point of the whole extraction, so losing them
+            // is a failed job, not a log line under a green tick.
+            if (notesErr) throw new Error(`Could not save the contract's details: ${notesErr.message}`);
+            saved = notesToSave.length;
+            console.log(`Extracted ${saved} planning notes from vendor contract upload`);
           }
         }
-      } catch (extractErr) {
-        console.error('Error extracting notes from vendor contract:', extractErr);
-      }
-    })();
+        return { processed: 1, detail: { notes: saved } };
+      },
+    ).catch(err => console.error('Could not start the vendor-contract job:', err?.message || err));
 
     // Log activity
     await logActivity(vendor.wedding_id, null, 'contract_uploaded', `${vendor.vendor_type} contract: ${file.originalname}`);
@@ -8774,9 +8813,15 @@ app.post('/api/inspo', requireAuth, upload.single('image'), async (req, res) => 
 
     if (error) throw error;
 
-    // Extract planning notes from the image (async, don't block response)
-    (async () => {
-      try {
+    // Read the image for planning details after answering, against a row.
+    //
+    // Same bare promise chain as the vendor contract had, with the same
+    // consequence: a couple's inspiration board quietly stops producing colour
+    // and decor notes and the only sign is a console line nobody reads.
+    runDetachedJob(
+      'inspo-notes',
+      { weddingId, filename: file.originalname },
+      async () => {
         const notesResponse = await anthropic.messages.create({
           model: MODEL_SONNET,
           max_tokens: 500,
@@ -8802,6 +8847,7 @@ Example: [{"category": "colors", "content": "Color palette: dusty rose, sage gre
 
         const notesText = notesResponse.content[0].text;
         const jsonMatch = notesText.match(/\[[\s\S]*\]/);
+        let saved = 0;
         if (jsonMatch) {
           const extractedNotes = JSON.parse(jsonMatch[0]);
           if (extractedNotes.length > 0) {
@@ -8812,14 +8858,15 @@ Example: [{"category": "colors", "content": "Color palette: dusty rose, sage gre
               source_message: `From inspiration image: ${finalCaption || file.originalname}`,
               status: 'pending'
             }));
-            await supabaseAdmin.from('planning_notes').insert(notesToSave);
-            console.log(`Extracted ${notesToSave.length} planning notes from inspo image`);
+            const { error: notesErr } = await supabaseAdmin.from('planning_notes').insert(notesToSave);
+            if (notesErr) throw new Error(`Could not save what the image showed: ${notesErr.message}`);
+            saved = notesToSave.length;
+            console.log(`Extracted ${saved} planning notes from inspo image`);
           }
         }
-      } catch (notesErr) {
-        console.error('Error extracting notes from inspo image:', notesErr);
-      }
-    })();
+        return { processed: 1, detail: { notes: saved } };
+      },
+    ).catch(err => console.error('Could not start the inspo-notes job:', err?.message || err));
 
     // Log activity for inspo upload
     await logActivity(weddingId, uploadedBy, 'inspo_uploaded', finalCaption || 'Inspiration image uploaded');
