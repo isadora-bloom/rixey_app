@@ -22,7 +22,7 @@
     "audit:nav": "node scripts/audit-nav-parity.mjs",
     "audit:unsurfaced": "node scripts/audit-unsurfaced.mjs",
     "audit:writes": "node scripts/audit-unfiltered-writes.mjs --max 0",
-    "audit:fetch": "node scripts/audit-raw-fetch.mjs --max 104",
+    "audit:fetch": "node scripts/audit-raw-fetch.mjs --max 35",
     "audit:pages": "node scripts/audit-unpaginated.mjs --max 40",
     "audit:tdz": "node scripts/audit-tdz-deps.mjs src --max 0",
     "audit:routes": "node scripts/audit-route-shadow.mjs --max 0",
