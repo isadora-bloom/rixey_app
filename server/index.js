@@ -22,7 +22,7 @@ import { validateBody } from './middleware/validate.js';
 import { coerceBody } from './middleware/coerce.js';
 import { fetchAllTabs, SheetFetchError } from './lib/sheet-fetcher.js';
 import { buildDiff, applyChoices } from './lib/sheet-diff/index.js';
-import { guestFullName, plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, headcount, parsePlusOneCell, usesPersonModel, personDisplayName, toParties, allPeople } from '../shared/guest-names.js';
+import { guestFullName, plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, headcount, usesPersonModel, personDisplayName, toParties, allPeople } from '../shared/guest-names.js';
 import { sendsConfirmation } from '../shared/rsvp-fields.js';
 import { isSameVendor, vendorKey } from '../shared/vendor-names.js';
 import { GUEST_FIELD_KEYS, ADDRESS_PART_KEYS, isMappableKey, tagLabelOf } from '../shared/guest-csv.js';
@@ -34,6 +34,9 @@ import { extractDocument } from './lib/doc-sync/extract.js';
 import { chunkDocument, sectionsPrompt, mergeSections, parseSectionsResponse } from './lib/doc-sync/sections.js';
 import { buildDocumentDiff, diffSections } from './lib/doc-sync/diff.js';
 import { commitSeatingToGuests } from './lib/seating-import.js';
+import {
+  bulkImportFault, buildImportRow, updatePatch, parseRsvpValue, splitPlusOneName, inChunks,
+} from './lib/guest-import.js';
 import { transcribeAudio, transcriptionConfigured } from './lib/transcribe.js';
 import { enquiryFromEvent, isTour, suggestWedding, parseStatedDate, platformSearchTerms, describeEmailMatch, parseCalculatorEmail, isCalculatorEmail } from './lib/enquiries.js';
 import { venueToday, venueDate, venueDateTime, VENUE_TZ } from '../shared/venue-time.js';
@@ -13949,7 +13952,13 @@ Reply with strict JSON and nothing else:
  * lower(last_name)) and writes onto the row it finds, inserting only the ones
  * it does not.
  *
- * Returns { added, updated, skipped, guests, duplicates, duplicateWarning }.
+ * Returns { added, updated, skipped, skippedBlankName, plusOnesCreated, guests,
+ * duplicates, duplicateWarning }. skippedBlankName is the rows the file had
+ * with nothing in the name column, which is how a sheet whose name column was
+ * mapped to something else used to report a clean import of nobody.
+ *
+ * Capped at BULK_ROW_LIMIT rows. Past that it is a mistake rather than a big
+ * wedding, and the reply says so instead of spending fifty seconds finding out.
  *
  * Why the match is not a database constraint: two people at a wedding can
  * genuinely be called the same thing, and a unique index would refuse the
@@ -13965,37 +13974,25 @@ app.post('/api/guests/bulk', async (req, res) => {
   try {
     const { weddingId, guests } = req.body;
     const mode = req.body.mode === 'update' ? 'update' : 'add';
-    if (!weddingId || !Array.isArray(guests) || guests.length === 0) {
-      return res.status(400).json({ error: 'weddingId and guests array required' });
-    }
-    const rows = guests.map(g => {
-      // A plus one is only ever created because the sheet says so. "No", "n/a"
-      // and blank all mean no plus one; a bare "yes" means one was granted
-      // without a name; anything else is kept as written. Without this, a
-      // column of Yes/No produced guests called "No".
-      const plusOne = parsePlusOneCell(g.plus_one_name || g.plus_one || g.plusone || g.plus_1 || '');
-      return {
-        wedding_id: weddingId,
-        first_name: g.first_name || g.firstName || '',
-        last_name: g.last_name || g.lastName || null,
-        email: g.email || null,
-        phone: g.phone || null,
-        address: g.address || null,
-        rsvp: g.rsvp || 'pending',
-        dietary_restrictions: g.dietary_restrictions || g.dietary || null,
-        meal_choice: g.meal_choice || g.meal || null,
-        table_assignment: g.table_assignment || g.table || null,
-        tags: Array.isArray(g.tags) ? g.tags : [],
-        notes: g.notes || null,
-        // These were dropped entirely, so exporting a guest list and importing
-        // it back deleted every plus one it contained.
-        plus_one_name: plusOne.name,
-        plus_one_rsvp: plusOne.granted ? parseRsvpValue(g.plus_one_rsvp || '') : 'pending',
-        plus_one_meal_choice: plusOne.granted ? (g.plus_one_meal_choice || null) : null,
-        plus_one_dietary: plusOne.granted ? (g.plus_one_dietary || null) : null,
-        updated_at: new Date().toISOString(),
-      };
-    }).filter(g => g.first_name.trim());
+    // One message per fault, naming it. All three used to come back as
+    // "weddingId and guests array required", which is a lie about two of them
+    // and sends the couple looking in the wrong place.
+    const fault = bulkImportFault({ weddingId, guests });
+    if (fault) return res.status(400).json({ error: fault });
+
+    // Kept alongside the row it was built from: an update may only write the
+    // plus-one columns the sheet actually had.
+    const built = guests
+      .map(g => ({ source: g, row: buildImportRow(g, weddingId) }))
+      .filter(b => b.row.first_name.trim());
+    const rows = built.map(b => b.row);
+    const sourceOf = new Map(built.map(b => [b.row, b.source]));
+    // Rows in the file with nothing in the name column. Silently dropped
+    // before, so a mis-mapped sheet reported a clean import of nobody.
+    const skippedBlankName = guests.length - rows.length;
+
+    const emptyFault = bulkImportFault({ weddingId, guests, parsed: rows.length });
+    if (emptyFault) return res.status(400).json({ error: emptyFault });
     // Auto-create any tag options that don't exist yet
     const allTags = [...new Set(rows.flatMap(r => r.tags))].filter(Boolean);
     if (allTags.length > 0) {
@@ -14009,9 +14006,12 @@ app.post('/api/guests/bulk', async (req, res) => {
       const existingLabels = new Set(existingTags.map(t => t.label));
       const newTags = allTags.filter(t => !existingLabels.has(t));
       if (newTags.length > 0) {
-        await supabaseAdmin.from('guest_tag_options').insert(
+        const { error: newTagsErr } = await supabaseAdmin.from('guest_tag_options').insert(
           newTags.map(label => ({ wedding_id: weddingId, label, color: '#9CA3AF' }))
         );
+        // The guests still import. The tags they carry just will not be in the
+        // filter list, which is worth saying rather than leaving to be noticed.
+        if (newTagsErr) console.error('[guests] could not create the imported tags:', newTagsErr.message);
       }
     }
 
@@ -14038,7 +14038,6 @@ app.post('/api/guests/bulk', async (req, res) => {
       if (!page || page.length < 1000) break;
     }
     const key = (f, l) => `${String(f || '').trim().toLowerCase()}|${String(l || '').trim().toLowerCase()}`;
-    const existingNames = new Set(already.map(g => key(g.first_name, g.last_name)));
 
     // Hosts only, and first match wins. Where a wedding already holds two
     // people with the same name the import cannot tell which was meant, so it
@@ -14049,6 +14048,11 @@ app.post('/api/guests/bulk', async (req, res) => {
       const k = key(g.first_name, g.last_name);
       if (!hostByName.has(k)) hostByName.set(k, g.id);
     }
+    // Hosts, for the same reason: an imported line is a party, and warning
+    // that "Cole Ashby is already on the list" because his own plus-one row
+    // carries that name is a warning about the row this import is about to
+    // reconcile anyway.
+    const existingNames = new Set(hostByName.keys());
 
     const duplicates = rows
       .filter(r => existingNames.has(key(r.first_name, r.last_name)))
@@ -14057,24 +14061,31 @@ app.post('/api/guests/bulk', async (req, res) => {
     // In update mode the matched rows are written one at a time. A bulk upsert
     // is not available here: there is no unique constraint to conflict on, for
     // the reason in the comment above the route.
-    let updated = 0;
-    const updatedRows = [];
+    //
+    // Fifty at a time, because one round trip per guest is not something a
+    // 900-row list survives: Railway gives the request about 50 seconds and a
+    // sequential import of a big wedding spent all of them, then failed in a
+    // way that looked like the file was wrong.
+    const toUpdate = [];
     const toInsert = [];
     for (const r of rows) {
       const hit = mode === 'update' ? hostByName.get(key(r.first_name, r.last_name)) : undefined;
-      if (!hit) { toInsert.push(r); continue; }
-      // wedding_id and the name are what matched, so they are not rewritten.
-      const { wedding_id: _w, first_name: _f, last_name: _l, ...patch } = r;
+      if (hit) toUpdate.push({ id: hit, row: r }); else toInsert.push(r);
+    }
+
+    const updatedRows = [];
+    await inChunks(toUpdate, 50, async ({ id, row: r }) => {
       const { data: row, error: upErr } = await supabaseAdmin
-        .from('wedding_guests').update(patch).eq('id', hit).select().maybeSingle();
+        .from('wedding_guests').update(updatePatch(r, sourceOf.get(r) || {})).eq('id', id).select().maybeSingle();
       if (upErr) {
         // Loud rather than silent: the rest of the import still runs, and the
         // count at the end will not add up to the file, which is the point.
         console.error(`[guests] could not update ${r.first_name} ${r.last_name || ''}:`, upErr.message);
-        continue;
+        return;
       }
-      if (row) { updated += 1; updatedRows.push(row); }
-    }
+      if (row) updatedRows.push(row);
+    });
+    const updated = updatedRows.length;
 
     // Every imported guest heads their own party, for the same reason as
     // above. Without this the whole import fails on the first row.
@@ -14083,22 +14094,23 @@ app.post('/api/guests/bulk', async (req, res) => {
       return { ...r, id, party_id: id };
     });
 
-    let data = [];
-    if (rowsWithParty.length) {
+    const data = [];
+    for (let from = 0; from < rowsWithParty.length; from += 50) {
       const { data: inserted, error } = await supabaseAdmin
         .from('wedding_guests')
-        .insert(rowsWithParty)
+        .insert(rowsWithParty.slice(from, from + 50))
         .select();
       if (error) throw error;
-      data = inserted || [];
+      data.push(...(inserted || []));
     }
 
     // Reconcile the plus one on every row that was updated rather than added.
     // The host row now carries whatever the file said about their plus one,
     // and syncPlusOneRow is the one place that turns that into a person row,
     // removes one that has gone, and leaves the plus one's own table, email
-    // and tags alone.
-    for (const row of updatedRows) await syncPlusOneRow(row);
+    // and tags alone. Twenty at a time: each of these is two or three round
+    // trips of its own, and 400 of them in a row is the proxy timeout again.
+    await inChunks(updatedRows, 20, row => syncPlusOneRow(row));
 
     // Give the imported plus ones rows of their own.
     //
@@ -14114,20 +14126,14 @@ app.post('/api/guests/bulk', async (req, res) => {
     for (const g of data) {
       const name = String(g.plus_one_name || '').trim();
       if (!name) continue;
-      const tidied = name.replace(/^[*.\s]+/, '').replace(/[*.\s]+$/, '').trim();
-      let first = name, last = null;
-      if (tidied && isNamedPerson(tidied)) {
-        const parts = tidied.split(/\s+/);
-        first = parts.length === 1 ? parts[0] : parts.slice(0, -1).join(' ');
-        last = parts.length === 1 ? null : parts[parts.length - 1];
-      }
+      const { first_name, last_name } = splitPlusOneName(name, isNamedPerson(name));
       plusOneRows.push({
         wedding_id: g.wedding_id,
         party_id: g.party_id,
         is_plus_one: true,
         plus_one_of: g.id,
-        first_name: first,
-        last_name: last,
+        first_name,
+        last_name,
         rsvp: g.plus_one_rsvp || 'pending',
         meal_choice: g.plus_one_meal_choice || null,
         dietary_restrictions: g.plus_one_dietary || null,
@@ -14138,8 +14144,10 @@ app.post('/api/guests/bulk', async (req, res) => {
     // update failed on, since every other row lands somewhere.
     const skipped = rows.length - data.length - updated;
 
-    if (plusOneRows.length) {
-      const { error: poErr } = await supabaseAdmin.from('wedding_guests').insert(plusOneRows);
+    let plusOnesCreated = 0;
+    for (let from = 0; from < plusOneRows.length; from += 50) {
+      const chunk = plusOneRows.slice(from, from + 50);
+      const { error: poErr } = await supabaseAdmin.from('wedding_guests').insert(chunk);
       // The guests are already in. Say loudly that their plus ones are not,
       // rather than reporting a clean import that quietly lost people.
       if (poErr) {
@@ -14149,11 +14157,14 @@ app.post('/api/guests/bulk', async (req, res) => {
           added: data.length,
           updated,
           skipped,
+          skippedBlankName,
+          plusOnesCreated,
           imported: data.length,
           duplicates,
-          duplicateWarning: `Imported ${data.length} guests, but their plus ones could not be added: ${poErr.message}. Check the list before relying on the numbers.`,
+          duplicateWarning: `Imported ${data.length} guests, but ${plusOneRows.length - plusOnesCreated} of their plus ones could not be added: ${poErr.message}. Check the list before relying on the numbers.`,
         });
       }
+      plusOnesCreated += chunk.length;
     }
 
     res.json({
@@ -14161,10 +14172,14 @@ app.post('/api/guests/bulk', async (req, res) => {
       added: data.length,
       updated,
       skipped,
+      // Rows the file had that carried no name at all. They were dropped in
+      // silence before, so a sheet whose name column was mapped to something
+      // else reported a clean import of nobody.
+      skippedBlankName,
       // The name the old client reads. Kept so an un-updated browser still
       // shows a number rather than "undefined guests imported".
       imported: data.length,
-      plusOnesCreated: plusOneRows.length,
+      plusOnesCreated,
       duplicates,
       // Two people can genuinely share a name, so in add mode this reports
       // rather than decides. The couple knows which it is; the server does not.
@@ -17340,14 +17355,7 @@ function safeCell(cells, idx) {
   return s || null;
 }
 
-function parseRsvpValue(raw) {
-  if (!raw) return 'pending';
-  const lower = raw.toLowerCase();
-  if (/going|attend|yes|confirm/.test(lower)) return 'yes';
-  if (/declin|not coming|no\b|cant|can't/.test(lower)) return 'no';
-  if (/maybe|unsure|likely/.test(lower)) return 'maybe';
-  return 'pending';
-}
+// parseRsvpValue and the rest of the import rules live in server/lib/guest-import.js.
 
 function splitGuestName(full) {
   const cleaned = full.replace(/#\S+/g, '').trim();
