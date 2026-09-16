@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import { useToast } from './ui/Toast'
 
 
@@ -117,11 +117,13 @@ export default function OnboardingChecklist({ weddingId, weddingDate, onAction, 
 
   const loadProgress = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/onboarding/${weddingId}`, { headers: await authHeaders() })
-      const data = await response.json()
+      const data = await loadJson(`${API_URL}/api/onboarding/${weddingId}`)
       setProgress(data.progress)
       setDismissed(data.progress?.onboarding_dismissed || false)
     } catch (err) {
+      // A soft nudge, not a couple's own data: on failure this card just
+      // doesn't show, the same as having dismissed it. Nothing here can be
+      // silently overwritten by not showing it, so a console note is enough.
       console.error('Failed to load onboarding:', err)
     }
     setLoading(false)
