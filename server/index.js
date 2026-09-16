@@ -14145,7 +14145,7 @@ app.get('/api/guests/:weddingId', async (req, res) => {
     res.json({ guests: await allGuestRows(req.params.weddingId) });
   } catch (err) {
     console.error('Get guests error:', err);
-    res.status(500).json({ error: `Failed to get guests: ${err.message}` });
+    sendDbError(res, err, { fallback: 'Failed to get guests' });
   }
 });
 
@@ -14337,7 +14337,7 @@ app.post('/api/guests', async (req, res) => {
     // is provably fine against blank fields and nulls, so whatever this is, it
     // needs to name itself the next time rather than be guessed at again.
     console.error('Create guest error:', err);
-    res.status(500).json({ error: `Could not add that guest: ${err.message}` });
+    sendDbError(res, err, { fallback: 'Could not add that guest' });
   }
 });
 
@@ -14367,7 +14367,7 @@ app.put('/api/guests/:id', async (req, res) => {
     res.json({ guest: data });
   } catch (err) {
     console.error('Update guest error:', err);
-    res.status(500).json({ error: `Could not save that guest: ${err.message}` });
+    sendDbError(res, err, { fallback: 'Could not save that guest' });
   }
 });
 
@@ -14768,7 +14768,7 @@ app.delete('/api/guests/:id', async (req, res) => {
     res.json({ ok: true, deleted });
   } catch (err) {
     console.error('Delete guest error:', err);
-    res.status(500).json({ error: `Failed to delete guest: ${err.message}` });
+    sendDbError(res, err, { fallback: 'Failed to delete guest' });
   }
 });
 
@@ -15110,7 +15110,7 @@ async function saveBarRecipe(req, res, { name, source_type, source_url, ingredie
     // The read has already been paid for, so say plainly that it could not be
     // kept rather than returning the ingredients as though they were filed.
     console.error('[bar-recipes] extracted but could not save:', error.message);
-    res.status(500).json({ error: `Read the recipe but could not save it: ${error.message}` });
+    sendDbError(res, error, { fallback: 'Read the recipe but could not save it' });
     return null;
   }
   return data;
@@ -17266,7 +17266,7 @@ app.post('/api/admin/walkthroughs/:id/media/begin', requireAdmin, async (req, re
       .from(DAY_OF_MEDIA_BUCKET).createSignedUploadUrl(key);
     if (error) {
       console.error('Walkthrough upload URL failed:', error.message);
-      return res.status(500).json({ error: `Could not open a place to upload to: ${error.message}` });
+      return sendDbError(res, error, { fallback: 'Could not open a place to upload to' });
     }
 
     res.json({

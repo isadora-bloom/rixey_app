@@ -56,14 +56,16 @@ async function check(name, expect, url, { method = 'GET', token, json, form } = 
   let body;
   if (json) { headers['Content-Type'] = 'application/json'; body = JSON.stringify(json); }
   if (form) body = form;
-  let status;
+  let status, text = '';
   try {
     const res = await fetch(`${API}${url}`, { method, headers, body });
     status = res.status;
+    try { text = await res.text(); } catch { text = ''; }
   } catch (err) { status = `ERR ${err.message}`; }
   const ok = Array.isArray(expect) ? expect.includes(status) : status === expect;
   results.push({ name, expect, status, ok });
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${String(status).padEnd(4)} expected ${Array.isArray(expect) ? expect.join('/') : expect}  ${name}`);
+  if (!ok && text) console.log(`      body: ${text.replace(/\s+/g, ' ').slice(0, 200)}`);
 }
 
 async function cleanup() {
