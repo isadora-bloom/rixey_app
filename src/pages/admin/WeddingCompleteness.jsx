@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../../config/api'
-import { authHeaders, apiFetch, loadJson } from '../../utils/api'
+import { apiFetch, loadJson } from '../../utils/api'
 import { useToast } from '../../components/ui/Toast'
 import { headcount } from '../../../shared/guest-names'
 import LoadError from '../../components/ui/LoadError'
@@ -121,6 +121,11 @@ export default function WeddingCompleteness({ weddingId, wedding, onSwitchTab })
   const [savingField, setSavingField] = useState(null)
   const [onboarding, setOnboarding] = useState(null)
   const [onboardingError, setOnboardingError] = useState(null)
+  // Which of the seventeen reads behind this checklist failed outright. A
+  // failed read used to fall back to null exactly like a section the couple
+  // genuinely hasn't touched yet, so the venue saw "not done" for something
+  // that was actually just unreadable right then.
+  const [loadError, setLoadError] = useState(null)
 
   useEffect(() => {
     if (weddingId) load()
@@ -134,45 +139,57 @@ export default function WeddingCompleteness({ weddingId, wedding, onSwitchTab })
   }
   useEffect(() => { if (weddingId) loadOnboarding() }, [weddingId])
 
+  // One entry per read this checklist depends on. Table-driven so a failure
+  // is attributable to a named section rather than silently read as null —
+  // see loadError above.
+  const READS = [
+    ['details', w => `${API_URL}/api/wedding-details/${w}`, 'wedding details'],
+    ['vendors', w => `${API_URL}/api/vendors/${w}`, 'vendors'],
+    ['guests', w => `${API_URL}/api/guests/${w}`, 'the guest list'],
+    ['allergies', w => `${API_URL}/api/allergies/${w}`, 'the allergy registry'],
+    ['contracts', w => `${API_URL}/api/contracts/${w}`, 'contracts'],
+    ['timeline', w => `${API_URL}/api/timeline/${w}`, 'the timeline'],
+    ['tables', w => `${API_URL}/api/tables/${w}`, 'table setup'],
+    ['layout', w => `${API_URL}/api/table-layout/${w}`, 'the table map'],
+    ['staffing', w => `${API_URL}/api/staffing/${w}`, 'the staffing plan'],
+    ['bar', w => `${API_URL}/api/bar-shopping/${w}`, 'the bar planner'],
+    ['shuttles', w => `${API_URL}/api/shuttle/${w}`, 'the shuttle schedule'],
+    ['makeup', w => `${API_URL}/api/makeup/${w}`, 'the hair & makeup schedule'],
+    ['rehearsal', w => `${API_URL}/api/rehearsal-dinner/${w}`, 'the rehearsal dinner'],
+    ['bedrooms', w => `${API_URL}/api/bedrooms/${w}`, 'bedroom assignments'],
+    ['decor', w => `${API_URL}/api/decor/${w}`, 'the decor inventory'],
+    ['ceremony', w => `${API_URL}/api/ceremony-order/${w}`, 'the ceremony order'],
+    ['ceremonyPlan', w => `${API_URL}/api/ceremony-plan/${w}`, 'the ceremony chair plan'],
+  ]
+
   const load = async () => {
+    setLoadError(null)
     try {
-      const hdrs = await authHeaders()
-      const [detailsRes, vendorsRes, guestsRes, allergyRes, contractsRes,
-             timelineRes, tablesRes, layoutRes, staffingRes, barRes,
-             shuttleRes, makeupRes, rehearsalRes, bedroomsRes, decorRes,
-             ceremonyRes, ceremonyPlanRes] = await Promise.all([
-        fetch(`${API_URL}/api/wedding-details/${weddingId}`, { headers: hdrs }),
-        fetch(`${API_URL}/api/vendors/${weddingId}`, { headers: hdrs }),
-        fetch(`${API_URL}/api/guests/${weddingId}`, { headers: hdrs }),
-        fetch(`${API_URL}/api/allergies/${weddingId}`, { headers: hdrs }),
-        fetch(`${API_URL}/api/contracts/${weddingId}`, { headers: hdrs }),
-        fetch(`${API_URL}/api/timeline/${weddingId}`, { headers: hdrs }),
-        fetch(`${API_URL}/api/tables/${weddingId}`, { headers: hdrs }),
-        fetch(`${API_URL}/api/table-layout/${weddingId}`, { headers: hdrs }),
-        fetch(`${API_URL}/api/staffing/${weddingId}`, { headers: hdrs }),
-        fetch(`${API_URL}/api/bar-shopping/${weddingId}`, { headers: hdrs }),
-        fetch(`${API_URL}/api/shuttle/${weddingId}`, { headers: hdrs }),
-        fetch(`${API_URL}/api/makeup/${weddingId}`, { headers: hdrs }),
-        fetch(`${API_URL}/api/rehearsal-dinner/${weddingId}`, { headers: hdrs }),
-        fetch(`${API_URL}/api/bedrooms/${weddingId}`, { headers: hdrs }),
-        fetch(`${API_URL}/api/decor/${weddingId}`, { headers: hdrs }),
-        fetch(`${API_URL}/api/ceremony-order/${weddingId}`, { headers: hdrs }),
-        fetch(`${API_URL}/api/ceremony-plan/${weddingId}`, { headers: hdrs }),
-      ])
+      const results = await Promise.allSettled(READS.map(([, url]) => loadJson(url(weddingId))))
+      const values = {}
+      const failedLabels = []
+      results.forEach((r, i) => {
+        const [key, , label] = READS[i]
+        if (r.status === 'fulfilled') {
+          values[key] = r.value
+        } else {
+          values[key] = null
+          failedLabels.push(label)
+        }
+      })
+      if (failedLabels.length) {
+        // Still renders whatever did load — a checklist half-shown beats one
+        // that vanishes entirely — but says plainly which parts might be
+        // wrong rather than letting them read as "not done".
+        setLoadError(new Error(
+          `Could not read ${failedLabels.length === 1 ? failedLabels[0] : `${failedLabels.length} sections (${failedLabels.join(', ')})`}. Those items below may show as missing when they are not.`
+        ))
+      }
 
-      const safeJson = async (res) => { try { return res.ok ? await res.json() : null } catch { return null } }
-
-      const [details, vendors, guests, allergies, contracts,
-             timeline, tables, layout, staffing, bar,
-             shuttles, makeup, rehearsal, bedrooms, decor,
-             ceremony, ceremonyPlan] = await Promise.all([
-        safeJson(detailsRes), safeJson(vendorsRes), safeJson(guestsRes),
-        safeJson(allergyRes), safeJson(contractsRes), safeJson(timelineRes),
-        safeJson(tablesRes), safeJson(layoutRes), safeJson(staffingRes),
-        safeJson(barRes), safeJson(shuttleRes), safeJson(makeupRes),
-        safeJson(rehearsalRes), safeJson(bedroomsRes), safeJson(decorRes),
-        safeJson(ceremonyRes), safeJson(ceremonyPlanRes),
-      ])
+      const { details, vendors, guests, allergies, contracts,
+              timeline, tables, layout, staffing, bar,
+              shuttles, makeup, rehearsal, bedrooms, decor,
+              ceremony, ceremonyPlan } = values
 
       const vendorList = vendors?.vendors || vendors || []
       const guestList = guests?.guests || guests || []
@@ -280,6 +297,10 @@ export default function WeddingCompleteness({ weddingId, wedding, onSwitchTab })
 
   return (
     <div className="space-y-5">
+      {loadError && (
+        <LoadError what="every section of this checklist" error={loadError} onRetry={load} />
+      )}
+
       {/* Progress bar */}
       <div className="bg-white rounded-xl border border-cream-200 p-5">
         <div className="flex items-center justify-between mb-2">
