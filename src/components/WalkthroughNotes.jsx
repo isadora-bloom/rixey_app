@@ -5,6 +5,9 @@ import { useToast } from './ui/Toast'
 import { useAutosave } from '../hooks/useAutosave'
 import SaveIndicator from './ui/SaveIndicator'
 import { useRecorder } from '../context/RecorderContext'
+import { uploadMediaDirect } from '../utils/directUpload'
+import { shrinkImageForUpload } from '../utils/image'
+import ConfirmDialog from './ui/ConfirmDialog'
 
 const KINDS = [
   { value: 'final_walkthrough', label: 'Final walkthrough' },
@@ -37,6 +40,7 @@ const kindLabel = k => KINDS.find(x => x.value === k)?.label || 'Walkthrough'
  */
 function MediaStrip({ walkthroughId, media, onChange, onReload, meetingLabel, toastError, onUseTranscript }) {
   const [uploading, setUploading] = useState(false)
+  const [pendingDelete, setPendingDelete] = useState(null)
   const fileRef = useRef(null)
   const { active, elapsed, start, stop, available, lastSaved } = useRecorder()
 
@@ -55,14 +59,21 @@ function MediaStrip({ walkthroughId, media, onChange, onReload, meetingLabel, to
 
   const mmss = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 
-  /** Photos, which are already a file and have nothing to lose. */
+  /** Photos, which are already a file and have nothing to lose. Uploads straight
+   * to storage the same way a recording does — see directUpload.js — so a big
+   * phone photo on venue wifi never has to make it through Railway either. */
   const uploadFile = async (file, extra = {}) => {
     setUploading(true)
     try {
-      const form = new FormData()
-      form.append('file', file)
-      for (const [k, v] of Object.entries(extra)) form.append(k, v)
-      const saved = await apiFetch(`${API_URL}/api/admin/walkthroughs/${walkthroughId}/media`, { method: 'POST', body: form })
+      const shrunk = await shrinkImageForUpload(file)
+      const saved = await uploadMediaDirect({
+        walkthroughId,
+        blob: shrunk,
+        kind: 'photo',
+        mimetype: shrunk.type || file.type,
+        filename: shrunk.name || file.name,
+        extra,
+      })
       onChange(prev => [...prev, saved])
     } catch (err) {
       toastError(`Could not save that: ${err.message}`)
@@ -70,12 +81,19 @@ function MediaStrip({ walkthroughId, media, onChange, onReload, meetingLabel, to
     setUploading(false)
   }
 
-
-  const remove = async (m) => {
+  const removeNow = async (m) => {
     const snapshot = media
     onChange(prev => prev.filter(x => x.id !== m.id))
     try { await apiFetch(`${API_URL}/api/admin/walkthrough-media/${m.id}`, { method: 'DELETE' }) }
     catch (err) { onChange(snapshot); toastError(`Could not delete that: ${err.message}`) }
+  }
+
+  // Audio is the one thing here that cannot be re-recorded — a stray tap
+  // should not be able to remove a whole meeting's recording with no chance
+  // to back out. Photos still delete straight away.
+  const remove = (m) => {
+    if (m.kind === 'audio') { setPendingDelete(m); return }
+    removeNow(m)
   }
 
   const photos = media.filter(m => m.kind === 'photo')
@@ -124,6 +142,15 @@ function MediaStrip({ walkthroughId, media, onChange, onReload, meetingLabel, to
         )}
       </div>
 
+      <ConfirmDialog
+        open={!!pendingDelete}
+        onClose={() => setPendingDelete(null)}
+        onConfirm={() => { const m = pendingDelete; setPendingDelete(null); if (m) removeNow(m) }}
+        danger
+        title="Delete this recording?"
+        message="This removes the audio and its transcript for good. There is no copy once it's gone from here."
+        confirmLabel="Delete recording"
+      />
 
       {audio.length > 0 && (
         <div className="space-y-2">
@@ -331,22 +358,32 @@ export default function WalkthroughNotes({ weddingId, enquiryId }) {
   // while anything is still waiting. Stops as soon as every recording has
   // text, and gives up after five minutes rather than polling for ever on a
   // recording that failed.
+  //
+  // The give-up clock lives in a ref keyed to the open walkthrough, not a
+  // local variable: setMedia below re-runs this effect on every poll, and a
+  // variable declared inside the effect body was being recreated — and the
+  // five-minute deadline silently reset — on every single tick, so it never
+  // actually gave up. Switching walkthroughs (a record change) starts a fresh
+  // clock rather than inheriting whatever was left of the old one.
+  const pollDeadlineRef = useRef({ id: null, startedAt: 0 })
   useEffect(() => {
     if (!active) return
     const pending = media.some(m => m.kind === 'audio' && !m.transcript && !m.transcript_error)
     if (!pending) return
-    let stop = false
-    const startedAt = Date.now()
+    if (pollDeadlineRef.current.id !== active.id) {
+      pollDeadlineRef.current = { id: active.id, startedAt: Date.now() }
+    }
+    let cancelled = false
     const tick = async () => {
-      if (stop || Date.now() - startedAt > 5 * 60 * 1000) return
+      if (cancelled || Date.now() - pollDeadlineRef.current.startedAt > 5 * 60 * 1000) return
       try {
         const fresh = await apiFetch(`${API_URL}/api/admin/walkthroughs/${active.id}/media`)
-        if (!stop && Array.isArray(fresh)) setMedia(fresh)
+        if (!cancelled && Array.isArray(fresh)) setMedia(fresh)
       } catch { /* a failed poll is not worth telling anyone about */ }
-      if (!stop) timer = setTimeout(tick, 8000)
+      if (!cancelled) timer = setTimeout(tick, 8000)
     }
     let timer = setTimeout(tick, 8000)
-    return () => { stop = true; clearTimeout(timer) }
+    return () => { cancelled = true; clearTimeout(timer) }
   }, [active, media])
 
   const { schedule: scheduleSave, flush: flushSave, state: saveState } = useAutosave(
