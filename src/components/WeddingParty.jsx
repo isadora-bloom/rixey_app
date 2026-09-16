@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { loadJson, apiFetch } from '../utils/api'
 import { supabase } from '../lib/supabase'
 import { useToast } from './ui/Toast'
+import ConfirmDialog from './ui/ConfirmDialog'
+import { allPeople, normaliseName } from '../../shared/guest-names'
 
 
 // ── Role suggestions — no gender or family-structure assumptions ───────────────
@@ -54,8 +56,14 @@ function getCeremonyMapping(role) {
 
 // ── Person avatar — pulls portrait from photo library ────────────────────────
 
+/** Is this photo tagged with this person? Accents and punctuation aside. */
+function taggedWith(photo, name) {
+  const wanted = normaliseName(name)
+  return !!wanted && !!photo.tags?.some(t => normaliseName(t) === wanted)
+}
+
 function PersonAvatar({ name, photos, size = 'md' }) {
-  const portrait = photos.find(p => p.tags?.some(t => t.toLowerCase() === name.toLowerCase()))
+  const portrait = photos.find(p => taggedWith(p, name))
   const dim = size === 'lg' ? 'w-16 h-16' : 'w-10 h-10'
   const text = size === 'lg' ? 'text-xl' : 'text-sm'
 
@@ -99,9 +107,9 @@ function PersonForm({ initial, guests, partner1, partner2, onSave, onCancel }) {
 
   const activeRole = custom.trim() || role
 
+  // `guests` are people, not rows: { id, name, email }.
   const handleGuestPick = (g) => {
-    const fullName = [g.first_name, g.last_name].filter(Boolean).join(' ')
-    setName(fullName)
+    setName(g.name)
     setFromGuest(g)
   }
 
@@ -128,24 +136,21 @@ function PersonForm({ initial, guests, partner1, partner2, onSave, onCancel }) {
         <div>
           <p className="text-xs font-semibold text-sage-500 uppercase tracking-wide mb-2">Add from your guest list</p>
           <div className="max-h-36 overflow-y-auto space-y-1">
-            {guests.map(g => {
-              const fullName = [g.first_name, g.last_name].filter(Boolean).join(' ')
-              return (
-                <button
-                  key={g.id}
-                  type="button"
-                  onClick={() => handleGuestPick(g)}
-                  className={`w-full text-left px-3 py-2 rounded-lg text-sm transition ${
-                    fromGuest?.id === g.id
-                      ? 'bg-sage-100 text-sage-800 border border-sage-300'
-                      : 'bg-white hover:bg-cream-100 border border-cream-200 text-sage-700'
-                  }`}
-                >
-                  {fullName}
-                  {g.email && <span className="text-sage-400 ml-2 text-xs">{g.email}</span>}
-                </button>
-              )
-            })}
+            {guests.map(g => (
+              <button
+                key={g.id}
+                type="button"
+                onClick={() => handleGuestPick(g)}
+                className={`w-full text-left px-3 py-2 rounded-lg text-sm transition ${
+                  fromGuest?.id === g.id
+                    ? 'bg-sage-100 text-sage-800 border border-sage-300'
+                    : 'bg-white hover:bg-cream-100 border border-cream-200 text-sage-700'
+                }`}
+              >
+                {g.name}
+                {g.email && <span className="text-sage-400 ml-2 text-xs">{g.email}</span>}
+              </button>
+            ))}
           </div>
           <p className="text-xs text-sage-400 mt-2">Or enter a name manually below</p>
         </div>
@@ -257,22 +262,14 @@ function PersonForm({ initial, guests, partner1, partner2, onSave, onCancel }) {
 // ── Ceremony sync preview ─────────────────────────────────────────────────────
 
 function CeremonySyncPanel({ members, existingEntries, onSync, onClose }) {
-  const toAdd = members.filter(m => {
-    const mapping = getCeremonyMapping(m.role)
-    if (!mapping) return false
-    // Don't add if already in ceremony order (match by name, case-insensitive)
-    return !existingEntries.some(e =>
-      e.participant_name?.toLowerCase() === m.member_name.toLowerCase()
-    )
-  })
+  // Matched through the shared normaliser, so "José" in the ceremony order and
+  // "Jose" in the wedding party are one person. They were two, and syncing
+  // added him to the processional a second time.
+  const alreadyThere = m => existingEntries.some(e =>
+    normaliseName(e.participant_name) === normaliseName(m.member_name))
 
-  const alreadyIn = members.filter(m => {
-    const mapping = getCeremonyMapping(m.role)
-    if (!mapping) return false
-    return existingEntries.some(e =>
-      e.participant_name?.toLowerCase() === m.member_name.toLowerCase()
-    )
-  })
+  const toAdd = members.filter(m => getCeremonyMapping(m.role) && !alreadyThere(m))
+  const alreadyIn = members.filter(m => getCeremonyMapping(m.role) && alreadyThere(m))
 
   const noWalk = members.filter(m => getCeremonyMapping(m.role) === null)
 
@@ -382,6 +379,7 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
   const [showSync, setShowSync]             = useState(false)
   const [syncing, setSyncing]               = useState(false)
   const [syncDone, setSyncDone]             = useState(false)
+  const [confirmRemove, setConfirmRemove]   = useState(null)
 
   // Partner names — use props if given, otherwise fall back to fetch
   const [partner1, setPartner1] = useState(p1Prop || '')
@@ -398,32 +396,32 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
   const loadAll = async () => {
     setLoading(true)
     try {
-      const hdrs = await authHeaders()
-      const [membersRes, guestsRes, photosRes, ceremonyRes] = await Promise.all([
-        fetch(`${API_URL}/api/wedding-party/${weddingId}`, { headers: hdrs }),
-        fetch(`${API_URL}/api/guests/${weddingId}`, { headers: hdrs }),
-        fetch(`${API_URL}/api/wedding-photos/${weddingId}`, { headers: hdrs }),
-        fetch(`${API_URL}/api/ceremony-order/${weddingId}`, { headers: hdrs }),
-      ])
-
-      const safeJson = async (res) => {
-        if (!res.ok) return null
-        try { return await res.json() } catch { return null }
+      // Each read stands on its own: the wedding party is still worth showing
+      // when the photo library is down, and the "add from your guest list"
+      // picker being empty must not look like an empty guest list.
+      const settle = async (label, url) => {
+        try { return await loadJson(url) } catch (err) {
+          console.error(`Could not load ${label}:`, err)
+          return null
+        }
       }
-
       const [membersData, guestsData, photosData, ceremonyData] = await Promise.all([
-        safeJson(membersRes),
-        safeJson(guestsRes),
-        safeJson(photosRes),
-        safeJson(ceremonyRes),
+        settle('the wedding party', `${API_URL}/api/wedding-party/${weddingId}`),
+        settle('the guest list', `${API_URL}/api/guests/${weddingId}`),
+        settle('the photo library', `${API_URL}/api/wedding-photos/${weddingId}`),
+        settle('the ceremony order', `${API_URL}/api/ceremony-order/${weddingId}`),
       ])
 
       setMembers(Array.isArray(membersData) ? membersData : [])
 
-      const guestList = guestsData?.guests || guestsData || []
-      // Exclude guests already in wedding party
+      // People, not rows: since 025 a plus one has a row of their own and can
+      // stand in the wedding party. Placeholders are left out, because "Guest"
+      // is not somebody you can name as a bridesmaid.
       const memberGuestIds = new Set((Array.isArray(membersData) ? membersData : []).map(m => m.guest_id).filter(Boolean))
-      setGuests(Array.isArray(guestList) ? guestList.filter(g => !memberGuestIds.has(g.id)) : [])
+      const people = allPeople(guestsData?.guests || guestsData || [])
+        .filter(p => p.name && p.name !== 'Guest' && !memberGuestIds.has(p.row?.id))
+        .map(p => ({ id: p.row?.id, name: p.name, email: p.row?.email }))
+      setGuests(people)
 
       setPhotos(Array.isArray(photosData) ? photosData : [])
       setExistingCeremony(Array.isArray(ceremonyData) ? ceremonyData : [])
@@ -493,16 +491,19 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
   }
 
   const handleDelete = async (id) => {
+    setConfirmRemove(null)
     const member = members.find(m => m.id === id)
     const snapshot = members
     setMembers(prev => prev.filter(m => m.id !== id))
     try {
       await apiFetch(`${API_URL}/api/wedding-party/${id}`, { method: 'DELETE' })
-      // Return guest to available list
+      // Return them to the pick-from-your-guest-list panel.
       if (member?.guest_id) {
-        const data = await apiFetch(`${API_URL}/api/guests/${weddingId}`)
-        const guest = (data.guests || data).find(g => g.id === member.guest_id)
-        if (guest) setGuests(prev => [...prev, guest])
+        const data = await loadJson(`${API_URL}/api/guests/${weddingId}`)
+        const person = allPeople(data?.guests || data || []).find(p => p.row?.id === member.guest_id)
+        if (person && person.name && person.name !== 'Guest') {
+          setGuests(prev => [...prev, { id: person.row.id, name: person.name, email: person.row.email }])
+        }
       }
     } catch (err) {
       setMembers(snapshot)
@@ -552,7 +553,7 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
   const syncableCount = members.filter(m => {
     const mapping = getCeremonyMapping(m.role)
     if (!mapping) return false
-    return !existingCeremony.some(e => e.participant_name?.toLowerCase() === m.member_name.toLowerCase())
+    return !existingCeremony.some(e => normaliseName(e.participant_name) === normaliseName(m.member_name))
   }).length
 
   if (loading) return <p className="text-sage-400 text-center py-8">Loading wedding party…</p>
@@ -710,7 +711,7 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
                       {member.blurb && (
                         <p className="text-sage-500 text-xs mt-1 line-clamp-2">{member.blurb}</p>
                       )}
-                      {!photos.some(p => p.tags?.some(t => t.toLowerCase() === member.member_name.toLowerCase())) && (
+                      {!photos.some(p => taggedWith(p, member.member_name)) && (
                         <p className="text-xs text-amber-600 mt-1">
                           No photo yet — tag a photo with "{member.member_name}" in the photo library
                         </p>
@@ -727,7 +728,7 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
                         </svg>
                       </button>
                       <button
-                        onClick={() => handleDelete(member.id)}
+                        onClick={() => setConfirmRemove(member)}
                         className="p-1.5 text-red-300 hover:text-red-500 rounded hover:bg-red-50"
                         title="Remove"
                       >
@@ -753,6 +754,18 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
           onClose={() => setShowSync(false)}
         />
       )}
+
+      <ConfirmDialog
+        open={!!confirmRemove}
+        onClose={() => setConfirmRemove(null)}
+        onConfirm={() => handleDelete(confirmRemove.id)}
+        title="Remove them from the wedding party?"
+        message={confirmRemove
+          ? `${confirmRemove.member_name} comes off the wedding party and off your website. Anything already added to the ceremony order stays there, so check that too.`
+          : ''}
+        confirmLabel="Remove"
+        danger
+      />
     </div>
   )
 }
