@@ -5043,9 +5043,11 @@ app.post('/api/gmail/backfill-bodies', requireAdmin, backgroundSync('gmail-backf
 // Disconnect Gmail
 app.post('/api/gmail/disconnect', async (req, res) => {
   try {
-    await supabaseAdmin.from('gmail_tokens').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    const { error } = await supabaseAdmin.from('gmail_tokens').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    if (error) throw error;
     res.json({ success: true });
   } catch (error) {
+    console.error('Gmail disconnect error:', error.message);
     res.status(500).json({ error: 'Failed to disconnect' });
   }
 });
@@ -7948,9 +7950,11 @@ app.post('/api/zoom/clear', async (req, res) => {
 // Disconnect Zoom
 app.post('/api/zoom/disconnect', async (req, res) => {
   try {
-    await supabaseAdmin.from('zoom_tokens').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    const { error } = await supabaseAdmin.from('zoom_tokens').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    if (error) throw error;
     res.json({ success: true });
   } catch (error) {
+    console.error('Zoom disconnect error:', error.message);
     res.status(500).json({ error: 'Failed to disconnect' });
   }
 });
