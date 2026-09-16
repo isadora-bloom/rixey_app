@@ -1,9 +1,21 @@
 import { useState, useEffect } from 'react';
 import { API_URL } from '../config/api'
 import { apiFetch } from '../utils/api'
-import { Button, Input } from './ui'
+import { Button, Input, ConfirmDialog } from './ui'
 import { useToast } from './ui/Toast'
 import { shuttleRequests } from '../../shared/rsvp-fields'
+
+// A run counts as "generated" if its label still carries the prefix the
+// Suggested Schedule generator gives it (see generatePreRuns/generatePostRuns
+// below). That prefix is the only marker the schema has room for without a
+// migration, since shuttle_schedule has no boolean column for it (see
+// server/middleware/table-columns.js), and it survives untouched on every
+// run nobody has bothered to relabel by hand.
+const GENERATED_LABEL_PREFIXES = ['Pre-Ceremony', 'End of Night'];
+function isGeneratedRun(run) {
+  const label = String(run?.run_label || '').trim();
+  return GENERATED_LABEL_PREFIXES.some((prefix) => label.startsWith(prefix));
+}
 
 
 // ── time helpers ──────────────────────────────────────────────────
@@ -243,6 +255,9 @@ export default function ShuttleSchedule({ weddingId, userId }) {
   const [saving, setSaving] = useState(false);
   const [editingFields, setEditingFields] = useState({});
   const { error: toastError } = useToast();
+  const [confirmDeleteRunId, setConfirmDeleteRunId] = useState(null);
+  const [confirmClearGenerated, setConfirmClearGenerated] = useState(false);
+  const [clearingGenerated, setClearingGenerated] = useState(false);
   const [formData, setFormData] = useState({
     run_label: '',
     pickup_location: '',
@@ -393,7 +408,6 @@ export default function ShuttleSchedule({ weddingId, userId }) {
   }
 
   async function handleDelete(runId) {
-    if (!window.confirm('Delete this shuttle run?')) return;
     const snapshot = runs;
     setRuns((prev) => prev.filter((r) => r.id !== runId));
     try {
@@ -405,6 +419,35 @@ export default function ShuttleSchedule({ weddingId, userId }) {
       setRuns(snapshot);
       toastError(`Could not delete shuttle run: ${err.message}`);
     }
+  }
+
+  // Deletes every run still carrying the generator's label prefix, leaving
+  // anything hand-made or since relabelled alone. Goes through the same
+  // per-run DELETE route the single delete button uses, one request per run,
+  // so one bad row does not stop the rest of the clear-out.
+  async function handleClearGenerated() {
+    const targets = runs.filter(isGeneratedRun);
+    if (targets.length === 0) return;
+    setClearingGenerated(true);
+    const snapshot = runs;
+    setRuns((prev) => prev.filter((r) => !isGeneratedRun(r)));
+    const results = await Promise.allSettled(
+      targets.map((r) => apiFetch(`${API_URL}/api/shuttle/${r.id}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ userId }),
+      }))
+    );
+    const failed = targets.filter((_, i) => results[i].status === 'rejected');
+    if (failed.length > 0) {
+      const failedIds = new Set(failed.map((r) => r.id));
+      setRuns((prev) => {
+        const restored = snapshot.filter((r) => failedIds.has(r.id));
+        return [...prev, ...restored].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+      });
+      toastError(`Could not clear ${failed.length} of ${targets.length} generated run${targets.length === 1 ? '' : 's'}.`);
+    }
+    setClearingGenerated(false);
+    setConfirmClearGenerated(false);
   }
 
   if (loading) {
@@ -425,12 +468,22 @@ export default function ShuttleSchedule({ weddingId, userId }) {
             Coordinate guest transportation runs for your wedding day.
           </p>
         </div>
-        <Button
-          onClick={() => setShowForm((prev) => !prev)}
-          className="shrink-0"
-        >
-          {showForm ? 'Cancel' : '+ Add Run'}
-        </Button>
+        <div className="flex items-center gap-2 shrink-0">
+          {runs.some(isGeneratedRun) && (
+            <Button
+              variant="secondary"
+              onClick={() => setConfirmClearGenerated(true)}
+              disabled={clearingGenerated}
+            >
+              {clearingGenerated ? 'Clearing…' : 'Clear generated runs'}
+            </Button>
+          )}
+          <Button
+            onClick={() => setShowForm((prev) => !prev)}
+          >
+            {showForm ? 'Cancel' : '+ Add Run'}
+          </Button>
+        </div>
       </div>
 
       {/* Advisory note */}
@@ -621,7 +674,7 @@ export default function ShuttleSchedule({ weddingId, userId }) {
                   />
                 </div>
                 <button
-                  onClick={() => handleDelete(run.id)}
+                  onClick={() => setConfirmDeleteRunId(run.id)}
                   className="text-xs text-rose-400 hover:text-rose-500 shrink-0"
                 >
                   Delete
@@ -719,6 +772,26 @@ export default function ShuttleSchedule({ weddingId, userId }) {
           ))}
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmDeleteRunId !== null}
+        onClose={() => setConfirmDeleteRunId(null)}
+        onConfirm={() => handleDelete(confirmDeleteRunId)}
+        title="Delete this shuttle run?"
+        message="This removes the run and its pickup and dropoff times for good."
+        confirmLabel="Delete"
+        danger
+      />
+
+      <ConfirmDialog
+        open={confirmClearGenerated}
+        onClose={() => setConfirmClearGenerated(false)}
+        onConfirm={handleClearGenerated}
+        title="Clear generated runs?"
+        message={`This removes ${runs.filter(isGeneratedRun).length} run${runs.filter(isGeneratedRun).length === 1 ? '' : 's'} made by the suggested-schedule generator. Runs you added or relabelled by hand are kept.`}
+        confirmLabel="Clear generated runs"
+        danger
+      />
     </div>
   );
 }

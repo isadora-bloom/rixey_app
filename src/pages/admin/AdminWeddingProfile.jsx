@@ -41,7 +41,7 @@ import WeddingContacts from '../../components/admin/WeddingContacts'
 import ZoomTranscriptsPanel from '../../components/admin/ZoomTranscriptsPanel'
 import CommunicationPulseCard from '../../components/admin/CommunicationPulseCard'
 import { API_URL } from '../../config/api'
-import { apiFetch } from '../../utils/api'
+import { apiFetch, loadJson } from '../../utils/api'
 import DocumentSyncPanel from '../../components/DocumentSyncPanel'
 import { getLastActivity, getCategoryIcon, getCategoryLabel } from './adminUtils'
 import { weddingTabs } from './weddingTabs'
@@ -52,7 +52,9 @@ import SectionJump from '../../components/ui/SectionJump'
 import useCollapsedGroups from '../../hooks/useCollapsedGroups'
 import RsvpSettingsTab from '../../components/admin/RsvpSettingsTab'
 import { weddingName } from '../../../shared/wedding-name.js'
+import { headcount } from '../../../shared/guest-names.js'
 import { ConfirmDialog } from '../../components/ui'
+import { useToast } from '../../components/ui/Toast'
 
 // Sections that exist on the venue side. Coming out of couple view lands on
 // the section the couple's menu was last showing, and a few of theirs have no
@@ -212,6 +214,21 @@ export default function AdminWeddingProfile({
     return () => { alive = false }
   }, [viewingWedding?.id])
 
+  // The attending headcount for the Staffing tab. Nothing else on this page
+  // loads the guest list itself, since the Guests tab and ShuttleSchedule
+  // each fetch their own copy, so StaffingCalculator was always seeded with
+  // its own default of 100 rather than this wedding's real numbers. A failed
+  // read just leaves the calculator on that same default.
+  const [attendingGuestCount, setAttendingGuestCount] = useState(0)
+  useEffect(() => {
+    let alive = true
+    if (!viewingWedding?.id) return
+    loadJson(`${API_URL}/api/guests/${viewingWedding.id}`)
+      .then(data => { if (alive) setAttendingGuestCount(headcount(data?.guests || []).attending) })
+      .catch(() => { if (alive) setAttendingGuestCount(0) })
+    return () => { alive = false }
+  }, [viewingWedding?.id])
+
   // One list for the sidebar and the phone dropdown both. See weddingTabs.js
   // for what went missing on phones while these were two lists.
   const TABS = weddingTabs({ planningNotes, uncertainQuestions, viewingWedding, borrowSelections, activities, sectionFinalisations, contactMessageCount })
@@ -301,6 +318,38 @@ export default function AdminWeddingProfile({
   const [nameDraft, setNameDraft] = useState('')
   const [savingName, setSavingName] = useState(false)
   const [confirmDeleteNoteId, setConfirmDeleteNoteId] = useState(null)
+  const [confirmDeleteQuestionId, setConfirmDeleteQuestionId] = useState(null)
+  const { error: toastError } = useToast()
+
+  // Approve all / Dismiss all for one category of planning notes. Goes
+  // through the same PUT the per-note buttons use, one request per note, so
+  // a bad row fails on its own rather than taking the rest of the category
+  // down with it.
+  const [bulkNoteConfirm, setBulkNoteConfirm] = useState(null) // { category, action, noteIds }
+  const [bulkNoteBusy, setBulkNoteBusy] = useState(false)
+
+  const applyBulkNoteStatus = async (noteIds, newStatus) => {
+    setBulkNoteBusy(true)
+    const snapshot = planningNotes
+    setPlanningNotes(prev => prev.map(n => noteIds.includes(n.id) ? { ...n, status: newStatus } : n))
+    const results = await Promise.allSettled(
+      noteIds.map(id => apiFetch(`${API_URL}/api/planning-notes/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ status: newStatus }),
+      }))
+    )
+    const failedIds = noteIds.filter((_, i) => results[i].status === 'rejected')
+    if (failedIds.length > 0) {
+      // Roll back only the notes that actually failed; the rest keep their new status.
+      setPlanningNotes(prev => prev.map(n => {
+        if (!failedIds.includes(n.id)) return n
+        return snapshot.find(s => s.id === n.id) || n
+      }))
+      toastError(`Could not update ${failedIds.length} of ${noteIds.length} note${noteIds.length === 1 ? '' : 's'}.`)
+    }
+    setBulkNoteBusy(false)
+    setBulkNoteConfirm(null)
+  }
 
   const startEditName = () => {
     setNameDraft(viewingWedding.project_name || viewingWedding.couple_names || '')
@@ -1101,16 +1150,19 @@ export default function AdminWeddingProfile({
                           const pendingCount = notes.filter(n => n.status === 'pending').length
                           const isCollapsed = collapsedNoteCategories[category]
 
+                          const pendingIds = notes.filter(n => n.status === 'pending').map(n => n.id)
+
                           return (
                             <div key={category} className="border border-cream-200 rounded-lg overflow-hidden">
-                              <button
-                                onClick={() => setCollapsedNoteCategories(prev => ({
-                                  ...prev,
-                                  [category]: !prev[category]
-                                }))}
-                                className="w-full flex items-center justify-between p-3 bg-cream-50 hover:bg-cream-100 transition"
-                              >
-                                <div className="flex items-center gap-2">
+                              <div className="w-full flex items-center justify-between gap-2 p-3 bg-cream-50 hover:bg-cream-100 transition">
+                                <button
+                                  type="button"
+                                  onClick={() => setCollapsedNoteCategories(prev => ({
+                                    ...prev,
+                                    [category]: !prev[category]
+                                  }))}
+                                  className="flex items-center gap-2 flex-1 min-w-0 text-left"
+                                >
                                   <span className="text-lg">{getCategoryIcon(category)}</span>
                                   <span className="font-medium text-sage-700">{getCategoryLabel(category)}</span>
                                   <span className="text-sage-400 text-sm">({notes.length})</span>
@@ -1119,16 +1171,48 @@ export default function AdminWeddingProfile({
                                       {pendingCount} new
                                     </span>
                                   )}
+                                </button>
+                                <div className="flex items-center gap-1 shrink-0">
+                                  {pendingCount > 0 && (
+                                    <>
+                                      <button
+                                        type="button"
+                                        disabled={bulkNoteBusy}
+                                        onClick={() => setBulkNoteConfirm({ category, action: 'added', noteIds: pendingIds })}
+                                        className="text-xs font-medium text-green-700 hover:text-green-800 px-2 py-1 rounded hover:bg-green-100 disabled:opacity-50"
+                                      >
+                                        Approve all
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={bulkNoteBusy}
+                                        onClick={() => setBulkNoteConfirm({ category, action: 'dismissed', noteIds: pendingIds })}
+                                        className="text-xs font-medium text-sage-500 hover:text-sage-700 px-2 py-1 rounded hover:bg-cream-200 disabled:opacity-50"
+                                      >
+                                        Dismiss all
+                                      </button>
+                                    </>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => setCollapsedNoteCategories(prev => ({
+                                      ...prev,
+                                      [category]: !prev[category]
+                                    }))}
+                                    aria-label={isCollapsed ? 'Expand category' : 'Collapse category'}
+                                    className="p-1"
+                                  >
+                                    <svg
+                                      className={`w-5 h-5 text-sage-400 transition-transform ${isCollapsed ? '' : 'rotate-180'}`}
+                                      fill="none"
+                                      stroke="currentColor"
+                                      viewBox="0 0 24 24"
+                                    >
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                    </svg>
+                                  </button>
                                 </div>
-                                <svg
-                                  className={`w-5 h-5 text-sage-400 transition-transform ${isCollapsed ? '' : 'rotate-180'}`}
-                                  fill="none"
-                                  stroke="currentColor"
-                                  viewBox="0 0 24 24"
-                                >
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                                </svg>
-                              </button>
+                              </div>
 
                               {!isCollapsed && (
                                 <div className="p-2 space-y-2">
@@ -1583,7 +1667,7 @@ export default function AdminWeddingProfile({
                                   </p>
                                 </div>
                                 <button
-                                  onClick={() => deleteUncertainQuestion(q.id)}
+                                  onClick={() => setConfirmDeleteQuestionId(q.id)}
                                   className="text-sage-400 hover:text-red-500 text-sm"
                                   title="Delete question"
                                 >
@@ -1702,7 +1786,7 @@ export default function AdminWeddingProfile({
               )}
 
               {activeTab === 'staffing' && (
-                <StaffingCalculator weddingId={viewingWedding.id} userId={null} isAdmin />
+                <StaffingCalculator weddingId={viewingWedding.id} userId={null} isAdmin guestCount={attendingGuestCount} />
               )}
 
               {activeTab === 'bar' && (
@@ -1930,6 +2014,26 @@ export default function AdminWeddingProfile({
         message="This is admin-only and cannot be recovered."
         confirmLabel="Delete"
         danger
+      />
+
+      <ConfirmDialog
+        open={confirmDeleteQuestionId !== null}
+        onClose={() => setConfirmDeleteQuestionId(null)}
+        onConfirm={() => deleteUncertainQuestion(confirmDeleteQuestionId)}
+        title="Delete this question?"
+        message="This removes it from the uncertain-questions list for good."
+        confirmLabel="Delete"
+        danger
+      />
+
+      <ConfirmDialog
+        open={bulkNoteConfirm !== null}
+        onClose={() => setBulkNoteConfirm(null)}
+        onConfirm={() => bulkNoteConfirm && applyBulkNoteStatus(bulkNoteConfirm.noteIds, bulkNoteConfirm.action)}
+        title={bulkNoteConfirm?.action === 'added' ? 'Approve all notes?' : 'Dismiss all notes?'}
+        message={bulkNoteConfirm ? `This will ${bulkNoteConfirm.action === 'added' ? 'approve' : 'dismiss'} ${bulkNoteConfirm.noteIds.length} note${bulkNoteConfirm.noteIds.length === 1 ? '' : 's'} in ${getCategoryLabel(bulkNoteConfirm.category)}.` : ''}
+        confirmLabel={bulkNoteConfirm?.action === 'added' ? 'Approve all' : 'Dismiss all'}
+        danger={bulkNoteConfirm?.action === 'dismissed'}
       />
     </div>
   )
