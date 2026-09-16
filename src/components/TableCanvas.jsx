@@ -282,6 +282,9 @@ export default function TableCanvas({ weddingId, isAdmin, coupleNames }) {
   const loadLayout = useCallback(async () => {
     setLoading(true)
     setLoadError(null)
+    // Switching wedding, or retrying, arms the autosave again from scratch:
+    // the layout that comes back is not an edit to the one that was there.
+    hasLoadedRef.current = false
     try {
       const layoutData = await loadJson(`${API_URL}/api/table-layout/${weddingId}`)
       setElements(layoutData?.layout?.elements || [])
