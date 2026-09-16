@@ -625,6 +625,20 @@ curl -s -X POST $API/api/admin/walkthroughs/$WT/media/complete \
   -d '{"key":"<key from begin, never uploaded to>","mimetype":"audio/webm"}' | jq -r '.error'
 ```
 
-Then do it for real: begin, `curl -X PUT --upload-file recording.webm "$signedUrl"`,
-complete. The row must appear on the walkthrough, and `sync_jobs` must hold a
-`transcribe` row that finishes rather than sitting at running for ever.
+Then do it for real. The upload itself is a plain PUT at the signed URL with the
+file's own content type, which is what `uploadToSignedUrl(key, token, blob)`
+does in the browser:
+
+```sh
+curl -X PUT -H 'content-type: audio/webm' --upload-file recording.webm "$signedUrl"
+
+curl -s -X POST $API/api/admin/walkthroughs/$WT/media/complete \
+  -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
+  -d "{\"key\":\"$KEY\",\"kind\":\"audio\",\"mimetype\":\"audio/webm\",\"size\":$BYTES,\"duration_secs\":7200}"
+```
+
+The row must appear on the walkthrough, and `sync_jobs` must hold a `transcribe`
+row that finishes rather than sitting at running for ever.
+
+A signed upload URL is good for two hours. A recording that takes longer than
+that to upload has to ask for a new one, which means calling begin again.
