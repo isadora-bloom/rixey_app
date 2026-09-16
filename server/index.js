@@ -4216,7 +4216,7 @@ app.post('/api/gmail/callback', async (req, res) => {
     debug.error = error.message || String(error);
     LAST_GMAIL_CALLBACK = debug;
     console.error('Gmail auth error:', error);
-    res.status(500).json({ error: 'Failed to connect Gmail: ' + error.message });
+    sendDbError(res, error, { fallback: 'Failed to connect Gmail' });
   }
 });
 
@@ -4310,7 +4310,7 @@ app.post('/api/admin/sheet-sync/:weddingId/diff', async (req, res) => {
     });
   } catch (err) {
     console.error('[sheet-sync diff]', err);
-    res.status(500).json({ error: err.message || 'Internal error' });
+    sendDbError(res, err, { fallback: 'Internal error' });
   }
 });
 
@@ -4340,7 +4340,7 @@ app.post('/api/admin/sheet-sync/:weddingId/apply', async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('[sheet-sync apply]', err);
-    res.status(500).json({ error: err.message || 'Internal error' });
+    sendDbError(res, err, { fallback: 'Internal error' });
   }
 });
 
@@ -5550,7 +5550,7 @@ app.post('/api/quo/clear-processed', async (req, res) => {
     });
   } catch (error) {
     console.error('Clear processed error:', error);
-    res.status(500).json({ error: 'Failed to clear: ' + error.message });
+    sendDbError(res, error, { fallback: 'Failed to clear' });
   }
 });
 
@@ -7697,7 +7697,7 @@ app.post('/api/admin/wedding-contacts/:weddingId', async (req, res) => {
     res.json(data);
   } catch (error) {
     console.error('wedding-contacts create error:', error);
-    res.status(500).json({ error: 'Could not save that contact: ' + error.message });
+    sendDbError(res, error, { fallback: 'Could not save that contact' });
   }
 });
 
@@ -7728,7 +7728,7 @@ app.patch('/api/admin/wedding-contacts/:id', async (req, res) => {
     res.json(data);
   } catch (error) {
     console.error('wedding-contacts update error:', error);
-    res.status(500).json({ error: 'Could not save that change: ' + error.message });
+    sendDbError(res, error, { fallback: 'Could not save that change' });
   }
 });
 
@@ -7946,7 +7946,7 @@ app.post('/api/admin/ingest-review/:id/assign', async (req, res) => {
     res.json({ ok: true, notesExtracted: filed.notes, extractError: filed.error });
   } catch (error) {
     console.error('assign review item error:', error);
-    res.status(500).json({ error: 'Could not file that meeting: ' + error.message });
+    sendDbError(res, error, { fallback: 'Could not file that meeting' });
   }
 });
 
@@ -8227,7 +8227,7 @@ app.post('/api/zoom/clear', async (req, res) => {
       message: `Cleared ${meetingsCleared || 0} processed meeting(s) and ${notesCleared || 0} transcript note(s). Click Sync to re-download.`,
     });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to clear: ' + error.message });
+    sendDbError(res, error, { fallback: 'Failed to clear' });
   }
 });
 
@@ -8400,7 +8400,7 @@ Write only the message body:`
     res.json({ draft: response.content[0].text.trim() });
   } catch (error) {
     console.error('Draft client message error:', error);
-    res.status(500).json({ error: error.message || 'Failed to draft the message' });
+    sendDbError(res, error, { fallback: 'Failed to draft the message' });
   }
 });
 
@@ -8492,7 +8492,7 @@ app.post('/api/uncertain-questions/:id/alert-client', async (req, res) => {
     });
   } catch (error) {
     console.error('Alert client error:', error);
-    res.status(500).json({ error: error.message || 'Failed to send the answer to the client' });
+    sendDbError(res, error, { fallback: 'Failed to send the answer to the client' });
   }
 });
 
@@ -8599,7 +8599,7 @@ app.post('/api/vendors', async (req, res) => {
     }
   } catch (error) {
     console.error('Save vendor error:', error);
-    res.status(500).json({ error: error.message || 'Failed to save vendor' });
+    sendDbError(res, error, { fallback: 'Failed to save vendor' });
   }
 });
 
@@ -10175,7 +10175,7 @@ app.post('/api/vendor-portal/:token/photos', upload.single('photo'), async (req,
     res.json({ photos: data.photos, is_published: data.is_published });
   } catch (err) {
     console.error('Vendor photo upload error:', err);
-    res.status(500).json({ error: err.message || 'Upload failed' });
+    sendDbError(res, err, { fallback: 'Upload failed' });
   }
 });
 
@@ -10228,7 +10228,7 @@ app.post('/api/vendor-portal/:token/logo', upload.single('logo'), async (req, re
     res.json({ logo_url: data.logo_url, is_published: data.is_published });
   } catch (err) {
     console.error('Vendor logo upload error:', err);
-    res.status(500).json({ error: err.message || 'Upload failed' });
+    sendDbError(res, err, { fallback: 'Upload failed' });
   }
 });
 
@@ -10670,7 +10670,7 @@ app.post('/api/venue-vendors/:id/invite', async (req, res) => {
     res.json({ sent: true, to: vendor.email, ...updated });
   } catch (err) {
     console.error('Vendor invite error:', err);
-    res.status(500).json({ error: err.message || 'Failed to send' });
+    sendDbError(res, err, { fallback: 'Failed to send' });
   }
 });
 
@@ -10786,7 +10786,7 @@ app.post('/api/venue-vendors/:id/merge', async (req, res) => {
     res.json({ merged: result });
   } catch (err) {
     console.error('Merge vendors error:', err);
-    res.status(500).json({ error: err.message || 'Failed to merge' });
+    sendDbError(res, err, { fallback: 'Failed to merge' });
   }
 });
 
@@ -10866,7 +10866,7 @@ app.post('/api/vendor-merge-review/:id', async (req, res) => {
     res.json({ ok: true, decision: 'separate' });
   } catch (err) {
     console.error('Resolve merge question error:', err);
-    res.status(500).json({ error: err.message || 'Failed to save that answer' });
+    sendDbError(res, err, { fallback: 'Failed to save that answer' });
   }
 });
 
@@ -11627,7 +11627,7 @@ app.post('/api/admin/enquiries/:id/link', requireAdmin, async (req, res) => {
     res.json({ ok: true, enquiry: data, coupleNames: w.couple_names });
   } catch (error) {
     console.error('Link enquiry error:', error);
-    res.status(500).json({ error: 'Could not link that: ' + error.message });
+    sendDbError(res, error, { fallback: 'Could not link that' });
   }
 });
 
@@ -11749,7 +11749,7 @@ app.post('/api/admin/enquiries/:id/convert', requireAdmin, async (req, res) => {
     res.json({ wedding, eventCode });
   } catch (error) {
     console.error('Convert enquiry error:', error);
-    res.status(500).json({ error: 'Could not create the wedding: ' + error.message });
+    sendDbError(res, error, { fallback: 'Could not create the wedding' });
   }
 });
 
@@ -13169,7 +13169,7 @@ app.post('/api/timeline', async (req, res) => {
     res.json({ timeline: data });
   } catch (error) {
     console.error('Save timeline error:', error);
-    res.status(500).json({ error: error.message || 'Failed to save timeline' });
+    sendDbError(res, error, { fallback: 'Failed to save timeline' });
   }
 });
 
@@ -13303,7 +13303,7 @@ app.post('/api/manor-assets', brandAssetUpload.single('file'), async (req, res) 
     res.json({ ...data, publicUrl });
   } catch (err) {
     console.error('Upload manor asset error:', err.message || err);
-    res.status(500).json({ error: err.message || 'Failed to upload asset' });
+    sendDbError(res, err, { fallback: 'Failed to upload asset' });
   }
 });
 
@@ -13472,7 +13472,7 @@ app.post('/api/budget', async (req, res) => {
     res.json({ budget: data });
   } catch (error) {
     console.error('Save budget error:', error);
-    res.status(500).json({ error: error.message || 'Failed to save budget' });
+    sendDbError(res, error, { fallback: 'Failed to save budget' });
   }
 });
 
@@ -18454,7 +18454,7 @@ app.post('/api/seating/import', requireAuth, aiLimiter, spreadsheetUpload.single
     return res.status(400).json({ error: `Unknown action: ${action}` });
   } catch (err) {
     console.error('[SeatingImport] Error:', err.message);
-    res.status(500).json({ error: err.message || 'Failed to import seating chart' });
+    sendDbError(res, err, { fallback: 'Failed to import seating chart' });
   }
 });
 
