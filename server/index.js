@@ -35,7 +35,8 @@ import { chunkDocument, sectionsPrompt, mergeSections, parseSectionsResponse } f
 import { buildDocumentDiff, diffSections } from './lib/doc-sync/diff.js';
 import { commitSeatingToGuests } from './lib/seating-import.js';
 import {
-  bulkImportFault, buildImportRow, updatePatch, parseRsvpValue, splitPlusOneName, inChunks,
+  bulkImportFault, buildImportRow, updatePatch, parseRsvpValue, splitPlusOneName,
+  plusOneRowPatch, hostMirrorPatch, inChunks,
 } from './lib/guest-import.js';
 import { transcribeAudio, transcriptionConfigured } from './lib/transcribe.js';
 import { enquiryFromEvent, isTour, suggestWedding, parseStatedDate, platformSearchTerms, describeEmailMatch, parseCalculatorEmail, isCalculatorEmail } from './lib/enquiries.js';
@@ -13725,6 +13726,11 @@ app.put('/api/guest-settings/:weddingId', async (req, res) => {
  * shared/guest-names.js ignores the columns as soon as a plus-one row exists,
  * so nobody is counted twice while both are in use.
  *
+ * The copying is not symmetrical. Creating the row takes everything the host's
+ * columns say. After that the plus one may have answered for themselves, so
+ * only what they have left blank is filled in, and mirrorPlusOneToHost carries
+ * their own edits back the other way.
+ *
  * Never throws: a guest edit that saved must not fail because the mirror did.
  * It shouts instead.
  */
@@ -13752,26 +13758,14 @@ async function syncPlusOneRow(host) {
 
     // A placeholder is kept as written and shown as "Guest"; a single name
     // leaves last_name null so the host's surname stays inherited on read.
-    const tidied = wanted.replace(/^[*.\s]+/, '').replace(/[*.\s]+$/, '').trim();
-    let first = wanted, last = null;
-    if (tidied && isNamedPerson(tidied)) {
-      const parts = tidied.split(/\s+/);
-      first = parts.length === 1 ? parts[0] : parts.slice(0, -1).join(' ');
-      last = parts.length === 1 ? null : parts[parts.length - 1];
-    }
+    const { first_name, last_name } = splitPlusOneName(wanted, isNamedPerson(wanted));
 
-    const row = {
-      wedding_id: host.wedding_id,
-      party_id: host.party_id || host.id,
-      is_plus_one: true,
-      plus_one_of: host.id,
-      first_name: first,
-      last_name: last,
-      rsvp: host.plus_one_rsvp || 'pending',
-      meal_choice: host.plus_one_meal_choice || null,
-      dietary_restrictions: host.plus_one_dietary || null,
-      updated_at: new Date().toISOString(),
-    };
+    // What the host's columns are allowed to say about the person row. On
+    // creation, everything: the columns are all there is. Afterwards, only
+    // what the plus one has not answered for themselves, because a guest who
+    // RSVP'd through the website and chose the fish had that undone every time
+    // the couple opened their host's row and saved it.
+    const row = { ...plusOneRowPatch(host, existing), first_name, last_name };
 
     if (existing) {
       // table_assignment, email, phone and tags are the plus one's own from
@@ -13786,6 +13780,24 @@ async function syncPlusOneRow(host) {
   } catch (err) {
     console.error(`[guests] could not sync the plus-one row for ${host.id}:`, err.message);
   }
+}
+
+/**
+ * The other direction: a plus one's own row back onto their host's columns.
+ *
+ * Both shapes are live and both are read, so an edit has to travel both ways.
+ * This was the missing half: someone corrected a plus one's meal on their row,
+ * the host's plus_one_meal_choice still said the old thing, and the next save
+ * of the host copied it straight back down. The change looked like it had not
+ * saved, twice, which is how it was reported.
+ *
+ * Never throws, for the same reason as syncPlusOneRow: the edit did save.
+ */
+async function mirrorPlusOneToHost(row) {
+  if (!row?.is_plus_one || !row.plus_one_of) return;
+  const { error } = await supabaseAdmin
+    .from('wedding_guests').update(hostMirrorPatch(row)).eq('id', row.plus_one_of);
+  if (error) console.error(`[guests] could not mirror ${row.id} up to host ${row.plus_one_of}:`, error.message);
 }
 
 // POST create guest
@@ -13853,6 +13865,7 @@ app.put('/api/guests/:id', async (req, res) => {
       .select().single();
     if (error) throw error;
     await syncPlusOneRow(data);
+    await mirrorPlusOneToHost(data);
     res.json({ guest: data });
   } catch (err) {
     console.error('Update guest error:', err);
