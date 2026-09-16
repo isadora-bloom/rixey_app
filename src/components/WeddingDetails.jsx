@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import SaveIndicator from './ui/SaveIndicator'
 import { useToast } from './ui/Toast'
 import { useAutosave } from '../hooks/useAutosave'
+import LoadError from './ui/LoadError'
 
 
 const defaultDetails = {
@@ -138,30 +139,36 @@ function FieldRow({ label, children }) {
 export default function WeddingDetails({ weddingId, userId }) {
   const [details, setDetails] = useState(defaultDetails)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
   const hasLoadedRef = useRef(false)
+  const skipNextAutosaveRef = useRef(true)
   const { error: toastError } = useToast()
 
-  useEffect(() => {
+  const load = async () => {
     if (!weddingId) return
     setLoading(true)
+    setLoadError(null)
     hasLoadedRef.current = false
-    const load = async () => {
-      try {
-        const res = await fetch(`${API_URL}/api/wedding-details/${weddingId}`, {
-          headers: await authHeaders()
-        })
-        const data = await res.json()
-        if (data && !data.error) {
-          setDetails({ ...defaultDetails, ...data })
-        }
-      } catch (err) {
-        console.error(err)
-      } finally {
-        setLoading(false)
+    skipNextAutosaveRef.current = true
+    try {
+      const data = await loadJson(`${API_URL}/api/wedding-details/${weddingId}`)
+      if (data && !data.error) {
+        setDetails({ ...defaultDetails, ...data })
       }
+      // Only a real, successful response arms the autosave effect below. A
+      // failed load left `details` at its blank defaults, and the next
+      // keystroke would have autosaved that over every wedding detail
+      // actually saved — see WebsiteBuilder/VenueSettings for the same fix.
+      hasLoadedRef.current = true
+    } catch (err) {
+      console.error(err)
+      setLoadError(err)
+    } finally {
+      setLoading(false)
     }
-    load()
-  }, [weddingId])
+  }
+
+  useEffect(() => { load() }, [weddingId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const set = (field) => (val) =>
     setDetails((prev) => ({ ...prev, [field]: val }))
@@ -181,8 +188,9 @@ export default function WeddingDetails({ weddingId, userId }) {
 
   useEffect(() => {
     if (loading) return
-    if (!hasLoadedRef.current) {
-      hasLoadedRef.current = true
+    if (!hasLoadedRef.current) return
+    if (skipNextAutosaveRef.current) {
+      skipNextAutosaveRef.current = false
       return
     }
     scheduleSave({ weddingId, userId, ...details })
@@ -194,6 +202,10 @@ export default function WeddingDetails({ weddingId, userId }) {
         Loading wedding details…
       </div>
     )
+  }
+
+  if (loadError) {
+    return <LoadError what="wedding details" error={loadError} onRetry={load} />
   }
 
   return (
