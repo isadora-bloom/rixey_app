@@ -13022,14 +13022,25 @@ app.delete('/api/manor-assets/:id', async (req, res) => {
       .from('manor_assets')
       .select('storage_path')
       .eq('id', req.params.id)
-      .single();
+      .maybeSingle();
     if (fetchErr) throw fetchErr;
+    if (!asset) return res.status(404).json({ error: 'No such asset' });
 
-    // Remove from storage
-    await supabaseAdmin.storage.from('manor-assets').remove([asset.storage_path]);
+    // The file first, and stop if it will not go.
+    if (asset.storage_path) {
+      const { error: rmErr } = await supabaseAdmin.storage.from('manor-assets').remove([asset.storage_path]);
+      if (rmErr) {
+        console.error('Manor asset file remove failed:', rmErr.message);
+        return res.status(500).json({ error: `The file itself could not be deleted (${rmErr.message}), so nothing was removed.` });
+      }
+    }
 
-    const { error } = await supabaseAdmin.from('manor_assets').delete().eq('id', req.params.id);
+    const { data, error } = await supabaseAdmin
+      .from('manor_assets').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such asset' });
+
+    console.log(`[manor-assets] deleted ${req.params.id}, by ${req.userId}`);
     res.json({ ok: true });
   } catch (err) {
     console.error('Delete manor asset error:', err);
