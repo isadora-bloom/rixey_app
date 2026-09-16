@@ -5699,10 +5699,17 @@ async function runQuoSync(body, { jobId, bump }) {
       throw new Error('Quo API key is not configured');
     }
 
-    const { forceReprocess } = body || {};
+    const { forceReprocess, confirm } = body || {};
 
-    // If force reprocess, clear the processed table first
+    // If force reprocess, clear the processed table first.
+    //
+    // This does exactly what /api/quo/clear-processed does — wipes every
+    // processed-message marker for the number — so it takes the same
+    // confirm word, not a bare boolean a stray retry could carry.
     if (forceReprocess) {
+      if (confirm !== true) {
+        throw new Error('Force reprocess clears every processed-message marker, the same as Clear Processed. Send confirm: true if that is what you want.');
+      }
       const { error: clearErr } = await supabaseAdmin
         .from('processed_quo_messages')
         .delete()
