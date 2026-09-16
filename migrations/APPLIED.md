@@ -42,4 +42,4 @@ All migrations are applied manually via `run-migration.ts` (never auto-applied o
 | 035_extraction_markers.sql | 2026-09-14 | applied 2026-09-14 by Isadora |
 | 036_ingestion_gaps.sql | 2026-09-14 | applied 2026-09-14 by Isadora |
 | 037_table_layout_draft.sql | 2026-09-14 | pending — needs Isadora |
-| 038_pattern_sweep.sql | 2026-09-15 | pending — needs Isadora |
+| 038_pattern_sweep.sql | 2026-09-16 | applied 2026-09-16 by Isadora; project-wide storage upload limit raised in the dashboard the same day |
