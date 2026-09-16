@@ -1782,7 +1782,7 @@ export default function AdminWeddingProfile({
               )}
 
               {activeTab === 'table-map' && (
-                <TableCanvas weddingId={viewingWedding.id} isAdmin />
+                <TableCanvas weddingId={viewingWedding.id} coupleNames={viewingWedding.couple_names} isAdmin />
               )}
 
               {activeTab === 'staffing' && (
