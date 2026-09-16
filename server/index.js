@@ -14996,22 +14996,34 @@ app.delete('/api/day-of-media/:id', async (req, res) => {
   try {
     const { data: item, error: readError } = await supabaseAdmin
       .from('day_of_media')
-      .select('storage_path')
+      .select('wedding_id, storage_path, filename')
       .eq('id', req.params.id)
-      .single();
+      .maybeSingle();
     // A failed read is not "no storage path" — deleting the row anyway would
     // orphan whatever is sitting in storage with nothing left pointing at it.
     if (readError) return res.status(500).json({ error: readError.message });
-    if (item?.storage_path) {
-      await supabaseAdmin.storage.from('day-of-media').remove([item.storage_path]);
+    if (!item) return res.status(404).json({ error: 'No such file' });
+
+    if (item.storage_path) {
+      const { error: rmErr } = await supabaseAdmin.storage.from('day-of-media').remove([item.storage_path]);
+      if (rmErr) {
+        console.error('Day-of media file remove failed:', rmErr.message);
+        return res.status(500).json({ error: `The file itself could not be deleted (${rmErr.message}), so it has been left alone. Nothing was removed.` });
+      }
     }
-    const { error } = await supabaseAdmin
+    const { data, error } = await supabaseAdmin
       .from('day_of_media')
       .delete()
-      .eq('id', req.params.id);
+      .eq('id', req.params.id)
+      .select('id')
+      .maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such file' });
+
+    await logActivity(item.wedding_id, req.userId, 'day_of_media_deleted', item.filename || `id ${req.params.id}`);
     res.json({ success: true });
   } catch (err) {
+    console.error('Delete day-of media error:', err);
     res.status(500).json({ error: err.message });
   }
 });
