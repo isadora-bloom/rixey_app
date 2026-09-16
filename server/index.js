@@ -9630,12 +9630,17 @@ app.delete('/api/recommended-vendors/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const { error } = await supabaseAdmin
+    const { data, error } = await supabaseAdmin
       .from('vendors')
       .delete()
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
 
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such vendor' });
+
+    console.log(`[recommended-vendors] deleted ${id}, by ${req.userId}`);
     res.json({ success: true });
   } catch (error) {
     console.error('Delete vendor error:', error);
