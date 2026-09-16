@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import { useToast } from './ui/Toast'
+import LoadError from './ui/LoadError'
 
 
 const SECTIONS = [
@@ -100,29 +101,33 @@ function merge(saved) {
 export default function GuestCareNotes({ weddingId }) {
   const [formData, setFormData] = useState(buildDefault())
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState(null)
   const [dirty, setDirty] = useState(false)
   const { error: toastError } = useToast()
 
-  useEffect(() => {
+  const load = useCallback(async () => {
     if (!weddingId) return
-    const load = async () => {
-      try {
-        const res = await fetch(`${API_URL}/api/guest-care/${weddingId}`, {
-          headers: await authHeaders()
-        })
-        const { data, updated_at } = await res.json()
-        setFormData(merge(data))
-        setSavedAt(updated_at)
-      } catch (err) {
-        console.error(err)
-      } finally {
-        setLoading(false)
-      }
+    setLoading(true)
+    setLoadError(null)
+    try {
+      const { data, updated_at } = await loadJson(`${API_URL}/api/guest-care/${weddingId}`)
+      setFormData(merge(data))
+      setSavedAt(updated_at)
+    } catch (err) {
+      // Editing after a failed load and pressing Save would send the whole
+      // form, blank defaults and all, straight over whatever the couple had
+      // actually told us — so this blocks the form rather than showing it
+      // empty. See load errors elsewhere in the portal for the same reasoning.
+      console.error(err)
+      setLoadError(err)
+    } finally {
+      setLoading(false)
     }
-    load()
   }, [weddingId])
+
+  useEffect(() => { load() }, [load])
 
   const setHas = (key, val) => {
     setFormData(prev => ({ ...prev, [key]: { ...prev[key], has: val } }))
@@ -156,6 +161,7 @@ export default function GuestCareNotes({ weddingId }) {
   const filledCount = SECTIONS.filter(s => formData[s.key]?.has === true || (s.alwaysOpen && formData[s.key]?.notes)).length
 
   if (loading) return null
+  if (loadError) return <LoadError what="guest care notes" error={loadError} onRetry={load} />
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-cream-200 overflow-hidden">
