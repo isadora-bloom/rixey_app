@@ -7473,10 +7473,19 @@ app.patch('/api/admin/wedding-contacts/:id', async (req, res) => {
 
 app.delete('/api/admin/wedding-contacts/:id', async (req, res) => {
   try {
+    const { data: row, error: readErr } = await supabaseAdmin
+      .from('wedding_contacts').select('wedding_id, name').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!row) return res.status(404).json({ error: 'No such contact' });
+
     // Their calls and emails stay. contact_id goes null on delete, so removing
     // a person from the list does not delete what they said.
-    const { error } = await supabaseAdmin.from('wedding_contacts').delete().eq('id', req.params.id);
+    const { data, error } = await supabaseAdmin
+      .from('wedding_contacts').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such contact' });
+
+    await logActivity(row.wedding_id, req.userId, 'wedding_contact_deleted', row.name || `id ${req.params.id}`);
     res.json({ ok: true });
   } catch (error) {
     console.error('wedding-contacts delete error:', error);
@@ -13488,8 +13497,17 @@ app.put('/api/allergies/:id', validateBody(['guest_name', 'allergy', 'severity',
 });
 app.delete('/api/allergies/:id', async (req, res) => {
   try {
-    const { error } = await supabaseAdmin.from('allergy_registry').delete().eq('id', req.params.id);
+    const { data: row, error: readErr } = await supabaseAdmin
+      .from('allergy_registry').select('wedding_id, guest_name').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!row) return res.status(404).json({ error: 'No such entry' });
+
+    const { data, error } = await supabaseAdmin
+      .from('allergy_registry').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such entry' });
+
+    await logActivity(row.wedding_id, req.userId, 'allergy_deleted', row.guest_name || `id ${req.params.id}`);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -13549,8 +13567,17 @@ app.put('/api/ceremony-order/:id', validateBody(['participant_name', 'role', 'se
 });
 app.delete('/api/ceremony-order/:id', async (req, res) => {
   try {
-    const { error } = await supabaseAdmin.from('ceremony_order').delete().eq('id', req.params.id);
+    const { data: row, error: readErr } = await supabaseAdmin
+      .from('ceremony_order').select('wedding_id, participant_name').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!row) return res.status(404).json({ error: 'No such entry' });
+
+    const { data, error } = await supabaseAdmin
+      .from('ceremony_order').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such entry' });
+
+    await logActivity(row.wedding_id, req.userId, 'ceremony_order_deleted', row.participant_name || `id ${req.params.id}`);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -13579,8 +13606,17 @@ app.put('/api/decor/:id', validateBody(['space_name', 'item_name', 'quantity', '
 });
 app.delete('/api/decor/:id', async (req, res) => {
   try {
-    const { error } = await supabaseAdmin.from('decor_inventory').delete().eq('id', req.params.id);
+    const { data: row, error: readErr } = await supabaseAdmin
+      .from('decor_inventory').select('wedding_id, item_name').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!row) return res.status(404).json({ error: 'No such item' });
+
+    const { data, error } = await supabaseAdmin
+      .from('decor_inventory').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such item' });
+
+    await logActivity(row.wedding_id, req.userId, 'decor_deleted', row.item_name || `id ${req.params.id}`);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -13609,8 +13645,17 @@ app.put('/api/makeup/:id', validateBody(['participant_name', 'role', 'hair_start
 });
 app.delete('/api/makeup/:id', async (req, res) => {
   try {
-    const { error } = await supabaseAdmin.from('makeup_schedule').delete().eq('id', req.params.id);
+    const { data: row, error: readErr } = await supabaseAdmin
+      .from('makeup_schedule').select('wedding_id, participant_name').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!row) return res.status(404).json({ error: 'No such entry' });
+
+    const { data, error } = await supabaseAdmin
+      .from('makeup_schedule').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such entry' });
+
+    await logActivity(row.wedding_id, req.userId, 'makeup_schedule_deleted', row.participant_name || `id ${req.params.id}`);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -13639,8 +13684,17 @@ app.put('/api/shuttle/:id', validateBody(['run_label', 'pickup_time', 'pickup_lo
 });
 app.delete('/api/shuttle/:id', async (req, res) => {
   try {
-    const { error } = await supabaseAdmin.from('shuttle_schedule').delete().eq('id', req.params.id);
+    const { data: row, error: readErr } = await supabaseAdmin
+      .from('shuttle_schedule').select('wedding_id, run_label').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!row) return res.status(404).json({ error: 'No such run' });
+
+    const { data, error } = await supabaseAdmin
+      .from('shuttle_schedule').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such run' });
+
+    await logActivity(row.wedding_id, req.userId, 'shuttle_run_deleted', row.run_label || `id ${req.params.id}`);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -14560,10 +14614,22 @@ app.put('/api/bar-shopping/:id', async (req, res) => {
 
 app.delete('/api/bar-shopping/:id', async (req, res) => {
   try {
-    const { error } = await supabaseAdmin.from('bar_shopping_list').delete().eq('id', req.params.id);
+    const { data: row, error: readErr } = await supabaseAdmin
+      .from('bar_shopping_list').select('wedding_id, item_name').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!row) return res.status(404).json({ error: 'No such item' });
+
+    const { data, error } = await supabaseAdmin
+      .from('bar_shopping_list').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such item' });
+
+    await logActivity(row.wedding_id, req.userId, 'bar_shopping_item_deleted', row.item_name || `id ${req.params.id}`);
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    console.error('Delete bar shopping item error:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Recipes
@@ -14841,10 +14907,22 @@ app.post('/api/bar-recipes/:weddingId', async (req, res) => {
 
 app.delete('/api/bar-recipes/:id', async (req, res) => {
   try {
-    const { error } = await supabaseAdmin.from('bar_recipes').delete().eq('id', req.params.id);
+    const { data: row, error: readErr } = await supabaseAdmin
+      .from('bar_recipes').select('wedding_id, name').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!row) return res.status(404).json({ error: 'No such recipe' });
+
+    const { data, error } = await supabaseAdmin
+      .from('bar_recipes').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such recipe' });
+
+    await logActivity(row.wedding_id, req.userId, 'bar_recipe_deleted', row.name || `id ${req.params.id}`);
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    console.error('Delete bar recipe error:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ============ WEDDING WEBSITE FEATURE ============
@@ -15127,10 +15205,20 @@ app.put('/api/wedding-party/:id', async (req, res) => {
 
 app.delete('/api/wedding-party/:id', async (req, res) => {
   try {
-    const { error } = await supabaseAdmin.from('wedding_party').delete().eq('id', req.params.id);
+    const { data: row, error: readErr } = await supabaseAdmin
+      .from('wedding_party').select('wedding_id, member_name').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!row) return res.status(404).json({ error: 'No such person' });
+
+    const { data, error } = await supabaseAdmin
+      .from('wedding_party').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such person' });
+
+    await logActivity(row.wedding_id, req.userId, 'wedding_party_deleted', row.member_name || `id ${req.params.id}`);
     res.json({ success: true });
   } catch (err) {
+    console.error('Delete wedding party error:', err);
     res.status(500).json({ error: err.message });
   }
 });
