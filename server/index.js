@@ -16398,16 +16398,28 @@ app.post('/api/admin/documents/:id/apply', requireAdmin, async (req, res) => {
 
 app.delete('/api/admin/documents/:id', requireAdmin, async (req, res) => {
   try {
-    const { data: row } = await supabaseAdmin
-      .from('wedding_documents').select('storage_path').eq('id', req.params.id).maybeSingle();
-    if (row?.storage_path) {
+    const { data: row, error: readErr } = await supabaseAdmin
+      .from('wedding_documents').select('wedding_id, storage_path, filename').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!row) return res.status(404).json({ error: 'Document not found' });
+
+    // The file first, and stop if it will not go — the row going first would
+    // orphan whatever is in storage with nothing left pointing at it.
+    if (row.storage_path) {
       const { error: rmErr } = await supabaseAdmin.storage.from('day-of-media').remove([row.storage_path]);
-      if (rmErr) console.error('[doc-sync] file remove failed:', rmErr.message);
+      if (rmErr) {
+        console.error('[doc-sync] file remove failed:', rmErr.message);
+        return res.status(500).json({ error: `The file itself could not be deleted (${rmErr.message}), so it has been left alone. Nothing was removed.` });
+      }
     }
-    const { error } = await supabaseAdmin.from('wedding_documents').delete().eq('id', req.params.id);
+    const { data, error } = await supabaseAdmin
+      .from('wedding_documents').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Document not found' });
+
+    await logActivity(row.wedding_id, req.userId, 'document_deleted', row.filename || `id ${req.params.id}`);
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { console.error('Document delete error:', e); res.status(500).json({ error: e.message }); }
 });
 
 // ============ WALKTHROUGHS ============
