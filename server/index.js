@@ -2846,7 +2846,7 @@ async function storeContractFile(weddingId, file) {
 // looked to it like a request about no wedding at all and went straight
 // through with no token. The membership check has to happen here, on the first
 // line after multer has parsed the form.
-app.post('/api/extract-contract', requireAuth, upload.single('contract'), async (req, res) => {
+app.post('/api/extract-contract', requireAuth, aiLimiter, upload.single('contract'), async (req, res) => {
   try {
     const { weddingId } = req.body;
     const file = req.file;
@@ -2862,6 +2862,49 @@ app.post('/api/extract-contract', requireAuth, upload.single('contract'), async 
     const allowed = await assertWeddingMember(supabaseAdmin, req, weddingId);
     if (!allowed.ok) return res.status(allowed.status).json({ error: 'You do not have access to this wedding' });
 
+    // Answer now, read the contract after.
+    //
+    // A PDF contract is two full Sonnet calls: one to transcribe it and one to
+    // pull the details out. On a twelve-page catering agreement that is well
+    // over Railway's fifty-second proxy timeout, so the browser was shown
+    // "Failed to upload contract" while this server carried on, finished both
+    // calls, filed the contract and saved the notes. The upload had worked. The
+    // person watching pressed the button again.
+    //
+    // The job id comes back instead and the browser polls for the answer. See
+    // lib/answer-jobs.js.
+    const { jobId } = await startAnswerJob({
+      kind: 'extract-contract',
+      weddingId,
+      userId: req.userId || null,
+      // Size as well as name, so re-uploading a corrected file with the same
+      // name starts a fresh read, while a double-click on the same one does
+      // not pay for a second.
+      input: { filename: file.originalname, size: file.size ?? file.buffer?.length ?? null },
+      worker: () => extractContractInBackground(weddingId, file),
+    });
+
+    res.status(202).json({ jobId, kind: 'extract-contract', filename: file.originalname });
+
+  } catch (error) {
+    console.error('Contract extraction error:', error);
+    res.status(500).json({ error: 'Failed to process contract' });
+  }
+});
+
+/**
+ * Everything the contract upload used to do while the browser waited.
+ *
+ * Throws on a failure worth telling somebody about, because that is what marks
+ * the job failed and puts the sentence in front of whoever uploaded it. The
+ * text extraction is the exception: a contract Claude could not transcribe is
+ * still worth filing and still worth reading for details, so that one is logged
+ * and carried past.
+ *
+ * @returns {Promise<{ answer: string, counts: { notesExtracted: number } }>}
+ */
+async function extractContractInBackground(weddingId, file) {
+  {
     console.log(`Processing contract for wedding ${weddingId}: ${file.originalname}`);
 
     const base64Data = file.buffer.toString('base64');
@@ -3005,7 +3048,7 @@ Return ONLY a valid JSON array, no other text. Example:
       }
     } catch (parseErr) {
       console.error('JSON parse error:', parseErr);
-      return res.status(500).json({ error: 'Could not parse extracted data' });
+      throw new Error('The contract is filed, but what came back from reading it could not be understood.');
     }
 
     // Save notes to database
@@ -3024,23 +3067,21 @@ Return ONLY a valid JSON array, no other text. Example:
 
       if (insertError) {
         console.error('Insert error:', insertError);
-        return res.status(500).json({ error: 'Failed to save notes' });
+        throw new Error(`The contract is filed, but its details could not be saved: ${insertError.message}`);
       }
 
       console.log(`Saved ${notesToSave.length} notes from contract`);
     }
 
-    res.json({
-      success: true,
-      notesExtracted: extractedNotes.length,
-      notes: extractedNotes
-    });
-
-  } catch (error) {
-    console.error('Contract extraction error:', error);
-    res.status(500).json({ error: 'Failed to process contract' });
+    const n = extractedNotes.length;
+    return {
+      answer: n
+        ? `Read ${n} detail${n === 1 ? '' : 's'} out of ${file.originalname}. They are waiting in pending planning notes.`
+        : `${file.originalname} is filed, but nothing worth a planning note came out of it.`,
+      counts: { notesExtracted: n },
+    };
   }
-});
+}
 
 // Public Sage preview — no auth required, no wedding context
 app.post('/api/sage-preview', async (req, res) => {
