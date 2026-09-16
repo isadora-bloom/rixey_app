@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import { useToast } from './ui/Toast'
 import { useAutosave } from '../hooks/useAutosave'
 import SaveIndicator from './ui/SaveIndicator'
+import LoadError from './ui/LoadError'
 
 
 const FIELDS = [
@@ -24,18 +25,26 @@ const FIELDS = [
 export default function VenueSettings() {
   const [values, setValues]   = useState({})
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
   const hasLoadedRef = useRef(false)
   const { error: toastError } = useToast()
 
   useEffect(() => { load() }, [])
 
   const load = async () => {
+    setLoadError(null)
     try {
-      const res  = await fetch(`${API_URL}/api/venue-settings`, { headers: await authHeaders() })
-      const data = await res.json()
+      const data = await loadJson(`${API_URL}/api/venue-settings`)
       setValues(data || {})
+      // Only a real, successful response arms the autosave effect below. A
+      // failed load left `values` at its empty initial state, and the very
+      // next keystroke would have autosaved that blank object over every
+      // venue setting that was actually saved — see WebsiteBuilder for the
+      // same fix.
+      hasLoadedRef.current = true
     } catch (err) {
       console.error('Failed to load venue settings:', err)
+      setLoadError(err)
     }
     setLoading(false)
   }
@@ -50,10 +59,13 @@ export default function VenueSettings() {
     { delay: 1200, errorMessage: 'Could not save venue settings', toastError }
   )
 
+  const skipNextAutosaveRef = useRef(true)
+
   useEffect(() => {
     if (loading) return
-    if (!hasLoadedRef.current) {
-      hasLoadedRef.current = true
+    if (!hasLoadedRef.current) return
+    if (skipNextAutosaveRef.current) {
+      skipNextAutosaveRef.current = false
       return
     }
     scheduleSave(values)
@@ -62,6 +74,7 @@ export default function VenueSettings() {
   const set = (key, val) => setValues(prev => ({ ...prev, [key]: val }))
 
   if (loading) return <p className="text-sage-400 text-center py-8">Loading venue settings…</p>
+  if (loadError) return <LoadError what="venue settings" error={loadError} onRetry={load} />
 
   return (
     <div className="max-w-2xl space-y-6">
