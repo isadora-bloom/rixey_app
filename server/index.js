@@ -276,8 +276,8 @@ app.use('/api/ask-contracts', aiLimiter);
 app.use('/api/bar-recipes/extract-url', aiLimiter);
 app.use('/api/bar-recipes/extract-upload', aiLimiter);
 // Every other route that spends money at Anthropic. These were behind nothing
-// but an auth check, so a loop by a signed-in caller — or a screen retrying a
-// failed call — billed without limit. The ones taking a path parameter get it
+// but an auth check, so a loop by a signed-in caller, or a screen retrying a
+// failed call, billed without limit. The ones taking a path parameter get it
 // inline at the route instead, because a prefix mount cannot express them:
 // /api/vendors/:id/contract, /api/uncertain-questions/:id/draft-client-message
 // and /api/admin/documents/:id/parse.
@@ -7380,7 +7380,7 @@ function backgroundSync(kind, runner) {
  *
  * backgroundSync is an Express handler: it owns the request, answers 202 and
  * then runs. Some detached work starts in the middle of a handler that has its
- * own answer to give — a recording is stored, the row is written, the reply
+ * own answer to give. A recording is stored, the row is written, the reply
  * goes back, and only then does an hour of Deepgram begin. That used to run as
  * a bare promise chain whose only record was a console line, so a transcription
  * that died with the container left a media row with a null transcript, which
@@ -7415,7 +7415,7 @@ async function runDetachedJob(kind, detail, runner) {
 
   // On a timer rather than per item. The work this runs is often one long call
   // with nothing to count, and the sync panel calls a job stalled after five
-  // minutes without a beat — which a two-hour recording going through Deepgram
+  // minutes without a beat, which a two-hour recording going through Deepgram
   // would trip while it was working perfectly well.
   const beat = setInterval(() => {
     bump({}).catch(err => console.error(`${kind} heartbeat failed:`, err?.message || err));
@@ -7991,7 +7991,7 @@ app.get('/api/zoom/transcripts', async (req, res) => {
 //
 // One Claude extraction per transcript, over every transcript on file. Rixey
 // has a couple of hundred, so this was minutes of work on a request the proxy
-// closed after fifty seconds — and because the loop kept running afterwards,
+// closed after fifty seconds, and because the loop kept running afterwards,
 // pressing the button again while the first run was still going doubled the
 // spend and the notes. A job row, like every other long import here.
 app.post('/api/zoom/reextract', backgroundSync('zoom-reextract', async (body, { bump }) => {
@@ -16629,8 +16629,8 @@ app.get('/api/admin/walkthroughs/:id/media', requireAdmin, async (req, res) => {
 // nowhere.
 //
 // The fix is to stop sending the bytes through here. The browser asks for a
-// signed upload URL, PUTs the file straight at Supabase Storage — no proxy, no
-// timeout, resumable by the browser's own retry — and then tells us the key.
+// signed upload URL, PUTs the file straight at Supabase Storage, with no proxy
+// and no timeout, and then tells us the key.
 // Two short requests either side of a long upload that this server is not part
 // of.
 //
@@ -16645,7 +16645,7 @@ const DAY_OF_MEDIA_BUCKET = 'day-of-media';
  * Storage enforces the bucket's own `file_size_limit` whatever this says; the
  * number here exists so a file that is going to be refused is refused now
  * rather than after an hour of uploading. It has to be kept in step with
- * migration 038, which raises the bucket to 500 MB — the bucket was created in
+ * migration 038, which raises the bucket to 500 MB. The bucket was created in
  * 016 with no limit set, so it has been sitting on the project default of
  * 50 MB, under which no real walkthrough has ever fitted.
  */
@@ -16694,7 +16694,7 @@ async function loadWalkthrough(id) {
  * transcribeAudioFromUrl. Nothing here throws at a caller, because by the time
  * it runs the recording is already safe in the bucket and the person who made
  * it has had their answer. What it does instead is leave a sync_jobs row that
- * says how it went, and set transcript_error when it went badly — a null
+ * says how it went, and set transcript_error when it went badly. A null
  * transcript is also what "queued" looks like and what "silent recording"
  * looks like, so a dead Deepgram key used to read as a slow one for as long as
  * nobody checked.
@@ -16828,7 +16828,7 @@ app.post('/api/admin/walkthroughs/:id/media/begin', requireAdmin, async (req, re
  * Step two: the bytes are there, file them.
  *
  * The object is confirmed before a row is written, so a failed or abandoned
- * upload cannot leave a media row pointing at nothing — which on this screen
+ * upload cannot leave a media row pointing at nothing, which on this screen
  * would look exactly like a recording that exists.
  */
 app.post('/api/admin/walkthroughs/:id/media/complete', requireAdmin, async (req, res) => {

@@ -220,7 +220,7 @@ export function publicJobView(job) {
     status: job.status,
     answer: job.status === 'finished' ? (job.detail?.answer ?? '') : null,
     // A count is not a context. Some kinds finish with a number the screen has
-    // to show — how many details came out of a contract — and withholding it
+    // to show, how many details came out of a contract, and withholding it
     // would only send the client back to reading the row it is not allowed to
     // read. Only what a worker deliberately put in detail.counts comes out.
     counts: job.status === 'finished' ? (job.detail?.counts || null) : null,

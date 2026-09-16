@@ -566,7 +566,7 @@ curl -s -o /dev/null -w '%{http_code}\n' \
   -H "Authorization: Bearer $OTHER_COUPLE"
 ```
 
-## Walkthrough recordings go straight to storage — begin and complete
+## Walkthrough recordings go straight to storage: begin and complete
 
 A two-hour walkthrough cannot travel through Railway's proxy, so the browser
 asks for a signed upload URL, PUTs the file at Supabase itself, and then says
@@ -577,19 +577,19 @@ else's, against a walkthrough.
 ```sh
 WT=…    # id of any row in walkthroughs
 
-# 403 — a couple may not ask for somewhere to upload to
+# 403: a couple may not ask for somewhere to upload to
 curl -s -o /dev/null -w '%{http_code}\n' -X POST \
   $API/api/admin/walkthroughs/$WT/media/begin \
   -H "Authorization: Bearer $COUPLE" -H 'Content-Type: application/json' \
   -d '{"kind":"audio","mimetype":"audio/webm","filename":"note.webm","size":1048576}'
 
-# 403 — nor may a couple file a row against one
+# 403: nor may a couple file a row against one
 curl -s -o /dev/null -w '%{http_code}\n' -X POST \
   $API/api/admin/walkthroughs/$WT/media/complete \
   -H "Authorization: Bearer $COUPLE" -H 'Content-Type: application/json' \
   -d '{"key":"anything","kind":"audio","mimetype":"audio/webm","size":1048576}'
 
-# 401 — no token at all, on both
+# 401: no token at all, on both
 curl -s -o /dev/null -w '%{http_code}\n' -X POST \
   $API/api/admin/walkthroughs/$WT/media/begin \
   -H 'Content-Type: application/json' \
@@ -604,7 +604,7 @@ curl -s -X POST $API/api/admin/walkthroughs/$WT/media/begin \
   -d '{"kind":"audio","mimetype":"audio/webm","filename":"walkthrough.webm","size":1048576}' \
   | jq '{key, hasToken: (.token | length > 0), maxBytes}'
 
-# 400 — a type the bucket does not take, and a kind that argues with the type
+# 400: a type the bucket does not take, and a kind that argues with the type
 curl -s -X POST $API/api/admin/walkthroughs/$WT/media/begin \
   -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
   -d '{"mimetype":"application/x-msdownload","filename":"x.exe","size":10}' | jq -r '.error'
@@ -612,13 +612,13 @@ curl -s -X POST $API/api/admin/walkthroughs/$WT/media/begin \
   -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
   -d '{"kind":"audio","mimetype":"image/jpeg","filename":"x.jpg","size":10}' | jq -r '.error'
 
-# 400 — a key belonging to another walkthrough may not be filed here
+# 400: a key belonging to another walkthrough may not be filed here
 curl -s -X POST $API/api/admin/walkthroughs/$WT/media/complete \
   -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
   -d "{\"key\":\"$THEIRS/walkthroughs/00000000-0000-0000-0000-000000000000/a.webm\"}" \
   | jq -r '.error'
 
-# 409 — a key we did hand out, for an upload that never happened. No row is
+# 409: a key we did hand out, for an upload that never happened. No row is
 # written: a media row pointing at nothing looks exactly like a saved meeting.
 curl -s -X POST $API/api/admin/walkthroughs/$WT/media/complete \
   -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
