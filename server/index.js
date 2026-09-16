@@ -14248,12 +14248,43 @@ app.delete('/api/guests/all', async (req, res) => {
 
 app.delete('/api/guests/:id', async (req, res) => {
   try {
-    const { error } = await supabaseAdmin.from('wedding_guests').delete().eq('id', req.params.id);
+    // Who else goes with them. A plus one's row is removed with their host by
+    // 025's ON DELETE CASCADE, and the client had both on screen while being
+    // told about only one, so the list kept a ghost until it was reloaded.
+    const { data: withThem, error: withErr } = await supabaseAdmin
+      .from('wedding_guests').select('id').eq('plus_one_of', req.params.id);
+    if (withErr) throw withErr;
+
+    const { data: gone, error } = await supabaseAdmin
+      .from('wedding_guests').delete().eq('id', req.params.id)
+      .select('id, is_plus_one, plus_one_of');
     if (error) throw error;
-    res.json({ ok: true });
+    // Nothing deleted is not a success. Somebody else removed them, or the id
+    // is wrong, and either way saying "ok" hides it.
+    if (!gone?.length) return res.status(404).json({ error: 'That guest is not on this list any more.' });
+
+    const row = gone[0];
+    if (row.is_plus_one && row.plus_one_of) {
+      // Their host still carries plus_one_name, which is what the CSV export
+      // reads and what syncPlusOneRow builds from, so leaving it would put the
+      // plus one back the next time the host was saved.
+      const { error: hostErr } = await supabaseAdmin
+        .from('wedding_guests')
+        .update({
+          plus_one_name: null, plus_one_rsvp: 'pending',
+          plus_one_meal_choice: null, plus_one_dietary: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', row.plus_one_of);
+      if (hostErr) console.error(`[guests] deleted plus one ${row.id} but could not clear the columns on ${row.plus_one_of}:`, hostErr.message);
+    }
+
+    const deleted = [row.id, ...(withThem || []).map(g => g.id)];
+    console.log(`[guests] deleted ${deleted.join(', ')} by ${req.userId}`);
+    res.json({ ok: true, deleted });
   } catch (err) {
     console.error('Delete guest error:', err);
-    res.status(500).json({ error: 'Failed to delete guest' });
+    res.status(500).json({ error: `Failed to delete guest: ${err.message}` });
   }
 });
 
