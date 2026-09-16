@@ -17,8 +17,36 @@ import assert from 'node:assert/strict';
 import {
   isNamedPerson, guestFullName, plusOneFullName, hasPlusOne, UNNAMED_PLUS_ONE,
   parsePlusOneCell, plusOneDisplayName, partyMembers, personDisplayName,
-  dietaryNotInRegistry,
+  dietaryNotInRegistry, normaliseName,
 } from '../../shared/guest-names.js';
+
+test('an accented name folds onto its plain spelling', () => {
+  assert.equal(normaliseName('Zoë'), 'zoe');
+  assert.equal(normaliseName('José'), 'jose');
+  assert.equal(normaliseName('Zoë'), normaliseName('zoe'));
+  assert.equal(normaliseName('José'), normaliseName('jose'));
+});
+
+test('folding survives however the accent was typed', () => {
+  // Precomposed U+00E9 and e followed by a combining acute are the same name.
+  assert.equal(normaliseName('José'), normaliseName('José'));
+});
+
+test('normalising a name drops case, punctuation and repeated spaces', () => {
+  assert.equal(normaliseName('  TOM   WHITFIELD! '), 'tom whitfield');
+  assert.equal(normaliseName("O'Brien-Smith"), 'o brien smith');
+});
+
+test('normalising keeps letters that are not Latin rather than deleting them', () => {
+  assert.equal(normaliseName('Анна'), 'анна');
+  assert.equal(normaliseName('中村'), '中村');
+});
+
+test('normalising nothing gives an empty string rather than throwing', () => {
+  assert.equal(normaliseName(null), '');
+  assert.equal(normaliseName(undefined), '');
+  assert.equal(normaliseName(''), '');
+});
 
 test('a real name is a named person', () => {
   assert.equal(isNamedPerson('Tom'), true);
@@ -189,6 +217,14 @@ test('matching against the registry ignores case and punctuation', () => {
     { id: 'h1', first_name: 'Tom', last_name: 'Whitfield', dietary_restrictions: 'coeliac' },
   ];
   const registry = [{ guest_name: "TOM WHITFIELD!" }];
+  assert.deepEqual(dietaryNotInRegistry(guests, registry), []);
+});
+
+test('an accented guest already in the registry is not surfaced as missing', () => {
+  const guests = [
+    { id: 'h1', first_name: 'Zoë', last_name: 'Martín', dietary_restrictions: 'coeliac' },
+  ];
+  const registry = [{ guest_name: 'Zoe Martin' }];
   assert.deepEqual(dietaryNotInRegistry(guests, registry), []);
 });
 
