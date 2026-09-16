@@ -20,6 +20,9 @@ import {
   assertWeddingMember,
   weddingIdFrom,
   rowLookupFor,
+  matchesPrefix,
+  matchesAnyPrefix,
+  ADMIN_PREFIXES,
 } from '../../server/middleware/weddingAccess.js';
 
 const OURS   = '11111111-1111-4111-8111-111111111111';
@@ -106,6 +109,43 @@ test('rowLookupFor treats the wedding route as the wedding itself', () => {
 
 test('rowLookupFor ignores a resource it has no mapping for', () => {
   assert.equal(rowLookupFor(`/budget/${OURS}`), null);
+});
+
+// ── prefix matching, on segment boundaries ───────────────────────────────────
+
+test('matchesPrefix requires a boundary when the prefix has no trailing slash', () => {
+  assert.equal(matchesPrefix('/api/admin', '/api/admin'), true);
+  assert.equal(matchesPrefix('/api/admin/x', '/api/admin'), true);
+  assert.equal(matchesPrefix('/api/admin-tools', '/api/admin'), false);
+  assert.equal(matchesPrefix('/api/admin-tools/y', '/api/admin'), false);
+});
+
+test('matchesPrefix takes a trailing-slash prefix as already stating its own boundary', () => {
+  assert.equal(matchesPrefix('/api/w/some-slug', '/api/w/'), true);
+  assert.equal(matchesPrefix('/api/wardrobe', '/api/w/'), false);
+});
+
+test('matchesAnyPrefix is true for /api/admin/x and false for /api/admin-tools', () => {
+  assert.equal(matchesAnyPrefix('/api/admin/x', ADMIN_PREFIXES), true);
+  assert.equal(matchesAnyPrefix('/api/admin-tools', ADMIN_PREFIXES), false);
+});
+
+test('/api/admin-tools is not swallowed by the /api/admin bypass: a non-member is still refused', async () => {
+  // Before the boundary fix, fullPath.startsWith('/api/admin') matched this
+  // path too, which skipped the membership check entirely and let anyone
+  // through. Route it the ordinary way instead: a stated uuid it does not
+  // recognise as a row still resolves to "is this a wedding", and COUPLE
+  // does not belong to THEIRS.
+  const supabase = fakeSupabase({ ...memberOfOurs });
+  const result = await run(supabase, { path: `/admin-tools/${THEIRS}`, userId: COUPLE });
+  assert.equal(result.allowed, false);
+  assert.equal(result.status, 403);
+});
+
+test('/api/admin/x still bypasses the membership check entirely, boundary or not', async () => {
+  const supabase = fakeSupabase({ ...memberOfOurs });
+  const result = await run(supabase, { path: `/admin/${THEIRS}`, userId: COUPLE });
+  assert.equal(result.allowed, true);
 });
 
 // ── the row wins over what the request claims ────────────────────────────────

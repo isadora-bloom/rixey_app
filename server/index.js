@@ -74,7 +74,41 @@ import { parseSpreadsheet } from './lib/spreadsheet.js';
 // own filter below and are admin-only.
 const IMAGE_MIME_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 
-const upload = multer({
+/**
+ * Wraps a multer instance so its configured fileSize cap travels with a
+ * LIMIT_FILE_SIZE error all the way to the global handler at the far end of
+ * this file, which otherwise has no way to say which of five different caps
+ * (20MB up to 100MB) a given upload tripped. Also gives every instance an
+ * explicit `files`/`fields`/`fieldSize`, which multer otherwise leaves
+ * unlimited — on a memory-storage upload that means an unbounded number of
+ * form fields or files is held in RAM before fileFilter ever runs.
+ *
+ * The returned object exposes the same single/array/fields/none methods a
+ * plain multer() instance does, so every existing `upload.single('file')`
+ * call site needs no change at all.
+ */
+function boundedUpload(config) {
+  const capBytes = config.limits?.fileSize;
+  const instance = multer({
+    ...config,
+    limits: {
+      files: 1,
+      fields: 20,
+      fieldSize: 2 * 1024 * 1024, // 2MB — generous for any text field these forms send alongside a file
+      ...config.limits,
+    },
+  });
+  const wrap = (method) => (...args) => {
+    const middleware = instance[method](...args);
+    return (req, res, next) => middleware(req, res, (err) => {
+      if (err && err.code === 'LIMIT_FILE_SIZE' && capBytes) err.uploadCapBytes = capBytes;
+      next(err);
+    });
+  };
+  return { single: wrap('single'), array: wrap('array'), fields: wrap('fields'), none: wrap('none') };
+}
+
+const upload = boundedUpload({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 }, // 50MB limit
   fileFilter: (req, file, cb) => {
@@ -89,7 +123,7 @@ const upload = multer({
 // Manor brand assets: logos and crests, which really are SVGs, uploaded by an
 // admin and by nobody else. The file picker in ManorDownloads has offered .svg
 // since it shipped.
-const brandAssetUpload = multer({
+const brandAssetUpload = boundedUpload({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
@@ -103,9 +137,17 @@ const brandAssetUpload = multer({
 
 // Day-of media uploads — photos + videos delivered by the venue to the couple
 // after the wedding. Larger cap for phone videos; broader mime allowlist.
-const dayOfMediaUpload = multer({
+//
+// Was 500MB. multer's own limit is not the last word, though: a Supabase
+// storage bucket carries its own file_size_limit which silently wins when it
+// is the smaller of the two — vendor-contracts sat at a 10MB bucket cap
+// against a 50MB endpoint for months, and a large upload just failed with no
+// clue why. 100MB still covers several minutes of phone video; check the
+// day-of-media bucket's own cap in the Supabase dashboard and bring this down
+// to match if it turns out to be lower.
+const dayOfMediaUpload = boundedUpload({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB
   fileFilter: (req, file, cb) => {
     const allowed = [
       'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'image/gif',
@@ -126,7 +168,7 @@ const dayOfMediaUpload = multer({
 
 // Planning documents couples and planners send in: PDFs, spreadsheets, Word.
 // 30MB covers a 53-page illustrated plan with room to spare.
-const documentUpload = multer({
+const documentUpload = boundedUpload({
   storage: multer.memoryStorage(),
   limits: { fileSize: 30 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
@@ -145,7 +187,7 @@ const documentUpload = multer({
 });
 
 // Spreadsheet uploads — xlsx, xls, csv for seating chart import
-const spreadsheetUpload = multer({
+const spreadsheetUpload = boundedUpload({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024 }, // 20MB
   fileFilter: (req, file, cb) => {
@@ -512,6 +554,17 @@ const { startAnswerJob, readAnswerJob, latestAnswerJob } = createAnswerJobs(supa
 // the request through unchanged. Deploying it alters no behaviour. Set
 // WEDDING_ACCESS_MODE=enforce once the audit log is quiet.
 app.use('/api', createWeddingAccess(supabaseAdmin));
+
+// Maps a Postgres/PostgREST error to a response a couple can read, instead of
+// the raw database text that `res.status(500).json({ error: e.message })`
+// hands the browser at 111 call sites across this file today. The mapper
+// itself lives in server/lib/db-error.js, pure and Express-free, so it can be
+// unit tested with a bare error object. sendDbError is the thin wrapper this
+// file calls; for now that is only the global error handler, at the bottom of
+// this file — sweeping the 111 existing call sites over to it is a separate,
+// mechanical pass done after this merges, to avoid every other change in
+// flight touching the same lines.
+import { sendDbError } from './lib/db-error.js';
 
 // ============ USAGE TRACKING ============
 
@@ -17581,6 +17634,15 @@ app.post('/api/seating/import', requireAuth, spreadsheetUpload.single('file'), a
   }
 });
 
+// Any /api path that reached here matched no route at all. Express's default
+// 404 is an HTML page, which a JSON-only client renders as a parse error that
+// hides the actual 404 behind it. Mounted after every real route and before
+// the error handler, so it only ever catches a genuine typo or a removed
+// endpoint an old client is still calling.
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: 'Not found' });
+});
+
 // Global error handler — ensures all unhandled Express errors return JSON, not HTML
 app.use((err, req, res, next) => {
   // A short id that appears in both the log line and the reply, so a couple can
@@ -17597,12 +17659,40 @@ app.use((err, req, res, next) => {
   // A file rejected by multer never reaches its route, so the route's own
   // careful error message never runs. "File too large" with a 500 beside it
   // reads as a crash rather than as a file that needs compressing, and the one
-  // thing it does not say is how large is too large.
+  // thing it used not to say is how large is too large — boundedUpload (see
+  // the multer setup near the top of this file) tags the error with the cap
+  // that was actually configured for that route, 20MB to 100MB depending on
+  // which one it was.
   if (err.code === 'LIMIT_FILE_SIZE') {
-    return res.status(413).json({ error: 'That file is too large to upload. Compress it, or send a smaller scan.', requestId });
+    const capMB = err.uploadCapBytes ? Math.round(err.uploadCapBytes / (1024 * 1024)) : null;
+    const capMsg = capMB ? `The limit here is ${capMB}MB.` : '';
+    return res.status(413).json({
+      error: `That file is too large to upload. ${capMsg} Compress it, or send a smaller file.`.trim(),
+      requestId,
+    });
   }
+  // The three shapes multer's fileFilter callbacks in this file reject with —
+  // one per upload config, worded for what that route actually accepts.
   if (/^File type not allowed:/.test(err.message || '')) {
     return res.status(415).json({ error: `${err.message}. PDFs and images are accepted.`, requestId });
+  }
+  if (/^Not a document we can read:/.test(err.message || '')) {
+    return res.status(415).json({ error: `${err.message} PDF, Word, Excel or CSV only.`, requestId });
+  }
+  if (/^Only Excel \(\.xlsx, \.xls\) and CSV files are supported\./.test(err.message || '')) {
+    return res.status(415).json({ error: err.message, requestId });
+  }
+
+  // A Postgres SQLSTATE is always five characters (22P02, 23505, …);
+  // PostgREST's own codes are prefixed PGRST (PGRST116, …). Route only these
+  // through the mapper — a route that escaped its try/catch with a genuine
+  // database error most often looks exactly like this — and leave anything
+  // else, including a deliberately-set err.status/statusCode, to the plain
+  // reply this always gave.
+  const looksLikeDbError = typeof err.code === 'string'
+    && (/^[0-9A-Z]{5}$/.test(err.code) || err.code.startsWith('PGRST'));
+  if (looksLikeDbError) {
+    return sendDbError(res, err, { requestId });
   }
 
   // Everything else gets one sentence. err.message here is whatever threw,
