@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { apiFetch, authHeaders } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
 import { useToast } from './ui/Toast'
 
 
@@ -54,12 +54,13 @@ export default function NotificationBell({ recipientType, weddingId, extraItems 
       const url = recipientType === 'admin'
         ? `${API_URL}/api/notifications/admin`
         : `${API_URL}/api/notifications/client/${weddingId}`
-      const res = await fetch(url, { headers: await authHeaders() })
-      if (!res.ok) return
-      const { notifications: data, unreadCount: count } = await res.json()
+      const { notifications: data, unreadCount: count } = await loadJson(url)
       setNotifications(data || [])
       setUnreadCount(count || 0)
     } catch (err) {
+      // A background poll for a badge count. A failed pass just leaves the
+      // last good count on screen rather than clearing it — not worth an
+      // error state of its own for a bell icon that polls again in 30s.
       console.error('Failed to fetch notifications:', err)
     }
   }
