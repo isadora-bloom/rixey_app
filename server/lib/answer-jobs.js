@@ -21,8 +21,16 @@
  * too, and the admin sync panel can show them without new plumbing.
  */
 
-/** Job kinds this module owns. Everything else in sync_jobs is an import. */
-export const ANSWER_JOB_KINDS = ['highlights', 'ask-contracts', 'admin-ask'];
+/**
+ * Job kinds this module owns. Everything else in sync_jobs is an import.
+ *
+ * `extract-contract` is not a question, but it is the same shape of problem:
+ * two Sonnet calls over a twelve-page PDF, comfortably past the proxy timeout,
+ * and a browser that reported failure while the server finished the work and
+ * filed the contract. What it hands back is a sentence about what it read
+ * rather than an answer to anything, plus a count in `counts`.
+ */
+export const ANSWER_JOB_KINDS = ['highlights', 'ask-contracts', 'admin-ask', 'extract-contract'];
 
 /** Bumped this often while a worker runs. See the reaper note above. */
 export const HEARTBEAT_MS = 15_000;
@@ -80,7 +88,7 @@ export function createAnswerJobs(supabase, options = {}) {
    * @param {string} args.weddingId   the wedding this answer is about
    * @param {string|null} args.userId who asked, when there is a signed-in user
    * @param {object} args.input       what was asked, recorded on the row
-   * @param {Function} args.worker    async () => string | { answer, model }
+   * @param {Function} args.worker    async () => string | { answer, model, counts }
    * @returns {Promise<{ jobId: string, reused: boolean, done: Promise<void> }>}
    */
   async function startAnswerJob({ kind, weddingId, userId = null, input = {}, worker }) {
@@ -146,11 +154,12 @@ export function createAnswerJobs(supabase, options = {}) {
         const result = await worker();
         const answer = typeof result === 'string' ? result : String(result?.answer ?? '');
         const model = (typeof result === 'object' && result?.model) || null;
+        const counts = (typeof result === 'object' && result?.counts) || null;
         await update({
           status: 'finished',
           finished_at: isoNow(),
           processed: 1,
-          detail: { ...(job.detail || {}), answer, chars: answer.length, model },
+          detail: { ...(job.detail || {}), answer, chars: answer.length, model, ...(counts ? { counts } : {}) },
         });
       } catch (err) {
         const message = String(err?.message || err);
@@ -210,6 +219,11 @@ export function publicJobView(job) {
     kind: job.kind,
     status: job.status,
     answer: job.status === 'finished' ? (job.detail?.answer ?? '') : null,
+    // A count is not a context. Some kinds finish with a number the screen has
+    // to show, how many details came out of a contract, and withholding it
+    // would only send the client back to reading the row it is not allowed to
+    // read. Only what a worker deliberately put in detail.counts comes out.
+    counts: job.status === 'finished' ? (job.detail?.counts || null) : null,
     error: job.last_error || null,
     started_at: job.started_at || null,
     finished_at: job.finished_at || null,

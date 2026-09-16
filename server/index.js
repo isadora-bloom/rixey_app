@@ -38,7 +38,7 @@ import {
   bulkImportFault, buildImportRow, updatePatch, parseRsvpValue, splitPlusOneName,
   plusOneRowPatch, hostMirrorPatch, inChunks,
 } from './lib/guest-import.js';
-import { transcribeAudio, transcriptionConfigured } from './lib/transcribe.js';
+import { transcribeAudioFromUrl, transcriptionConfigured } from './lib/transcribe.js';
 import { enquiryFromEvent, isTour, suggestWedding, parseStatedDate, platformSearchTerms, describeEmailMatch, parseCalculatorEmail, isCalculatorEmail } from './lib/enquiries.js';
 import { venueToday, venueDate, venueDateTime, VENUE_TZ } from '../shared/venue-time.js';
 import { normalizePhone, toE164 } from '../shared/phone.js';
@@ -260,6 +260,21 @@ const aiLimiter = rateLimit({
   message: { error: 'Too many requests, please try again later' }
 });
 
+// Uploads that each cost a Claude call on the way in.
+//
+// aiLimiter's twenty in fifteen minutes is right for a question box and wrong
+// here: a couple filling their inspiration gallery uploads up to twenty images
+// in a sitting, one request each, and would be refused on the last one for
+// doing exactly what the page invites. Sixty leaves room for that and for a
+// second sitting, and still stops a loop.
+const aiUploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'That is a lot of uploads at once. Please wait a few minutes and carry on.' },
+});
+
 // Guest-name lookup on a public wedding website. Two letters at a time, an
 // unthrottled search will enumerate a couple's entire guest list, so this is
 // deliberately tighter than the general limit while still leaving room for
@@ -286,8 +301,18 @@ const vendorPhotoDeleteLimiter = rateLimit({
   message: { error: 'Too many photo deletions. Please wait a few minutes and try again.' },
 });
 
-// Apply general rate limiter to all routes
-app.use(generalLimiter);
+// Apply general rate limiter to all routes, except the two Railway polls to
+// decide whether this container is alive.
+//
+// Behind the general limiter a busy quarter of an hour makes the health check
+// 429. Railway reads that as a dead container and restarts it, which kills
+// every sync that was running: a rate limit turning itself into an outage, and
+// an outage that looks like the thing the limiter was there to prevent. They
+// answer from memory and touch no database, so there is nothing to protect.
+app.use((req, res, next) => {
+  if (req.path === '/' || req.path === '/api/health') return next();
+  return generalLimiter(req, res, next);
+});
 
 // Apply stricter AI rate limiter to chat/AI endpoints
 app.use('/api/chat', aiLimiter);
@@ -297,6 +322,16 @@ app.use('/api/sage-preview', aiLimiter);
 app.use('/api/ask-contracts', aiLimiter);
 app.use('/api/bar-recipes/extract-url', aiLimiter);
 app.use('/api/bar-recipes/extract-upload', aiLimiter);
+// Every other route that spends money at Anthropic. These were behind nothing
+// but an auth check, so a loop by a signed-in caller, or a screen retrying a
+// failed call, billed without limit. The ones taking a path parameter get it
+// inline at the route instead, because a prefix mount cannot express them:
+// /api/vendors/:id/contract, /api/uncertain-questions/:id/draft-client-message
+// and /api/admin/documents/:id/parse.
+app.use('/api/extract-contract', aiLimiter);
+app.use('/api/admin/ask', aiLimiter);
+app.use('/api/notes-highlights', aiLimiter);
+app.use('/api/guests/map-columns', aiLimiter);
 
 // Health check endpoint for Railway (public)
 app.get('/', (req, res) => {
@@ -524,6 +559,27 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
   timeout: 120_000,
   maxRetries: 2,
+});
+
+/**
+ * The client for anything a person is sat waiting on.
+ *
+ * Two minutes and two retries is right for an extraction running inside a job
+ * row, where nothing is watching and finishing matters more than finishing
+ * soon. It is wrong for Sage. She answers on the request, and Railway's proxy
+ * closes that at about fifty seconds, so the default client can spend six
+ * minutes on three attempts at a question whose asker was handed a
+ * `502 upstream error` before the first one finished, and every one of those
+ * attempts is paid for.
+ *
+ * Forty seconds and no retry instead: an answer that is not back by then is
+ * not going to reach anybody, and the overload fallback to Haiku a few hundred
+ * lines down is a better second attempt than the same call again.
+ */
+const anthropicSage = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+  timeout: 40_000,
+  maxRetries: 0,
 });
 
 // Single source of truth for model IDs — update here when Anthropic releases new versions
@@ -2417,12 +2473,12 @@ app.post('/api/chat', requireAuth, async (req, res) => {
 
     let response;
     try {
-      response = await anthropic.messages.create({ model: MODEL_SONNET, ...sageCallParams });
+      response = await anthropicSage.messages.create({ model: MODEL_SONNET, ...sageCallParams });
     } catch (sonnetErr) {
       const isOverloaded = sonnetErr.status === 529 || sonnetErr.status === 503 || sonnetErr.status === 429;
       if (!isOverloaded) throw sonnetErr;
       console.log(`Sonnet overloaded (${sonnetErr.status}), falling back to Haiku for Sage`);
-      response = await anthropic.messages.create({ model: MODEL_HAIKU, ...sageCallParams });
+      response = await anthropicSage.messages.create({ model: MODEL_HAIKU, ...sageCallParams });
     }
 
     let assistantMessage = response.content[0].text;
@@ -2697,7 +2753,7 @@ Mention that:
 
 Keep it warm but not over-the-top. 3-4 sentences max. End with an open question.`;
 
-    const response = await anthropic.messages.create({
+    const response = await anthropicSage.messages.create({
       model: MODEL_SONNET,
       max_tokens: 300,
       temperature: 0.7,
@@ -2920,6 +2976,49 @@ app.post('/api/extract-contract', requireAuth, upload.single('contract'), async 
     const allowed = await assertWeddingMember(supabaseAdmin, req, weddingId);
     if (!allowed.ok) return res.status(allowed.status).json({ error: 'You do not have access to this wedding' });
 
+    // Answer now, read the contract after.
+    //
+    // A PDF contract is two full Sonnet calls: one to transcribe it and one to
+    // pull the details out. On a twelve-page catering agreement that is well
+    // over Railway's fifty-second proxy timeout, so the browser was shown
+    // "Failed to upload contract" while this server carried on, finished both
+    // calls, filed the contract and saved the notes. The upload had worked. The
+    // person watching pressed the button again.
+    //
+    // The job id comes back instead and the browser polls for the answer. See
+    // lib/answer-jobs.js.
+    const { jobId } = await startAnswerJob({
+      kind: 'extract-contract',
+      weddingId,
+      userId: req.userId || null,
+      // Size as well as name, so re-uploading a corrected file with the same
+      // name starts a fresh read, while a double-click on the same one does
+      // not pay for a second.
+      input: { filename: file.originalname, size: file.size ?? file.buffer?.length ?? null },
+      worker: () => extractContractInBackground(weddingId, file),
+    });
+
+    res.status(202).json({ jobId, kind: 'extract-contract', filename: file.originalname });
+
+  } catch (error) {
+    console.error('Contract extraction error:', error);
+    res.status(500).json({ error: 'Failed to process contract' });
+  }
+});
+
+/**
+ * Everything the contract upload used to do while the browser waited.
+ *
+ * Throws on a failure worth telling somebody about, because that is what marks
+ * the job failed and puts the sentence in front of whoever uploaded it. The
+ * text extraction is the exception: a contract Claude could not transcribe is
+ * still worth filing and still worth reading for details, so that one is logged
+ * and carried past.
+ *
+ * @returns {Promise<{ answer: string, counts: { notesExtracted: number } }>}
+ */
+async function extractContractInBackground(weddingId, file) {
+  {
     console.log(`Processing contract for wedding ${weddingId}: ${file.originalname}`);
 
     const base64Data = file.buffer.toString('base64');
@@ -3063,7 +3162,7 @@ Return ONLY a valid JSON array, no other text. Example:
       }
     } catch (parseErr) {
       console.error('JSON parse error:', parseErr);
-      return res.status(500).json({ error: 'Could not parse extracted data' });
+      throw new Error('The contract is filed, but what came back from reading it could not be understood.');
     }
 
     // Save notes to database
@@ -3082,23 +3181,21 @@ Return ONLY a valid JSON array, no other text. Example:
 
       if (insertError) {
         console.error('Insert error:', insertError);
-        return res.status(500).json({ error: 'Failed to save notes' });
+        throw new Error(`The contract is filed, but its details could not be saved: ${insertError.message}`);
       }
 
       console.log(`Saved ${notesToSave.length} notes from contract`);
     }
 
-    res.json({
-      success: true,
-      notesExtracted: extractedNotes.length,
-      notes: extractedNotes
-    });
-
-  } catch (error) {
-    console.error('Contract extraction error:', error);
-    res.status(500).json({ error: 'Failed to process contract' });
+    const n = extractedNotes.length;
+    return {
+      answer: n
+        ? `Read ${n} detail${n === 1 ? '' : 's'} out of ${file.originalname}. They are waiting in pending planning notes.`
+        : `${file.originalname} is filed, but nothing worth a planning note came out of it.`,
+      counts: { notesExtracted: n },
+    };
   }
-});
+}
 
 // Public Sage preview — no auth required, no wedding context
 app.post('/api/sage-preview', async (req, res) => {
@@ -3108,7 +3205,7 @@ app.post('/api/sage-preview', async (req, res) => {
 
     const knowledge = await getRelevantKnowledge(message);
 
-    const response = await anthropic.messages.create({
+    const response = await anthropicSage.messages.create({
       model: MODEL_SONNET,
       max_tokens: 600,
       system: `${SAGE_SYSTEM_PROMPT}\n\nADDITIONAL RIXEY MANOR KNOWLEDGE BASE:\n\n${knowledge}\n\n---\n\nNOTE: You're chatting with a prospective couple on the Rixey Manor preview page. They haven't created their account yet, so the in-app tabs and the "stay inside the portal" rule above DO NOT apply here — there is no portal for them yet. For prospects, you CAN link to rixeymanor.com pages (availability, packages, pricing calculator, finance101, book a tour, venue galleries) when it's helpful, since the public marketing site is the only thing they have access to. Keep replies concise and welcoming. If they ask about their specific wedding details, gently note they'll have a personalised portal once they sign up.`,
@@ -3155,7 +3252,7 @@ app.post('/api/chat-with-file', requireAuth, upload.single('file'), async (req, 
 
     let response;
     if (isPdf) {
-      response = await anthropic.messages.create({
+      response = await anthropicSage.messages.create({
         model: MODEL_SONNET,
         max_tokens: 1500,
         system: SAGE_SYSTEM_PROMPT,
@@ -3171,7 +3268,7 @@ app.post('/api/chat-with-file', requireAuth, upload.single('file'), async (req, 
         }]
       });
     } else {
-      response = await anthropic.messages.create({
+      response = await anthropicSage.messages.create({
         model: MODEL_SONNET,
         max_tokens: 1500,
         system: SAGE_SYSTEM_PROMPT,
@@ -3193,218 +3290,244 @@ app.post('/api/chat-with-file', requireAuth, upload.single('file'), async (req, 
     // Log usage for the main chat response
     await logUsage(weddingId, userId, 'chat-with-file', response);
 
-    // If there's a weddingId, also save the file to appropriate places
-    if (weddingId) {
-      try {
-        const isImage = file.mimetype.startsWith('image/');
-        const isDocument = isPdf || file.mimetype.includes('document');
-
-        // Determine if this is an inspo image or a contract/document
-        let fileType = 'unknown';
-        const classifyResponse = await anthropic.messages.create({
-          model: MODEL_SONNET,
-          max_tokens: 100,
-          messages: [{
-            role: 'user',
-            content: isImage ? [
-              { type: 'image', source: { type: 'base64', media_type: file.mimetype, data: base64Data } },
-              { type: 'text', text: 'Classify this image. Reply with ONLY one word: "inspo" if this is wedding inspiration/decor/style, "contract" if this is a contract/invoice/document, or "other" if neither.' }
-            ] : [
-              { type: 'document', source: { type: 'base64', media_type: file.mimetype, data: base64Data } },
-              { type: 'text', text: 'Classify this document. Reply with ONLY one word: "contract" if this is a vendor contract/invoice/quote, or "other" if not.' }
-            ]
-          }]
-        });
-        fileType = classifyResponse.content[0].text.toLowerCase().trim();
-        console.log(`File classified as: ${fileType}`);
-
-        // Handle inspiration images
-        if (fileType === 'inspo' && isImage) {
-          // Check if they haven't exceeded max inspo images
-          const { count } = await supabaseAdmin
-            .from('inspo_gallery')
-            .select('*', { count: 'exact', head: true })
-            .eq('wedding_id', weddingId);
-
-          if (count < 20) {
-            // Upload to inspo-gallery bucket
-            const fileName = `${weddingId}/${safeStorageKey(file.originalname)}`;
-            const { error: uploadError } = await supabaseAdmin.storage
-              .from('inspo-gallery')
-              .upload(fileName, file.buffer, { contentType: file.mimetype });
-
-            if (!uploadError) {
-              const { data: signedUrlData } = await supabaseAdmin.storage
-                .from('inspo-gallery')
-                .createSignedUrl(fileName, 31536000);
-
-              if (signedUrlData) {
-                // Get a caption for the image
-                const captionResponse = await anthropic.messages.create({
-                  model: MODEL_SONNET,
-                  max_tokens: 50,
-                  messages: [{
-                    role: 'user',
-                    content: [
-                      { type: 'image', source: { type: 'base64', media_type: file.mimetype, data: base64Data } },
-                      { type: 'text', text: 'Describe this wedding inspiration image in 5-10 words for a gallery caption. Be specific about colors, style, or elements shown.' }
-                    ]
-                  }]
-                });
-
-                await supabaseAdmin.from('inspo_gallery').insert({
-                  wedding_id: weddingId,
-                  image_url: signedUrlData.signedUrl,
-                  caption: captionResponse.content[0].text,
-                  uploaded_by: userId
-                });
-                console.log(`Added inspo image from chat: ${file.originalname}`);
-              }
-            }
-          }
-        }
-
-        // Handle contracts/documents
-        if (fileType === 'contract' || isDocument) {
-          // Extract full text for storage
-          const textResponse = await anthropic.messages.create({
-            model: MODEL_SONNET,
-            max_tokens: 8000,
-            messages: [{
-              role: 'user',
-              content: isPdf ? [
-                { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64Data } },
-                { type: 'text', text: 'Extract ALL text from this document exactly as it appears. Return only the text.' }
-              ] : [
-                { type: 'image', source: { type: 'base64', media_type: file.mimetype, data: base64Data } },
-                { type: 'text', text: 'Extract ALL text from this image exactly as it appears. Return only the text.' }
-              ]
-            }]
-          });
-
-          // Vendor, type and date read once off the extracted text, then reused
-          // below. This used to be a second and third upload of the same PDF.
-          const contractText = textResponse.content[0].text;
-          const contractFacts = await readContractFacts(contractText, file.originalname);
-
-          // Same as the admin path: keep the file itself, under a key that is
-          // safe to store. This one used to upload the document twice, once
-          // here with a Date.now() key and once further down for the vendor
-          // checklist, and neither key ever reached the contracts row.
-          const chatContractPath = await storeContractFile(weddingId, file);
-
-          await saveContract({
-            weddingId,
-            filename: file.originalname,
-            fileType: file.mimetype,
-            text: contractText,
-            source: 'chat',
-            facts: contractFacts,
-            storagePath: chatContractPath,
-          });
-
-          const vendorType = contractFacts.vendorType || 'other';
-
-          // Check if this vendor type already exists
-          // maybeSingle, not single: single() treats zero rows as an error, so
-          // the old code could only work by ignoring errors, and a genuine
-          // failure was indistinguishable from "no such vendor yet".
-          const { data: existingVendor, error: existingVendorErr } = await supabaseAdmin
-            .from('vendor_checklist')
-            .select('id')
-            .eq('wedding_id', weddingId)
-            .eq('vendor_type', vendorType)
-            .maybeSingle();
-
-          if (existingVendorErr) {
-            console.error('Could not check for an existing vendor, not adding one:', existingVendorErr.message);
-          } else if (!existingVendor && vendorType !== 'other') {
-            // The file is already in the bucket from storeContractFile above.
-            // This used to upload it a second time under a Date.now() key,
-            // which is neither unique nor safe, and left two copies of every
-            // contract a couple sent Sage.
-            if (chatContractPath) {
-              const { data: signedUrlData, error: signErr } = await supabaseAdmin.storage
-                .from('vendor-contracts')
-                .createSignedUrl(chatContractPath, 31536000);
-              if (signErr) console.error('[contracts] could not sign the vendor link:', signErr.message);
-
-              if (signedUrlData) {
-                // Create new vendor entry with contract
-                await supabaseAdmin.from('vendor_checklist').insert({
-                  wedding_id: weddingId,
-                  vendor_type: vendorType,
-                  contract_uploaded: true,
-                  contract_url: signedUrlData.signedUrl,
-                  // Not "the day it was signed at the venue", whatever the old
-                  // comment said. This is the day somebody pressed upload, and
-                  // the vendor screen was rendering it as the contract's date.
-                  contract_date: venueToday(),
-                  contract_document_date: contractFacts.documentDate,
-                  is_booked: true
-                });
-                console.log(`Created vendor checklist entry for ${vendorType} from chat upload`);
-              }
-            }
-          }
-
-          // Also extract planning notes from the contract
-          const extractionPrompt = `Extract key planning details from this document as a JSON array. For each item include:
-- category: one of "vendor", "timeline", "cost", "note", "allergy", "guest_count"
-- content: brief description
-
-Focus on: vendor names, contact info, costs, dates, deadlines, special requirements.
-Return ONLY a valid JSON array like: [{"category": "vendor", "content": "Caterer: ABC Catering"}]`;
-
-          const notesResponse = await anthropic.messages.create({
-            model: MODEL_SONNET,
-            max_tokens: 2000,
-            messages: [{
-              role: 'user',
-              content: isPdf ? [
-                { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64Data } },
-                { type: 'text', text: extractionPrompt }
-              ] : [
-                { type: 'image', source: { type: 'base64', media_type: file.mimetype, data: base64Data } },
-                { type: 'text', text: extractionPrompt }
-              ]
-            }]
-          });
-
-          // Parse and save planning notes
-          try {
-            const notesText = notesResponse.content[0].text;
-            const jsonMatch = notesText.match(/\[[\s\S]*\]/);
-            if (jsonMatch) {
-              const extractedNotes = JSON.parse(jsonMatch[0]);
-              if (extractedNotes.length > 0) {
-                const notesToSave = extractedNotes.map(note => ({
-                  wedding_id: weddingId,
-                  category: note.category || 'note',
-                  content: note.content,
-                  source_message: `Extracted from: ${file.originalname}`,
-                  status: 'pending'
-                }));
-                await supabaseAdmin.from('planning_notes').insert(notesToSave);
-                console.log(`Extracted ${notesToSave.length} planning notes from chat upload`);
-              }
-            }
-          } catch (notesErr) {
-            console.error('Error extracting notes from chat upload:', notesErr);
-          }
-        }
-      } catch (saveErr) {
-        console.error('Error processing file from chat:', saveErr);
-      }
-    }
-
+    // Answer first, file afterwards.
+    //
+    // The answer is one Sonnet call. The filing underneath is four more, one of
+    // them an eight-thousand-token transcription of the whole document, and it
+    // ran before the reply went out. So a couple who asked Sage a question
+    // about their caterer's quote waited on the classification, the
+    // transcription, the vendor lookup and the note extraction before reading a
+    // word of her answer, and past fifty seconds read nothing at all. What the
+    // proxy killed then was the reply; the filing carried on regardless, which
+    // is why some of those uploads are on file with no conversation attached.
     res.json({ message: sageResponse });
+
+    if (weddingId) {
+      runDetachedJob(
+        'chat-file',
+        { weddingId, userId: userId || null, filename: file.originalname },
+        () => fileChatUpload({ weddingId, userId, file, base64Data, isPdf }),
+      ).catch(err => console.error('Could not start the chat-file job:', err?.message || err));
+    }
 
   } catch (error) {
     console.error('Chat with file error:', error);
     res.status(500).json({ error: 'Failed to process file' });
   }
 });
+
+/**
+ * Put a file a couple sent Sage where it belongs.
+ *
+ * Inspiration goes to the gallery, a contract to the contracts table with a
+ * vendor checklist row and planning notes behind it. Every branch here is one
+ * or more Claude calls, which is why it runs against a job row rather than on
+ * the request that answered the couple.
+ *
+ * The outer try/catch it used to sit in swallowed everything and logged a line,
+ * so a couple's contract could fail to file with nobody any the wiser. It
+ * throws now; the job row carries the reason.
+ */
+async function fileChatUpload({ weddingId, userId, file, base64Data, isPdf }) {
+  const isImage = file.mimetype.startsWith('image/');
+  const isDocument = isPdf || file.mimetype.includes('document');
+
+  // Determine if this is an inspo image or a contract/document
+  let fileType = 'unknown';
+  const classifyResponse = await anthropic.messages.create({
+    model: MODEL_SONNET,
+    max_tokens: 100,
+    messages: [{
+      role: 'user',
+      content: isImage ? [
+        { type: 'image', source: { type: 'base64', media_type: file.mimetype, data: base64Data } },
+        { type: 'text', text: 'Classify this image. Reply with ONLY one word: "inspo" if this is wedding inspiration/decor/style, "contract" if this is a contract/invoice/document, or "other" if neither.' }
+      ] : [
+        { type: 'document', source: { type: 'base64', media_type: file.mimetype, data: base64Data } },
+        { type: 'text', text: 'Classify this document. Reply with ONLY one word: "contract" if this is a vendor contract/invoice/quote, or "other" if not.' }
+      ]
+    }]
+  });
+  fileType = classifyResponse.content[0].text.toLowerCase().trim();
+  console.log(`File classified as: ${fileType}`);
+
+  // Handle inspiration images
+  if (fileType === 'inspo' && isImage) {
+    // Check if they haven't exceeded max inspo images
+    const { count } = await supabaseAdmin
+      .from('inspo_gallery')
+      .select('*', { count: 'exact', head: true })
+      .eq('wedding_id', weddingId);
+
+    if (count < 20) {
+      // Upload to inspo-gallery bucket
+      const fileName = `${weddingId}/${safeStorageKey(file.originalname)}`;
+      const { error: uploadError } = await supabaseAdmin.storage
+        .from('inspo-gallery')
+        .upload(fileName, file.buffer, { contentType: file.mimetype });
+
+      if (!uploadError) {
+        const { data: signedUrlData } = await supabaseAdmin.storage
+          .from('inspo-gallery')
+          .createSignedUrl(fileName, 31536000);
+
+        if (signedUrlData) {
+          // Get a caption for the image
+          const captionResponse = await anthropic.messages.create({
+            model: MODEL_SONNET,
+            max_tokens: 50,
+            messages: [{
+              role: 'user',
+              content: [
+                { type: 'image', source: { type: 'base64', media_type: file.mimetype, data: base64Data } },
+                { type: 'text', text: 'Describe this wedding inspiration image in 5-10 words for a gallery caption. Be specific about colors, style, or elements shown.' }
+              ]
+            }]
+          });
+
+          await supabaseAdmin.from('inspo_gallery').insert({
+            wedding_id: weddingId,
+            image_url: signedUrlData.signedUrl,
+            caption: captionResponse.content[0].text,
+            uploaded_by: userId
+          });
+          console.log(`Added inspo image from chat: ${file.originalname}`);
+        }
+      }
+    }
+  }
+
+  // Handle contracts/documents
+  if (fileType === 'contract' || isDocument) {
+    // Extract full text for storage
+    const textResponse = await anthropic.messages.create({
+      model: MODEL_SONNET,
+      max_tokens: 8000,
+      messages: [{
+        role: 'user',
+        content: isPdf ? [
+          { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64Data } },
+          { type: 'text', text: 'Extract ALL text from this document exactly as it appears. Return only the text.' }
+        ] : [
+          { type: 'image', source: { type: 'base64', media_type: file.mimetype, data: base64Data } },
+          { type: 'text', text: 'Extract ALL text from this image exactly as it appears. Return only the text.' }
+        ]
+      }]
+    });
+
+    // Vendor, type and date read once off the extracted text, then reused
+    // below. This used to be a second and third upload of the same PDF.
+    const contractText = textResponse.content[0].text;
+    const contractFacts = await readContractFacts(contractText, file.originalname);
+
+    // Same as the admin path: keep the file itself, under a key that is
+    // safe to store. This one used to upload the document twice, once
+    // here with a Date.now() key and once further down for the vendor
+    // checklist, and neither key ever reached the contracts row.
+    const chatContractPath = await storeContractFile(weddingId, file);
+
+    await saveContract({
+      weddingId,
+      filename: file.originalname,
+      fileType: file.mimetype,
+      text: contractText,
+      source: 'chat',
+      facts: contractFacts,
+      storagePath: chatContractPath,
+    });
+
+    const vendorType = contractFacts.vendorType || 'other';
+
+    // Check if this vendor type already exists
+    // maybeSingle, not single: single() treats zero rows as an error, so
+    // the old code could only work by ignoring errors, and a genuine
+    // failure was indistinguishable from "no such vendor yet".
+    const { data: existingVendor, error: existingVendorErr } = await supabaseAdmin
+      .from('vendor_checklist')
+      .select('id')
+      .eq('wedding_id', weddingId)
+      .eq('vendor_type', vendorType)
+      .maybeSingle();
+
+    if (existingVendorErr) {
+      console.error('Could not check for an existing vendor, not adding one:', existingVendorErr.message);
+    } else if (!existingVendor && vendorType !== 'other') {
+      // The file is already in the bucket from storeContractFile above.
+      // This used to upload it a second time under a Date.now() key,
+      // which is neither unique nor safe, and left two copies of every
+      // contract a couple sent Sage.
+      if (chatContractPath) {
+        const { data: signedUrlData, error: signErr } = await supabaseAdmin.storage
+          .from('vendor-contracts')
+          .createSignedUrl(chatContractPath, 31536000);
+        if (signErr) console.error('[contracts] could not sign the vendor link:', signErr.message);
+
+        if (signedUrlData) {
+          // Create new vendor entry with contract
+          await supabaseAdmin.from('vendor_checklist').insert({
+            wedding_id: weddingId,
+            vendor_type: vendorType,
+            contract_uploaded: true,
+            contract_url: signedUrlData.signedUrl,
+            // Not "the day it was signed at the venue", whatever the old
+            // comment said. This is the day somebody pressed upload, and
+            // the vendor screen was rendering it as the contract's date.
+            contract_date: venueToday(),
+            contract_document_date: contractFacts.documentDate,
+            is_booked: true
+          });
+          console.log(`Created vendor checklist entry for ${vendorType} from chat upload`);
+        }
+      }
+    }
+
+    // Also extract planning notes from the contract
+    const extractionPrompt = `Extract key planning details from this document as a JSON array. For each item include:
+- category: one of "vendor", "timeline", "cost", "note", "allergy", "guest_count"
+- content: brief description
+
+Focus on: vendor names, contact info, costs, dates, deadlines, special requirements.
+Return ONLY a valid JSON array like: [{"category": "vendor", "content": "Caterer: ABC Catering"}]`;
+
+    const notesResponse = await anthropic.messages.create({
+      model: MODEL_SONNET,
+      max_tokens: 2000,
+      messages: [{
+        role: 'user',
+        content: isPdf ? [
+          { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64Data } },
+          { type: 'text', text: extractionPrompt }
+        ] : [
+          { type: 'image', source: { type: 'base64', media_type: file.mimetype, data: base64Data } },
+          { type: 'text', text: extractionPrompt }
+        ]
+      }]
+    });
+
+    // Parse and save planning notes
+    try {
+      const notesText = notesResponse.content[0].text;
+      const jsonMatch = notesText.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        const extractedNotes = JSON.parse(jsonMatch[0]);
+        if (extractedNotes.length > 0) {
+          const notesToSave = extractedNotes.map(note => ({
+            wedding_id: weddingId,
+            category: note.category || 'note',
+            content: note.content,
+            source_message: `Extracted from: ${file.originalname}`,
+            status: 'pending'
+          }));
+          await supabaseAdmin.from('planning_notes').insert(notesToSave);
+          console.log(`Extracted ${notesToSave.length} planning notes from chat upload`);
+        }
+      }
+    } catch (notesErr) {
+      console.error('Error extracting notes from chat upload:', notesErr);
+    }
+  }
+  return { processed: 1, detail: { filename: file.originalname } };
+}
 
 // List all contracts for a wedding (extracted docs + vendor contract URLs)
 app.get('/api/contracts/:weddingId', async (req, res) => {
@@ -7316,6 +7439,80 @@ function backgroundSync(kind, runner) {
   };
 }
 
+/**
+ * The same bookkeeping as backgroundSync, for work that is not a route.
+ *
+ * backgroundSync is an Express handler: it owns the request, answers 202 and
+ * then runs. Some detached work starts in the middle of a handler that has its
+ * own answer to give. A recording is stored, the row is written, the reply
+ * goes back, and only then does an hour of Deepgram begin. That used to run as
+ * a bare promise chain whose only record was a console line, so a transcription
+ * that died with the container left a media row with a null transcript, which
+ * reads exactly like one still queued.
+ *
+ * Same table, same statuses, so the sync panel and the boot reaper cover it
+ * without knowing anything new.
+ *
+ * @param {string} kind     what to file this under in sync_jobs
+ * @param {object} detail   recorded on the row; keep it small and non-secret
+ * @param {Function} runner async ({ jobId, bump }) => summary
+ * @returns {Promise<{ jobId: string|null, done: Promise<void> }>}
+ */
+async function runDetachedJob(kind, detail, runner) {
+  const { data: job, error } = await supabaseAdmin.from('sync_jobs')
+    .insert({ kind, trigger: 'manual', status: 'running', detail: detail || {} })
+    .select().single();
+
+  // No row means no record of this run, so say so loudly and do not start it.
+  // Silently carrying on is how the old bare promise behaved, and the whole
+  // point of this helper is that it does not.
+  if (error || !job?.id) {
+    console.error(`Could not open a ${kind} job:`, error?.message || 'no row came back');
+    return { jobId: null, done: Promise.resolve() };
+  }
+
+  const bump = (fields) => supabaseAdmin.from('sync_jobs')
+    .update({ ...fields, heartbeat_at: new Date().toISOString() }).eq('id', job.id)
+    .then(({ error: upErr }) => {
+      if (upErr) console.error(`Could not update ${kind} job ${job.id}:`, upErr.message);
+    });
+
+  // On a timer rather than per item. The work this runs is often one long call
+  // with nothing to count, and the sync panel calls a job stalled after five
+  // minutes without a beat, which a two-hour recording going through Deepgram
+  // would trip while it was working perfectly well.
+  const beat = setInterval(() => {
+    bump({}).catch(err => console.error(`${kind} heartbeat failed:`, err?.message || err));
+  }, 15_000);
+  if (typeof beat.unref === 'function') beat.unref();
+
+  const done = (async () => {
+    try {
+      const summary = (await runner({ jobId: job.id, bump })) || {};
+      await bump({
+        status: 'finished',
+        finished_at: new Date().toISOString(),
+        processed: summary.processed || 0,
+        failed: summary.failed || 0,
+        last_error: summary.error || null,
+        detail: { ...(detail || {}), ...(summary.detail || {}) },
+      });
+    } catch (err) {
+      console.error(`${kind} job ${job.id} failed:`, err?.message || err);
+      await bump({
+        status: 'failed',
+        finished_at: new Date().toISOString(),
+        failed: 1,
+        last_error: String(err?.message || err),
+      });
+    } finally {
+      clearInterval(beat);
+    }
+  })();
+
+  return { jobId: job.id, done };
+}
+
 // What have the syncs been doing? Answers "did it finish, and if not where did
 // it stop", which nothing could answer before.
 app.get('/api/admin/sync-jobs', async (req, res) => {
@@ -7855,8 +8052,14 @@ app.get('/api/zoom/transcripts', async (req, res) => {
 });
 
 // Re-extract planning notes from already-processed Zoom transcripts
-app.post('/api/zoom/reextract', async (req, res) => {
-  try {
+//
+// One Claude extraction per transcript, over every transcript on file. Rixey
+// has a couple of hundred, so this was minutes of work on a request the proxy
+// closed after fifty seconds, and because the loop kept running afterwards,
+// pressing the button again while the first run was still going doubled the
+// spend and the notes. A job row, like every other long import here.
+app.post('/api/zoom/reextract', backgroundSync('zoom-reextract', async (body, { bump }) => {
+  {
     let sources = [];
 
     // Primary: processed_zoom_meetings table
@@ -7898,11 +8101,14 @@ app.post('/api/zoom/reextract', async (req, res) => {
     }
 
     if (sources.length === 0) {
-      return res.json({ message: 'No Zoom transcripts found to re-extract from.' });
+      return { processed: 0, detail: { message: 'No Zoom transcripts found to re-extract from.' } };
     }
+
+    await bump({ total: sources.length });
 
     let totalNotes = 0;
     let failedSources = 0;
+    let done = 0;
     for (const src of sources) {
       const { notes, error: extractErr } = await extractPlanningNotesAI(
         src.text, src.wedding_id, `Zoom meeting: ${src.label}`, 'transcript',
@@ -7918,18 +8124,23 @@ app.post('/api/zoom/reextract', async (req, res) => {
       } else if (!extractErr) {
         console.log(`No notes extracted from "${src.label}" (text length: ${src.text?.length || 0})`);
       }
+      // Where it got to, per transcript, so a run killed halfway says so
+      // instead of looking like a run that found nothing.
+      done++;
+      await bump({ processed: done, failed: failedSources, last_item: src.label });
     }
 
-    res.json({
-      message: `Re-extracted ${totalNotes} planning notes from ${sources.length} transcript(s).`
-        + (failedSources ? ` ${failedSources} transcript(s) could not be read.` : ''),
-      failedSources,
-    });
-  } catch (error) {
-    console.error('Re-extract error:', error);
-    res.status(500).json({ error: 'Failed to re-extract: ' + error.message });
+    return {
+      processed: sources.length,
+      failed: failedSources,
+      detail: {
+        notes: totalNotes,
+        message: `Re-extracted ${totalNotes} planning notes from ${sources.length} transcript(s).`
+          + (failedSources ? ` ${failedSources} transcript(s) could not be read.` : ''),
+      },
+    };
   }
-});
+}));
 
 // Force resync: clear all processed Zoom data so next Sync re-downloads everything fresh
 app.post('/api/zoom/clear', async (req, res) => {
@@ -8076,7 +8287,7 @@ app.post('/api/uncertain-questions/:id/answer', async (req, res) => {
 // Turn the knowledge-base answer into something you would actually send a
 // person. The KB entry is written for Sage to read; this is written for the
 // couple, and it opens by referring back to what they asked.
-app.post('/api/uncertain-questions/:id/draft-client-message', async (req, res) => {
+app.post('/api/uncertain-questions/:id/draft-client-message', aiLimiter, async (req, res) => {
   try {
     const { id } = req.params;
     const { answer } = req.body;
@@ -8344,7 +8555,7 @@ app.delete('/api/vendors/:id', async (req, res) => {
 });
 
 // Upload vendor contract
-app.post('/api/vendors/:id/contract', upload.single('contract'), async (req, res) => {
+app.post('/api/vendors/:id/contract', aiUploadLimiter, upload.single('contract'), async (req, res) => {
   try {
     const { id } = req.params;
     const file = req.file;
@@ -8429,9 +8640,18 @@ app.post('/api/vendors/:id/contract', upload.single('contract'), async (req, res
 
     if (error) throw error;
 
-    // Also extract planning notes from the contract (async, don't block response)
-    (async () => {
-      try {
+    // Read the contract after answering, against a row that says how it went.
+    //
+    // This was a bare `(async () => {…})()` whose only record of failure was a
+    // console line. Two Sonnet calls, one of them an eight-thousand-token
+    // transcription, and if either died, whether on a restart, an overload or
+    // a bad response, the vendor screen still said the contract was uploaded
+    // and nothing said its details had never been read. A job row is the
+    // difference between "not extracted yet" and "extraction failed in March".
+    runDetachedJob(
+      'vendor-contract',
+      { weddingId: vendor.wedding_id, vendorId: id, filename: file.originalname },
+      async () => {
         const base64Data = file.buffer.toString('base64');
         const isPdf = file.mimetype === 'application/pdf';
 
@@ -8498,6 +8718,7 @@ Return ONLY a valid JSON array like: [{"category": "vendor", "content": "Photogr
 
         const notesText = notesResponse.content[0].text;
         const jsonMatch = notesText.match(/\[[\s\S]*\]/);
+        let saved = 0;
         if (jsonMatch) {
           const extractedNotes = JSON.parse(jsonMatch[0]);
           if (extractedNotes.length > 0) {
@@ -8508,14 +8729,17 @@ Return ONLY a valid JSON array like: [{"category": "vendor", "content": "Photogr
               source_message: `Extracted from ${vendor.vendor_type} contract: ${file.originalname}`,
               status: 'pending'
             }));
-            await supabaseAdmin.from('planning_notes').insert(notesToSave);
-            console.log(`Extracted ${notesToSave.length} planning notes from vendor contract upload`);
+            const { error: notesErr } = await supabaseAdmin.from('planning_notes').insert(notesToSave);
+            // The details are the point of the whole extraction, so losing them
+            // is a failed job, not a log line under a green tick.
+            if (notesErr) throw new Error(`Could not save the contract's details: ${notesErr.message}`);
+            saved = notesToSave.length;
+            console.log(`Extracted ${saved} planning notes from vendor contract upload`);
           }
         }
-      } catch (extractErr) {
-        console.error('Error extracting notes from vendor contract:', extractErr);
-      }
-    })();
+        return { processed: 1, detail: { notes: saved } };
+      },
+    ).catch(err => console.error('Could not start the vendor-contract job:', err?.message || err));
 
     // Log activity
     await logActivity(vendor.wedding_id, null, 'contract_uploaded', `${vendor.vendor_type} contract: ${file.originalname}`);
@@ -8605,7 +8829,7 @@ app.get('/api/inspo/:weddingId', async (req, res) => {
 // Upload inspo image
 // Multipart, so weddingAccess saw an empty body and could not scope it. See
 // the note on /api/extract-contract.
-app.post('/api/inspo', requireAuth, upload.single('image'), async (req, res) => {
+app.post('/api/inspo', requireAuth, aiUploadLimiter, upload.single('image'), async (req, res) => {
   try {
     const { weddingId, caption, uploadedBy, category } = req.body;
     const file = req.file;
@@ -8688,9 +8912,15 @@ app.post('/api/inspo', requireAuth, upload.single('image'), async (req, res) => 
 
     if (error) throw error;
 
-    // Extract planning notes from the image (async, don't block response)
-    (async () => {
-      try {
+    // Read the image for planning details after answering, against a row.
+    //
+    // Same bare promise chain as the vendor contract had, with the same
+    // consequence: a couple's inspiration board quietly stops producing colour
+    // and decor notes and the only sign is a console line nobody reads.
+    runDetachedJob(
+      'inspo-notes',
+      { weddingId, filename: file.originalname },
+      async () => {
         const notesResponse = await anthropic.messages.create({
           model: MODEL_SONNET,
           max_tokens: 500,
@@ -8716,6 +8946,7 @@ Example: [{"category": "colors", "content": "Color palette: dusty rose, sage gre
 
         const notesText = notesResponse.content[0].text;
         const jsonMatch = notesText.match(/\[[\s\S]*\]/);
+        let saved = 0;
         if (jsonMatch) {
           const extractedNotes = JSON.parse(jsonMatch[0]);
           if (extractedNotes.length > 0) {
@@ -8726,14 +8957,15 @@ Example: [{"category": "colors", "content": "Color palette: dusty rose, sage gre
               source_message: `From inspiration image: ${finalCaption || file.originalname}`,
               status: 'pending'
             }));
-            await supabaseAdmin.from('planning_notes').insert(notesToSave);
-            console.log(`Extracted ${notesToSave.length} planning notes from inspo image`);
+            const { error: notesErr } = await supabaseAdmin.from('planning_notes').insert(notesToSave);
+            if (notesErr) throw new Error(`Could not save what the image showed: ${notesErr.message}`);
+            saved = notesToSave.length;
+            console.log(`Extracted ${saved} planning notes from inspo image`);
           }
         }
-      } catch (notesErr) {
-        console.error('Error extracting notes from inspo image:', notesErr);
-      }
-    })();
+        return { processed: 1, detail: { notes: saved } };
+      },
+    ).catch(err => console.error('Could not start the inspo-notes job:', err?.message || err));
 
     // Log activity for inspo upload
     await logActivity(weddingId, uploadedBy, 'inspo_uploaded', finalCaption || 'Inspiration image uploaded');
@@ -10994,20 +11226,25 @@ async function runCalendlySync(body = {}) {
   };
 }
 
-// The button. Same import, answered inline so the admin panel can show the
-// result it has always shown rather than a job id to go and watch.
-app.post('/api/admin/enquiries/sync', requireAdmin, async (req, res) => {
-  try {
-    const summary = await runCalendlySync(req.body || {});
-    res.json({ ...summary.detail });
-  } catch (error) {
-    console.error('Enquiry sync error:', error);
-    // A missing token is a configuration answer, not a server fault, and the
-    // panel has always shown it as a 400.
-    const status = /not configured/i.test(error.message || '') ? 400 : 500;
-    res.status(status).json({ error: error.message });
+// The button. Same import the cron runs, now against a job row like the other
+// three.
+//
+// It was answered inline so the panel could show the result straight away, and
+// that held for a fortnight of diary. Fourteen days of a busy season is a
+// hundred events, each of them a Calendly read and a match against the wedding
+// book, and a catch-up run after an outage passes sinceDays of up to a year.
+// Both are well past the fifty seconds Railway's proxy allows, and what the
+// admin saw then was a CORS failure on a sync that was working.
+//
+// A missing token stays a 400 on the request. It is a configuration answer,
+// not a run that failed, and telling somebody a sync has started when there is
+// nothing to start it with is the kind of lie this whole plan is about.
+app.post('/api/admin/enquiries/sync', requireAdmin, (req, res, next) => {
+  if (!process.env.CALENDLY_API_TOKEN) {
+    return res.status(400).json({ error: 'Calendly API token not configured' });
   }
-});
+  next();
+}, backgroundSync('calendly', (body) => runCalendlySync(body)));
 
 /**
  * The diary, newest meeting first among the upcoming ones.
@@ -14638,24 +14875,39 @@ app.post('/api/bar-recipes/extract-url', requireAuth, async (req, res) => {
     // Redirects are followed by hand so every hop is checked, not just the one
     // the caller typed. Left to fetch, a public URL that 302s to 169.254.169.254
     // would defeat the whole check.
+    //
+    // One clock for the whole chain, not one per hop. Five hops at fifteen
+    // seconds each is seventy-five seconds of fetching before Claude is even
+    // asked, and Railway closes the connection at about fifty, so a slow site
+    // redirecting a few times produced a proxy error rather than a message
+    // about a slow site. Twenty seconds, shared: a recipe page that cannot
+    // answer in that is not going to.
+    const pageBudget = AbortSignal.timeout(20_000);
     let target = url;
     let pageRes = null;
-    for (let hop = 0; hop < 5; hop++) {
-      const safe = await assertFetchableUrl(target);
-      if (!safe.ok) return res.status(400).json({ error: safe.why });
+    try {
+      for (let hop = 0; hop < 5; hop++) {
+        const safe = await assertFetchableUrl(target);
+        if (!safe.ok) return res.status(400).json({ error: safe.why });
 
-      pageRes = await fetch(safe.url, {
-        redirect: 'manual',
-        signal: AbortSignal.timeout(15_000),
-        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
-      });
+        pageRes = await fetch(safe.url, {
+          redirect: 'manual',
+          signal: pageBudget,
+          headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
+        });
 
-      if (pageRes.status >= 300 && pageRes.status < 400 && pageRes.headers.get('location')) {
-        target = new URL(pageRes.headers.get('location'), safe.url).toString();
-        pageRes = null;
-        continue;
+        if (pageRes.status >= 300 && pageRes.status < 400 && pageRes.headers.get('location')) {
+          target = new URL(pageRes.headers.get('location'), safe.url).toString();
+          pageRes = null;
+          continue;
+        }
+        break;
       }
-      break;
+    } catch (fetchErr) {
+      if (pageBudget.aborted) {
+        return res.status(504).json({ error: 'That page took too long to answer. Try a different link, or type the ingredients in.' });
+      }
+      throw fetchErr;
     }
     if (!pageRes) return res.status(400).json({ error: 'That page redirects too many times.' });
     if (!pageRes.ok) return res.status(422).json({ error: 'That page could not be read.' });
@@ -16493,80 +16745,308 @@ app.get('/api/admin/walkthroughs/:id/media', requireAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Getting a two-hour recording into the bucket ───────────────────────────
+//
+// The multipart route below sends the whole recording through this server, and
+// therefore through Railway's edge proxy, which gives up at about fifty
+// seconds. A phone photo makes it. A final walkthrough does not: the
+// walkthrough recorded at 20:46 UTC on 15 September has no media row at all,
+// because the browser was still uploading when the proxy closed the
+// connection, and what the venue saw was an hour of talking that had gone
+// nowhere.
+//
+// The fix is to stop sending the bytes through here. The browser asks for a
+// signed upload URL, PUTs the file straight at Supabase Storage, with no proxy
+// and no timeout, and then tells us the key.
+// Two short requests either side of a long upload that this server is not part
+// of.
+//
+// The multipart route stays for small files and for anything already built
+// against it.
+
+const DAY_OF_MEDIA_BUCKET = 'day-of-media';
+
+/**
+ * The cap the browser is told about before it starts.
+ *
+ * Storage enforces the bucket's own `file_size_limit` whatever this says; the
+ * number here exists so a file that is going to be refused is refused now
+ * rather than after an hour of uploading. It has to be kept in step with
+ * migration 038, which raises the bucket to 500 MB. The bucket was created in
+ * 016 with no limit set, so it has been sitting on the project default of
+ * 50 MB, under which no real walkthrough has ever fitted.
+ */
+const WALKTHROUGH_MAX_BYTES = 500 * 1024 * 1024;
+
+/**
+ * What a walkthrough recording is allowed to be.
+ *
+ * The same list the dayOfMediaUpload multer filter applies, restated because
+ * the signed-URL path never goes near multer. If one list changes the other
+ * has to: the two routes write into the same bucket and the same table, and a
+ * type one accepts and the other refuses is a bug that only shows up on one
+ * phone.
+ */
+const WALKTHROUGH_MEDIA_MIME = [
+  'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'image/gif',
+  'video/mp4', 'video/quicktime', 'video/webm', 'video/x-msvideo',
+  'audio/webm', 'audio/mp4', 'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/x-m4a', 'audio/aac',
+];
+
+/** Codec suffixes ride along on what a browser reports, so match the base type. */
+const baseMime = (value) => String(value || '').split(';')[0].trim().toLowerCase();
+
+/**
+ * Where this walkthrough's files live.
+ *
+ * A tour has no wedding to file the audio under, so it goes under the enquiry
+ * instead. Same bucket, same shape of path. Everything written for a
+ * walkthrough sits under this prefix, which is also what lets `complete` refuse
+ * a key belonging to somebody else.
+ */
+const walkthroughPrefix = (wt) => `${wt.wedding_id || `enquiries/${wt.enquiry_id}`}/walkthroughs/${wt.id}`;
+
+/** The walkthrough, or null. Raises on a read failure so a blip is not a 404. */
+async function loadWalkthrough(id) {
+  const { data, error } = await supabaseAdmin
+    .from('walkthroughs').select('id, wedding_id, enquiry_id').eq('id', id).maybeSingle();
+  if (error) throw new Error(`Could not read that walkthrough: ${error.message}`);
+  return data || null;
+}
+
+/**
+ * Read a stored recording and write the transcript onto its row.
+ *
+ * Deepgram is handed a signed link rather than the bytes: see
+ * transcribeAudioFromUrl. Nothing here throws at a caller, because by the time
+ * it runs the recording is already safe in the bucket and the person who made
+ * it has had their answer. What it does instead is leave a sync_jobs row that
+ * says how it went, and set transcript_error when it went badly. A null
+ * transcript is also what "queued" looks like and what "silent recording"
+ * looks like, so a dead Deepgram key used to read as a slow one for as long as
+ * nobody checked.
+ */
+async function transcribeWalkthroughMedia(media) {
+  const { data: signed, error: signErr } = await supabaseAdmin.storage
+    .from(DAY_OF_MEDIA_BUCKET).createSignedUrl(media.storage_path, 60 * 60 * 6);
+  if (signErr) throw new Error(`Could not open the recording for transcription: ${signErr.message}`);
+  if (!signed?.signedUrl) throw new Error('Could not open the recording for transcription: no URL came back');
+
+  const r = await transcribeAudioFromUrl(signed.signedUrl);
+
+  if (r.ok) {
+    const { error: saveErr } = await supabaseAdmin.from('walkthrough_media').update({
+      transcript: r.transcript,
+      duration_secs: r.durationSecs || media.duration_secs || null,
+      ...(has035('transcript') ? { transcript_error: null } : {}),
+    }).eq('id', media.id);
+    if (saveErr) throw new Error(`Transcribed but could not be saved: ${saveErr.message}`);
+    console.log(`[transcribe] ${media.id}: ${r.transcript.length} chars`);
+    return { processed: 1, detail: { chars: r.transcript.length, durationSecs: r.durationSecs || null } };
+  }
+
+  console.error(`[transcribe] ${media.id} failed: ${r.error}`);
+  if (has035('transcript')) {
+    const { error: errSaveErr } = await supabaseAdmin.from('walkthrough_media')
+      .update({ transcript_error: String(r.error).slice(0, 500) }).eq('id', media.id);
+    if (errSaveErr) console.error(`[transcribe] ${media.id}: could not record the failure: ${errSaveErr.message}`);
+  }
+  return { failed: 1, error: String(r.error).slice(0, 500) };
+}
+
+/**
+ * Everything that happens once the bytes are in the bucket.
+ *
+ * Both upload routes end here, so the row, the public URL and the
+ * transcription are written once and behave the same whichever way the file
+ * arrived.
+ */
+async function recordWalkthroughMedia(wt, { storagePath, mimetype, caption, durationSecs }) {
+  const isAudio = baseMime(mimetype).startsWith('audio/');
+  const { data: { publicUrl } } = supabaseAdmin.storage.from(DAY_OF_MEDIA_BUCKET).getPublicUrl(storagePath);
+
+  const { data, error } = await supabaseAdmin.from('walkthrough_media').insert({
+    walkthrough_id: wt.id,
+    wedding_id: wt.wedding_id,
+    kind: isAudio ? 'audio' : 'photo',
+    url: publicUrl,
+    storage_path: storagePath,
+    caption: caption || null,
+    duration_secs: durationSecs || null,
+  }).select().single();
+  if (error) throw new Error(`The recording is stored but could not be filed: ${error.message}`);
+
+  // Transcribe after, not during. A ninety-minute walkthrough takes Deepgram a
+  // while, and holding the request open for it risks the same proxy timeout
+  // this whole path exists to get out of the way of.
+  let transcriptJobId = null;
+  if (isAudio && transcriptionConfigured()) {
+    const started = await runDetachedJob(
+      'transcribe',
+      { mediaId: data.id, walkthroughId: wt.id, weddingId: wt.wedding_id || null },
+      () => transcribeWalkthroughMedia(data),
+    );
+    transcriptJobId = started.jobId;
+  }
+
+  return { ...data, transcriptionPending: isAudio && transcriptionConfigured(), transcriptJobId };
+}
+
+/**
+ * Step one: ask for somewhere to put it.
+ *
+ * Answers in milliseconds and spends nothing. The browser then PUTs the file
+ * to `signedUrl` itself; this server does not see a byte of it.
+ */
+app.post('/api/admin/walkthroughs/:id/media/begin', requireAdmin, async (req, res) => {
+  try {
+    const wt = await loadWalkthrough(req.params.id);
+    if (!wt) return res.status(404).json({ error: 'Walkthrough not found' });
+
+    const mimetype = baseMime(req.body?.mimetype);
+    if (!mimetype) return res.status(400).json({ error: 'mimetype is required' });
+    if (!WALKTHROUGH_MEDIA_MIME.includes(mimetype)) {
+      return res.status(400).json({ error: `File type not allowed: ${req.body?.mimetype}` });
+    }
+
+    // kind is the client saying what it thinks it is recording. It is checked
+    // against the type rather than trusted, because it decides which rows the
+    // panel shows as recordings and which as photographs.
+    const derived = mimetype.startsWith('audio/') ? 'audio' : 'photo';
+    const kind = req.body?.kind ? String(req.body.kind) : derived;
+    if (kind !== derived) {
+      return res.status(400).json({ error: `A ${mimetype} file is a ${derived}, not a ${kind}` });
+    }
+
+    const size = Number(req.body?.size);
+    if (!Number.isFinite(size) || size <= 0) {
+      return res.status(400).json({ error: 'size must be the number of bytes about to be uploaded' });
+    }
+    if (size > WALKTHROUGH_MAX_BYTES) {
+      const mb = (n) => Math.round(n / (1024 * 1024));
+      return res.status(400).json({
+        error: `That recording is ${mb(size)} MB and the limit is ${mb(WALKTHROUGH_MAX_BYTES)} MB.`,
+      });
+    }
+
+    const key = `${walkthroughPrefix(wt)}/${safeStorageKey(req.body?.filename)}`;
+    const { data, error } = await supabaseAdmin.storage
+      .from(DAY_OF_MEDIA_BUCKET).createSignedUploadUrl(key);
+    if (error) {
+      console.error('Walkthrough upload URL failed:', error.message);
+      return res.status(500).json({ error: `Could not open a place to upload to: ${error.message}` });
+    }
+
+    res.json({
+      key,
+      token: data.token,
+      signedUrl: data.signedUrl,
+      bucket: DAY_OF_MEDIA_BUCKET,
+      kind,
+      maxBytes: WALKTHROUGH_MAX_BYTES,
+    });
+  } catch (e) {
+    console.error('Walkthrough media begin error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * Step two: the bytes are there, file them.
+ *
+ * The object is confirmed before a row is written, so a failed or abandoned
+ * upload cannot leave a media row pointing at nothing, which on this screen
+ * would look exactly like a recording that exists.
+ */
+app.post('/api/admin/walkthroughs/:id/media/complete', requireAdmin, async (req, res) => {
+  try {
+    const wt = await loadWalkthrough(req.params.id);
+    if (!wt) return res.status(404).json({ error: 'Walkthrough not found' });
+
+    const key = String(req.body?.key || '');
+    if (!key) return res.status(400).json({ error: 'key is required' });
+
+    // The key has to be one we handed out for this walkthrough. Without this a
+    // caller could file another couple's recording against their own tour, and
+    // the delete route would then remove that couple's audio.
+    const prefix = `${walkthroughPrefix(wt)}/`;
+    if (!key.startsWith(prefix) || key.slice(prefix.length).includes('/')) {
+      return res.status(400).json({ error: 'That key does not belong to this walkthrough' });
+    }
+
+    const mimetype = baseMime(req.body?.mimetype);
+    if (mimetype && !WALKTHROUGH_MEDIA_MIME.includes(mimetype)) {
+      return res.status(400).json({ error: `File type not allowed: ${req.body?.mimetype}` });
+    }
+
+    // Is it actually there? An upload that failed halfway leaves no object, and
+    // a row written anyway is worse than no row: the panel shows a recording,
+    // the link 404s, and the meeting looks saved.
+    const name = key.slice(prefix.length);
+    const { data: listed, error: listErr } = await supabaseAdmin.storage
+      .from(DAY_OF_MEDIA_BUCKET)
+      .list(walkthroughPrefix(wt), { limit: 1, search: name });
+    if (listErr) {
+      console.error('Walkthrough media confirm failed:', listErr.message);
+      return res.status(500).json({ error: `Could not check the upload: ${listErr.message}` });
+    }
+    const object = (listed || []).find(o => o.name === name);
+    if (!object) {
+      return res.status(409).json({ error: 'That upload is not in storage. Nothing was filed; try uploading again.' });
+    }
+
+    // A size the browser reported and a size the bucket holds that disagree
+    // mean a truncated upload, and a truncated recording transcribes to a
+    // meeting that stops halfway with nothing saying it did.
+    const claimed = Number(req.body?.size);
+    const stored = Number(object?.metadata?.size);
+    if (Number.isFinite(claimed) && Number.isFinite(stored) && stored > 0 && claimed > 0 && claimed !== stored) {
+      return res.status(409).json({
+        error: `Only ${stored} of ${claimed} bytes arrived, so the recording is incomplete. Nothing was filed; try uploading again.`,
+      });
+    }
+
+    const seconds = parseInt(req.body?.duration_secs, 10);
+    const media = await recordWalkthroughMedia(wt, {
+      storagePath: key,
+      mimetype: mimetype || baseMime(object?.metadata?.mimetype),
+      caption: req.body?.caption || null,
+      durationSecs: Number.isFinite(seconds) && seconds > 0 ? seconds : null,
+    });
+    res.json(media);
+  } catch (e) {
+    console.error('Walkthrough media complete error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * The old path, kept for small files.
+ *
+ * Fine for a photograph. Anything long should go through begin/complete: this
+ * one carries the whole file through Railway's proxy and dies at about fifty
+ * seconds however big the bucket's cap is.
+ */
 app.post('/api/admin/walkthroughs/:id/media', requireAdmin, dayOfMediaUpload.single('file'), async (req, res) => {
   try {
     const file = req.file;
     if (!file) return res.status(400).json({ error: 'No file provided' });
-    const { data: wt, error: we } = await supabaseAdmin
-      .from('walkthroughs').select('id, wedding_id, enquiry_id').eq('id', req.params.id).single();
-    if (we || !wt) return res.status(404).json({ error: 'Walkthrough not found' });
+    const wt = await loadWalkthrough(req.params.id);
+    if (!wt) return res.status(404).json({ error: 'Walkthrough not found' });
 
-    const isAudio = String(file.mimetype || '').startsWith('audio/');
-    const safeExt = (file.originalname.split('.').pop() || (isAudio ? 'webm' : 'jpg')).toLowerCase().replace(/[^a-z0-9]/g, '');
-    // A tour has no wedding to file the audio under, so it goes under the
-    // enquiry instead. Same bucket, same shape of path.
-    const owner = wt.wedding_id || `enquiries/${wt.enquiry_id}`;
-    const path = `${owner}/walkthroughs/${wt.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${safeExt}`;
-
+    const path = `${walkthroughPrefix(wt)}/${safeStorageKey(file.originalname)}`;
     const { error: upErr } = await supabaseAdmin.storage
-      .from('day-of-media').upload(path, file.buffer, { contentType: file.mimetype, upsert: false });
+      .from(DAY_OF_MEDIA_BUCKET).upload(path, file.buffer, { contentType: file.mimetype, upsert: false });
     if (upErr) throw upErr;
-    const { data: { publicUrl } } = supabaseAdmin.storage.from('day-of-media').getPublicUrl(path);
 
-    const { data, error } = await supabaseAdmin.from('walkthrough_media').insert({
-      walkthrough_id: wt.id,
-      wedding_id: wt.wedding_id,
-      kind: isAudio ? 'audio' : 'photo',
-      url: publicUrl,
-      storage_path: path,
+    const seconds = parseInt(req.body.duration_secs, 10);
+    const media = await recordWalkthroughMedia(wt, {
+      storagePath: path,
+      mimetype: file.mimetype,
       caption: req.body.caption || null,
-      duration_secs: req.body.duration_secs ? parseInt(req.body.duration_secs, 10) || null : null,
-    }).select().single();
-    if (error) throw error;
-
-    // Answer now, transcribe after.
-    //
-    // A ninety-minute walkthrough takes Deepgram a while, and holding the
-    // request open for it risks a proxy timeout that would look to the user
-    // like the recording failed — when the audio is already safely stored.
-    // The row is updated when it finishes and the panel picks it up.
-    res.json({ ...data, transcriptionPending: isAudio && transcriptionConfigured() });
-
-    if (isAudio && transcriptionConfigured()) {
-      transcribeAudio(file.buffer, file.mimetype)
-        .then(async (r) => {
-          if (r.ok) {
-            const { error: saveErr } = await supabaseAdmin.from('walkthrough_media').update({
-              transcript: r.transcript,
-              duration_secs: r.durationSecs || data.duration_secs || null,
-              ...(has035('transcript') ? { transcript_error: null } : {}),
-            }).eq('id', data.id);
-            if (saveErr) console.error(`[transcribe] ${data.id}: transcribed but could not be saved: ${saveErr.message}`);
-            else console.log(`[transcribe] ${data.id}: ${r.transcript.length} chars`);
-          } else {
-            // Recorded but not readable, and now it says so.
-            //
-            // transcript stayed null, which is also what "queued" looks like
-            // and what "silent recording" looks like, so a dead Deepgram key
-            // read as a slow one for as long as nobody checked. The recording
-            // itself is safe either way; this is about the panel telling the
-            // truth about it.
-            console.error(`[transcribe] ${data.id} failed: ${r.error}`);
-            if (has035('transcript')) {
-              const { error: errSaveErr } = await supabaseAdmin.from('walkthrough_media')
-                .update({ transcript_error: String(r.error).slice(0, 500) }).eq('id', data.id);
-              if (errSaveErr) console.error(`[transcribe] ${data.id}: could not record the failure: ${errSaveErr.message}`);
-            }
-          }
-        })
-        .catch(async err => {
-          console.error(`[transcribe] ${data.id} unexpected:`, err.message);
-          if (has035('transcript')) {
-            await supabaseAdmin.from('walkthrough_media')
-              .update({ transcript_error: String(err.message).slice(0, 500) }).eq('id', data.id);
-          }
-        });
-    }
+      durationSecs: Number.isFinite(seconds) && seconds > 0 ? seconds : null,
+    });
+    res.json(media);
   } catch (e) {
     console.error('Walkthrough media upload error:', e);
     res.status(500).json({ error: e.message });
@@ -17575,7 +18055,7 @@ async function parseSeatingBuffer(buffer, filename, mimetype) {
 // Multipart, so weddingAccess saw an empty body and could not scope it. A
 // commit rewrites a whole guest list, which makes this the most expensive of
 // the four to have left open. See the note on /api/extract-contract.
-app.post('/api/seating/import', requireAuth, spreadsheetUpload.single('file'), async (req, res) => {
+app.post('/api/seating/import', requireAuth, aiLimiter, spreadsheetUpload.single('file'), async (req, res) => {
   try {
     const action = req.body.action || 'parse';
     const weddingId = req.body.weddingId;
