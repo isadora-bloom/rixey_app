@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders } from '../utils/api'
+import { loadJson } from '../utils/api'
+import LoadError from './ui/LoadError'
 
 
 const CATEGORIES = ['All', 'Partyware & Serving', 'Guest Experience', 'Décor & Lighting']
@@ -29,17 +30,31 @@ function pickTypeBadge(type) {
 export default function StorefrontBrowser() {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
   const [activeCategory, setActiveCategory] = useState('All')
   const [activeType, setActiveType] = useState('')
   const [search, setSearch] = useState('')
 
-  useEffect(() => {
-    authHeaders().then(hdrs => fetch(`${API_URL}/api/storefront`, { headers: hdrs }))
-      .then(r => r.json())
+  const fetchStorefront = useCallback(() => {
+    return loadJson(`${API_URL}/api/storefront`)
       .then(({ items }) => setItems(items || []))
-      .catch(console.error)
+      .catch(err => {
+        // A failed read used to leave items at [], which read exactly like
+        // "no picks match your filters" — wrong for a browse page that
+        // hasn't even loaded, not just been filtered down to nothing.
+        console.error(err)
+        setLoadError(err)
+      })
       .finally(() => setLoading(false))
   }, [])
+
+  useEffect(() => { fetchStorefront() }, [fetchStorefront])
+
+  const retry = () => {
+    setLoading(true)
+    setLoadError(null)
+    fetchStorefront()
+  }
 
   const filtered = items.filter(item => {
     if (activeCategory !== 'All' && item.category !== activeCategory) return false
@@ -126,11 +141,15 @@ export default function StorefrontBrowser() {
         </div>
       )}
 
-      {!loading && filtered.length === 0 && (
+      {!loading && loadError && (
+        <LoadError what="the storefront" error={loadError} onRetry={retry} />
+      )}
+
+      {!loading && !loadError && filtered.length === 0 && (
         <p className="text-center text-sage-400 py-12">No picks match your filters.</p>
       )}
 
-      {!loading && filtered.length > 0 && (
+      {!loading && !loadError && filtered.length > 0 && (
         <div className="space-y-6">
           {Object.entries(grouped).map(([productType, typeItems]) => (
             <div key={productType}>
