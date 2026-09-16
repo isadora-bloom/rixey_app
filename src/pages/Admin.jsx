@@ -14,7 +14,8 @@ import BorrowCatalog from '../components/BorrowCatalog'
 import StorefrontAdmin from '../components/StorefrontAdmin'
 import ManorDownloads from '../components/ManorDownloads'
 import { API_URL } from '../config/api'
-import { apiFetch, authHeaders } from '../utils/api'
+import { apiFetch, loadJson } from '../utils/api'
+import LoadError from '../components/ui/LoadError'
 import { awaitAnswerJob, timeAgo } from '../utils/answerJobs'
 import { useToast } from '../components/ui/Toast'
 import { ConfirmDialog } from '../components/ui'
@@ -57,6 +58,9 @@ export default function Admin() {
   const { error: toastError, success: toastSuccess } = useToast()
   const [notifications, setNotifications] = useState([])
   const [weddings, setWeddings] = useState([])
+  // A failed load of the weddings list used to render as "no weddings yet",
+  // console.error'd where nobody was looking. Distinct so the list can say so.
+  const [weddingsLoadError, setWeddingsLoadError] = useState(false)
   const [allMessages, setAllMessages] = useState({}) // Messages by wedding ID
   const [loading, setLoading] = useState(true)
   const [editingWedding, setEditingWedding] = useState(null)
@@ -154,6 +158,16 @@ export default function Admin() {
   // another couple while it is being written, and an answer must never land in
   // the wrong wedding's box.
   const openWeddingRef = useRef(null)
+  // Checked on every pass of a background poll (followSyncJob) and every tick
+  // of a job-await (awaitAnswerJob) so navigating away from Admin entirely —
+  // not just closing one wedding's profile — actually stops the polling
+  // rather than leaving it running against a page that no longer exists.
+  const cancelledRef = useRef(false)
+  // One controller for the life of this page. awaitAnswerJob polls (highlights,
+  // contract Q&A) pass its signal so they stop between polls on unmount rather
+  // than running to their five-minute timeout regardless.
+  const abortRef = useRef(null)
+  if (!abortRef.current) abortRef.current = new AbortController()
   const [notesSearchQuery, setNotesSearchQuery] = useState('')
   const [collapsedNoteCategories, setCollapsedNoteCategories] = useState({})
   const [sortBy, setSortBy] = useState('lastActivity') // 'lastActivity' or 'weddingDate'
@@ -210,6 +224,8 @@ export default function Admin() {
   const [checkingIn, setCheckingIn] = useState(false)
   const [checkedIn, setCheckedIn] = useState(false)
   const [confirmDeleteQuestionId, setConfirmDeleteQuestionId] = useState(null)
+  const [confirmIgnoreItem, setConfirmIgnoreItem] = useState(null)
+  const [confirmClearZoom, setConfirmClearZoom] = useState(false)
   const [last24h, setLast24h] = useState({ signups: [], activity: [] })
   const [last24hLoading, setLast24hLoading] = useState(true)
   // The last 20 sync runs, whatever kind. Lifted out of the old sidebar panel
@@ -236,10 +252,7 @@ export default function Admin() {
 
   const fetchUnreadMessages = async () => {
     try {
-      const res = await fetch(`${API_URL}/api/messages/admin/unread`, {
-        headers: await authHeaders()
-      })
-      const data = await res.json()
+      const data = await loadJson(`${API_URL}/api/messages/admin/unread`)
       setUnreadMessages(data.total || 0)
     } catch (err) {
       console.error('Failed to fetch unread count:', err)
@@ -287,15 +300,12 @@ export default function Admin() {
     loadAllCouplePhotos()
     fetchUnreadMessages()
     const interval = setInterval(fetchUnreadMessages, 60000)
-    return () => clearInterval(interval)
+    return () => { clearInterval(interval); cancelledRef.current = true; abortRef.current?.abort() }
   }, [])
 
   const checkGmailStatus = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/gmail/status`, {
-        headers: await authHeaders()
-      })
-      const data = await response.json()
+      const data = await loadJson(`${API_URL}/api/gmail/status`)
       setGmailConnected(data.connected)
       // Defaults to true so an older server that does not report it does not
       // put a warning on the screen that nobody can act on.
@@ -313,15 +323,12 @@ export default function Admin() {
 
   const connectGmail = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/gmail/auth`, {
-        headers: await authHeaders()
-      })
-      const data = await response.json()
+      const data = await apiFetch(`${API_URL}/api/gmail/auth`)
       if (data.authUrl) {
         window.location.href = data.authUrl
       }
     } catch (err) {
-      console.error('Gmail connect error:', err)
+      toastError(`Could not connect Gmail: ${err.message}`)
     }
   }
 
@@ -398,10 +405,7 @@ export default function Admin() {
 
   const checkQuoStatus = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/quo/status`, {
-        headers: await authHeaders()
-      })
-      const data = await response.json()
+      const data = await loadJson(`${API_URL}/api/quo/status`)
       setQuoConnected(data.connected)
       setQuoInfo(data)
     } catch (err) {
@@ -416,7 +420,7 @@ export default function Admin() {
       console.log('Calling Quo sync with forceReprocess:', forceReprocess)
       const data = await apiFetch(`${API_URL}/api/quo/sync`, {
         method: 'POST',
-        body: JSON.stringify({ forceReprocess })
+        body: JSON.stringify({ forceReprocess, confirm: forceReprocess })
       })
       console.log('Quo sync response:', data)
 
@@ -472,10 +476,7 @@ export default function Admin() {
 
   const checkZoomStatus = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/zoom/status`, {
-        headers: await authHeaders()
-      })
-      const data = await response.json()
+      const data = await loadJson(`${API_URL}/api/zoom/status`)
       setZoomConnected(data.connected)
       setZoomInfo(data)
     } catch (err) {
@@ -485,15 +486,12 @@ export default function Admin() {
 
   const connectZoom = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/zoom/auth`, {
-        headers: await authHeaders()
-      })
-      const data = await response.json()
+      const data = await apiFetch(`${API_URL}/api/zoom/auth`)
       if (data.authUrl) {
         window.location.href = data.authUrl
       }
     } catch (err) {
-      console.error('Zoom connect error:', err)
+      toastError(`Could not connect Zoom: ${err.message}`)
     }
   }
 
@@ -573,7 +571,9 @@ export default function Admin() {
     const { kind = 'zoom', setStatus = setZoomStatus, noun = 'meetings', describeDone } = opts
     const started = Date.now()
     while (Date.now() - started < 20 * 60 * 1000) {
+      if (cancelledRef.current) return null
       await new Promise(r => setTimeout(r, 4000))
+      if (cancelledRef.current) return null
       let job
       try {
         const data = await apiFetch(`${API_URL}/api/admin/sync-jobs?kind=${kind}&limit=10`)
@@ -638,8 +638,17 @@ export default function Admin() {
     setZoomSyncing(true)
     setZoomStatus('')
     try {
+      // Answers with a job id now rather than the finished result — this runs
+      // as a sync job like the others, so follow it instead of assuming it is
+      // already done by the time the request returns.
       const data = await apiFetch(`${API_URL}/api/zoom/reextract`, { method: 'POST' })
-      setZoomStatus(data.message || data.error)
+      if (!data.jobId) {
+        setZoomStatus(data.message || data.error || 'Did not start')
+      } else {
+        setZoomStatus(data.message || 'Started. Re-reading Zoom transcripts…')
+        await followSyncJob(data.jobId, { kind: 'zoom-reextract' })
+        await refreshAfterSync()
+      }
       loadData()
     } catch (err) {
       setZoomStatus('Failed to re-extract notes')
@@ -648,13 +657,24 @@ export default function Admin() {
     setZoomSyncing(false)
   }
 
-  const clearZoom = async () => {
-    if (!window.confirm('Clear all stored Zoom transcripts and processing history? You\'ll need to click Sync after to re-download everything fresh.')) return
+  // The button still just calls clearZoom() — the confirm step is a dialog
+  // now rather than a blocking window.confirm, so the actual clear waits for
+  // performClearZoom below.
+  const clearZoom = () => setConfirmClearZoom(true)
+
+  const performClearZoom = async () => {
+    setConfirmClearZoom(false)
     setZoomSyncing(true)
     setZoomStatus('')
     try {
-      const data = await apiFetch(`${API_URL}/api/zoom/clear`, { method: 'POST' })
-      setZoomStatus(data.message || data.error)
+      const data = await apiFetch(`${API_URL}/api/zoom/clear`, {
+        method: 'POST',
+        body: JSON.stringify({ confirm: true }),
+      })
+      const count = data.count ?? data.cleared ?? data.removed ?? data.deleted
+      setZoomStatus(
+        count != null ? `${data.message || 'Cleared'} (${count} removed)` : (data.message || data.error)
+      )
     } catch (err) {
       setZoomStatus('Failed to clear Zoom data')
       toastError(`Could not clear Zoom data: ${err.message}`)
@@ -714,6 +734,7 @@ export default function Admin() {
         body: JSON.stringify({ weddingId })
       })
       const job = await awaitAnswerJob(started?.jobId, {
+        signal: abortRef.current?.signal,
         onTick: (secs) => {
           if (openWeddingRef.current !== weddingId) return
           setNotesHighlights(`${WAITING} ${secs}s`)
@@ -722,6 +743,7 @@ export default function Admin() {
       if (openWeddingRef.current !== weddingId) return
       setNotesHighlights(job.answer || 'Nothing came back. Try again.')
     } catch (err) {
+      if (cancelledRef.current) return   // navigated away — not a real failure
       if (openWeddingRef.current === weddingId) setNotesHighlights('Failed to generate highlights')
       toastError(`Could not generate highlights: ${err.message}`)
     }
@@ -730,10 +752,7 @@ export default function Admin() {
 
   const loadUncertainQuestions = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/uncertain-questions`, {
-        headers: await authHeaders()
-      })
-      const data = await response.json()
+      const data = await loadJson(`${API_URL}/api/uncertain-questions`)
       setUncertainQuestions(data.questions || [])
     } catch (err) {
       console.error('Failed to load uncertain questions:', err)
@@ -742,10 +761,7 @@ export default function Admin() {
 
   const loadUnlinkedProfiles = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/admin/unlinked-profiles`, {
-        headers: await authHeaders()
-      })
-      setUnlinkedProfiles(response.ok ? (await response.json()) || [] : [])
+      setUnlinkedProfiles((await loadJson(`${API_URL}/api/admin/unlinked-profiles`)) || [])
     } catch (err) {
       console.error('Failed to load unlinked profiles:', err)
     }
@@ -779,10 +795,7 @@ export default function Admin() {
   const loadAllCouplePhotos = async () => {
     try {
       // Load couple photos via server endpoint (bypasses RLS)
-      const response = await fetch(`${API_URL}/api/couple-photos/all`, {
-        headers: await authHeaders()
-      })
-      const data = await response.json()
+      const data = await loadJson(`${API_URL}/api/couple-photos/all`)
 
       if (data.photos) {
         const photoMap = {}
@@ -892,10 +905,7 @@ export default function Admin() {
   const loadData = async () => {
     // Load notifications via server endpoint (bypasses RLS)
     try {
-      const notifsRes = await fetch(`${API_URL}/api/admin/notifications`, {
-        headers: await authHeaders()
-      })
-      const notifsData = await notifsRes.json()
+      const notifsData = await loadJson(`${API_URL}/api/admin/notifications`)
       setNotifications(notifsData.notifications || [])
     } catch (err) {
       console.error('Failed to load notifications:', err)
@@ -903,38 +913,38 @@ export default function Admin() {
     }
 
     // Auto-archive weddings whose date has passed before loading, so the active
-    // list stays current. Best-effort: if it fails we still load what's there.
+    // list stays current. Best-effort: if it fails we still load what's there —
+    // apiFetch so a real failure at least reaches the console with a reason.
     try {
-      await fetch(`${API_URL}/api/admin/weddings/archive-past`, {
-        method: 'POST',
-        headers: await authHeaders()
-      })
+      await apiFetch(`${API_URL}/api/admin/weddings/archive-past`, { method: 'POST' })
     } catch (err) {
       console.error('Auto-archive past weddings failed:', err)
     }
 
-    // Load weddings with profiles via server endpoint (bypasses RLS)
+    // Load weddings with profiles via server endpoint (bypasses RLS). The main
+    // read for this whole page — a failure here used to render as "no
+    // weddings yet" with nothing but a console.error, indistinguishable from a
+    // brand new, empty install.
     let weddingsData = []
     try {
-      const weddingsRes = await fetch(`${API_URL}/api/admin/weddings`, {
-        headers: await authHeaders()
-      })
-      const weddingsJson = await weddingsRes.json()
+      const weddingsJson = await loadJson(`${API_URL}/api/admin/weddings`)
       weddingsData = weddingsJson.weddings || []
       setWeddings(weddingsData)
+      setWeddingsLoadError(false)
     } catch (err) {
       console.error('Failed to load weddings:', err)
       setWeddings([])
+      setWeddingsLoadError(true)
     }
 
     // Load last 24h activity summary
-    authHeaders().then(hdrs =>
-      fetch(`${API_URL}/api/admin/last-24h`, { headers: hdrs })
-        .then(r => r.json())
-        .then(d => { setLast24h({ signups: d.signups || [], activity: d.activity || [] }) })
-        .catch(() => {})
-        .finally(() => setLast24hLoading(false))
-    )
+    try {
+      const d = await loadJson(`${API_URL}/api/admin/last-24h`)
+      setLast24h({ signups: d.signups || [], activity: d.activity || [] })
+    } catch {
+      // A missing "last 24h" panel is not worth its own error state.
+    }
+    setLast24hLoading(false)
 
     // Direct-message conversations — the "unread > 4h" escalation signal and
     // the last-activity fallback for couples who only ever message directly.
@@ -954,10 +964,7 @@ export default function Admin() {
     if (weddingsData && weddingsData.length > 0) {
       try {
         const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
-        const messagesRes = await fetch(`${API_URL}/api/sage-messages/all?since=${encodeURIComponent(since)}`, {
-          headers: await authHeaders()
-        })
-        const messagesData = await messagesRes.json()
+        const messagesData = await loadJson(`${API_URL}/api/sage-messages/all?since=${encodeURIComponent(since)}`)
         const messages = messagesData.messages || []
 
         // Group messages by wedding
@@ -1394,27 +1401,36 @@ export default function Admin() {
     const file = e.target.files?.[0]
     if (!file || !viewingWedding) return
 
+    const weddingId = viewingWedding.id
     setUploadingContract(true)
     setUploadResult(null)
 
     const formData = new FormData()
     formData.append('contract', file)
-    formData.append('weddingId', viewingWedding.id)
+    formData.append('weddingId', weddingId)
 
     try {
-      const data = await apiFetch(`${API_URL}/api/extract-contract`, {
+      // Answers straight away with a job id now — reading a contract is
+      // Sonnet's job, not the request's, and holding it open used to run into
+      // Railway's proxy timeout on a long one.
+      const started = await apiFetch(`${API_URL}/api/extract-contract`, {
         method: 'POST',
         body: formData
       })
-
-      setUploadResult({
-        success: true,
-        message: `Extracted ${data.notesExtracted} notes from contract`
-      })
-      await loadPlanningNotesForWedding(viewingWedding.id)
+      const job = await awaitAnswerJob(started?.jobId, { signal: abortRef.current?.signal })
+      if (openWeddingRef.current === weddingId) {
+        setUploadResult({
+          success: true,
+          message: job?.answer || `Extracted ${job?.counts?.notesExtracted ?? 0} notes from contract`,
+        })
+      }
+      await loadPlanningNotesForWedding(weddingId)
     } catch (err) {
+      if (cancelledRef.current) return   // navigated away — not a real failure
       console.error('Upload error:', err)
-      setUploadResult({ success: false, message: err.message || 'Failed to upload contract' })
+      if (openWeddingRef.current === weddingId) {
+        setUploadResult({ success: false, message: err.message || 'Failed to upload contract' })
+      }
       toastError(`Could not upload contract: ${err.message}`)
     }
 
@@ -1439,6 +1455,7 @@ export default function Admin() {
         })
       })
       const job = await awaitAnswerJob(started?.jobId, {
+        signal: abortRef.current?.signal,
         onTick: (secs) => {
           if (openWeddingRef.current !== weddingId) return
           setContractAnswer(`${WAITING} ${secs}s`)
@@ -1447,6 +1464,7 @@ export default function Admin() {
       if (openWeddingRef.current !== weddingId) return
       setContractAnswer(job.answer || 'Nothing came back. Try again.')
     } catch (err) {
+      if (cancelledRef.current) return   // navigated away — not a real failure
       console.error('Question error:', err)
       if (openWeddingRef.current === weddingId) setContractAnswer(`Could not get an answer: ${err.message}`)
       toastError(`Could not get answer: ${err.message}`)
@@ -2023,7 +2041,7 @@ export default function Admin() {
                       {reviewBusy === item.id ? 'Filing…' : 'File it'}
                     </button>
                     <button
-                      onClick={() => ignoreReviewItem(item)}
+                      onClick={() => setConfirmIgnoreItem(item)}
                       disabled={reviewBusy === item.id}
                       className="px-4 py-2 rounded-lg text-sm border border-cream-300 text-sage-600"
                     >
@@ -2223,7 +2241,9 @@ export default function Admin() {
         )}
 
         {/* Weddings View */}
-        {mainView === 'weddings' && (
+        {mainView === 'weddings' && weddingsLoadError && weddings.length === 0 ? (
+          <LoadError what="the weddings list" onRetry={loadData} />
+        ) : mainView === 'weddings' && (
           <AdminWeddingList
             weddings={weddings}
             unlinkedProfiles={unlinkedProfiles}
@@ -2354,6 +2374,26 @@ export default function Admin() {
         title="Delete this question?"
         message="This removes it from Sage Needs Help for everyone."
         confirmLabel="Delete"
+        danger
+      />
+
+      <ConfirmDialog
+        open={confirmIgnoreItem !== null}
+        onClose={() => setConfirmIgnoreItem(null)}
+        onConfirm={() => { const item = confirmIgnoreItem; setConfirmIgnoreItem(null); if (item) ignoreReviewItem(item) }}
+        title="Not a client meeting?"
+        message="This drops it from the review queue for good — it will not come back suggesting a wedding again."
+        confirmLabel="Ignore it"
+        danger
+      />
+
+      <ConfirmDialog
+        open={confirmClearZoom}
+        onClose={() => setConfirmClearZoom(false)}
+        onConfirm={performClearZoom}
+        title="Clear all Zoom data?"
+        message="This removes every stored Zoom transcript and processing history. You'll need to click Sync after to re-download everything fresh."
+        confirmLabel="Clear Zoom data"
         danger
       />
     </div>
