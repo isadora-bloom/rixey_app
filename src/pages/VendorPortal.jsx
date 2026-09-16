@@ -2,7 +2,9 @@ import { useState, useEffect, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 import { API_URL } from '../config/api'
 import { authHeaders, apiFetch } from '../utils/api'
+import { shrinkImageForUpload } from '../utils/image'
 import { useToast } from '../components/ui/Toast'
+import ConfirmDialog from '../components/ui/ConfirmDialog'
 
 
 export default function VendorPortal() {
@@ -11,6 +13,7 @@ export default function VendorPortal() {
   const [vendor, setVendor] = useState(null)
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
+  const [loadError, setLoadError] = useState(false)
   const [form, setForm] = useState({})
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -18,13 +21,22 @@ export default function VendorPortal() {
   const [uploadingPhoto, setUploadingPhoto] = useState(false)
   const [photos, setPhotos] = useState([])
   const [uploadingLogo, setUploadingLogo] = useState(false)
+  const [photoToRemove, setPhotoToRemove] = useState(null)
   const logoInputRef = useRef()
   const photoInputRef = useRef()
 
   useEffect(() => {
     authHeaders().then(hdrs => fetch(`${API_URL}/api/vendor-portal/${token}`, { headers: hdrs }))
-      .then(r => r.json())
+      .then(r => {
+        // A dead link and a server having a bad moment used to look
+        // identical: both landed a vendor on "Link not found", which sent
+        // them straight to us asking for a fresh one they didn't need.
+        if (r.status === 404) { setNotFound(true); return null }
+        if (!r.ok) { setLoadError(true); return null }
+        return r.json()
+      })
       .then(d => {
+        if (!d) return
         if (!d.vendor) { setNotFound(true); return }
         setVendor(d.vendor)
         setPhotos(d.vendor.photos || [])
@@ -40,7 +52,7 @@ export default function VendorPortal() {
           availability_note: d.vendor.availability_note || '',
         })
       })
-      .catch(() => setNotFound(true))
+      .catch(() => setLoadError(true))
       .finally(() => setLoading(false))
   }, [token])
 
@@ -68,7 +80,7 @@ export default function VendorPortal() {
     if (photos.length >= 8) { alert('Maximum 8 photos allowed'); return }
     setUploadingPhoto(true)
     const fd = new FormData()
-    fd.append('photo', file)
+    fd.append('photo', await shrinkImageForUpload(file))
     try {
       const data = await apiFetch(`${API_URL}/api/vendor-portal/${token}/photos`, { method: 'POST', body: fd })
       setPhotos(data.photos)
@@ -87,7 +99,7 @@ export default function VendorPortal() {
     if (!file) return
     setUploadingLogo(true)
     const fd = new FormData()
-    fd.append('logo', file)
+    fd.append('logo', await shrinkImageForUpload(file))
     try {
       const data = await apiFetch(`${API_URL}/api/vendor-portal/${token}/logo`, { method: 'POST', body: fd })
       if (data?.vendor) setVendor(data.vendor)
@@ -100,7 +112,6 @@ export default function VendorPortal() {
   }
 
   const removePhoto = async (url) => {
-    if (!confirm('Remove this photo?')) return
     const snapshot = photos
     setPhotos(prev => prev.filter(p => p !== url))
     try {
@@ -129,6 +140,23 @@ export default function VendorPortal() {
         <div className="text-center max-w-sm">
           <p className="text-sage-700 font-medium mb-2">Link not found</p>
           <p className="text-sage-400 text-sm">This link may be invalid or expired. Contact Rixey Manor to get a fresh one.</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (loadError) {
+    return (
+      <div className="min-h-screen bg-cream-50 flex items-center justify-center p-4">
+        <div className="text-center max-w-sm">
+          <p className="text-sage-700 font-medium mb-2">Could not load your profile</p>
+          <p className="text-sage-400 text-sm mb-4">Something went wrong on our end. Your link is fine — try reloading.</p>
+          <button
+            onClick={() => window.location.reload()}
+            className="text-sm px-4 py-2 bg-sage-600 text-white rounded-xl hover:bg-sage-700 transition"
+          >
+            Reload
+          </button>
         </div>
       </div>
     )
@@ -238,7 +266,11 @@ export default function VendorPortal() {
               <h2 className="font-semibold text-sage-700">Your Logo</h2>
               <p className="text-xs text-sage-400 mt-0.5">Shown beside your name in the couples&apos; directory</p>
             </div>
-            <input ref={logoInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/svg+xml" className="hidden" onChange={uploadLogo} />
+            {/* No SVG here: the server's upload filter refuses it (an SVG can
+                carry script and this bucket is served publicly off Rixey's
+                own origin — see server/index.js), so offering it just sent a
+                vendor's file straight into a confusing 400. */}
+            <input ref={logoInputRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={uploadLogo} />
             <button
               onClick={() => logoInputRef.current?.click()}
               disabled={uploadingLogo}
@@ -290,7 +322,7 @@ export default function VendorPortal() {
                 <div key={i} className="relative group aspect-square rounded-xl overflow-hidden bg-cream-100">
                   <img src={url} alt="" className="w-full h-full object-cover" />
                   <button
-                    onClick={() => removePhoto(url)}
+                    onClick={() => setPhotoToRemove(url)}
                     className="absolute top-1 right-1 w-6 h-6 bg-black/60 text-white rounded-full text-xs opacity-0 group-hover:opacity-100 transition flex items-center justify-center"
                   >
                     ×
@@ -361,6 +393,16 @@ export default function VendorPortal() {
           </p>
         </div>
       </main>
+
+      <ConfirmDialog
+        open={!!photoToRemove}
+        onClose={() => setPhotoToRemove(null)}
+        onConfirm={() => { const url = photoToRemove; setPhotoToRemove(null); if (url) removePhoto(url) }}
+        danger
+        title="Remove this photo?"
+        message="It comes out of your directory listing right away."
+        confirmLabel="Remove photo"
+      />
     </div>
   )
 }
