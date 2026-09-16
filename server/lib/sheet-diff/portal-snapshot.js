@@ -27,6 +27,8 @@ const MULTI_ROW_TABLES = [
   'allergy_registry'
 ];
 
+const PAGE = 1000;
+
 export async function buildPortalSnapshot(supabase, weddingId) {
   const snapshot = { weddingId };
 
@@ -39,19 +41,33 @@ export async function buildPortalSnapshot(supabase, weddingId) {
 
   await Promise.all(
     queries.map(async ({ key, table, col }) => {
-      const { data, error } = await supabase
-        .from(table)
-        .select('*')
-        .eq(col, weddingId);
-      if (error) {
-        snapshot[key] = { _error: error.message };
+      // Paged. Supabase caps a read at 1,000 rows and says nothing, so a big
+      // wedding's guest list came back cut off and the diff reported every
+      // guest past the first thousand as missing from the portal.
+      if (SINGLE_ROW_TABLES.has(table)) {
+        // One row per wedding by definition, so there is nothing to page.
+        const { data, error } = await supabase.from(table).select('*').eq(col, weddingId);
+        if (error) snapshot[key] = { _error: error.message };
+        else snapshot[key] = (data && data[0]) || null;
         return;
       }
-      if (SINGLE_ROW_TABLES.has(table)) {
-        snapshot[key] = (data && data[0]) || null;
-      } else {
-        snapshot[key] = data || [];
+
+      const rows = [];
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await supabase
+          .from(table)
+          .select('*')
+          .eq(col, weddingId)
+          .order('id', { ascending: true })
+          .range(from, from + PAGE - 1);
+        if (error) {
+          snapshot[key] = { _error: error.message };
+          return;
+        }
+        rows.push(...(data || []));
+        if (!data || data.length < PAGE) break;
       }
+      snapshot[key] = rows;
     })
   );
 

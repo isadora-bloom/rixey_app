@@ -3479,7 +3479,7 @@ async function buildWeddingContext(weddingId, { noteLimit = 400 } = {}) {
       { data: guestCareRows },
       { data: internalNotes },
       { data: wedding },
-      { data: guestRows },
+      { data: guestRows, error: guestErr },
     ] = await Promise.all([
       supabaseAdmin.from('contracts').select('filename, extracted_text').eq('wedding_id', weddingId).is('superseded_by', null),
       supabaseAdmin.from('planning_notes').select('category, content, source_message, created_at').eq('wedding_id', weddingId).order('created_at', { ascending: false }),
@@ -3506,7 +3506,10 @@ async function buildWeddingContext(weddingId, { noteLimit = 400 } = {}) {
       // model it is looking at from the rows themselves. Leave them out and it
       // falls back to the old shape, counts the new plus-one rows as guests AND
       // expands plus_one_name off the hosts, and reports everybody twice.
-      supabaseAdmin.from('wedding_guests').select('id, first_name, last_name, rsvp, plus_one_name, plus_one_rsvp, party_id, is_plus_one, plus_one_of').eq('wedding_id', weddingId),
+      // Paged: a wedding past a thousand rows was answering questions about
+      // its guest list with the first thousand of it and no sign of the rest.
+      allGuestRows(weddingId, 'id, first_name, last_name, rsvp, plus_one_name, plus_one_rsvp, party_id, is_plus_one, plus_one_of', 'id')
+        .then(rows => ({ data: rows, error: null }), err => ({ data: null, error: err })),
     ]);
 
     // Build comprehensive context
@@ -3530,6 +3533,9 @@ async function buildWeddingContext(weddingId, { noteLimit = 400 } = {}) {
       const plannedGuests = staffingRow?.answers?.guestCount;
       if (plannedGuests) fullContext += `Planned guest count: ${plannedGuests}\n`;
       // People, including plus ones, since that is what Sage gets asked about.
+      // A read that failed is said out loud: a silent nothing here reads as a
+      // wedding with no guests, and gets answered as one.
+      if (guestErr) fullContext += `Guest list: could not be read just now (${guestErr.message}). Say so rather than answering as though nobody is coming.\n`;
       const heads = headcount(guestRows || []);
       if (heads.total) {
         // Invitations are parties, which stopped being the same as rows the
@@ -13635,19 +13641,27 @@ app.post('/api/ceremony-plan/:weddingId', async (req, res) => {
 
 // ─── Guest Management ──────────────────────────────────────────────────────────
 
+/**
+ * Every guest at a wedding, not the first thousand of them.
+ *
+ * Supabase caps a read at 1,000 rows and says nothing about it, which is the
+ * recurring bug of this project. A 400-guest wedding is 800 rows once plus
+ * ones have rows of their own, and two of those fit inside one venue. Ordered,
+ * because paging an unordered read can hand back the same row twice and miss
+ * another.
+ */
+async function allGuestRows(weddingId, columns = '*', order = 'created_at') {
+  return allVendorRows('wedding_guests', columns, q =>
+    q.eq('wedding_id', weddingId).order(order, { ascending: true }));
+}
+
 // GET all guests for a wedding
 app.get('/api/guests/:weddingId', async (req, res) => {
   try {
-    const { data, error } = await supabaseAdmin
-      .from('wedding_guests')
-      .select('*')
-      .eq('wedding_id', req.params.weddingId)
-      .order('created_at', { ascending: true });
-    if (error) throw error;
-    res.json({ guests: data || [] });
+    res.json({ guests: await allGuestRows(req.params.weddingId) });
   } catch (err) {
     console.error('Get guests error:', err);
-    res.status(500).json({ error: 'Failed to get guests' });
+    res.status(500).json({ error: `Failed to get guests: ${err.message}` });
   }
 });
 
