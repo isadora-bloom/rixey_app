@@ -526,6 +526,8 @@ use it as well as the venue, so it sits outside `/api/admin` and is behind
 curl -s -o /dev/null -w '%{http_code}\n' -X POST $API/api/guests/map-columns \
   -H 'Content-Type: application/json' \
   -d '{"headers":["First Name","Email"],"samples":[["Ana","ana@example.com"]]}'
+```
+
 ## Long answers as jobs — `GET /api/answer-jobs/:id`
 
 Highlights and both Q&A boxes no longer answer on the request. They open a row
@@ -558,3 +560,66 @@ curl -s -o /dev/null -w '%{http_code}\n' \
   "$API/api/answer-jobs/latest?kind=highlights&weddingId=$OURS" \
   -H "Authorization: Bearer $OTHER_COUPLE"
 ```
+
+## Walkthrough recordings go straight to storage — begin and complete
+
+A two-hour walkthrough cannot travel through Railway's proxy, so the browser
+asks for a signed upload URL, PUTs the file at Supabase itself, and then says
+where it put it. Both halves hand out or accept a storage key, so both are
+admin-only: without that a couple could file their own audio, or somebody
+else's, against a walkthrough.
+
+```sh
+WT=…    # id of any row in walkthroughs
+
+# 403 — a couple may not ask for somewhere to upload to
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  $API/api/admin/walkthroughs/$WT/media/begin \
+  -H "Authorization: Bearer $COUPLE" -H 'Content-Type: application/json' \
+  -d '{"kind":"audio","mimetype":"audio/webm","filename":"note.webm","size":1048576}'
+
+# 403 — nor may a couple file a row against one
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  $API/api/admin/walkthroughs/$WT/media/complete \
+  -H "Authorization: Bearer $COUPLE" -H 'Content-Type: application/json' \
+  -d '{"key":"anything","kind":"audio","mimetype":"audio/webm","size":1048576}'
+
+# 401 — no token at all, on both
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  $API/api/admin/walkthroughs/$WT/media/begin \
+  -H 'Content-Type: application/json' \
+  -d '{"kind":"audio","mimetype":"audio/webm","filename":"note.webm","size":1048576}'
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  $API/api/admin/walkthroughs/$WT/media/complete \
+  -H 'Content-Type: application/json' -d '{"key":"anything"}'
+
+# 200 as ADMIN, and the key must sit under this walkthrough's own prefix
+curl -s -X POST $API/api/admin/walkthroughs/$WT/media/begin \
+  -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
+  -d '{"kind":"audio","mimetype":"audio/webm","filename":"walkthrough.webm","size":1048576}' \
+  | jq '{key, hasToken: (.token | length > 0), maxBytes}'
+
+# 400 — a type the bucket does not take, and a kind that argues with the type
+curl -s -X POST $API/api/admin/walkthroughs/$WT/media/begin \
+  -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
+  -d '{"mimetype":"application/x-msdownload","filename":"x.exe","size":10}' | jq -r '.error'
+curl -s -X POST $API/api/admin/walkthroughs/$WT/media/begin \
+  -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
+  -d '{"kind":"audio","mimetype":"image/jpeg","filename":"x.jpg","size":10}' | jq -r '.error'
+
+# 400 — a key belonging to another walkthrough may not be filed here
+curl -s -X POST $API/api/admin/walkthroughs/$WT/media/complete \
+  -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
+  -d "{\"key\":\"$THEIRS/walkthroughs/00000000-0000-0000-0000-000000000000/a.webm\"}" \
+  | jq -r '.error'
+
+# 409 — a key we did hand out, for an upload that never happened. No row is
+# written: a media row pointing at nothing looks exactly like a saved meeting.
+curl -s -X POST $API/api/admin/walkthroughs/$WT/media/complete \
+  -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
+  -d '{"key":"<key from begin, never uploaded to>","mimetype":"audio/webm"}' | jq -r '.error'
+```
+
+Then do it for real: begin, `curl -X PUT --upload-file recording.webm "$signedUrl"`,
+complete. The row must appear on the walkthrough, and `sync_jobs` must hold a
+`transcribe` row that finishes rather than sitting at running for ever.

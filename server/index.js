@@ -33,7 +33,7 @@ import { WALKTHROUGH_TARGETS, TARGET_KEYS, buildNote, organisePrompt, parseItems
 import { extractDocument } from './lib/doc-sync/extract.js';
 import { chunkDocument, sectionsPrompt, mergeSections, parseSectionsResponse } from './lib/doc-sync/sections.js';
 import { buildDocumentDiff, diffSections } from './lib/doc-sync/diff.js';
-import { transcribeAudio, transcriptionConfigured } from './lib/transcribe.js';
+import { transcribeAudioFromUrl, transcriptionConfigured } from './lib/transcribe.js';
 import { enquiryFromEvent, isTour, suggestWedding, parseStatedDate, platformSearchTerms, describeEmailMatch, parseCalculatorEmail, isCalculatorEmail } from './lib/enquiries.js';
 import { venueToday, venueDate, venueDateTime, VENUE_TZ } from '../shared/venue-time.js';
 import { normalizePhone, toE164 } from '../shared/phone.js';
@@ -7250,6 +7250,80 @@ function backgroundSync(kind, runner) {
         });
       });
   };
+}
+
+/**
+ * The same bookkeeping as backgroundSync, for work that is not a route.
+ *
+ * backgroundSync is an Express handler: it owns the request, answers 202 and
+ * then runs. Some detached work starts in the middle of a handler that has its
+ * own answer to give — a recording is stored, the row is written, the reply
+ * goes back, and only then does an hour of Deepgram begin. That used to run as
+ * a bare promise chain whose only record was a console line, so a transcription
+ * that died with the container left a media row with a null transcript, which
+ * reads exactly like one still queued.
+ *
+ * Same table, same statuses, so the sync panel and the boot reaper cover it
+ * without knowing anything new.
+ *
+ * @param {string} kind     what to file this under in sync_jobs
+ * @param {object} detail   recorded on the row; keep it small and non-secret
+ * @param {Function} runner async ({ jobId, bump }) => summary
+ * @returns {Promise<{ jobId: string|null, done: Promise<void> }>}
+ */
+async function runDetachedJob(kind, detail, runner) {
+  const { data: job, error } = await supabaseAdmin.from('sync_jobs')
+    .insert({ kind, trigger: 'manual', status: 'running', detail: detail || {} })
+    .select().single();
+
+  // No row means no record of this run, so say so loudly and do not start it.
+  // Silently carrying on is how the old bare promise behaved, and the whole
+  // point of this helper is that it does not.
+  if (error || !job?.id) {
+    console.error(`Could not open a ${kind} job:`, error?.message || 'no row came back');
+    return { jobId: null, done: Promise.resolve() };
+  }
+
+  const bump = (fields) => supabaseAdmin.from('sync_jobs')
+    .update({ ...fields, heartbeat_at: new Date().toISOString() }).eq('id', job.id)
+    .then(({ error: upErr }) => {
+      if (upErr) console.error(`Could not update ${kind} job ${job.id}:`, upErr.message);
+    });
+
+  // On a timer rather than per item. The work this runs is often one long call
+  // with nothing to count, and the sync panel calls a job stalled after five
+  // minutes without a beat — which a two-hour recording going through Deepgram
+  // would trip while it was working perfectly well.
+  const beat = setInterval(() => {
+    bump({}).catch(err => console.error(`${kind} heartbeat failed:`, err?.message || err));
+  }, 15_000);
+  if (typeof beat.unref === 'function') beat.unref();
+
+  const done = (async () => {
+    try {
+      const summary = (await runner({ jobId: job.id, bump })) || {};
+      await bump({
+        status: 'finished',
+        finished_at: new Date().toISOString(),
+        processed: summary.processed || 0,
+        failed: summary.failed || 0,
+        last_error: summary.error || null,
+        detail: { ...(detail || {}), ...(summary.detail || {}) },
+      });
+    } catch (err) {
+      console.error(`${kind} job ${job.id} failed:`, err?.message || err);
+      await bump({
+        status: 'failed',
+        finished_at: new Date().toISOString(),
+        failed: 1,
+        last_error: String(err?.message || err),
+      });
+    } finally {
+      clearInterval(beat);
+    }
+  })();
+
+  return { jobId: job.id, done };
 }
 
 // What have the syncs been doing? Answers "did it finish, and if not where did
@@ -16366,80 +16440,308 @@ app.get('/api/admin/walkthroughs/:id/media', requireAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Getting a two-hour recording into the bucket ───────────────────────────
+//
+// The multipart route below sends the whole recording through this server, and
+// therefore through Railway's edge proxy, which gives up at about fifty
+// seconds. A phone photo makes it. A final walkthrough does not: the
+// walkthrough recorded at 20:46 UTC on 15 September has no media row at all,
+// because the browser was still uploading when the proxy closed the
+// connection, and what the venue saw was an hour of talking that had gone
+// nowhere.
+//
+// The fix is to stop sending the bytes through here. The browser asks for a
+// signed upload URL, PUTs the file straight at Supabase Storage — no proxy, no
+// timeout, resumable by the browser's own retry — and then tells us the key.
+// Two short requests either side of a long upload that this server is not part
+// of.
+//
+// The multipart route stays for small files and for anything already built
+// against it.
+
+const DAY_OF_MEDIA_BUCKET = 'day-of-media';
+
+/**
+ * The cap the browser is told about before it starts.
+ *
+ * Storage enforces the bucket's own `file_size_limit` whatever this says; the
+ * number here exists so a file that is going to be refused is refused now
+ * rather than after an hour of uploading. It has to be kept in step with
+ * migration 038, which raises the bucket to 500 MB — the bucket was created in
+ * 016 with no limit set, so it has been sitting on the project default of
+ * 50 MB, under which no real walkthrough has ever fitted.
+ */
+const WALKTHROUGH_MAX_BYTES = 500 * 1024 * 1024;
+
+/**
+ * What a walkthrough recording is allowed to be.
+ *
+ * The same list the dayOfMediaUpload multer filter applies, restated because
+ * the signed-URL path never goes near multer. If one list changes the other
+ * has to: the two routes write into the same bucket and the same table, and a
+ * type one accepts and the other refuses is a bug that only shows up on one
+ * phone.
+ */
+const WALKTHROUGH_MEDIA_MIME = [
+  'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'image/gif',
+  'video/mp4', 'video/quicktime', 'video/webm', 'video/x-msvideo',
+  'audio/webm', 'audio/mp4', 'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/x-m4a', 'audio/aac',
+];
+
+/** Codec suffixes ride along on what a browser reports, so match the base type. */
+const baseMime = (value) => String(value || '').split(';')[0].trim().toLowerCase();
+
+/**
+ * Where this walkthrough's files live.
+ *
+ * A tour has no wedding to file the audio under, so it goes under the enquiry
+ * instead. Same bucket, same shape of path. Everything written for a
+ * walkthrough sits under this prefix, which is also what lets `complete` refuse
+ * a key belonging to somebody else.
+ */
+const walkthroughPrefix = (wt) => `${wt.wedding_id || `enquiries/${wt.enquiry_id}`}/walkthroughs/${wt.id}`;
+
+/** The walkthrough, or null. Raises on a read failure so a blip is not a 404. */
+async function loadWalkthrough(id) {
+  const { data, error } = await supabaseAdmin
+    .from('walkthroughs').select('id, wedding_id, enquiry_id').eq('id', id).maybeSingle();
+  if (error) throw new Error(`Could not read that walkthrough: ${error.message}`);
+  return data || null;
+}
+
+/**
+ * Read a stored recording and write the transcript onto its row.
+ *
+ * Deepgram is handed a signed link rather than the bytes: see
+ * transcribeAudioFromUrl. Nothing here throws at a caller, because by the time
+ * it runs the recording is already safe in the bucket and the person who made
+ * it has had their answer. What it does instead is leave a sync_jobs row that
+ * says how it went, and set transcript_error when it went badly — a null
+ * transcript is also what "queued" looks like and what "silent recording"
+ * looks like, so a dead Deepgram key used to read as a slow one for as long as
+ * nobody checked.
+ */
+async function transcribeWalkthroughMedia(media) {
+  const { data: signed, error: signErr } = await supabaseAdmin.storage
+    .from(DAY_OF_MEDIA_BUCKET).createSignedUrl(media.storage_path, 60 * 60 * 6);
+  if (signErr) throw new Error(`Could not open the recording for transcription: ${signErr.message}`);
+  if (!signed?.signedUrl) throw new Error('Could not open the recording for transcription: no URL came back');
+
+  const r = await transcribeAudioFromUrl(signed.signedUrl);
+
+  if (r.ok) {
+    const { error: saveErr } = await supabaseAdmin.from('walkthrough_media').update({
+      transcript: r.transcript,
+      duration_secs: r.durationSecs || media.duration_secs || null,
+      ...(has035('transcript') ? { transcript_error: null } : {}),
+    }).eq('id', media.id);
+    if (saveErr) throw new Error(`Transcribed but could not be saved: ${saveErr.message}`);
+    console.log(`[transcribe] ${media.id}: ${r.transcript.length} chars`);
+    return { processed: 1, detail: { chars: r.transcript.length, durationSecs: r.durationSecs || null } };
+  }
+
+  console.error(`[transcribe] ${media.id} failed: ${r.error}`);
+  if (has035('transcript')) {
+    const { error: errSaveErr } = await supabaseAdmin.from('walkthrough_media')
+      .update({ transcript_error: String(r.error).slice(0, 500) }).eq('id', media.id);
+    if (errSaveErr) console.error(`[transcribe] ${media.id}: could not record the failure: ${errSaveErr.message}`);
+  }
+  return { failed: 1, error: String(r.error).slice(0, 500) };
+}
+
+/**
+ * Everything that happens once the bytes are in the bucket.
+ *
+ * Both upload routes end here, so the row, the public URL and the
+ * transcription are written once and behave the same whichever way the file
+ * arrived.
+ */
+async function recordWalkthroughMedia(wt, { storagePath, mimetype, caption, durationSecs }) {
+  const isAudio = baseMime(mimetype).startsWith('audio/');
+  const { data: { publicUrl } } = supabaseAdmin.storage.from(DAY_OF_MEDIA_BUCKET).getPublicUrl(storagePath);
+
+  const { data, error } = await supabaseAdmin.from('walkthrough_media').insert({
+    walkthrough_id: wt.id,
+    wedding_id: wt.wedding_id,
+    kind: isAudio ? 'audio' : 'photo',
+    url: publicUrl,
+    storage_path: storagePath,
+    caption: caption || null,
+    duration_secs: durationSecs || null,
+  }).select().single();
+  if (error) throw new Error(`The recording is stored but could not be filed: ${error.message}`);
+
+  // Transcribe after, not during. A ninety-minute walkthrough takes Deepgram a
+  // while, and holding the request open for it risks the same proxy timeout
+  // this whole path exists to get out of the way of.
+  let transcriptJobId = null;
+  if (isAudio && transcriptionConfigured()) {
+    const started = await runDetachedJob(
+      'transcribe',
+      { mediaId: data.id, walkthroughId: wt.id, weddingId: wt.wedding_id || null },
+      () => transcribeWalkthroughMedia(data),
+    );
+    transcriptJobId = started.jobId;
+  }
+
+  return { ...data, transcriptionPending: isAudio && transcriptionConfigured(), transcriptJobId };
+}
+
+/**
+ * Step one: ask for somewhere to put it.
+ *
+ * Answers in milliseconds and spends nothing. The browser then PUTs the file
+ * to `signedUrl` itself; this server does not see a byte of it.
+ */
+app.post('/api/admin/walkthroughs/:id/media/begin', requireAdmin, async (req, res) => {
+  try {
+    const wt = await loadWalkthrough(req.params.id);
+    if (!wt) return res.status(404).json({ error: 'Walkthrough not found' });
+
+    const mimetype = baseMime(req.body?.mimetype);
+    if (!mimetype) return res.status(400).json({ error: 'mimetype is required' });
+    if (!WALKTHROUGH_MEDIA_MIME.includes(mimetype)) {
+      return res.status(400).json({ error: `File type not allowed: ${req.body?.mimetype}` });
+    }
+
+    // kind is the client saying what it thinks it is recording. It is checked
+    // against the type rather than trusted, because it decides which rows the
+    // panel shows as recordings and which as photographs.
+    const derived = mimetype.startsWith('audio/') ? 'audio' : 'photo';
+    const kind = req.body?.kind ? String(req.body.kind) : derived;
+    if (kind !== derived) {
+      return res.status(400).json({ error: `A ${mimetype} file is a ${derived}, not a ${kind}` });
+    }
+
+    const size = Number(req.body?.size);
+    if (!Number.isFinite(size) || size <= 0) {
+      return res.status(400).json({ error: 'size must be the number of bytes about to be uploaded' });
+    }
+    if (size > WALKTHROUGH_MAX_BYTES) {
+      const mb = (n) => Math.round(n / (1024 * 1024));
+      return res.status(400).json({
+        error: `That recording is ${mb(size)} MB and the limit is ${mb(WALKTHROUGH_MAX_BYTES)} MB.`,
+      });
+    }
+
+    const key = `${walkthroughPrefix(wt)}/${safeStorageKey(req.body?.filename)}`;
+    const { data, error } = await supabaseAdmin.storage
+      .from(DAY_OF_MEDIA_BUCKET).createSignedUploadUrl(key);
+    if (error) {
+      console.error('Walkthrough upload URL failed:', error.message);
+      return res.status(500).json({ error: `Could not open a place to upload to: ${error.message}` });
+    }
+
+    res.json({
+      key,
+      token: data.token,
+      signedUrl: data.signedUrl,
+      bucket: DAY_OF_MEDIA_BUCKET,
+      kind,
+      maxBytes: WALKTHROUGH_MAX_BYTES,
+    });
+  } catch (e) {
+    console.error('Walkthrough media begin error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * Step two: the bytes are there, file them.
+ *
+ * The object is confirmed before a row is written, so a failed or abandoned
+ * upload cannot leave a media row pointing at nothing — which on this screen
+ * would look exactly like a recording that exists.
+ */
+app.post('/api/admin/walkthroughs/:id/media/complete', requireAdmin, async (req, res) => {
+  try {
+    const wt = await loadWalkthrough(req.params.id);
+    if (!wt) return res.status(404).json({ error: 'Walkthrough not found' });
+
+    const key = String(req.body?.key || '');
+    if (!key) return res.status(400).json({ error: 'key is required' });
+
+    // The key has to be one we handed out for this walkthrough. Without this a
+    // caller could file another couple's recording against their own tour, and
+    // the delete route would then remove that couple's audio.
+    const prefix = `${walkthroughPrefix(wt)}/`;
+    if (!key.startsWith(prefix) || key.slice(prefix.length).includes('/')) {
+      return res.status(400).json({ error: 'That key does not belong to this walkthrough' });
+    }
+
+    const mimetype = baseMime(req.body?.mimetype);
+    if (mimetype && !WALKTHROUGH_MEDIA_MIME.includes(mimetype)) {
+      return res.status(400).json({ error: `File type not allowed: ${req.body?.mimetype}` });
+    }
+
+    // Is it actually there? An upload that failed halfway leaves no object, and
+    // a row written anyway is worse than no row: the panel shows a recording,
+    // the link 404s, and the meeting looks saved.
+    const name = key.slice(prefix.length);
+    const { data: listed, error: listErr } = await supabaseAdmin.storage
+      .from(DAY_OF_MEDIA_BUCKET)
+      .list(walkthroughPrefix(wt), { limit: 1, search: name });
+    if (listErr) {
+      console.error('Walkthrough media confirm failed:', listErr.message);
+      return res.status(500).json({ error: `Could not check the upload: ${listErr.message}` });
+    }
+    const object = (listed || []).find(o => o.name === name);
+    if (!object) {
+      return res.status(409).json({ error: 'That upload is not in storage. Nothing was filed; try uploading again.' });
+    }
+
+    // A size the browser reported and a size the bucket holds that disagree
+    // mean a truncated upload, and a truncated recording transcribes to a
+    // meeting that stops halfway with nothing saying it did.
+    const claimed = Number(req.body?.size);
+    const stored = Number(object?.metadata?.size);
+    if (Number.isFinite(claimed) && Number.isFinite(stored) && stored > 0 && claimed > 0 && claimed !== stored) {
+      return res.status(409).json({
+        error: `Only ${stored} of ${claimed} bytes arrived, so the recording is incomplete. Nothing was filed; try uploading again.`,
+      });
+    }
+
+    const seconds = parseInt(req.body?.duration_secs, 10);
+    const media = await recordWalkthroughMedia(wt, {
+      storagePath: key,
+      mimetype: mimetype || baseMime(object?.metadata?.mimetype),
+      caption: req.body?.caption || null,
+      durationSecs: Number.isFinite(seconds) && seconds > 0 ? seconds : null,
+    });
+    res.json(media);
+  } catch (e) {
+    console.error('Walkthrough media complete error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * The old path, kept for small files.
+ *
+ * Fine for a photograph. Anything long should go through begin/complete: this
+ * one carries the whole file through Railway's proxy and dies at about fifty
+ * seconds however big the bucket's cap is.
+ */
 app.post('/api/admin/walkthroughs/:id/media', requireAdmin, dayOfMediaUpload.single('file'), async (req, res) => {
   try {
     const file = req.file;
     if (!file) return res.status(400).json({ error: 'No file provided' });
-    const { data: wt, error: we } = await supabaseAdmin
-      .from('walkthroughs').select('id, wedding_id, enquiry_id').eq('id', req.params.id).single();
-    if (we || !wt) return res.status(404).json({ error: 'Walkthrough not found' });
+    const wt = await loadWalkthrough(req.params.id);
+    if (!wt) return res.status(404).json({ error: 'Walkthrough not found' });
 
-    const isAudio = String(file.mimetype || '').startsWith('audio/');
-    const safeExt = (file.originalname.split('.').pop() || (isAudio ? 'webm' : 'jpg')).toLowerCase().replace(/[^a-z0-9]/g, '');
-    // A tour has no wedding to file the audio under, so it goes under the
-    // enquiry instead. Same bucket, same shape of path.
-    const owner = wt.wedding_id || `enquiries/${wt.enquiry_id}`;
-    const path = `${owner}/walkthroughs/${wt.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${safeExt}`;
-
+    const path = `${walkthroughPrefix(wt)}/${safeStorageKey(file.originalname)}`;
     const { error: upErr } = await supabaseAdmin.storage
-      .from('day-of-media').upload(path, file.buffer, { contentType: file.mimetype, upsert: false });
+      .from(DAY_OF_MEDIA_BUCKET).upload(path, file.buffer, { contentType: file.mimetype, upsert: false });
     if (upErr) throw upErr;
-    const { data: { publicUrl } } = supabaseAdmin.storage.from('day-of-media').getPublicUrl(path);
 
-    const { data, error } = await supabaseAdmin.from('walkthrough_media').insert({
-      walkthrough_id: wt.id,
-      wedding_id: wt.wedding_id,
-      kind: isAudio ? 'audio' : 'photo',
-      url: publicUrl,
-      storage_path: path,
+    const seconds = parseInt(req.body.duration_secs, 10);
+    const media = await recordWalkthroughMedia(wt, {
+      storagePath: path,
+      mimetype: file.mimetype,
       caption: req.body.caption || null,
-      duration_secs: req.body.duration_secs ? parseInt(req.body.duration_secs, 10) || null : null,
-    }).select().single();
-    if (error) throw error;
-
-    // Answer now, transcribe after.
-    //
-    // A ninety-minute walkthrough takes Deepgram a while, and holding the
-    // request open for it risks a proxy timeout that would look to the user
-    // like the recording failed — when the audio is already safely stored.
-    // The row is updated when it finishes and the panel picks it up.
-    res.json({ ...data, transcriptionPending: isAudio && transcriptionConfigured() });
-
-    if (isAudio && transcriptionConfigured()) {
-      transcribeAudio(file.buffer, file.mimetype)
-        .then(async (r) => {
-          if (r.ok) {
-            const { error: saveErr } = await supabaseAdmin.from('walkthrough_media').update({
-              transcript: r.transcript,
-              duration_secs: r.durationSecs || data.duration_secs || null,
-              ...(has035('transcript') ? { transcript_error: null } : {}),
-            }).eq('id', data.id);
-            if (saveErr) console.error(`[transcribe] ${data.id}: transcribed but could not be saved: ${saveErr.message}`);
-            else console.log(`[transcribe] ${data.id}: ${r.transcript.length} chars`);
-          } else {
-            // Recorded but not readable, and now it says so.
-            //
-            // transcript stayed null, which is also what "queued" looks like
-            // and what "silent recording" looks like, so a dead Deepgram key
-            // read as a slow one for as long as nobody checked. The recording
-            // itself is safe either way; this is about the panel telling the
-            // truth about it.
-            console.error(`[transcribe] ${data.id} failed: ${r.error}`);
-            if (has035('transcript')) {
-              const { error: errSaveErr } = await supabaseAdmin.from('walkthrough_media')
-                .update({ transcript_error: String(r.error).slice(0, 500) }).eq('id', data.id);
-              if (errSaveErr) console.error(`[transcribe] ${data.id}: could not record the failure: ${errSaveErr.message}`);
-            }
-          }
-        })
-        .catch(async err => {
-          console.error(`[transcribe] ${data.id} unexpected:`, err.message);
-          if (has035('transcript')) {
-            await supabaseAdmin.from('walkthrough_media')
-              .update({ transcript_error: String(err.message).slice(0, 500) }).eq('id', data.id);
-          }
-        });
-    }
+      durationSecs: Number.isFinite(seconds) && seconds > 0 ? seconds : null,
+    });
+    res.json(media);
   } catch (e) {
     console.error('Walkthrough media upload error:', e);
     res.status(500).json({ error: e.message });
