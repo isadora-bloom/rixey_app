@@ -9821,8 +9821,7 @@ app.post('/api/vendor-portal/:token/photos', upload.single('photo'), async (req,
 
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
-    const ext = req.file.originalname.split('.').pop().toLowerCase();
-    const filename = `${vendor.id}/${Date.now()}.${ext}`;
+    const filename = `${vendor.id}/${safeStorageKey(req.file.originalname)}`;
     const { error: upErr } = await supabaseAdmin.storage
       .from('vendor-photos')
       .upload(filename, req.file.buffer, { contentType: req.file.mimetype, upsert: false });
