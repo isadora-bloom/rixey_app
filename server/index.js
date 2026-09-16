@@ -12362,24 +12362,26 @@ app.post('/api/borrow-selections', async (req, res) => {
     }
 
     // Fetch all currently selected item names for this wedding
-    const { data: allSelections } = await supabaseAdmin
+    const { data: allSelections, error: listErr } = await supabaseAdmin
       .from('wedding_borrow_selections')
       .select('borrow_catalog(item_name)')
       .eq('wedding_id', weddingId);
+    if (listErr) throw listErr;
 
     const itemNames = (allSelections || [])
       .map(s => s.borrow_catalog?.item_name)
       .filter(Boolean);
 
     // Replace existing borrow_selection note with updated list (delete + insert)
-    await supabaseAdmin
+    const { error: clearErr } = await supabaseAdmin
       .from('planning_notes')
       .delete()
       .eq('wedding_id', weddingId)
       .eq('category', 'borrow_selection');
+    if (clearErr) throw clearErr;
 
     if (itemNames.length > 0) {
-      await supabaseAdmin
+      const { error: noteErr } = await supabaseAdmin
         .from('planning_notes')
         .insert({
           wedding_id: weddingId,
@@ -12387,6 +12389,7 @@ app.post('/api/borrow-selections', async (req, res) => {
           content: `Couple wants to borrow: ${itemNames.join(', ')}`,
           status: 'confirmed',
         });
+      if (noteErr) throw noteErr;
     }
 
     res.json({ success: true, selectedCount: itemNames.length });
@@ -12406,22 +12409,23 @@ app.post('/api/admin/borrow-catalog', upload.single('image'), async (req, res) =
 
     // Upload image to Supabase storage if provided
     if (req.file) {
-      const ext = req.file.mimetype.split('/')[1] || 'jpg';
-      const fileName = `${Date.now()}-${item_name.replace(/\s+/g, '-').toLowerCase()}.${ext}`;
-      const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
+      const fileName = safeStorageKey(req.file.originalname);
+      const { error: uploadError } = await supabaseAdmin.storage
         .from('borrow-catalog')
         .upload(fileName, req.file.buffer, {
           contentType: req.file.mimetype,
           upsert: false,
         });
+      // A silently dropped image used to mean the item was created anyway,
+      // captioned with a picture nobody uploaded. Refuse instead.
       if (uploadError) {
-        console.error('Image upload error:', uploadError);
-      } else {
-        const { data: urlData } = supabaseAdmin.storage
-          .from('borrow-catalog')
-          .getPublicUrl(fileName);
-        image_url = urlData?.publicUrl || null;
+        console.error('Borrow catalog image upload error:', uploadError);
+        return res.status(500).json({ error: `Could not store the image (${uploadError.message}); the item was not created.` });
       }
+      const { data: urlData } = supabaseAdmin.storage
+        .from('borrow-catalog')
+        .getPublicUrl(fileName);
+      image_url = urlData?.publicUrl || null;
     }
 
     const { data: newItem, error } = await supabaseAdmin
