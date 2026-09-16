@@ -16643,10 +16643,11 @@ app.post('/api/admin/walkthroughs/:id/media', requireAdmin, dayOfMediaUpload.sin
 app.delete('/api/admin/walkthrough-media/:id', requireAdmin, async (req, res) => {
   try {
     const { data: row, error: readErr } = await supabaseAdmin
-      .from('walkthrough_media').select('storage_path').eq('id', req.params.id).maybeSingle();
+      .from('walkthrough_media').select('wedding_id, storage_path, kind').eq('id', req.params.id).maybeSingle();
     // Not knowing whether there is a file means not deleting the row. Carrying
     // on would orphan whatever is in the bucket with nothing left pointing at it.
     if (readErr) throw new Error(`Could not read the recording: ${readErr.message}`);
+    if (!row) return res.status(404).json({ error: 'No such recording' });
 
     // The file first, and stop if it will not go.
     //
@@ -16663,10 +16664,16 @@ app.delete('/api/admin/walkthrough-media/:id', requireAdmin, async (req, res) =>
         });
       }
     }
-    const { error } = await supabaseAdmin.from('walkthrough_media').delete().eq('id', req.params.id);
+    const { data, error } = await supabaseAdmin
+      .from('walkthrough_media').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such recording' });
+
+    if (row.wedding_id) {
+      await logActivity(row.wedding_id, req.userId, 'walkthrough_media_deleted', row.kind || `id ${req.params.id}`);
+    }
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { console.error('Delete walkthrough media error:', e); res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/admin/walkthroughs/:id/items', requireAdmin, async (req, res) => {
