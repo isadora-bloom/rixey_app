@@ -14,7 +14,7 @@ export default function DashboardChat({
   clearSelectedFile,
   uploadingFile,
   retryState,
-  setRetryState,
+  onRetryNow,
   chatContainerRef,
   messagesEndRef,
   portalActions,
@@ -114,13 +114,27 @@ export default function DashboardChat({
               <span className="text-sage-600 font-serif text-xs sm:text-sm">S</span>
             </div>
             <div className="bg-amber-50 border border-amber-200 text-sage-700 px-4 py-3 rounded-2xl rounded-bl-md max-w-[85%] sm:max-w-[80%]">
-              <p className="text-sm">Having trouble connecting. Retrying in {retryState.secondsLeft}s…</p>
-              <button
-                onClick={() => setRetryState(prev => prev ? { ...prev, secondsLeft: 0 } : null)}
-                className="text-xs text-sage-500 underline mt-1 hover:text-sage-700"
-              >
-                Try now
-              </button>
+              {retryState.exhausted ? (
+                <>
+                  <p className="text-sm">Still having trouble reaching Sage after a few tries.</p>
+                  <button
+                    onClick={onRetryNow}
+                    className="text-xs text-sage-600 underline mt-1 hover:text-sage-800 font-medium"
+                  >
+                    Retry
+                  </button>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm">Having trouble connecting. Retrying in {retryState.secondsLeft}s…</p>
+                  <button
+                    onClick={onRetryNow}
+                    className="text-xs text-sage-500 underline mt-1 hover:text-sage-700"
+                  >
+                    Try now
+                  </button>
+                </>
+              )}
             </div>
           </div>
         )}
