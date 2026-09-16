@@ -7906,8 +7906,14 @@ app.get('/api/zoom/transcripts', async (req, res) => {
 });
 
 // Re-extract planning notes from already-processed Zoom transcripts
-app.post('/api/zoom/reextract', async (req, res) => {
-  try {
+//
+// One Claude extraction per transcript, over every transcript on file. Rixey
+// has a couple of hundred, so this was minutes of work on a request the proxy
+// closed after fifty seconds — and because the loop kept running afterwards,
+// pressing the button again while the first run was still going doubled the
+// spend and the notes. A job row, like every other long import here.
+app.post('/api/zoom/reextract', backgroundSync('zoom-reextract', async (body, { bump }) => {
+  {
     let sources = [];
 
     // Primary: processed_zoom_meetings table
@@ -7949,11 +7955,14 @@ app.post('/api/zoom/reextract', async (req, res) => {
     }
 
     if (sources.length === 0) {
-      return res.json({ message: 'No Zoom transcripts found to re-extract from.' });
+      return { processed: 0, detail: { message: 'No Zoom transcripts found to re-extract from.' } };
     }
+
+    await bump({ total: sources.length });
 
     let totalNotes = 0;
     let failedSources = 0;
+    let done = 0;
     for (const src of sources) {
       const { notes, error: extractErr } = await extractPlanningNotesAI(
         src.text, src.wedding_id, `Zoom meeting: ${src.label}`, 'transcript',
@@ -7969,18 +7978,23 @@ app.post('/api/zoom/reextract', async (req, res) => {
       } else if (!extractErr) {
         console.log(`No notes extracted from "${src.label}" (text length: ${src.text?.length || 0})`);
       }
+      // Where it got to, per transcript, so a run killed halfway says so
+      // instead of looking like a run that found nothing.
+      done++;
+      await bump({ processed: done, failed: failedSources, last_item: src.label });
     }
 
-    res.json({
-      message: `Re-extracted ${totalNotes} planning notes from ${sources.length} transcript(s).`
-        + (failedSources ? ` ${failedSources} transcript(s) could not be read.` : ''),
-      failedSources,
-    });
-  } catch (error) {
-    console.error('Re-extract error:', error);
-    res.status(500).json({ error: 'Failed to re-extract: ' + error.message });
+    return {
+      processed: sources.length,
+      failed: failedSources,
+      detail: {
+        notes: totalNotes,
+        message: `Re-extracted ${totalNotes} planning notes from ${sources.length} transcript(s).`
+          + (failedSources ? ` ${failedSources} transcript(s) could not be read.` : ''),
+      },
+    };
   }
-});
+}));
 
 // Force resync: clear all processed Zoom data so next Sync re-downloads everything fresh
 app.post('/api/zoom/clear', async (req, res) => {
@@ -11045,20 +11059,25 @@ async function runCalendlySync(body = {}) {
   };
 }
 
-// The button. Same import, answered inline so the admin panel can show the
-// result it has always shown rather than a job id to go and watch.
-app.post('/api/admin/enquiries/sync', requireAdmin, async (req, res) => {
-  try {
-    const summary = await runCalendlySync(req.body || {});
-    res.json({ ...summary.detail });
-  } catch (error) {
-    console.error('Enquiry sync error:', error);
-    // A missing token is a configuration answer, not a server fault, and the
-    // panel has always shown it as a 400.
-    const status = /not configured/i.test(error.message || '') ? 400 : 500;
-    res.status(status).json({ error: error.message });
+// The button. Same import the cron runs, now against a job row like the other
+// three.
+//
+// It was answered inline so the panel could show the result straight away, and
+// that held for a fortnight of diary. Fourteen days of a busy season is a
+// hundred events, each of them a Calendly read and a match against the wedding
+// book, and a catch-up run after an outage passes sinceDays of up to a year.
+// Both are well past the fifty seconds Railway's proxy allows, and what the
+// admin saw then was a CORS failure on a sync that was working.
+//
+// A missing token stays a 400 on the request. It is a configuration answer,
+// not a run that failed, and telling somebody a sync has started when there is
+// nothing to start it with is the kind of lie this whole plan is about.
+app.post('/api/admin/enquiries/sync', requireAdmin, (req, res, next) => {
+  if (!process.env.CALENDLY_API_TOKEN) {
+    return res.status(400).json({ error: 'Calendly API token not configured' });
   }
-});
+  next();
+}, backgroundSync('calendly', (body) => runCalendlySync(body)));
 
 /**
  * The diary, newest meeting first among the upcoming ones.
