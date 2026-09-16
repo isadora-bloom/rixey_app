@@ -22,7 +22,7 @@ import { validateBody } from './middleware/validate.js';
 import { coerceBody } from './middleware/coerce.js';
 import { fetchAllTabs, SheetFetchError } from './lib/sheet-fetcher.js';
 import { buildDiff, applyChoices } from './lib/sheet-diff/index.js';
-import { guestFullName, plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, headcount, parsePlusOneCell, usesPersonModel, personDisplayName, toParties, allPeople } from '../shared/guest-names.js';
+import { guestFullName, plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, headcount, usesPersonModel, personDisplayName, toParties, allPeople } from '../shared/guest-names.js';
 import { sendsConfirmation } from '../shared/rsvp-fields.js';
 import { isSameVendor, vendorKey } from '../shared/vendor-names.js';
 import { GUEST_FIELD_KEYS, ADDRESS_PART_KEYS, isMappableKey, tagLabelOf } from '../shared/guest-csv.js';
@@ -33,6 +33,11 @@ import { WALKTHROUGH_TARGETS, TARGET_KEYS, buildNote, organisePrompt, parseItems
 import { extractDocument } from './lib/doc-sync/extract.js';
 import { chunkDocument, sectionsPrompt, mergeSections, parseSectionsResponse } from './lib/doc-sync/sections.js';
 import { buildDocumentDiff, diffSections } from './lib/doc-sync/diff.js';
+import { commitSeatingToGuests } from './lib/seating-import.js';
+import {
+  bulkImportFault, buildImportRow, updatePatch, parseRsvpValue, splitPlusOneName,
+  plusOneRowPatch, hostMirrorPatch, inChunks,
+} from './lib/guest-import.js';
 import { transcribeAudio, transcriptionConfigured } from './lib/transcribe.js';
 import { enquiryFromEvent, isTour, suggestWedding, parseStatedDate, platformSearchTerms, describeEmailMatch, parseCalculatorEmail, isCalculatorEmail } from './lib/enquiries.js';
 import { venueToday, venueDate, venueDateTime, VENUE_TZ } from '../shared/venue-time.js';
@@ -3527,7 +3532,7 @@ async function buildWeddingContext(weddingId, { noteLimit = 400 } = {}) {
       { data: guestCareRows },
       { data: internalNotes },
       { data: wedding },
-      { data: guestRows },
+      { data: guestRows, error: guestErr },
     ] = await Promise.all([
       supabaseAdmin.from('contracts').select('filename, extracted_text').eq('wedding_id', weddingId).is('superseded_by', null),
       supabaseAdmin.from('planning_notes').select('category, content, source_message, created_at').eq('wedding_id', weddingId).order('created_at', { ascending: false }),
@@ -3554,7 +3559,10 @@ async function buildWeddingContext(weddingId, { noteLimit = 400 } = {}) {
       // model it is looking at from the rows themselves. Leave them out and it
       // falls back to the old shape, counts the new plus-one rows as guests AND
       // expands plus_one_name off the hosts, and reports everybody twice.
-      supabaseAdmin.from('wedding_guests').select('id, first_name, last_name, rsvp, plus_one_name, plus_one_rsvp, party_id, is_plus_one, plus_one_of').eq('wedding_id', weddingId),
+      // Paged: a wedding past a thousand rows was answering questions about
+      // its guest list with the first thousand of it and no sign of the rest.
+      allGuestRows(weddingId, 'id, first_name, last_name, rsvp, plus_one_name, plus_one_rsvp, party_id, is_plus_one, plus_one_of', 'id')
+        .then(rows => ({ data: rows, error: null }), err => ({ data: null, error: err })),
     ]);
 
     // Build comprehensive context
@@ -3578,6 +3586,9 @@ async function buildWeddingContext(weddingId, { noteLimit = 400 } = {}) {
       const plannedGuests = staffingRow?.answers?.guestCount;
       if (plannedGuests) fullContext += `Planned guest count: ${plannedGuests}\n`;
       // People, including plus ones, since that is what Sage gets asked about.
+      // A read that failed is said out loud: a silent nothing here reads as a
+      // wedding with no guests, and gets answered as one.
+      if (guestErr) fullContext += `Guest list: could not be read just now (${guestErr.message}). Say so rather than answering as though nobody is coming.\n`;
       const heads = headcount(guestRows || []);
       if (heads.total) {
         // Invitations are parties, which stopped being the same as rows the
@@ -13683,19 +13694,27 @@ app.post('/api/ceremony-plan/:weddingId', async (req, res) => {
 
 // ─── Guest Management ──────────────────────────────────────────────────────────
 
+/**
+ * Every guest at a wedding, not the first thousand of them.
+ *
+ * Supabase caps a read at 1,000 rows and says nothing about it, which is the
+ * recurring bug of this project. A 400-guest wedding is 800 rows once plus
+ * ones have rows of their own, and two of those fit inside one venue. Ordered,
+ * because paging an unordered read can hand back the same row twice and miss
+ * another.
+ */
+async function allGuestRows(weddingId, columns = '*', order = 'created_at') {
+  return allVendorRows('wedding_guests', columns, q =>
+    q.eq('wedding_id', weddingId).order(order, { ascending: true }));
+}
+
 // GET all guests for a wedding
 app.get('/api/guests/:weddingId', async (req, res) => {
   try {
-    const { data, error } = await supabaseAdmin
-      .from('wedding_guests')
-      .select('*')
-      .eq('wedding_id', req.params.weddingId)
-      .order('created_at', { ascending: true });
-    if (error) throw error;
-    res.json({ guests: data || [] });
+    res.json({ guests: await allGuestRows(req.params.weddingId) });
   } catch (err) {
     console.error('Get guests error:', err);
-    res.status(500).json({ error: 'Failed to get guests' });
+    res.status(500).json({ error: `Failed to get guests: ${err.message}` });
   }
 });
 
@@ -13774,6 +13793,11 @@ app.put('/api/guest-settings/:weddingId', async (req, res) => {
  * shared/guest-names.js ignores the columns as soon as a plus-one row exists,
  * so nobody is counted twice while both are in use.
  *
+ * The copying is not symmetrical. Creating the row takes everything the host's
+ * columns say. After that the plus one may have answered for themselves, so
+ * only what they have left blank is filled in, and mirrorPlusOneToHost carries
+ * their own edits back the other way.
+ *
  * Never throws: a guest edit that saved must not fail because the mirror did.
  * It shouts instead.
  */
@@ -13801,26 +13825,14 @@ async function syncPlusOneRow(host) {
 
     // A placeholder is kept as written and shown as "Guest"; a single name
     // leaves last_name null so the host's surname stays inherited on read.
-    const tidied = wanted.replace(/^[*.\s]+/, '').replace(/[*.\s]+$/, '').trim();
-    let first = wanted, last = null;
-    if (tidied && isNamedPerson(tidied)) {
-      const parts = tidied.split(/\s+/);
-      first = parts.length === 1 ? parts[0] : parts.slice(0, -1).join(' ');
-      last = parts.length === 1 ? null : parts[parts.length - 1];
-    }
+    const { first_name, last_name } = splitPlusOneName(wanted, isNamedPerson(wanted));
 
-    const row = {
-      wedding_id: host.wedding_id,
-      party_id: host.party_id || host.id,
-      is_plus_one: true,
-      plus_one_of: host.id,
-      first_name: first,
-      last_name: last,
-      rsvp: host.plus_one_rsvp || 'pending',
-      meal_choice: host.plus_one_meal_choice || null,
-      dietary_restrictions: host.plus_one_dietary || null,
-      updated_at: new Date().toISOString(),
-    };
+    // What the host's columns are allowed to say about the person row. On
+    // creation, everything: the columns are all there is. Afterwards, only
+    // what the plus one has not answered for themselves, because a guest who
+    // RSVP'd through the website and chose the fish had that undone every time
+    // the couple opened their host's row and saved it.
+    const row = { ...plusOneRowPatch(host, existing), first_name, last_name };
 
     if (existing) {
       // table_assignment, email, phone and tags are the plus one's own from
@@ -13835,6 +13847,24 @@ async function syncPlusOneRow(host) {
   } catch (err) {
     console.error(`[guests] could not sync the plus-one row for ${host.id}:`, err.message);
   }
+}
+
+/**
+ * The other direction: a plus one's own row back onto their host's columns.
+ *
+ * Both shapes are live and both are read, so an edit has to travel both ways.
+ * This was the missing half: someone corrected a plus one's meal on their row,
+ * the host's plus_one_meal_choice still said the old thing, and the next save
+ * of the host copied it straight back down. The change looked like it had not
+ * saved, twice, which is how it was reported.
+ *
+ * Never throws, for the same reason as syncPlusOneRow: the edit did save.
+ */
+async function mirrorPlusOneToHost(row) {
+  if (!row?.is_plus_one || !row.plus_one_of) return;
+  const { error } = await supabaseAdmin
+    .from('wedding_guests').update(hostMirrorPatch(row)).eq('id', row.plus_one_of);
+  if (error) console.error(`[guests] could not mirror ${row.id} up to host ${row.plus_one_of}:`, error.message);
 }
 
 // POST create guest
@@ -13902,6 +13932,7 @@ app.put('/api/guests/:id', async (req, res) => {
       .select().single();
     if (error) throw error;
     await syncPlusOneRow(data);
+    await mirrorPlusOneToHost(data);
     res.json({ guest: data });
   } catch (err) {
     console.error('Update guest error:', err);
@@ -14001,7 +14032,13 @@ Reply with strict JSON and nothing else:
  * lower(last_name)) and writes onto the row it finds, inserting only the ones
  * it does not.
  *
- * Returns { added, updated, skipped, guests, duplicates, duplicateWarning }.
+ * Returns { added, updated, skipped, skippedBlankName, plusOnesCreated, guests,
+ * duplicates, duplicateWarning }. skippedBlankName is the rows the file had
+ * with nothing in the name column, which is how a sheet whose name column was
+ * mapped to something else used to report a clean import of nobody.
+ *
+ * Capped at BULK_ROW_LIMIT rows. Past that it is a mistake rather than a big
+ * wedding, and the reply says so instead of spending fifty seconds finding out.
  *
  * Why the match is not a database constraint: two people at a wedding can
  * genuinely be called the same thing, and a unique index would refuse the
@@ -14017,37 +14054,25 @@ app.post('/api/guests/bulk', async (req, res) => {
   try {
     const { weddingId, guests } = req.body;
     const mode = req.body.mode === 'update' ? 'update' : 'add';
-    if (!weddingId || !Array.isArray(guests) || guests.length === 0) {
-      return res.status(400).json({ error: 'weddingId and guests array required' });
-    }
-    const rows = guests.map(g => {
-      // A plus one is only ever created because the sheet says so. "No", "n/a"
-      // and blank all mean no plus one; a bare "yes" means one was granted
-      // without a name; anything else is kept as written. Without this, a
-      // column of Yes/No produced guests called "No".
-      const plusOne = parsePlusOneCell(g.plus_one_name || g.plus_one || g.plusone || g.plus_1 || '');
-      return {
-        wedding_id: weddingId,
-        first_name: g.first_name || g.firstName || '',
-        last_name: g.last_name || g.lastName || null,
-        email: g.email || null,
-        phone: g.phone || null,
-        address: g.address || null,
-        rsvp: g.rsvp || 'pending',
-        dietary_restrictions: g.dietary_restrictions || g.dietary || null,
-        meal_choice: g.meal_choice || g.meal || null,
-        table_assignment: g.table_assignment || g.table || null,
-        tags: Array.isArray(g.tags) ? g.tags : [],
-        notes: g.notes || null,
-        // These were dropped entirely, so exporting a guest list and importing
-        // it back deleted every plus one it contained.
-        plus_one_name: plusOne.name,
-        plus_one_rsvp: plusOne.granted ? parseRsvpValue(g.plus_one_rsvp || '') : 'pending',
-        plus_one_meal_choice: plusOne.granted ? (g.plus_one_meal_choice || null) : null,
-        plus_one_dietary: plusOne.granted ? (g.plus_one_dietary || null) : null,
-        updated_at: new Date().toISOString(),
-      };
-    }).filter(g => g.first_name.trim());
+    // One message per fault, naming it. All three used to come back as
+    // "weddingId and guests array required", which is a lie about two of them
+    // and sends the couple looking in the wrong place.
+    const fault = bulkImportFault({ weddingId, guests });
+    if (fault) return res.status(400).json({ error: fault });
+
+    // Kept alongside the row it was built from: an update may only write the
+    // plus-one columns the sheet actually had.
+    const built = guests
+      .map(g => ({ source: g, row: buildImportRow(g, weddingId) }))
+      .filter(b => b.row.first_name.trim());
+    const rows = built.map(b => b.row);
+    const sourceOf = new Map(built.map(b => [b.row, b.source]));
+    // Rows in the file with nothing in the name column. Silently dropped
+    // before, so a mis-mapped sheet reported a clean import of nobody.
+    const skippedBlankName = guests.length - rows.length;
+
+    const emptyFault = bulkImportFault({ weddingId, guests, parsed: rows.length });
+    if (emptyFault) return res.status(400).json({ error: emptyFault });
     // Auto-create any tag options that don't exist yet
     const allTags = [...new Set(rows.flatMap(r => r.tags))].filter(Boolean);
     if (allTags.length > 0) {
@@ -14061,9 +14086,12 @@ app.post('/api/guests/bulk', async (req, res) => {
       const existingLabels = new Set(existingTags.map(t => t.label));
       const newTags = allTags.filter(t => !existingLabels.has(t));
       if (newTags.length > 0) {
-        await supabaseAdmin.from('guest_tag_options').insert(
+        const { error: newTagsErr } = await supabaseAdmin.from('guest_tag_options').insert(
           newTags.map(label => ({ wedding_id: weddingId, label, color: '#9CA3AF' }))
         );
+        // The guests still import. The tags they carry just will not be in the
+        // filter list, which is worth saying rather than leaving to be noticed.
+        if (newTagsErr) console.error('[guests] could not create the imported tags:', newTagsErr.message);
       }
     }
 
@@ -14090,7 +14118,6 @@ app.post('/api/guests/bulk', async (req, res) => {
       if (!page || page.length < 1000) break;
     }
     const key = (f, l) => `${String(f || '').trim().toLowerCase()}|${String(l || '').trim().toLowerCase()}`;
-    const existingNames = new Set(already.map(g => key(g.first_name, g.last_name)));
 
     // Hosts only, and first match wins. Where a wedding already holds two
     // people with the same name the import cannot tell which was meant, so it
@@ -14101,6 +14128,11 @@ app.post('/api/guests/bulk', async (req, res) => {
       const k = key(g.first_name, g.last_name);
       if (!hostByName.has(k)) hostByName.set(k, g.id);
     }
+    // Hosts, for the same reason: an imported line is a party, and warning
+    // that "Cole Ashby is already on the list" because his own plus-one row
+    // carries that name is a warning about the row this import is about to
+    // reconcile anyway.
+    const existingNames = new Set(hostByName.keys());
 
     const duplicates = rows
       .filter(r => existingNames.has(key(r.first_name, r.last_name)))
@@ -14109,24 +14141,31 @@ app.post('/api/guests/bulk', async (req, res) => {
     // In update mode the matched rows are written one at a time. A bulk upsert
     // is not available here: there is no unique constraint to conflict on, for
     // the reason in the comment above the route.
-    let updated = 0;
-    const updatedRows = [];
+    //
+    // Fifty at a time, because one round trip per guest is not something a
+    // 900-row list survives: Railway gives the request about 50 seconds and a
+    // sequential import of a big wedding spent all of them, then failed in a
+    // way that looked like the file was wrong.
+    const toUpdate = [];
     const toInsert = [];
     for (const r of rows) {
       const hit = mode === 'update' ? hostByName.get(key(r.first_name, r.last_name)) : undefined;
-      if (!hit) { toInsert.push(r); continue; }
-      // wedding_id and the name are what matched, so they are not rewritten.
-      const { wedding_id: _w, first_name: _f, last_name: _l, ...patch } = r;
+      if (hit) toUpdate.push({ id: hit, row: r }); else toInsert.push(r);
+    }
+
+    const updatedRows = [];
+    await inChunks(toUpdate, 50, async ({ id, row: r }) => {
       const { data: row, error: upErr } = await supabaseAdmin
-        .from('wedding_guests').update(patch).eq('id', hit).select().maybeSingle();
+        .from('wedding_guests').update(updatePatch(r, sourceOf.get(r) || {})).eq('id', id).select().maybeSingle();
       if (upErr) {
         // Loud rather than silent: the rest of the import still runs, and the
         // count at the end will not add up to the file, which is the point.
         console.error(`[guests] could not update ${r.first_name} ${r.last_name || ''}:`, upErr.message);
-        continue;
+        return;
       }
-      if (row) { updated += 1; updatedRows.push(row); }
-    }
+      if (row) updatedRows.push(row);
+    });
+    const updated = updatedRows.length;
 
     // Every imported guest heads their own party, for the same reason as
     // above. Without this the whole import fails on the first row.
@@ -14135,22 +14174,23 @@ app.post('/api/guests/bulk', async (req, res) => {
       return { ...r, id, party_id: id };
     });
 
-    let data = [];
-    if (rowsWithParty.length) {
+    const data = [];
+    for (let from = 0; from < rowsWithParty.length; from += 50) {
       const { data: inserted, error } = await supabaseAdmin
         .from('wedding_guests')
-        .insert(rowsWithParty)
+        .insert(rowsWithParty.slice(from, from + 50))
         .select();
       if (error) throw error;
-      data = inserted || [];
+      data.push(...(inserted || []));
     }
 
     // Reconcile the plus one on every row that was updated rather than added.
     // The host row now carries whatever the file said about their plus one,
     // and syncPlusOneRow is the one place that turns that into a person row,
     // removes one that has gone, and leaves the plus one's own table, email
-    // and tags alone.
-    for (const row of updatedRows) await syncPlusOneRow(row);
+    // and tags alone. Twenty at a time: each of these is two or three round
+    // trips of its own, and 400 of them in a row is the proxy timeout again.
+    await inChunks(updatedRows, 20, row => syncPlusOneRow(row));
 
     // Give the imported plus ones rows of their own.
     //
@@ -14166,20 +14206,14 @@ app.post('/api/guests/bulk', async (req, res) => {
     for (const g of data) {
       const name = String(g.plus_one_name || '').trim();
       if (!name) continue;
-      const tidied = name.replace(/^[*.\s]+/, '').replace(/[*.\s]+$/, '').trim();
-      let first = name, last = null;
-      if (tidied && isNamedPerson(tidied)) {
-        const parts = tidied.split(/\s+/);
-        first = parts.length === 1 ? parts[0] : parts.slice(0, -1).join(' ');
-        last = parts.length === 1 ? null : parts[parts.length - 1];
-      }
+      const { first_name, last_name } = splitPlusOneName(name, isNamedPerson(name));
       plusOneRows.push({
         wedding_id: g.wedding_id,
         party_id: g.party_id,
         is_plus_one: true,
         plus_one_of: g.id,
-        first_name: first,
-        last_name: last,
+        first_name,
+        last_name,
         rsvp: g.plus_one_rsvp || 'pending',
         meal_choice: g.plus_one_meal_choice || null,
         dietary_restrictions: g.plus_one_dietary || null,
@@ -14190,8 +14224,10 @@ app.post('/api/guests/bulk', async (req, res) => {
     // update failed on, since every other row lands somewhere.
     const skipped = rows.length - data.length - updated;
 
-    if (plusOneRows.length) {
-      const { error: poErr } = await supabaseAdmin.from('wedding_guests').insert(plusOneRows);
+    let plusOnesCreated = 0;
+    for (let from = 0; from < plusOneRows.length; from += 50) {
+      const chunk = plusOneRows.slice(from, from + 50);
+      const { error: poErr } = await supabaseAdmin.from('wedding_guests').insert(chunk);
       // The guests are already in. Say loudly that their plus ones are not,
       // rather than reporting a clean import that quietly lost people.
       if (poErr) {
@@ -14201,11 +14237,14 @@ app.post('/api/guests/bulk', async (req, res) => {
           added: data.length,
           updated,
           skipped,
+          skippedBlankName,
+          plusOnesCreated,
           imported: data.length,
           duplicates,
-          duplicateWarning: `Imported ${data.length} guests, but their plus ones could not be added: ${poErr.message}. Check the list before relying on the numbers.`,
+          duplicateWarning: `Imported ${data.length} guests, but ${plusOneRows.length - plusOnesCreated} of their plus ones could not be added: ${poErr.message}. Check the list before relying on the numbers.`,
         });
       }
+      plusOnesCreated += chunk.length;
     }
 
     res.json({
@@ -14213,10 +14252,14 @@ app.post('/api/guests/bulk', async (req, res) => {
       added: data.length,
       updated,
       skipped,
+      // Rows the file had that carried no name at all. They were dropped in
+      // silence before, so a sheet whose name column was mapped to something
+      // else reported a clean import of nobody.
+      skippedBlankName,
       // The name the old client reads. Kept so an un-updated browser still
       // shows a number rather than "undefined guests imported".
       imported: data.length,
-      plusOnesCreated: plusOneRows.length,
+      plusOnesCreated,
       duplicates,
       // Two people can genuinely share a name, so in add mode this reports
       // rather than decides. The couple knows which it is; the server does not.
@@ -14258,12 +14301,43 @@ app.delete('/api/guests/all', async (req, res) => {
 
 app.delete('/api/guests/:id', async (req, res) => {
   try {
-    const { error } = await supabaseAdmin.from('wedding_guests').delete().eq('id', req.params.id);
+    // Who else goes with them. A plus one's row is removed with their host by
+    // 025's ON DELETE CASCADE, and the client had both on screen while being
+    // told about only one, so the list kept a ghost until it was reloaded.
+    const { data: withThem, error: withErr } = await supabaseAdmin
+      .from('wedding_guests').select('id').eq('plus_one_of', req.params.id);
+    if (withErr) throw withErr;
+
+    const { data: gone, error } = await supabaseAdmin
+      .from('wedding_guests').delete().eq('id', req.params.id)
+      .select('id, is_plus_one, plus_one_of');
     if (error) throw error;
-    res.json({ ok: true });
+    // Nothing deleted is not a success. Somebody else removed them, or the id
+    // is wrong, and either way saying "ok" hides it.
+    if (!gone?.length) return res.status(404).json({ error: 'That guest is not on this list any more.' });
+
+    const row = gone[0];
+    if (row.is_plus_one && row.plus_one_of) {
+      // Their host still carries plus_one_name, which is what the CSV export
+      // reads and what syncPlusOneRow builds from, so leaving it would put the
+      // plus one back the next time the host was saved.
+      const { error: hostErr } = await supabaseAdmin
+        .from('wedding_guests')
+        .update({
+          plus_one_name: null, plus_one_rsvp: 'pending',
+          plus_one_meal_choice: null, plus_one_dietary: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', row.plus_one_of);
+      if (hostErr) console.error(`[guests] deleted plus one ${row.id} but could not clear the columns on ${row.plus_one_of}:`, hostErr.message);
+    }
+
+    const deleted = [row.id, ...(withThem || []).map(g => g.id)];
+    console.log(`[guests] deleted ${deleted.join(', ')} by ${req.userId}`);
+    res.json({ ok: true, deleted });
   } catch (err) {
     console.error('Delete guest error:', err);
-    res.status(500).json({ error: 'Failed to delete guest' });
+    res.status(500).json({ error: `Failed to delete guest: ${err.message}` });
   }
 });
 
@@ -16569,13 +16643,22 @@ app.post('/api/admin/walkthroughs/:id/organise', requireAdmin, aiLimiter, async 
         ? supabaseAdmin.from('weddings').select('couple_names, wedding_date').eq('id', wt.wedding_id).maybeSingle()
         : Promise.resolve({ data: null }),
       wt.wedding_id
-        ? supabaseAdmin.from('wedding_guests').select('first_name, last_name').eq('wedding_id', wt.wedding_id).limit(200)
+        ? supabaseAdmin.from('wedding_guests')
+          .select('id, first_name, last_name, plus_one_name, is_plus_one, party_id, plus_one_of')
+          .eq('wedding_id', wt.wedding_id).limit(200)
         : Promise.resolve({ data: [] }),
       wt.enquiry_id
         ? supabaseAdmin.from('enquiries').select('*').eq('id', wt.enquiry_id).maybeSingle()
         : Promise.resolve({ data: null }),
     ]);
-    const knownNames = (guestRows || []).map(g => guestFullName(g)).filter(Boolean).slice(0, 120);
+    // People, and only the ones with a name. A guest list holds plus ones the
+    // couple has granted but not named, so this list used to offer the model
+    // "Guest", "+1" and "TBD" as names to match a first name against, which is
+    // how a note about somebody's mother got filed against a placeholder.
+    const knownNames = allPeople(guestRows || [])
+      .filter(p => isNamedPerson(p.name))
+      .map(p => p.name)
+      .slice(0, 120);
     const context = [
       RIXEY_EXTRACTION_CONTEXT,
       wedding ? `\nThis walkthrough is for ${wedding.couple_names || 'a couple'}, wedding date ${wedding.wedding_date || 'unknown'}.` : '',
@@ -17392,14 +17475,7 @@ function safeCell(cells, idx) {
   return s || null;
 }
 
-function parseRsvpValue(raw) {
-  if (!raw) return 'pending';
-  const lower = raw.toLowerCase();
-  if (/going|attend|yes|confirm/.test(lower)) return 'yes';
-  if (/declin|not coming|no\b|cant|can't/.test(lower)) return 'no';
-  if (/maybe|unsure|likely/.test(lower)) return 'maybe';
-  return 'pending';
-}
+// parseRsvpValue and the rest of the import rules live in server/lib/guest-import.js.
 
 function splitGuestName(full) {
   const cleaned = full.replace(/#\S+/g, '').trim();
@@ -17438,10 +17514,23 @@ async function parseSeatingBuffer(buffer, filename, mimetype) {
   const tablesMap = new Map();
   const warnings = [];
   let totalGuests = 0;
+  let skippedRows = 0;
 
-  for (const row of dataRows) {
+  for (const [i, row] of dataRows.entries()) {
     const rawName = safeCell(row, colMap.name);
-    if (!rawName) continue;
+    if (!rawName) {
+      // A row with something in it and nothing in the name column is a row the
+      // import is about to drop. It used to drop them in silence, so a chart
+      // whose names sat in a column the detector missed committed as an empty
+      // seating plan and said it had worked.
+      const hasContent = row.some(v => v !== null && v !== undefined && String(v).trim());
+      if (!hasContent) continue;
+      skippedRows += 1;
+      if (warnings.length < 25) {
+        warnings.push(`Row ${i + 2} has no name in the name column, so it was left out: ${row.map(v => String(v ?? '').trim()).filter(Boolean).slice(0, 4).join(' · ').slice(0, 120)}`);
+      }
+      continue;
+    }
 
     const rawTable = safeCell(row, colMap.table) || 'Unassigned';
 
@@ -17465,137 +17554,22 @@ async function parseSeatingBuffer(buffer, filename, mimetype) {
       last_name,
       notes: combinedNotes,
       dietary_restrictions: dietary,
-      rsvp: parseRsvpValue(rawRsvp),
+      // Null, not 'pending', when the chart says nothing about it. A chart with
+      // no RSVP column set every guest on it back to pending, which is a whole
+      // wedding's worth of answers deleted by a seating import.
+      rsvp: rawRsvp ? parseRsvpValue(rawRsvp) : null,
       table_assignment: rawTable,
     });
     totalGuests++;
   }
 
-  return { tables: Array.from(tablesMap.values()), totalGuests, warnings };
+  if (skippedRows > 25) warnings.push(`${skippedRows} rows in all had nothing in the name column.`);
+
+  return { tables: Array.from(tablesMap.values()), totalGuests, skippedRows, warnings };
 }
 
-// Upsert parsed seating into wedding_guests (update if name matches, insert if new)
-async function commitSeatingToGuests(weddingId, tables, replaceExisting) {
-  if (replaceExisting) {
-    // Clear table_assignment for all existing guests in this wedding
-    await supabaseAdmin
-      .from('wedding_guests')
-      .update({ table_assignment: null })
-      .eq('wedding_id', weddingId);
-  }
-
-  const { data: existingGuests, error: existingGuestsErr } = await supabaseAdmin
-    .from('wedding_guests')
-    .select('id, first_name, last_name, plus_one_name')
-    .eq('wedding_id', weddingId);
-  if (existingGuestsErr) throw new Error(`Could not read the guest list: ${existingGuestsErr.message}`);
-
-  const norm = s => (s || '').toLowerCase().trim().replace(/\s+/g, ' ');
-  const nameKey = full => norm(full);
-
-  // One index of people, by the name each of them shows under.
-  //
-  // A seating chart lists people, so matching it wants people. This used to be
-  // two indexes — hosts, and plus ones pointing at their host's row — because a
-  // plus one had no row to seat. Since 025 they do, and the two-index version
-  // then went wrong in a way worth spelling out: a plus one recorded as "Cole"
-  // displays as "Cole Ashby" with the surname inherited, so a chart saying
-  // "Cole Ashby" missed the person index, fell through to the plus-one index,
-  // and moved Brooke instead. Cole's own row kept no table at all.
-  //
-  // p.row is the row that carries that person's table: their host's before 025,
-  // their own after it. So the same code seats the right thing in both.
-  const personIndex = new Map();
-  const isPlusOneRow = new Set();
-  for (const person of allPeople(existingGuests || [])) {
-    const rowId = person.row?.id;
-    if (!rowId || !person.name) continue;
-    personIndex.set(nameKey(person.name), rowId);
-    if (person.isPlusOne) isPlusOneRow.add(rowId);
-  }
-  // A chart may also use the bare name the couple typed, without the inherited
-  // surname. Added second so a real guest of that name always wins.
-  for (const g of existingGuests || []) {
-    if (hasPlusOne(g) && isNamedPerson(g.plus_one_name)) {
-      const bare = nameKey(g.plus_one_name);
-      if (!personIndex.has(bare)) {
-        const own = (existingGuests || []).find(x => x.is_plus_one && x.plus_one_of === g.id);
-        personIndex.set(bare, own ? own.id : g.id);
-        if (own) isPlusOneRow.add(own.id);
-      }
-    }
-  }
-
-  let created = 0, updated = 0, seatedAsPlusOne = 0;
-  const warnings = [];
-  const assignedTable = new Map(); // row id -> table we have already set
-
-  for (const table of tables) {
-    for (const guest of table.guests) {
-      const full = [guest.first_name, guest.last_name].filter(Boolean).join(' ');
-      const key = nameKey(full);
-      const existingId = personIndex.get(key);
-
-      // Somebody whose table lives on a row shared with their host. Only
-      // possible before 025; after it they have their own row and can be seated
-      // wherever the chart says. Never create a row for them, and never
-      // silently move a host who is already seated somewhere else.
-      if (existingId && isPlusOneRow.has(existingId)) {
-        const already = assignedTable.get(existingId);
-        if (already && already !== guest.table_assignment) {
-          warnings.push(`${full} is charted at ${guest.table_assignment} but shares a row with someone already seated at ${already}. Left as ${already}.`);
-        } else {
-          await supabaseAdmin
-            .from('wedding_guests')
-            .update({ table_assignment: guest.table_assignment, updated_at: new Date().toISOString() })
-            .eq('id', existingId);
-          assignedTable.set(existingId, guest.table_assignment);
-          seatedAsPlusOne++;
-        }
-        continue;
-      }
-
-      const payload = {
-        first_name: guest.first_name,
-        last_name: guest.last_name,
-        notes: guest.notes,
-        dietary_restrictions: guest.dietary_restrictions,
-        rsvp: guest.rsvp,
-        table_assignment: guest.table_assignment,
-        updated_at: new Date().toISOString(),
-      };
-
-      if (existingId) {
-        await supabaseAdmin.from('wedding_guests').update(payload).eq('id', existingId);
-        assignedTable.set(existingId, guest.table_assignment);
-        updated++;
-      } else {
-        // A name on the chart that matches nobody. Inserted as a guest in their
-        // own right, with no plus one, because nothing here says they have one.
-        // Head of their own party. Migration 027's trigger would fill this in
-        // too, but a path that only works because of a trigger is a path that
-        // breaks on any database where the trigger has not been run.
-        const newId = crypto.randomUUID();
-        const { data: newGuest, error: insertError } = await supabaseAdmin
-          .from('wedding_guests')
-          .insert({ id: newId, party_id: newId, wedding_id: weddingId, ...payload })
-          .select('id')
-          .single();
-        if (insertError) {
-          // Counted as created even when it never landed. Warn instead of
-          // silently inflating the summary the admin reads back.
-          warnings.push(`${full || 'A guest'} could not be added: ${insertError.message}`);
-        } else {
-          personIndex.set(key, newGuest.id);
-          assignedTable.set(newGuest.id, guest.table_assignment);
-          created++;
-        }
-      }
-    }
-  }
-
-  return { created, updated, seatedAsPlusOne, warnings };
-}
+// Writing a parsed chart onto the guest list lives in server/lib/seating-import.js,
+// where the name matching can be tested without a database.
 
 // POST /api/seating/import — parse (action=parse) or commit (action=commit)
 // Multipart, so weddingAccess saw an empty body and could not scope it. A
@@ -17619,11 +17593,22 @@ app.post('/api/seating/import', requireAuth, spreadsheetUpload.single('file'), a
 
     if (action === 'commit') {
       let chart;
+      if (req.body.chart === undefined || req.body.chart === null || req.body.chart === '') {
+        return res.status(400).json({ error: 'No chart was sent with the commit. Parse the file first, then commit what came back.' });
+      }
       try { chart = typeof req.body.chart === 'string' ? JSON.parse(req.body.chart) : req.body.chart; }
-      catch { return res.status(400).json({ error: 'Invalid chart JSON' }); }
+      catch (parseErr) {
+        // "Invalid chart JSON" told nobody which of the two things went wrong,
+        // and a chart truncated by an upload limit looks exactly like a bug.
+        const raw = String(req.body.chart);
+        return res.status(400).json({ error: `The chart could not be read as JSON (${parseErr.message}). It arrived ${raw.length} characters long, starting "${raw.slice(0, 40)}".` });
+      }
+      if (!chart || !Array.isArray(chart.tables)) {
+        return res.status(400).json({ error: `The chart has no tables in it: expected { tables: [...] }, got ${chart === null ? 'null' : Array.isArray(chart) ? 'an array' : typeof chart}${chart && typeof chart === 'object' ? ` with keys ${Object.keys(chart).slice(0, 6).join(', ') || 'none'}` : ''}.` });
+      }
 
       const replaceExisting = req.body.replaceExisting === 'true' || req.body.replaceExisting === true;
-      const result = await commitSeatingToGuests(weddingId, chart.tables, replaceExisting);
+      const result = await commitSeatingToGuests(supabaseAdmin, weddingId, chart.tables, replaceExisting);
       return res.json({ ok: true, ...result });
     }
 

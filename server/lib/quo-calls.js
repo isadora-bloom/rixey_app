@@ -515,7 +515,7 @@ async function quoContactNames({ maxPages = 20 } = {}) {
  * wrong couple's record for three weeks. So: the guest list first, because
  * being on it is real evidence, and only ever when exactly one wedding matches.
  */
-async function suggestWedding(supabaseAdmin, callerName, weddings) {
+export async function suggestWedding(supabaseAdmin, callerName, weddings) {
   if (!callerName) return { weddingId: null, confidence: 0, reason: 'An unrecognised number, with no name against it in Quo.' };
 
   const parts = callerName.trim().split(/\s+/);
@@ -525,7 +525,7 @@ async function suggestWedding(supabaseAdmin, callerName, weddings) {
   if (last.length >= 3) {
     const { data: guests, error: guestErr } = await supabaseAdmin
       .from('wedding_guests')
-      .select('wedding_id, first_name, last_name')
+      .select('id, wedding_id, first_name, last_name, is_plus_one')
       .ilike('last_name', last);
 
     // A lookup that failed is not a surname nobody has. Swallowing it would
@@ -537,17 +537,38 @@ async function suggestWedding(supabaseAdmin, callerName, weddings) {
     }
 
     const hits = (guests || []).filter(g => !first || String(g.first_name || '').toLowerCase() === first);
-    const weddingIds = [...new Set(hits.map(g => g.wedding_id))];
-    if (weddingIds.length === 1) {
-      const w = weddings.find(x => x.id === weddingIds[0]);
+    const weddingIds = new Set(hits.map(g => g.wedding_id));
+
+    // A plus one's surname is usually not written down: it is inherited from
+    // their host on read, so "Cole Ashby" has last_name null and the query
+    // above cannot see him. Quo knows him as Cole Ashby, and he rang about a
+    // wedding he is on the list for, so look for him under his host.
+    const hostIds = (guests || []).filter(g => !g.is_plus_one).map(g => g.id);
+    if (first && hostIds.length) {
+      const { data: plusOnes, error: plusOneErr } = await supabaseAdmin
+        .from('wedding_guests')
+        .select('wedding_id, first_name')
+        .in('plus_one_of', hostIds)
+        .is('last_name', null);
+      if (plusOneErr) {
+        console.error('suggestWedding plus-one lookup failed:', plusOneErr.message);
+        return { weddingId: null, confidence: 0, reason: 'Could not check the guest lists just now, so this one needs a human.' };
+      }
+      for (const p of plusOnes || []) {
+        if (String(p.first_name || '').toLowerCase() === first) weddingIds.add(p.wedding_id);
+      }
+    }
+    const matched = [...weddingIds];
+    if (matched.length === 1) {
+      const w = weddings.find(x => x.id === matched[0]);
       return {
-        weddingId: weddingIds[0],
+        weddingId: matched[0],
         confidence: 70,
         reason: `Quo knows this number as "${callerName}", and ${callerName} is on the guest list for ${w?.couple_names || 'this wedding'}.`,
       };
     }
-    if (weddingIds.length > 1) {
-      return { weddingId: null, confidence: 0, reason: `Quo knows this number as "${callerName}", but that name is on ${weddingIds.length} guest lists.` };
+    if (matched.length > 1) {
+      return { weddingId: null, confidence: 0, reason: `Quo knows this number as "${callerName}", but that name is on ${matched.length} guest lists.` };
     }
   }
 
