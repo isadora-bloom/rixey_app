@@ -1,8 +1,13 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Stage, Layer, Image as KonvaImage, Circle, Rect, Text, Group } from 'react-konva'
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { loadJson, apiFetch } from '../utils/api'
 import { useToast } from './ui/Toast'
+import { useAutosave } from '../hooks/useAutosave'
+import { useGuestHeadcount, headcountNote } from '../hooks/useGuestHeadcount'
+import SaveIndicator from './ui/SaveIndicator'
+import ConfirmDialog from './ui/ConfirmDialog'
+import LoadError from './ui/LoadError'
 
 
 // Cropped image is 2893×1550. Barn measured: 718px = 40ft → 17.95 px/ft
@@ -14,6 +19,41 @@ const CHAIR_CLEARANCE_FT = 1.5 // 18 inches
 
 function ft(feet) { return feet * PX_PER_FT }
 function genId() { return Math.random().toString(36).substr(2, 9) }
+
+/**
+ * Save a canvas export the way a browser will actually accept it.
+ *
+ * A 4x export of a 2893x1550 plan is a data URL tens of megabytes long, and an
+ * anchor whose href is a data URL that size is either refused outright or
+ * silently ignored, which is what "Export PNG does nothing" meant. A blob URL
+ * has no such limit. The anchor has to be in the document for Firefox to
+ * honour the click, and the URL has to outlive the click, because revoking it
+ * straight away cancels the download on Safari and on an iPhone.
+ */
+function saveDataUrl(uri, filename) {
+  const [meta, b64] = String(uri || '').split(',')
+  if (!b64) return
+  const mime = /:(.*?);/.exec(meta)?.[1] || 'image/png'
+  const binary = atob(b64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  const url = URL.createObjectURL(new Blob([bytes], { type: mime }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.rel = 'noopener'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  setTimeout(() => URL.revokeObjectURL(url), 60_000)
+}
+
+/** A filename nobody has to rename before emailing it on. */
+function exportFilename(coupleNames, suffix) {
+  const who = String(coupleNames || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+  const when = new Date().toISOString().slice(0, 10)
+  return `${who ? `${who}-` : ''}table-layout${suffix ? `-${suffix}` : ''}-${when}.png`
+}
 
 // Rect table sizes in 2ft increments 6–36ft
 const RECT_SIZES = Array.from({ length: 16 }, (_, i) => 6 + i * 2) // [6,8,...,36]
@@ -177,7 +217,7 @@ function TableEl({ el, isSelected, isAdmin, onSelect, onMove }) {
 
 // ─── Main component ────────────────────────────────────────────────────────────
 
-export default function TableCanvas({ weddingId, isAdmin }) {
+export default function TableCanvas({ weddingId, isAdmin, coupleNames }) {
   const containerRef = useRef()
   const stageRef = useRef()
 
@@ -191,12 +231,16 @@ export default function TableCanvas({ weddingId, isAdmin }) {
   const [elements, setElements]   = useState([])
   const [selectedId, setSelectedId] = useState(null)
   const [loading, setLoading]     = useState(true)
-  const [saving, setSaving]       = useState(false)
-  const [saved, setSaved]         = useState(false)
+  const [loadError, setLoadError] = useState(null)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  // Autosave arms only once a load has actually succeeded, so a failed read
+  // can never be written back over a real layout as an empty canvas.
+  const hasLoadedRef = useRef(false)
   const { error: toastError } = useToast()
 
   // Table summary from the Tables planner (for admin reference on the map)
   const [tableSummary, setTableSummary] = useState(null)
+  const guestCounts = useGuestHeadcount(weddingId)
 
   // Toolbar UI state
   const [showRectPicker, setShowRectPicker] = useState(false)
@@ -235,46 +279,64 @@ export default function TableCanvas({ weddingId, isAdmin }) {
     return () => window.removeEventListener('resize', update)
   }, [planRotation]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Load saved layout
-  useEffect(() => {
-    if (weddingId) loadLayout()
-  }, [weddingId])
-
-  const loadLayout = async () => {
+  const loadLayout = useCallback(async () => {
     setLoading(true)
+    setLoadError(null)
     try {
-      const hdrs = await authHeaders()
-      const [layoutRes, tablesRes] = await Promise.all([
-        fetch(`${API_URL}/api/table-layout/${weddingId}`, { headers: hdrs }),
-        fetch(`${API_URL}/api/tables/${weddingId}`, { headers: hdrs }),
-      ])
-      const layoutData = await layoutRes.json()
-      if (layoutData.layout) setElements(layoutData.layout.elements || [])
+      const layoutData = await loadJson(`${API_URL}/api/table-layout/${weddingId}`)
+      setElements(layoutData?.layout?.elements || [])
+      // The summary is a reference figure printed above the plan. It is not
+      // the layout, so it stays non-fatal: no summary is better than no plan.
       try {
-        const tablesData = await tablesRes.json()
-        if (tablesData.tables) setTableSummary(tablesData.tables)
-      } catch {}
+        const tablesData = await loadJson(`${API_URL}/api/tables/${weddingId}`)
+        if (tablesData?.tables) setTableSummary(tablesData.tables)
+      } catch (err) {
+        console.error('Could not read the table summary:', err)
+      }
     } catch (err) {
       console.error('Failed to load layout:', err)
+      setLoadError(err)
     }
     setLoading(false)
-  }
+  }, [weddingId])
 
-  const save = async () => {
-    setSaving(true)
-    try {
+  // Load saved layout
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (weddingId) loadLayout()
+  }, [weddingId, loadLayout])
+
+  /**
+   * The layout saves itself.
+   *
+   * There was a Save Layout button and nothing else, and the owner lost work
+   * during builds: an afternoon of dragging tables around is gone if the tab
+   * is closed, the laptop sleeps, or the session lapses before anyone presses
+   * it. Every change now schedules a save two seconds later, and useAutosave
+   * flushes on blur and on unmount, so leaving the tab saves rather than
+   * discards.
+   *
+   * Only an admin can change anything here, so only an admin ever writes.
+   */
+  const { schedule: scheduleSave, state: saveState } = useAutosave(
+    async (payload) => {
       await apiFetch(`${API_URL}/api/table-layout`, {
         method: 'POST',
-        body: JSON.stringify({ weddingId, elements }),
+        body: JSON.stringify(payload),
       })
-      setSaved(true)
-      setTimeout(() => setSaved(false), 2000)
-    } catch (err) {
-      console.error('Save failed:', err)
-      toastError(`Could not save table layout: ${err.message}`)
+    },
+    { delay: 2000, errorMessage: 'Could not save the table layout', toastError }
+  )
+
+  useEffect(() => {
+    if (!isAdmin || loading || loadError) return
+    // The first pass after a load is the load itself, not an edit.
+    if (!hasLoadedRef.current) {
+      hasLoadedRef.current = true
+      return
     }
-    setSaving(false)
-  }
+    scheduleSave({ weddingId, elements })
+  }, [isAdmin, loading, loadError, elements, weddingId, scheduleSave])
 
   const fitScale = stageW / effectiveW
   const currentZoom = zoom ?? fitScale
@@ -327,6 +389,7 @@ export default function TableCanvas({ weddingId, isAdmin }) {
   }
 
   const deleteSelected = () => {
+    setConfirmDelete(false)
     setElements(prev => prev.filter(el => el.id !== selectedId))
     setSelectedId(null)
   }
@@ -361,33 +424,28 @@ export default function TableCanvas({ weddingId, isAdmin }) {
   const rotatePlan = () => setPlanRotation(r => (r + 90) % 360)
 
   const exportPng = () => {
-    const uri = stageRef.current.toDataURL({ pixelRatio: 4 })
-    const a = document.createElement('a')
-    a.download = 'table-layout.png'
-    a.href = uri
-    a.click()
+    if (!stageRef.current) return
+    saveDataUrl(stageRef.current.toDataURL({ pixelRatio: 4 }), exportFilename(coupleNames))
   }
 
   // Crop-export: download just the selected region at high res
   const exportCrop = (rect) => {
     // rect is in stage (screen) coords. Convert to content coords for toDataURL.
-    const uri = stageRef.current.toDataURL({
-      x: rect.x,
-      y: rect.y,
-      width: rect.width,
-      height: rect.height,
-      pixelRatio: 4,
-    })
-    const a = document.createElement('a')
-    a.download = 'table-layout-crop.png'
-    a.href = uri
-    a.click()
+    if (stageRef.current) {
+      saveDataUrl(stageRef.current.toDataURL({
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+        pixelRatio: 4,
+      }), exportFilename(coupleNames, 'crop'))
+    }
     setCropMode(false)
     setCropRect(null)
     setCropStart(null)
   }
 
-  const handleCropMouseDown = (e) => {
+  const handleCropMouseDown = () => {
     if (!cropMode) return
     const stage = stageRef.current
     const pointer = stage.getPointerPosition()
@@ -395,7 +453,7 @@ export default function TableCanvas({ weddingId, isAdmin }) {
     setCropRect(null)
   }
 
-  const handleCropMouseMove = (e) => {
+  const handleCropMouseMove = () => {
     if (!cropMode || !cropStart) return
     const stage = stageRef.current
     const pointer = stage.getPointerPosition()
@@ -419,6 +477,16 @@ export default function TableCanvas({ weddingId, isAdmin }) {
   }
 
   const selectedEl = elements.find(e => e.id === selectedId)
+
+  // Drawn into the plan itself so an exported PNG says whose it is and when it
+  // was taken. A printout on a kitchen table two months later is otherwise a
+  // picture of some circles.
+  const caption = [coupleNames, `Rixey Manor · ${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}`]
+    .filter(Boolean).join(' — ')
+
+  if (loadError) {
+    return <LoadError what="the floor plan" error={loadError} onRetry={loadLayout} />
+  }
 
   // Client view: if no layout saved yet, show placeholder
   if (!isAdmin && !loading && elements.length === 0) {
@@ -455,6 +523,9 @@ export default function TableCanvas({ weddingId, isAdmin }) {
               </div>
               <span className="text-sage-200 text-xs">{gc} guests · {tableSummary.table_shape || 'round'}</span>
             </div>
+            {headcountNote(guestCounts, gc) && (
+              <p className="text-sage-200 text-xs mt-1.5">{headcountNote(guestCounts, gc)} Change it in the Tables planner.</p>
+            )}
           </div>
         )
       })()}
@@ -533,9 +604,10 @@ export default function TableCanvas({ weddingId, isAdmin }) {
               − Out
             </button>
             <span className="text-xs text-sage-400">{Math.round(currentZoom / fitScale * 100)}%</span>
-            <div className="ml-auto flex gap-2">
+            <div className="ml-auto flex items-center gap-2">
+              <SaveIndicator state={saveState} />
               {selectedId && (
-                <button onClick={deleteSelected} className="text-xs px-3 py-1.5 rounded-lg border border-red-200 text-red-500 hover:bg-red-50 transition">
+                <button onClick={() => setConfirmDelete(true)} className="text-xs px-3 py-1.5 rounded-lg border border-red-200 text-red-500 hover:bg-red-50 transition">
                   Delete
                 </button>
               )}
@@ -547,10 +619,6 @@ export default function TableCanvas({ weddingId, isAdmin }) {
                 className={`text-xs px-3 py-1.5 rounded-lg border transition ${cropMode ? 'border-sage-500 bg-sage-50 text-sage-700' : 'border-cream-200 text-sage-600 hover:bg-cream-50'}`}
               >
                 {cropMode ? 'Cancel Crop' : 'Crop & Export'}
-              </button>
-              <button onClick={save} disabled={saving}
-                className="text-xs px-4 py-1.5 rounded-lg bg-sage-600 text-white hover:bg-sage-700 disabled:opacity-50 transition">
-                {saving ? 'Saving…' : saved ? '✓ Saved' : 'Save Layout'}
               </button>
             </div>
           </div>
@@ -682,6 +750,19 @@ export default function TableCanvas({ weddingId, isAdmin }) {
                     <KonvaImage image={floorImg} x={0} y={0} width={IMAGE_W} height={IMAGE_H} />
                   )}
                 </Group>
+                {/* Outside the rotation group, so it stays the right way up
+                    however the plan is turned, and inside the stage so it is
+                    baked into an exported PNG. */}
+                {caption && (
+                  <Text
+                    text={caption}
+                    x={ft(1.5)}
+                    y={effectiveH - ft(2.5)}
+                    fontSize={Math.max(18, ft(1.1))}
+                    fill="#55705f"
+                    listening={false}
+                  />
+                )}
               </Layer>
               <Layer>
                 <Group
@@ -739,7 +820,8 @@ export default function TableCanvas({ weddingId, isAdmin }) {
       </div>
 
       <p className="text-xs text-sage-400 mt-2 text-center">
-        Scroll to zoom · Drag background to pan · Click to select · Blue ring = 18" chair clearance
+        Scroll to zoom · Drag background to pan · Click to select · Blue ring = 18&quot; chair clearance
+        {isAdmin && ' · Changes save on their own'}
       </p>
 
       {/* ── Block dimension prompt ── */}
@@ -750,6 +832,18 @@ export default function TableCanvas({ weddingId, isAdmin }) {
           onCancel={() => setBlockPrompt(null)}
         />
       )}
+
+      <ConfirmDialog
+        open={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
+        onConfirm={deleteSelected}
+        title="Remove this from the plan?"
+        message={selectedEl
+          ? `${selectedEl.label} comes off the floor plan. The layout saves on its own, so this one is gone as soon as you confirm.`
+          : ''}
+        confirmLabel="Remove it"
+        danger
+      />
     </div>
   )
 }
