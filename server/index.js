@@ -33,6 +33,7 @@ import { WALKTHROUGH_TARGETS, TARGET_KEYS, buildNote, organisePrompt, parseItems
 import { extractDocument } from './lib/doc-sync/extract.js';
 import { chunkDocument, sectionsPrompt, mergeSections, parseSectionsResponse } from './lib/doc-sync/sections.js';
 import { buildDocumentDiff, diffSections } from './lib/doc-sync/diff.js';
+import { commitSeatingToGuests } from './lib/seating-import.js';
 import { transcribeAudio, transcriptionConfigured } from './lib/transcribe.js';
 import { enquiryFromEvent, isTour, suggestWedding, parseStatedDate, platformSearchTerms, describeEmailMatch, parseCalculatorEmail, isCalculatorEmail } from './lib/enquiries.js';
 import { venueToday, venueDate, venueDateTime, VENUE_TZ } from '../shared/venue-time.js';
@@ -17385,10 +17386,23 @@ async function parseSeatingBuffer(buffer, filename, mimetype) {
   const tablesMap = new Map();
   const warnings = [];
   let totalGuests = 0;
+  let skippedRows = 0;
 
-  for (const row of dataRows) {
+  for (const [i, row] of dataRows.entries()) {
     const rawName = safeCell(row, colMap.name);
-    if (!rawName) continue;
+    if (!rawName) {
+      // A row with something in it and nothing in the name column is a row the
+      // import is about to drop. It used to drop them in silence, so a chart
+      // whose names sat in a column the detector missed committed as an empty
+      // seating plan and said it had worked.
+      const hasContent = row.some(v => v !== null && v !== undefined && String(v).trim());
+      if (!hasContent) continue;
+      skippedRows += 1;
+      if (warnings.length < 25) {
+        warnings.push(`Row ${i + 2} has no name in the name column, so it was left out: ${row.map(v => String(v ?? '').trim()).filter(Boolean).slice(0, 4).join(' · ').slice(0, 120)}`);
+      }
+      continue;
+    }
 
     const rawTable = safeCell(row, colMap.table) || 'Unassigned';
 
@@ -17412,137 +17426,22 @@ async function parseSeatingBuffer(buffer, filename, mimetype) {
       last_name,
       notes: combinedNotes,
       dietary_restrictions: dietary,
-      rsvp: parseRsvpValue(rawRsvp),
+      // Null, not 'pending', when the chart says nothing about it. A chart with
+      // no RSVP column set every guest on it back to pending, which is a whole
+      // wedding's worth of answers deleted by a seating import.
+      rsvp: rawRsvp ? parseRsvpValue(rawRsvp) : null,
       table_assignment: rawTable,
     });
     totalGuests++;
   }
 
-  return { tables: Array.from(tablesMap.values()), totalGuests, warnings };
+  if (skippedRows > 25) warnings.push(`${skippedRows} rows in all had nothing in the name column.`);
+
+  return { tables: Array.from(tablesMap.values()), totalGuests, skippedRows, warnings };
 }
 
-// Upsert parsed seating into wedding_guests (update if name matches, insert if new)
-async function commitSeatingToGuests(weddingId, tables, replaceExisting) {
-  if (replaceExisting) {
-    // Clear table_assignment for all existing guests in this wedding
-    await supabaseAdmin
-      .from('wedding_guests')
-      .update({ table_assignment: null })
-      .eq('wedding_id', weddingId);
-  }
-
-  const { data: existingGuests, error: existingGuestsErr } = await supabaseAdmin
-    .from('wedding_guests')
-    .select('id, first_name, last_name, plus_one_name')
-    .eq('wedding_id', weddingId);
-  if (existingGuestsErr) throw new Error(`Could not read the guest list: ${existingGuestsErr.message}`);
-
-  const norm = s => (s || '').toLowerCase().trim().replace(/\s+/g, ' ');
-  const nameKey = full => norm(full);
-
-  // One index of people, by the name each of them shows under.
-  //
-  // A seating chart lists people, so matching it wants people. This used to be
-  // two indexes — hosts, and plus ones pointing at their host's row — because a
-  // plus one had no row to seat. Since 025 they do, and the two-index version
-  // then went wrong in a way worth spelling out: a plus one recorded as "Cole"
-  // displays as "Cole Ashby" with the surname inherited, so a chart saying
-  // "Cole Ashby" missed the person index, fell through to the plus-one index,
-  // and moved Brooke instead. Cole's own row kept no table at all.
-  //
-  // p.row is the row that carries that person's table: their host's before 025,
-  // their own after it. So the same code seats the right thing in both.
-  const personIndex = new Map();
-  const isPlusOneRow = new Set();
-  for (const person of allPeople(existingGuests || [])) {
-    const rowId = person.row?.id;
-    if (!rowId || !person.name) continue;
-    personIndex.set(nameKey(person.name), rowId);
-    if (person.isPlusOne) isPlusOneRow.add(rowId);
-  }
-  // A chart may also use the bare name the couple typed, without the inherited
-  // surname. Added second so a real guest of that name always wins.
-  for (const g of existingGuests || []) {
-    if (hasPlusOne(g) && isNamedPerson(g.plus_one_name)) {
-      const bare = nameKey(g.plus_one_name);
-      if (!personIndex.has(bare)) {
-        const own = (existingGuests || []).find(x => x.is_plus_one && x.plus_one_of === g.id);
-        personIndex.set(bare, own ? own.id : g.id);
-        if (own) isPlusOneRow.add(own.id);
-      }
-    }
-  }
-
-  let created = 0, updated = 0, seatedAsPlusOne = 0;
-  const warnings = [];
-  const assignedTable = new Map(); // row id -> table we have already set
-
-  for (const table of tables) {
-    for (const guest of table.guests) {
-      const full = [guest.first_name, guest.last_name].filter(Boolean).join(' ');
-      const key = nameKey(full);
-      const existingId = personIndex.get(key);
-
-      // Somebody whose table lives on a row shared with their host. Only
-      // possible before 025; after it they have their own row and can be seated
-      // wherever the chart says. Never create a row for them, and never
-      // silently move a host who is already seated somewhere else.
-      if (existingId && isPlusOneRow.has(existingId)) {
-        const already = assignedTable.get(existingId);
-        if (already && already !== guest.table_assignment) {
-          warnings.push(`${full} is charted at ${guest.table_assignment} but shares a row with someone already seated at ${already}. Left as ${already}.`);
-        } else {
-          await supabaseAdmin
-            .from('wedding_guests')
-            .update({ table_assignment: guest.table_assignment, updated_at: new Date().toISOString() })
-            .eq('id', existingId);
-          assignedTable.set(existingId, guest.table_assignment);
-          seatedAsPlusOne++;
-        }
-        continue;
-      }
-
-      const payload = {
-        first_name: guest.first_name,
-        last_name: guest.last_name,
-        notes: guest.notes,
-        dietary_restrictions: guest.dietary_restrictions,
-        rsvp: guest.rsvp,
-        table_assignment: guest.table_assignment,
-        updated_at: new Date().toISOString(),
-      };
-
-      if (existingId) {
-        await supabaseAdmin.from('wedding_guests').update(payload).eq('id', existingId);
-        assignedTable.set(existingId, guest.table_assignment);
-        updated++;
-      } else {
-        // A name on the chart that matches nobody. Inserted as a guest in their
-        // own right, with no plus one, because nothing here says they have one.
-        // Head of their own party. Migration 027's trigger would fill this in
-        // too, but a path that only works because of a trigger is a path that
-        // breaks on any database where the trigger has not been run.
-        const newId = crypto.randomUUID();
-        const { data: newGuest, error: insertError } = await supabaseAdmin
-          .from('wedding_guests')
-          .insert({ id: newId, party_id: newId, wedding_id: weddingId, ...payload })
-          .select('id')
-          .single();
-        if (insertError) {
-          // Counted as created even when it never landed. Warn instead of
-          // silently inflating the summary the admin reads back.
-          warnings.push(`${full || 'A guest'} could not be added: ${insertError.message}`);
-        } else {
-          personIndex.set(key, newGuest.id);
-          assignedTable.set(newGuest.id, guest.table_assignment);
-          created++;
-        }
-      }
-    }
-  }
-
-  return { created, updated, seatedAsPlusOne, warnings };
-}
+// Writing a parsed chart onto the guest list lives in server/lib/seating-import.js,
+// where the name matching can be tested without a database.
 
 // POST /api/seating/import — parse (action=parse) or commit (action=commit)
 // Multipart, so weddingAccess saw an empty body and could not scope it. A
@@ -17566,11 +17465,22 @@ app.post('/api/seating/import', requireAuth, spreadsheetUpload.single('file'), a
 
     if (action === 'commit') {
       let chart;
+      if (req.body.chart === undefined || req.body.chart === null || req.body.chart === '') {
+        return res.status(400).json({ error: 'No chart was sent with the commit. Parse the file first, then commit what came back.' });
+      }
       try { chart = typeof req.body.chart === 'string' ? JSON.parse(req.body.chart) : req.body.chart; }
-      catch { return res.status(400).json({ error: 'Invalid chart JSON' }); }
+      catch (parseErr) {
+        // "Invalid chart JSON" told nobody which of the two things went wrong,
+        // and a chart truncated by an upload limit looks exactly like a bug.
+        const raw = String(req.body.chart);
+        return res.status(400).json({ error: `The chart could not be read as JSON (${parseErr.message}). It arrived ${raw.length} characters long, starting "${raw.slice(0, 40)}".` });
+      }
+      if (!chart || !Array.isArray(chart.tables)) {
+        return res.status(400).json({ error: `The chart has no tables in it: expected { tables: [...] }, got ${chart === null ? 'null' : Array.isArray(chart) ? 'an array' : typeof chart}${chart && typeof chart === 'object' ? ` with keys ${Object.keys(chart).slice(0, 6).join(', ') || 'none'}` : ''}.` });
+      }
 
       const replaceExisting = req.body.replaceExisting === 'true' || req.body.replaceExisting === true;
-      const result = await commitSeatingToGuests(weddingId, chart.tables, replaceExisting);
+      const result = await commitSeatingToGuests(supabaseAdmin, weddingId, chart.tables, replaceExisting);
       return res.json({ ok: true, ...result });
     }
 
