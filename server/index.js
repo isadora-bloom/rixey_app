@@ -13124,7 +13124,7 @@ app.post('/api/guest-care', async (req, res) => {
 // ============ INTERNAL NOTES API ============
 
 // Get internal notes for a wedding (admin only)
-app.get('/api/internal-notes/:weddingId', async (req, res) => {
+app.get('/api/internal-notes/:weddingId', requireAdmin, async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
       .from('wedding_internal_notes')
@@ -13160,13 +13160,26 @@ app.post('/api/internal-notes', async (req, res) => {
 });
 
 // Delete an internal note
-app.delete('/api/internal-notes/:id', async (req, res) => {
+app.delete('/api/internal-notes/:id', requireAdmin, async (req, res) => {
   try {
-    const { error } = await supabaseAdmin
+    const { data: note, error: readErr } = await supabaseAdmin
+      .from('wedding_internal_notes')
+      .select('wedding_id')
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (readErr) throw readErr;
+    if (!note) return res.status(404).json({ error: 'No such note' });
+
+    const { data, error } = await supabaseAdmin
       .from('wedding_internal_notes')
       .delete()
-      .eq('id', req.params.id);
+      .eq('id', req.params.id)
+      .select('id')
+      .maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such note' });
+
+    await logActivity(note.wedding_id, req.userId, 'internal_note_deleted', `id ${req.params.id}`);
     res.json({ success: true });
   } catch (error) {
     console.error('Delete internal note error:', error);
