@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
 import { apiFetch } from '../utils/api'
+import { normaliseName } from '../../shared/guest-names'
 import { Button, Input, ConfirmDialog } from './ui'
 import { useToast } from './ui/Toast'
 
@@ -144,11 +145,16 @@ export default function KnowledgeBaseAdmin() {
   // Get unique categories
   const categories = [...new Set(entries.map(e => e.category).filter(Boolean))]
 
-  // Filter entries
+  // Filter entries.
+  //
+  // Searching goes through the shared normaliser, so looking for "Jose" finds
+  // an entry that spells it "José" and a search for "cafe" finds "café". The
+  // highlighting below still works on the raw text: it may not mark an
+  // accented hit, which is a smaller failure than the entry not showing up.
+  const normalisedQuery = normaliseName(searchQuery)
   const filteredEntries = entries.filter(entry => {
-    const matchesSearch = !searchQuery ||
-      entry.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      entry.content.toLowerCase().includes(searchQuery.toLowerCase())
+    const haystack = normaliseName(`${entry.title || ''} ${entry.content || ''}`)
+    const matchesSearch = !normalisedQuery || haystack.includes(normalisedQuery)
     const matchesCategory = filterCategory === 'all' || entry.category === filterCategory
     return matchesSearch && matchesCategory
   })

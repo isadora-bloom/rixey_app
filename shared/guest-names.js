@@ -18,6 +18,30 @@ function tidy(name) {
   return (name || '').replace(/^[*.\s]+/, '').replace(/[*.\s]+$/, '').trim();
 }
 
+/**
+ * One way of comparing two names, used everywhere names are matched.
+ *
+ * "Zoë" on the guest list and "Zoe" in the allergy registry are the same
+ * person, and until now no surface agreed about that: each one lowercased and
+ * stripped punctuation in its own way and none of them folded accents, so an
+ * accented name never matched itself. Every such comparison was a place where
+ * a real person quietly went missing.
+ *
+ * NFD splits a letter from its diacritic so the combining marks can be dropped
+ * on their own, which works for any script that decomposes rather than for a
+ * hand-written list of European letters. Letters and digits from every script
+ * survive; everything else becomes a single space.
+ */
+export function normaliseName(value) {
+  return String(value == null ? '' : value)
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /** Do we have an actual name for this person, or just a placeholder? */
 export function isNamedPerson(name) {
   const s = tidy(name);
@@ -248,9 +272,8 @@ export function dietaryNotes(guests) {
 
 /** Guest-list dietary notes with nobody of that name in the allergy registry. */
 export function dietaryNotInRegistry(guests, registryRows) {
-  const norm = s => String(s || '').toLowerCase().replace(/[^a-z ]/g, '').replace(/\s+/g, ' ').trim();
-  const known = new Set((registryRows || []).map(r => norm(r.guest_name)).filter(Boolean));
-  return dietaryNotes(guests).filter(d => !known.has(norm(d.name)));
+  const known = new Set((registryRows || []).map(r => normaliseName(r.guest_name)).filter(Boolean));
+  return dietaryNotes(guests).filter(d => !known.has(normaliseName(d.name)));
 }
 
 /** Headcounts that all mean the same thing wherever they are shown. */

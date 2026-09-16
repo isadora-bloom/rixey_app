@@ -11,8 +11,29 @@ import { headcount } from '../../shared/guest-names'
 
 const APP_URL = import.meta.env.VITE_APP_URL || window.location.origin
 
+/**
+ * A web address from a couple's names.
+ *
+ * Accented letters used to be deleted rather than folded, so "José & María"
+ * gave "jos-mar-a": a link they would have had to fix by hand before printing
+ * it on an invitation, if they noticed. NFD splits the letter from its
+ * diacritic so the letter itself survives. The German ß and the Nordic
+ * æ/ø/å do not decompose, so they are spelled out first.
+ */
+const TRANSLITERATE = [
+  [/ß/g, 'ss'], [/æ/g, 'ae'], [/ø/g, 'o'], [/å/g, 'a'],
+  [/œ/g, 'oe'], [/đ/g, 'd'], [/ð/g, 'd'], [/þ/g, 'th'], [/ł/g, 'l'],
+]
+
 function slugify(str) {
-  return str.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+  let s = String(str == null ? '' : str).toLowerCase()
+  for (const [from, to] of TRANSLITERATE) s = s.replace(from, to)
+  return s
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/&/g, '-and-')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
 }
 
 const SECTION_TOGGLES = [
@@ -646,6 +667,15 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
                 <p className="text-xs text-sage-500 mt-2 max-w-xs">
                   Point a phone camera here to open your website. Download it to add to your invitations or signage.
                 </p>
+                {/* A QR code carries the address and nothing else. Printing it
+                    on two hundred invitations without saying so means two
+                    hundred guests at a password box they have never seen. */}
+                {passwordEnabled && accessPassword && (
+                  <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-2 max-w-xs">
+                    Your site is password protected. This code opens the address but not the site, so print the
+                    password alongside it or guests will get as far as the password box and no further.
+                  </p>
+                )}
                 <button
                   type="button"
                   onClick={downloadQr}

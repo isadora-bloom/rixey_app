@@ -56,8 +56,27 @@ for (const [key, aliases] of Object.entries(HEADER_ALIASES)) for (const a of ali
 // the order the columns appear.
 const ADDRESS_PARTS = ['address_', 'address_line', 'street', 'city', 'town', 'state', 'county', 'province', 'zip', 'postal_code', 'postcode', 'country']
 
+/**
+ * The column key a header maps onto.
+ *
+ * Two things used to be thrown away here. Accents: "Prénom" became "prnom" and
+ * matched nothing, so a French or Spanish sheet lost the column entirely.
+ * Digits: "Address Line 1" and "Address Line 2" both became "address_line",
+ * which is one key for two columns, and the second quietly overwrote the
+ * first. Folding the accent rather than deleting it, and keeping the digit,
+ * fixes both. Punctuation still vanishes without leaving a gap, because
+ * "E-Mail" has to reach "email".
+ */
 export function canonicalHeader(raw) {
-  const k = String(raw || '').toLowerCase().trim().replace(/\s+/g, '_').replace(/[^a-z_]/g, '').replace(/_+/g, '_').replace(/^_|_$/g, '')
+  const k = String(raw == null ? '' : raw)
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-z0-9_]/g, '')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
   return CANONICAL.get(k) || k
 }
 

@@ -1,11 +1,12 @@
-import { useState, useEffect, useRef, Fragment } from 'react'
+import { useState, useEffect, useRef, useCallback, Fragment } from 'react'
 import { API_URL } from '../config/api'
 import { apiFetch, loadJson } from '../utils/api'
 import { describeExtras } from '../../shared/rsvp-fields'
-import { plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, allPeople, headcount, usesPersonModel } from '../../shared/guest-names'
+import { plusOneFullName, plusOneDisplayName, isNamedPerson, hasPlusOne, allPeople, headcount, usesPersonModel, normaliseName } from '../../shared/guest-names'
 import { parseGuestCsv, inferColumns, applyColumnMapping, FIELD_GROUPS, FIELD_LABELS, tagLabelOf, isMappableKey } from '../../shared/guest-csv'
 import { useToast } from './ui/Toast'
 import LoadError from './ui/LoadError'
+import ConfirmDialog from './ui/ConfirmDialog'
 
 
 const RSVP_OPTIONS = [
@@ -77,6 +78,26 @@ function rememberMapping(headers, keys) {
     localStorage.setItem(MAPPING_STORE, JSON.stringify(Object.fromEntries(entries.slice(0, 20))))
   } catch {
     // A private window with storage turned off just means no memory of it.
+  }
+}
+
+/**
+ * The whole guest row, for a PUT that only means to change one field.
+ *
+ * The route replaces the row rather than patching it, so anything left out of
+ * the body is wiped. Every inline edit has to send the lot, and it has to be
+ * the same list in each of them, which is why it lives here rather than being
+ * typed out at each call site.
+ */
+function guestPutBody(g) {
+  return {
+    first_name: g.first_name, last_name: g.last_name,
+    rsvp: g.rsvp, dietary_restrictions: g.dietary_restrictions,
+    meal_choice: g.meal_choice, tags: g.tags || [], notes: g.notes,
+    email: g.email, phone: g.phone, address: g.address,
+    plus_one_name: g.plus_one_name, plus_one_rsvp: g.plus_one_rsvp,
+    plus_one_meal_choice: g.plus_one_meal_choice, plus_one_dietary: g.plus_one_dietary,
+    table_assignment: g.table_assignment,
   }
 }
 
@@ -472,7 +493,7 @@ function GuestModal({ guest, weddingId, tagOptions, mealOptions, platedMeal, tab
 
 // ─── Settings Modal ────────────────────────────────────────────────────────────
 
-function SettingsModal({ weddingId, tagOptions, mealOptions, platedMeal, onUpdate, onClose }) {
+function SettingsModal({ weddingId, guests, tagOptions, mealOptions, platedMeal, onUpdate, onClose }) {
   const { error: toastError } = useToast()
   const [plated, setPlated] = useState(platedMeal)
   const [tags, setTags] = useState(tagOptions)
@@ -480,6 +501,14 @@ function SettingsModal({ weddingId, tagOptions, mealOptions, platedMeal, onUpdat
   const [newTag, setNewTag] = useState('')
   const [newTagColor, setNewTagColor] = useState(TAG_PALETTE[0])
   const [newMeal, setNewMeal] = useState('')
+  // Deleting either of these reaches guests who are carrying it, so both ask
+  // first and both say how many people that is.
+  const [confirmTag, setConfirmTag] = useState(null)
+  const [confirmMeal, setConfirmMeal] = useState(null)
+
+  const guestsWithTag = label => (guests || []).filter(g => (g.tags || []).includes(label)).length
+  const guestsWithMeal = label => (guests || []).filter(g =>
+    g.meal_choice === label || g.plus_one_meal_choice === label).length
 
   const emit = (updates) => {
     onUpdate({ platedMeal: plated, tagOptions: tags, mealOptions: meals, ...updates })
@@ -518,6 +547,7 @@ function SettingsModal({ weddingId, tagOptions, mealOptions, platedMeal, onUpdat
   }
 
   const deleteTag = async (id) => {
+    setConfirmTag(null)
     const snapshot = tags
     const updated = tags.filter(t => t.id !== id)
     setTags(updated)
@@ -547,6 +577,7 @@ function SettingsModal({ weddingId, tagOptions, mealOptions, platedMeal, onUpdat
   }
 
   const deleteMeal = async (id) => {
+    setConfirmMeal(null)
     const snapshot = meals
     const updated = meals.filter(m => m.id !== id)
     setMeals(updated)
@@ -601,7 +632,7 @@ function SettingsModal({ weddingId, tagOptions, mealOptions, platedMeal, onUpdat
                   >
                     {tag.label}
                     <button
-                      onClick={() => deleteTag(tag.id)}
+                      onClick={() => setConfirmTag(tag)}
                       className="hover:opacity-75 leading-none ml-0.5"
                     >
                       ×
@@ -649,7 +680,7 @@ function SettingsModal({ weddingId, tagOptions, mealOptions, platedMeal, onUpdat
                   {meals.map(m => (
                     <div key={m.id} className="flex items-center justify-between bg-cream-50 rounded-lg px-3 py-2">
                       <span className="text-sm text-sage-700">{m.label}</span>
-                      <button onClick={() => deleteMeal(m.id)} className="text-xs text-red-400 hover:text-red-600 transition">
+                      <button onClick={() => setConfirmMeal(m)} className="text-xs text-red-400 hover:text-red-600 transition">
                         Remove
                       </button>
                     </div>
@@ -676,6 +707,30 @@ function SettingsModal({ weddingId, tagOptions, mealOptions, platedMeal, onUpdat
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={!!confirmTag}
+        onClose={() => setConfirmTag(null)}
+        onConfirm={() => deleteTag(confirmTag.id)}
+        title="Delete this tag?"
+        message={confirmTag
+          ? `"${confirmTag.label}" is on ${guestsWithTag(confirmTag.label)} guest${guestsWithTag(confirmTag.label) === 1 ? '' : 's'}. Deleting it takes it off them as well, and there is no undo.`
+          : ''}
+        confirmLabel="Delete tag"
+        danger
+      />
+
+      <ConfirmDialog
+        open={!!confirmMeal}
+        onClose={() => setConfirmMeal(null)}
+        onConfirm={() => deleteMeal(confirmMeal.id)}
+        title="Remove this meal option?"
+        message={confirmMeal
+          ? `${guestsWithMeal(confirmMeal.label)} guest${guestsWithMeal(confirmMeal.label) === 1 ? ' has' : 's have'} chosen "${confirmMeal.label}". Removing the option clears their choice, and the kitchen counts change with it.`
+          : ''}
+        confirmLabel="Remove option"
+        danger
+      />
     </div>
   )
 }
@@ -703,6 +758,12 @@ export default function GuestList({ weddingId, userId }) {
   const [editingGuest, setEditingGuest] = useState(null)
   const [showSettings, setShowSettings] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState(null)
+  // Ticked rows, by party head id, for the bulk actions.
+  const [selectedIds, setSelectedIds] = useState(() => new Set())
+  const [confirmDeleteSelected, setConfirmDeleteSelected] = useState(false)
+  const [deletingSelected, setDeletingSelected] = useState(false)
+  const [confirmClearSeating, setConfirmClearSeating] = useState(false)
+  const [clearingSeating, setClearingSeating] = useState(false)
   // Empty the whole list: opens a dialog that asks for the word DELETE.
   const [deleteAllOpen, setDeleteAllOpen] = useState(false)
   const [deleteAllWord, setDeleteAllWord] = useState('')
@@ -713,11 +774,7 @@ export default function GuestList({ weddingId, userId }) {
   const [csvCheck, setCsvCheck] = useState(null) // the column mapping waiting to be confirmed
   const csvInputRef = useRef(null)
 
-  useEffect(() => {
-    if (weddingId) loadData()
-  }, [weddingId])
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true)
     setLoadError(null)
     try {
@@ -753,9 +810,24 @@ export default function GuestList({ weddingId, userId }) {
       setLoadError(err)
     }
     setLoading(false)
-  }
+  }, [weddingId])
 
+  // Declared after the callback on purpose: a dependency array is read during
+  // render, and naming one declared further down throws "Cannot access before
+  // initialization" in the built bundle.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { if (weddingId) loadData() }, [weddingId, loadData])
+
+  /**
+   * A saved guest goes back on the list.
+   *
+   * An edit can be dropped straight in. An add cannot: since 025 a guest with
+   * a plus one is two rows on the server and only the host comes back here, so
+   * appending it left the plus one invisible until the next reload. Every
+   * headcount on the screen was then one short of the truth. So an add refetches.
+   */
   const handleSaveGuest = (savedGuest) => {
+    const isEdit = guests.some(g => g.id === savedGuest.id)
     setGuests(prev => {
       const idx = prev.findIndex(g => g.id === savedGuest.id)
       if (idx >= 0) {
@@ -767,6 +839,18 @@ export default function GuestList({ weddingId, userId }) {
     })
     setShowAddModal(false)
     setEditingGuest(null)
+    if (!isEdit) refreshGuests()
+  }
+
+  /** Re-read the guest list on its own, leaving the settings alone. */
+  const refreshGuests = async () => {
+    try {
+      const gData = await loadJson(`${API_URL}/api/guests/${weddingId}`)
+      setGuests(gData.guests || [])
+    } catch (err) {
+      console.error('Failed to refresh guests:', err)
+      toastError(`Saved, but the list could not be re-read: ${err.message}`)
+    }
   }
 
   const handleDeleteAll = async () => {
@@ -787,16 +871,88 @@ export default function GuestList({ weddingId, userId }) {
     setDeletingAll(false)
   }
 
+  /**
+   * Remove a party: the host row and, since 025, their plus one's row too.
+   *
+   * The server cascades. This used to drop only the row that was clicked, so
+   * the plus one stayed on screen as a guest with nobody to belong to, and
+   * every count included a person who no longer existed.
+   */
   const handleDelete = async (id) => {
     const snapshot = guests
-    setGuests(prev => prev.filter(g => g.id !== id))
+    setGuests(prev => prev.filter(g => g.id !== id && g.plus_one_of !== id))
     setDeleteConfirm(null)
+    setSelectedIds(prev => {
+      if (!prev.has(id)) return prev
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
     try {
       await apiFetch(`${API_URL}/api/guests/${id}`, { method: 'DELETE' })
     } catch (err) {
       setGuests(snapshot)
       toastError(`Could not delete guest: ${err.message}`)
     }
+  }
+
+  /**
+   * Remove every ticked party, through the same per-row route.
+   *
+   * Promise.allSettled rather than a loop that stops at the first refusal:
+   * a loop leaves you not knowing which of forty rows went. The ones that
+   * failed stay on the list and the toast says how many.
+   */
+  const deleteSelected = async () => {
+    setConfirmDeleteSelected(false)
+    const ids = [...selectedIds]
+    if (!ids.length) return
+    setDeletingSelected(true)
+    const results = await Promise.allSettled(
+      ids.map(id => apiFetch(`${API_URL}/api/guests/${id}`, { method: 'DELETE' }))
+    )
+    const failedIds = new Set(ids.filter((_, i) => results[i].status === 'rejected'))
+    const goneIds = new Set(ids.filter(id => !failedIds.has(id)))
+    setGuests(prev => prev.filter(g => !goneIds.has(g.id) && !goneIds.has(g.plus_one_of)))
+    setSelectedIds(failedIds)
+    if (failedIds.size) {
+      toastError(failedIds.size === ids.length
+        ? `None of the ${ids.length} guests could be removed. They are all still on the list.`
+        : `${failedIds.size} of ${ids.length} guests could not be removed. They are still ticked.`)
+    }
+    setDeletingSelected(false)
+  }
+
+  /**
+   * Take everyone off their table, leaving the tables themselves alone.
+   *
+   * Written one person at a time because a plus one has a table of their own
+   * since 025 and can be sitting apart from their host.
+   */
+  const clearAllSeating = async () => {
+    setConfirmClearSeating(false)
+    const seated = guests.filter(g => g.table_assignment)
+    if (!seated.length) return
+    setClearingSeating(true)
+    const snapshot = guests
+    setGuests(prev => prev.map(g => (g.table_assignment ? { ...g, table_assignment: null } : g)))
+    const results = await Promise.allSettled(
+      seated.map(g => apiFetch(`${API_URL}/api/guests/${g.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ ...guestPutBody(g), table_assignment: null }),
+      }))
+    )
+    const failed = seated.filter((_, i) => results[i].status === 'rejected')
+    if (failed.length) {
+      // Put back exactly the ones that are still seated on the server, so the
+      // screen is not claiming an empty chart it did not manage to make.
+      const stillSeated = new Set(failed.map(g => g.id))
+      setGuests(prev => prev.map(g => (stillSeated.has(g.id)
+        ? { ...g, table_assignment: snapshot.find(s => s.id === g.id)?.table_assignment || null }
+        : g)))
+      toastError(`${failed.length} of ${seated.length} guests are still at their table.`)
+    }
+    setClearingSeating(false)
   }
 
   const handleCsvUpload = async (e) => {
@@ -1073,25 +1229,24 @@ export default function GuestList({ weddingId, userId }) {
     setExportOpen(false)
   }
 
-  // Assign a guest to a table inline (sends full guest object to preserve all fields)
-  const assignTable = async (guest, tableLabel) => {
-    const updated = { ...guest, table_assignment: tableLabel || null }
-    setGuests(prev => prev.map(g => g.id === guest.id ? updated : g))
+  /**
+   * Seat one person.
+   *
+   * Takes a row rather than a party, because since 025 a plus one is a row of
+   * their own with a table of their own and can be sat apart from their host.
+   * Passing the party head here for both of them put them at the same table
+   * whatever the screen showed.
+   */
+  const assignTable = async (row, tableLabel) => {
+    const before = row
+    setGuests(prev => prev.map(g => g.id === row.id ? { ...g, table_assignment: tableLabel || null } : g))
     try {
-      await apiFetch(`${API_URL}/api/guests/${guest.id}`, {
+      await apiFetch(`${API_URL}/api/guests/${row.id}`, {
         method: 'PUT',
-        body: JSON.stringify({
-          first_name: guest.first_name, last_name: guest.last_name,
-          rsvp: guest.rsvp, dietary_restrictions: guest.dietary_restrictions,
-          meal_choice: guest.meal_choice, tags: guest.tags || [], notes: guest.notes,
-          email: guest.email, phone: guest.phone, address: guest.address,
-          plus_one_name: guest.plus_one_name, plus_one_rsvp: guest.plus_one_rsvp,
-          plus_one_meal_choice: guest.plus_one_meal_choice, plus_one_dietary: guest.plus_one_dietary,
-          table_assignment: tableLabel || null,
-        }),
+        body: JSON.stringify({ ...guestPutBody(row), table_assignment: tableLabel || null }),
       })
     } catch (err) {
-      setGuests(prev => prev.map(g => g.id === guest.id ? guest : g)) // revert
+      setGuests(prev => prev.map(g => g.id === row.id ? before : g)) // revert
       toastError(`Could not assign table: ${err.message}`)
     }
   }
@@ -1220,20 +1375,43 @@ export default function GuestList({ weddingId, userId }) {
   const plusOneDietaryOf = g => plusOneRowFor.get(g.id)?.dietary_restrictions ?? g.plus_one_dietary
   const plusOneMealOf = g => plusOneRowFor.get(g.id)?.meal_choice ?? g.plus_one_meal_choice
 
-  // Filtering
-  const filtered = parties.filter(g => {
+  // Filtering, one person at a time.
+  //
+  // The filters used to run over the party head only, so a plus one was
+  // invisible to all of them: searching a plus one's name found nothing unless
+  // it happened to be spelled exactly as typed in the host's column, filtering
+  // by Confirmed hid parties whose plus one had said yes, and Table 6 did not
+  // list the plus one sitting at Table 6. A party shows when anybody in it
+  // matches, which is what somebody looking for a person means.
+  //
+  // Names are compared through the shared normaliser, so searching "Zoe" finds
+  // "Zoë" and searching "Jose" finds "José".
+  const partyIdOfPerson = p => (p.row?.is_plus_one && p.row?.plus_one_of) ? p.row.plus_one_of : p.row?.id
+  const needle = normaliseName(searchTerm)
+  const rawNeedle = searchTerm.trim().toLowerCase()
+
+  const personMatches = (p) => {
     if (searchTerm) {
-      const haystack = `${g.first_name} ${g.last_name || ''} ${g.plus_one_name || ''} ${g.email || ''} ${g.dietary_restrictions || ''}`.toLowerCase()
-      if (!haystack.includes(searchTerm.toLowerCase())) return false
+      const nameHit = needle && normaliseName(p.name).includes(needle)
+      // Email and dietary text are not names, so they are matched as typed.
+      const otherHit = rawNeedle && `${p.row?.email || ''} ${p.dietary || ''} ${p.row?.notes || ''}`
+        .toLowerCase().includes(rawNeedle)
+      if (!nameHit && !otherHit) return false
     }
-    if (filterRsvp !== 'all' && g.rsvp !== filterRsvp) return false
-    if (filterTag !== 'all' && !(g.tags || []).includes(filterTag)) return false
-    if (filterTable === 'unassigned' && g.table_assignment) return false
-    if (filterTable !== 'all' && filterTable !== 'unassigned' && g.table_assignment !== filterTable) return false
-    if (filterDietary === 'yes' && !g.dietary_restrictions) return false
-    if (filterDietary === 'no' && g.dietary_restrictions) return false
+    if (filterRsvp !== 'all' && p.rsvp !== filterRsvp) return false
+    if (filterTag !== 'all' && !(p.row?.tags || []).includes(filterTag)) return false
+    if (filterTable === 'unassigned' && p.row?.table_assignment) return false
+    if (filterTable !== 'all' && filterTable !== 'unassigned' && p.row?.table_assignment !== filterTable) return false
+    if (filterDietary === 'yes' && !p.dietary) return false
+    if (filterDietary === 'no' && p.dietary) return false
     return true
-  })
+  }
+
+  const matchedPartyIds = new Set()
+  for (const person of allPeople(guests)) {
+    if (personMatches(person)) matchedPartyIds.add(partyIdOfPerson(person))
+  }
+  const filtered = parties.filter(g => matchedPartyIds.has(g.id))
 
   // Sorting
   const RSVP_ORDER = { yes: 0, maybe: 1, pending: 2, no: 3 }
@@ -1277,6 +1455,25 @@ export default function GuestList({ weddingId, userId }) {
     else { setSortField(field); setSortDir('asc') }
   }
 
+  // Ticking rows. The header box covers what is on screen under the current
+  // filters, never the whole list, so "select all" on a filtered view cannot
+  // quietly take in the rows you have filtered out.
+  const allVisibleTicked = sorted.length > 0 && sorted.every(g => selectedIds.has(g.id))
+  const toggleRow = (id) => setSelectedIds(prev => {
+    const next = new Set(prev)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    return next
+  })
+  const toggleAllVisible = () => setSelectedIds(prev => {
+    const next = new Set(prev)
+    if (allVisibleTicked) sorted.forEach(g => next.delete(g.id))
+    else sorted.forEach(g => next.add(g.id))
+    return next
+  })
+  // What the ticked rows come to in people, because a party is not a person.
+  const selectedPeopleCount = allPeople(guests)
+    .filter(p => selectedIds.has(partyIdOfPerson(p))).length
+
   const SortIcon = ({ field }) => {
     if (sortField !== field) return <span className="ml-1 opacity-30">↕</span>
     return <span className="ml-1">{sortDir === 'asc' ? '↑' : '↓'}</span>
@@ -1296,6 +1493,9 @@ export default function GuestList({ weddingId, userId }) {
     if (table) acc[table] = (acc[table] || 0) + 1
     return acc
   }, {})
+
+  // People, not parties: a plus one sitting apart from their host is a seat.
+  const seatedCount = guests.filter(g => g.table_assignment).length
 
   // Summary stats. Every figure here is a headcount of people. They used to be
   // a mix: total and confirmed counted people while declined, pending and
@@ -1365,6 +1565,16 @@ export default function GuestList({ weddingId, userId }) {
                 className="flex items-center gap-1.5 border border-sage-300 text-sage-600 px-4 py-2 rounded-xl text-sm font-medium hover:bg-sage-50 transition"
               >
                 Print by Table
+              </button>
+            )}
+            {seatedCount > 0 && (
+              <button
+                onClick={() => setConfirmClearSeating(true)}
+                disabled={clearingSeating}
+                className="flex items-center gap-1.5 border border-sage-300 text-sage-600 px-4 py-2 rounded-xl text-sm font-medium hover:bg-sage-50 disabled:opacity-50 transition"
+                title="Take everyone off their table, keeping the tables themselves"
+              >
+                {clearingSeating ? 'Clearing…' : 'Clear all seating'}
               </button>
             )}
             <button
@@ -1525,6 +1735,31 @@ export default function GuestList({ weddingId, userId }) {
         </div>
       </div>
 
+      {/* Ticked rows */}
+      {selectedIds.size > 0 && (
+        <div className="bg-sage-50 border border-sage-200 rounded-2xl px-5 py-3 flex items-center justify-between gap-4 flex-wrap">
+          <p className="text-sm text-sage-700">
+            {selectedIds.size} invitation{selectedIds.size === 1 ? '' : 's'} ticked
+            {selectedPeopleCount !== selectedIds.size && ` · ${selectedPeopleCount} people`}
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setSelectedIds(new Set())}
+              className="text-sm text-sage-600 px-3 py-1.5 rounded-lg hover:bg-sage-100 transition"
+            >
+              Clear selection
+            </button>
+            <button
+              onClick={() => setConfirmDeleteSelected(true)}
+              disabled={deletingSelected}
+              className="text-sm bg-red-500 text-white px-4 py-1.5 rounded-lg hover:bg-red-600 disabled:opacity-50 transition"
+            >
+              {deletingSelected ? 'Removing…' : `Delete selected (${selectedIds.size})`}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Guest table */}
       <div className="bg-white rounded-2xl shadow-sm border border-cream-200 overflow-hidden">
         {sorted.length === 0 ? (
@@ -1540,6 +1775,16 @@ export default function GuestList({ weddingId, userId }) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-cream-200 bg-cream-50">
+                  <th className="px-4 py-3 w-10">
+                    <input
+                      type="checkbox"
+                      className="accent-sage-600"
+                      checked={allVisibleTicked}
+                      onChange={toggleAllVisible}
+                      title={allVisibleTicked ? 'Untick these rows' : 'Tick every row shown'}
+                      aria-label="Tick every row shown"
+                    />
+                  </th>
                   {[
                     { label: 'Name', field: 'name' },
                     { label: 'RSVP', field: 'rsvp' },
@@ -1566,7 +1811,16 @@ export default function GuestList({ weddingId, userId }) {
                   const answers = describeExtras(guest.rsvp_extras, rsvpConfig, { plusOneName: plusOneDisplayName(guest) })
                   return (
                   <Fragment key={guest.id}>
-                  <tr className={`hover:bg-cream-50/60 transition ${answers.length ? '' : 'border-b border-cream-100'}`}>
+                  <tr className={`hover:bg-cream-50/60 transition ${selectedIds.has(guest.id) ? 'bg-sage-50/60' : ''} ${answers.length ? '' : 'border-b border-cream-100'}`}>
+                    <td className="px-4 py-3">
+                      <input
+                        type="checkbox"
+                        className="accent-sage-600"
+                        checked={selectedIds.has(guest.id)}
+                        onChange={() => toggleRow(guest.id)}
+                        aria-label={`Tick ${guest.first_name} ${guest.last_name || ''}`.trim()}
+                      />
+                    </td>
                     <td className="px-4 py-3">
                       <p className="font-medium text-sage-800">{guest.first_name} {guest.last_name}</p>
                       {guest.phone && (
@@ -1635,13 +1889,39 @@ export default function GuestList({ weddingId, userId }) {
                     </td>
                     <td className="px-4 py-3">
                       {hasPlusOne(guest) ? (
-                        <div className="space-y-0.5">
+                        <div className="space-y-1">
                           {/* "Guest" where the couple recorded a plus one but
                               no name, so a placeholder never reads as one. */}
                           <p className={`text-xs ${isNamedPerson(guest.plus_one_name) ? 'text-sage-700' : 'text-sage-400 italic'}`}>
                             {plusOneDisplayName(guest)}
                           </p>
                           <RsvpBadge rsvp={plusOneRsvpOf(guest)} />
+                          {/* Their own seat. Since 025 a plus one is a row of
+                              their own and can sit apart from their host, and
+                              couples do seat them apart; before this there was
+                              no way to say so. */}
+                          {tableOptions.length > 0 && plusOneRowFor.get(guest.id) && (() => {
+                            const row = plusOneRowFor.get(guest.id)
+                            return (
+                              <select
+                                className="border border-cream-200 rounded-lg px-2 py-1 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-sage-300 max-w-[130px] block"
+                                value={row.table_assignment || ''}
+                                onChange={e => assignTable(row, e.target.value)}
+                                aria-label={`Table for ${plusOneDisplayName(guest)}`}
+                              >
+                                <option value="">Unassigned</option>
+                                {tableOptions.map(t => {
+                                  const used = tableCounts[t.label] || 0
+                                  const isAtCap = used >= t.capacity && row.table_assignment !== t.label
+                                  return (
+                                    <option key={t.label} value={t.label} disabled={isAtCap}>
+                                      {t.label} {isAtCap ? '(full)' : `(${used}/${t.capacity})`}
+                                    </option>
+                                  )
+                                })}
+                              </select>
+                            )
+                          })()}
                         </div>
                       ) : (
                         <span className="text-sage-300 text-xs">—</span>
@@ -1675,7 +1955,8 @@ export default function GuestList({ weddingId, userId }) {
                       columns above it. */}
                   {answers.length > 0 && (
                     <tr className="border-b border-cream-100 bg-cream-50/40">
-                      <td colSpan={7 + (tableOptions.length > 0 ? 1 : 0) + (platedMeal ? 1 : 0)} className="px-4 pb-3 pt-0">
+                      {/* 8 fixed columns now the tick box is one of them. */}
+                      <td colSpan={8 + (tableOptions.length > 0 ? 1 : 0) + (platedMeal ? 1 : 0)} className="px-4 pb-3 pt-0">
                         <div className="flex flex-wrap gap-x-5 gap-y-1">
                           {answers.map(a => (
                             <span key={a.key} className="text-xs text-sage-600">
@@ -1712,6 +1993,7 @@ export default function GuestList({ weddingId, userId }) {
       {showSettings && (
         <SettingsModal
           weddingId={weddingId}
+          guests={guests}
           tagOptions={tagOptions}
           mealOptions={mealOptions}
           platedMeal={platedMeal}
@@ -1900,6 +2182,26 @@ export default function GuestList({ weddingId, userId }) {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmDeleteSelected}
+        onClose={() => setConfirmDeleteSelected(false)}
+        onConfirm={deleteSelected}
+        title={`Remove ${selectedIds.size} invitation${selectedIds.size === 1 ? '' : 's'}?`}
+        message={`That is ${selectedPeopleCount} ${selectedPeopleCount === 1 ? 'person' : 'people'} with their plus ones, RSVPs and table assignments. Export a CSV first if you want a copy.`}
+        confirmLabel={`Remove ${selectedIds.size}`}
+        danger
+      />
+
+      <ConfirmDialog
+        open={confirmClearSeating}
+        onClose={() => setConfirmClearSeating(false)}
+        onConfirm={clearAllSeating}
+        title="Take everyone off their table?"
+        message={`${seatedCount} ${seatedCount === 1 ? 'person is' : 'people are'} seated. The tables on the floor plan stay exactly as they are; only who sits where is cleared. Print the seating chart first if you want a copy.`}
+        confirmLabel="Clear the seating"
+        danger
+      />
 
       {deleteConfirm && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">

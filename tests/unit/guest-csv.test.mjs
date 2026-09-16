@@ -65,6 +65,26 @@ test('header canonicalisation ignores case, spaces and punctuation', () => {
   assert.equal(canonicalHeader('Favourite colour'), 'favourite_colour')
 })
 
+test('header canonicalisation folds accents instead of deleting the letter', () => {
+  // "Prénom" used to canonicalise to "prnom", so the column was lost.
+  assert.equal(canonicalHeader('Prénom'), 'prenom')
+  // Folded, it reaches the phone alias list; unfolded it reached nothing.
+  assert.equal(canonicalHeader('Téléphone'), 'phone')
+  assert.equal(canonicalHeader('Correo electrónico'), 'correo_electronico')
+})
+
+test('header canonicalisation keeps the digit that tells two columns apart', () => {
+  // Both of these used to become "address_line", so the second overwrote
+  // the first and half of everyone's address went missing.
+  assert.equal(canonicalHeader('Address Line 1'), 'address_line_1')
+  assert.equal(canonicalHeader('Address Line 2'), 'address_line_2')
+})
+
+test('canonicalising nothing gives an empty string rather than throwing', () => {
+  assert.equal(canonicalHeader(null), '')
+  assert.equal(canonicalHeader(undefined), '')
+})
+
 test('quoted fields keep commas and doubled quotes', () => {
   assert.deepEqual(parseCSVLine('a,"b, c","say ""hi"""'), ['a', 'b, c', 'say "hi"'])
 })

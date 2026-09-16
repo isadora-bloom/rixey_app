@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { loadJson, apiFetch } from '../utils/api'
+import { useGuestHeadcount, headcountNote } from '../hooks/useGuestHeadcount'
 import { Button, Card } from './ui'
 import { useToast } from './ui/Toast'
 
@@ -11,6 +12,10 @@ export default function StaffingCalculator({ guestCount: initialGuestCount, wedd
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const { error: toastError } = useToast()
+  // What the guest list says, for seeding the figure and for the line under it.
+  const guestCounts = useGuestHeadcount(weddingId)
+  // Neither a saved answer nor a typed one may be overwritten by the seed.
+  const guestCountSettledRef = useRef(!!initialGuestCount)
   const [answers, setAnswers] = useState({
     guestCount: initialGuestCount || 100,
     hasFridayEvent: false,
@@ -44,9 +49,9 @@ export default function StaffingCalculator({ guestCount: initialGuestCount, wedd
 
     const loadStaffing = async () => {
       try {
-        const res = await fetch(`${API_URL}/api/staffing/${weddingId}`, { headers: await authHeaders() })
-        const data = await res.json()
-        if (data.staffing?.answers) {
+        const data = await loadJson(`${API_URL}/api/staffing/${weddingId}`)
+        if (data?.staffing?.answers) {
+          if (data.staffing.answers.guestCount) guestCountSettledRef.current = true
           setAnswers(prev => ({ ...prev, ...data.staffing.answers }))
           // Admin view jumps straight to the summary so the client's
           // actual choices and estimate are visible without clicking
@@ -54,13 +59,27 @@ export default function StaffingCalculator({ guestCount: initialGuestCount, wedd
           if (isAdmin) setStep(5)
         }
       } catch (err) {
+        // A missing estimate is the normal state for a new wedding, and this
+        // screen is a calculator that works without one, so nothing is put in
+        // front of the couple. Saving still reports its own failures.
         console.error('Failed to load staffing:', err)
       }
     }
     loadStaffing()
   }, [weddingId, isAdmin])
 
+  // Seed the guest count from the guest list, once, and only when nothing has
+  // been saved or typed. The 100 it starts on is a placeholder, and a staffing
+  // estimate built on a placeholder is the thing this is for.
+  useEffect(() => {
+    if (!guestCounts || !guestCounts.total) return
+    if (guestCountSettledRef.current) return
+    guestCountSettledRef.current = true
+    setAnswers(prev => ({ ...prev, guestCount: guestCounts.expected }))
+  }, [guestCounts])
+
   const updateAnswer = (key, value) => {
+    if (key === 'guestCount') guestCountSettledRef.current = true
     setAnswers(prev => ({ ...prev, [key]: value }))
   }
 
@@ -264,6 +283,18 @@ export default function StaffingCalculator({ guestCount: initialGuestCount, wedd
               min="1"
               max="300"
             />
+            {headcountNote(guestCounts, answers.guestCount) && (
+              <p className="text-sage-400 text-xs mt-1.5">
+                {headcountNote(guestCounts, answers.guestCount)}{' '}
+                <button
+                  type="button"
+                  onClick={() => updateAnswer('guestCount', guestCounts.expected)}
+                  className="underline hover:text-sage-600"
+                >
+                  Use that
+                </button>
+              </p>
+            )}
           </div>
 
           <div className="border-t border-cream-200 pt-4">

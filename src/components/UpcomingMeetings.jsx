@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { venueTime, venueDate, venueToday, venueDayLabel, isVenueToday, VENUE_TZ } from '../../shared/venue-time'
+import { normaliseName } from '../../shared/guest-names'
 import { API_URL } from '../config/api'
 import { apiFetch } from '../utils/api'
 
@@ -106,7 +107,14 @@ export default function UpcomingMeetings({ weddings = [], filterWedding = null, 
   // filed itself against whichever wedding happened to sort first. Only a
   // full name or an email now counts as a match; anything short of that is
   // left unmatched rather than guessed at.
-  const namesMatch = (a, b) => !!a && !!b && a.trim().toLowerCase() === b.trim().toLowerCase()
+  //
+  // Through the shared normaliser, so "José Martín" booking a tour matches the
+  // wedding filed as "Jose Martin" instead of showing as unmatched.
+  const namesMatch = (a, b) => {
+    const left = normaliseName(a)
+    const right = normaliseName(b)
+    return !!left && !!right && left === right
+  }
 
   const matchWedding = (invitees) => {
     if (!invitees || invitees.length === 0) return null
