@@ -3,7 +3,9 @@ import { API_URL } from '../config/api'
 import { apiFetch, loadJson } from '../utils/api'
 import { useToast } from './ui/Toast'
 import LoadError from './ui/LoadError'
+import ConfirmDialog from './ui/ConfirmDialog'
 import { shrinkImageForUpload } from '../utils/image'
+import { allPeople } from '../../shared/guest-names'
 
 
 // ── Tag definitions ────────────────────────────────────────────────────────────
@@ -44,12 +46,11 @@ function TagChip({ tag, onRemove, guestNames }) {
 
 // ── Tag editor panel ───────────────────────────────────────────────────────────
 
-function TagEditor({ photo, guestNames, onUpdate, onDelete, onClose }) {
+function TagEditor({ photo, guestNames, onUpdate, onRequestDelete, onClose }) {
   const [tags, setTags]       = useState(photo.tags || [])
   const [caption, setCaption] = useState(photo.caption || '')
   const [custom, setCustom]   = useState('')
   const [saving, setSaving]   = useState(false)
-  const [confirmDelete, setConfirmDelete] = useState(false)
 
   const toggle = (tag) => {
     setTags(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag])
@@ -220,28 +221,15 @@ function TagEditor({ photo, guestNames, onUpdate, onDelete, onClose }) {
         >
           {saving ? 'Saving…' : 'Save'}
         </button>
-        {confirmDelete ? (
-          <>
-            <button
-              onClick={() => { onDelete(photo.id); onClose() }}
-              className="px-3 py-2 bg-red-500 text-white rounded-lg text-sm hover:bg-red-600"
-            >Confirm delete</button>
-            <button
-              onClick={() => setConfirmDelete(false)}
-              className="px-3 py-2 text-sage-500 text-sm"
-            >Cancel</button>
-          </>
-        ) : (
-          <button
-            onClick={() => setConfirmDelete(true)}
-            className="px-3 py-2 text-red-400 hover:text-red-600 rounded-lg text-sm"
-            title="Delete photo"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-            </svg>
-          </button>
-        )}
+        <button
+          onClick={() => onRequestDelete(photo)}
+          className="px-3 py-2 text-red-400 hover:text-red-600 rounded-lg text-sm"
+          title="Delete photo"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+          </svg>
+        </button>
       </div>
     </div>
   )
@@ -258,6 +246,10 @@ export default function PhotoBucket({ weddingId, readOnly = false }) {
   const [selectedPhoto, setSelectedPhoto] = useState(null)
   const [guestNames, setGuestNames]       = useState([])
   const [filterTag, setFilterTag]         = useState('all')
+  const [selectedIds, setSelectedIds]     = useState(() => new Set())
+  const [confirmDeleteOne, setConfirmDeleteOne] = useState(null)
+  const [confirmDeleteMany, setConfirmDeleteMany] = useState(false)
+  const [deletingMany, setDeletingMany]   = useState(false)
   const fileInputRef = useRef(null)
 
   useEffect(() => {
@@ -283,13 +275,16 @@ export default function PhotoBucket({ weddingId, readOnly = false }) {
       // the photo bucket itself.
       const data = await loadJson(`${API_URL}/api/guests/${weddingId}`)
       const guests = data.guests || data || []
-      // Prioritise wedding party tagged guests first, then all
-      const names = guests
-        .filter(g => g.first_name)
-        .map(g => [g.first_name, g.last_name].filter(Boolean).join(' '))
+      // Through allPeople(), so a plus one can be tagged in a photo as well as
+      // their host. Placeholders are dropped: "Guest" and "+1" are not people
+      // you can point at in a picture, and offering them as a name to tag is
+      // how a photo ends up labelled with a placeholder for ever.
+      const names = allPeople(guests)
+        .map(p => (p.name || '').trim())
+        .filter(name => name && name !== 'Guest')
       setGuestNames([...new Set(names)])
     } catch (err) {
-      // non-fatal
+      console.error('Could not read guest names for photo tags:', err)
     }
   }
 
@@ -335,9 +330,16 @@ export default function PhotoBucket({ weddingId, readOnly = false }) {
   }
 
   const handleDelete = async (photoId) => {
+    setConfirmDeleteOne(null)
     const snapshot = photos
     const prevSelected = selectedPhoto
     setPhotos(prev => prev.filter(p => p.id !== photoId))
+    setSelectedIds(prev => {
+      if (!prev.has(photoId)) return prev
+      const next = new Set(prev)
+      next.delete(photoId)
+      return next
+    })
     if (selectedPhoto?.id === photoId) setSelectedPhoto(null)
     try {
       await apiFetch(`${API_URL}/api/wedding-photos/${photoId}`, { method: 'DELETE' })
@@ -348,6 +350,41 @@ export default function PhotoBucket({ weddingId, readOnly = false }) {
       toastError(`Could not delete photo: ${err.message}`)
     }
   }
+
+  /**
+   * Delete every ticked photo, through the same per-photo route.
+   *
+   * Clearing out a shoot one picture at a time meant a confirm per picture,
+   * which is how people stop reading confirms. Every delete is attempted and
+   * the ones that failed stay ticked, so a second go picks up where this left
+   * off rather than starting again.
+   */
+  const deleteSelected = async () => {
+    setConfirmDeleteMany(false)
+    const ids = [...selectedIds]
+    if (!ids.length) return
+    setDeletingMany(true)
+    const results = await Promise.allSettled(
+      ids.map(id => apiFetch(`${API_URL}/api/wedding-photos/${id}`, { method: 'DELETE' }))
+    )
+    const failed = new Set(ids.filter((_, i) => results[i].status === 'rejected'))
+    const gone = new Set(ids.filter(id => !failed.has(id)))
+    setPhotos(prev => prev.filter(p => !gone.has(p.id)))
+    setSelectedIds(failed)
+    if (selectedPhoto && gone.has(selectedPhoto.id)) setSelectedPhoto(null)
+    if (failed.size) {
+      toastError(failed.size === ids.length
+        ? `None of the ${ids.length} photos could be deleted.`
+        : `${failed.size} of ${ids.length} photos could not be deleted. They are still ticked.`)
+    }
+    setDeletingMany(false)
+  }
+
+  const togglePhoto = (id) => setSelectedIds(prev => {
+    const next = new Set(prev)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    return next
+  })
 
   // Swaps sort_order with the visible neighbour (within the current filter,
   // since that's the order being looked at) through the same PUT route as
@@ -385,6 +422,15 @@ export default function PhotoBucket({ weddingId, readOnly = false }) {
     : photos.filter(p => p.tags?.includes(filterTag))
 
   const websiteCount = photos.filter(p => p.tags?.includes('website')).length
+  // Ticking covers what the filter is showing, never the whole library.
+  const allShownTicked = filteredPhotos.length > 0 && filteredPhotos.every(p => selectedIds.has(p.id))
+  const toggleAllShown = () => setSelectedIds(prev => {
+    const next = new Set(prev)
+    if (allShownTicked) filteredPhotos.forEach(p => next.delete(p.id))
+    else filteredPhotos.forEach(p => next.add(p.id))
+    return next
+  })
+  const selectedOnWebsite = photos.filter(p => selectedIds.has(p.id) && p.tags?.includes('website')).length
 
   if (loading) return <p className="text-sage-400 text-center py-8">Loading photos…</p>
 
@@ -477,6 +523,30 @@ export default function PhotoBucket({ weddingId, readOnly = false }) {
           </div>
         )}
 
+        {/* Ticked photos */}
+        {!readOnly && photos.length > 0 && (
+          <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+            <label className="flex items-center gap-2 text-xs text-sage-500 cursor-pointer">
+              <input type="checkbox" className="accent-sage-600" checked={allShownTicked} onChange={toggleAllShown} />
+              Select all {filterTag === 'all' ? '' : 'shown '}({filteredPhotos.length})
+            </label>
+            {selectedIds.size > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-sage-500">{selectedIds.size} selected</span>
+                <button
+                  onClick={() => setSelectedIds(new Set())}
+                  className="text-xs px-3 py-1.5 rounded-lg border border-cream-300 text-sage-600 hover:bg-cream-50"
+                >Clear selection</button>
+                <button
+                  onClick={() => setConfirmDeleteMany(true)}
+                  disabled={deletingMany}
+                  className="text-xs px-3 py-1.5 rounded-lg bg-red-500 text-white hover:bg-red-600 disabled:opacity-50"
+                >{deletingMany ? 'Deleting…' : `Delete selected (${selectedIds.size})`}</button>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Grid or empty state */}
         {photos.length === 0 ? (
           <div
@@ -509,6 +579,31 @@ export default function PhotoBucket({ weddingId, readOnly = false }) {
 
                 {/* Overlay: tag indicators */}
                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition" />
+
+                {/* Tick box. A span rather than a nested button, because this
+                    tile is itself a button and a button inside a button is not
+                    valid markup. */}
+                {!readOnly && (
+                  <span
+                    role="checkbox"
+                    aria-checked={selectedIds.has(photo.id)}
+                    aria-label={`Select ${photo.caption || 'photo'}`}
+                    tabIndex={0}
+                    onClick={(e) => { e.stopPropagation(); togglePhoto(photo.id) }}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); togglePhoto(photo.id) } }}
+                    className={`absolute top-1 right-1 w-6 h-6 rounded-md border-2 flex items-center justify-center transition ${
+                      selectedIds.has(photo.id)
+                        ? 'bg-sage-600 border-sage-600 opacity-100'
+                        : 'bg-white/80 border-white opacity-0 group-hover:opacity-100'
+                    }`}
+                  >
+                    {selectedIds.has(photo.id) && (
+                      <svg className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                      </svg>
+                    )}
+                  </span>
+                )}
 
                 {!readOnly && (
                   <div className="absolute top-1 left-1 flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -573,11 +668,35 @@ export default function PhotoBucket({ weddingId, readOnly = false }) {
             photo={selectedPhoto}
             guestNames={guestNames}
             onUpdate={handleUpdate}
-            onDelete={handleDelete}
+            onRequestDelete={setConfirmDeleteOne}
             onClose={() => setSelectedPhoto(null)}
           />
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!confirmDeleteOne}
+        onClose={() => setConfirmDeleteOne(null)}
+        onConfirm={() => handleDelete(confirmDeleteOne.id)}
+        title="Delete this photo?"
+        message={confirmDeleteOne?.tags?.includes('website')
+          ? 'This photo is on your wedding website, so guests will stop seeing it. There is no undo and the file goes with it.'
+          : 'There is no undo, and the file goes with it.'}
+        confirmLabel="Delete photo"
+        danger
+      />
+
+      <ConfirmDialog
+        open={confirmDeleteMany}
+        onClose={() => setConfirmDeleteMany(false)}
+        onConfirm={deleteSelected}
+        title={`Delete ${selectedIds.size} photo${selectedIds.size === 1 ? '' : 's'}?`}
+        message={selectedOnWebsite > 0
+          ? `${selectedOnWebsite} of them ${selectedOnWebsite === 1 ? 'is' : 'are'} on your wedding website, so guests will stop seeing ${selectedOnWebsite === 1 ? 'it' : 'them'}. There is no undo and the files go too.`
+          : 'There is no undo, and the files go too.'}
+        confirmLabel={`Delete ${selectedIds.size}`}
+        danger
+      />
     </div>
   )
 }
