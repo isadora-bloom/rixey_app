@@ -4423,13 +4423,18 @@ async function runGmailSync(body, { bump }) {
           ];
           if (automatedSenderPatterns.some(p => p.test(fromEmail))) {
             processedIds.add(msg.id);
-            await supabaseAdmin.from('processed_emails').insert({
+            const { error: markerErr } = await supabaseAdmin.from('processed_emails').insert({
               gmail_message_id: msg.id,
               wedding_id: emailToWedding[clientEmail],
               from_email: fromEmail,
               subject: subject,
               body_text: '[Automated sender — skipped]'
-            }).then(() => {});
+            });
+            // Same rule as everywhere else in this file: a marker that did not
+            // save is not a marker, and the item comes round again next run.
+            if (markerErr && markerErr.code !== '23505') {
+              console.error(`[gmail] marker failed for ${msg.id}, skipping it: ${markerErr.message}`);
+            }
             continue;
           }
 
@@ -4585,13 +4590,19 @@ async function runGmailSync(body, { bump }) {
             // onto whichever wedding was being searched for, and rather than
             // being dropped, which is the same thing as losing it.
             processedIds.add(msg.id);
-            await supabaseAdmin.from('processed_emails').insert({
+            const { error: markerErr } = await supabaseAdmin.from('processed_emails').insert({
               gmail_message_id: msg.id,
               wedding_id: null,
               from_email: fromEmail,
               subject,
               body_text: bodyText.substring(0, 10000),
             });
+            // Same rule as everywhere else in this file: if the marker did not
+            // save, skip the item rather than queuing it for review twice.
+            if (markerErr && markerErr.code !== '23505') {
+              console.error(`[gmail] marker failed for ${msg.id}, skipping it: ${markerErr.message}`);
+              continue;
+            }
             const { error: reviewErr } = await supabaseAdmin.from('ingest_review').upsert({
               source: 'gmail',
               external_id: msg.id,
