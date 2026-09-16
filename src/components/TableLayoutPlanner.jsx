@@ -3,6 +3,7 @@ import { API_URL } from '../config/api'
 import { apiFetch, loadJson } from '../utils/api'
 import { useToast } from './ui/Toast'
 import { useAutosave } from '../hooks/useAutosave'
+import { useGuestHeadcount, headcountNote } from '../hooks/useGuestHeadcount'
 import SaveIndicator from './ui/SaveIndicator'
 import ConfirmDialog from './ui/ConfirmDialog'
 
@@ -223,6 +224,14 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
   const hasLoadedRef = useRef(false)
   const { error: toastError } = useToast()
 
+  // What the guest list says. The 100 this planner opens on is a placeholder,
+  // and a whole linen order gets worked out from it, so on a wedding that has
+  // never saved a table setup the real figure is taken instead. Where a setup
+  // has been saved the typed number is left alone and only a line is shown,
+  // because that number is the couple's answer and a save here reaches Rixey.
+  const guestCounts = useGuestHeadcount(weddingId)
+  const hasSavedSetupRef = useRef(false)
+
   const loadTableSetup = useCallback(async () => {
     setLoadError(false)
     try {
@@ -230,6 +239,7 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
       // An admin gets their unsent draft back alongside the live layout, and
       // the draft is what they were last working on, so it wins.
       const d = isAdmin ? data?.draft : null
+      hasSavedSetupRef.current = !!(d || data?.tables)
       if (d) {
         setGuestCount(d.guestCount || 100)
         setSliderValue(d.guestCount || 100)
@@ -397,6 +407,26 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
     }
     scheduleSave(buildPayload(isDraft))
   }, [loading, loadError, isAdmin, isDraft, buildPayload, scheduleSave])
+
+  /**
+   * Fill in the guest count on a planner nobody has saved yet.
+   *
+   * Declared after the autosave effect on purpose, and it skips one autosave
+   * pass the same way discarding a draft does. Putting the real number in the
+   * box is a help; writing a table setup to the server because somebody opened
+   * the tab is not, and for a couple that write is the live one Rixey builds
+   * from.
+   */
+  useEffect(() => {
+    if (loading || loadError) return
+    if (hasSavedSetupRef.current) return
+    if (!guestCounts || !guestCounts.total) return
+    hasSavedSetupRef.current = true
+    hasLoadedRef.current = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setGuestCount(guestCounts.expected)
+    setSliderValue(guestCounts.expected)
+  }, [loading, loadError, guestCounts])
 
   const commitSlider = () => {
     if (sliderTimerRef.current) {
@@ -613,6 +643,15 @@ export default function TableLayoutPlanner({ weddingId, userId, isAdmin = false 
             className="w-20 px-3 py-2 border border-sage-200 rounded-lg text-center font-medium" />
           <span className="text-sage-700">guests</span>
         </div>
+        {headcountNote(guestCounts, sliderValue) && (
+          <p className="text-xs text-sage-600 mt-2">
+            {headcountNote(guestCounts, sliderValue)}{' '}
+            <button type="button" className="underline hover:no-underline"
+              onClick={() => { setSliderValue(guestCounts.expected); setGuestCount(guestCounts.expected) }}>
+              Use that
+            </button>
+          </p>
+        )}
       </div>
 
       {/* Table Style */}
