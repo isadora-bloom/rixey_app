@@ -102,7 +102,9 @@ export function dbErrorToResponse(err, opts = {}) {
       return { status: 404, body: { error: 'Not found' } };
     default: {
       const requestId = opts.requestId || newRequestId();
-      return { status: 500, body: { error: 'Something went wrong', requestId } };
+      // `opts.fallback` keeps a route's own wording ("Failed to save the
+      // timeline") for the unmapped case; the raw message still never leaves.
+      return { status: 500, body: { error: opts.fallback || 'Something went wrong', requestId } };
     }
   }
 }
