@@ -14374,8 +14374,36 @@ app.post('/api/guest-tags', async (req, res) => {
 // DELETE tag option
 app.delete('/api/guest-tags/:id', async (req, res) => {
   try {
-    const { error } = await supabaseAdmin.from('guest_tag_options').delete().eq('id', req.params.id);
+    const { data: tag, error: readErr } = await supabaseAdmin
+      .from('guest_tag_options').select('wedding_id, label').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!tag) return res.status(404).json({ error: 'No such tag' });
+
+    const { data, error } = await supabaseAdmin
+      .from('guest_tag_options').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such tag' });
+
+    // A deleted tag comes off every guest carrying it. Tags are stored on
+    // wedding_guests as label text, not an id, so a guest kept it forever
+    // otherwise — visible on their row with nothing left to edit or remove it.
+    const { data: carriers, error: findErr } = await supabaseAdmin
+      .from('wedding_guests').select('id, tags')
+      .eq('wedding_id', tag.wedding_id)
+      .contains('tags', [tag.label]);
+    if (findErr) {
+      console.error(`[guest-tags] could not find guests carrying "${tag.label}" after deleting it: ${findErr.message}`);
+    } else if (carriers?.length) {
+      for (const guest of carriers) {
+        const { error: clearErr } = await supabaseAdmin
+          .from('wedding_guests')
+          .update({ tags: (guest.tags || []).filter(t => t !== tag.label) })
+          .eq('id', guest.id);
+        if (clearErr) console.error(`[guest-tags] could not clear "${tag.label}" off guest ${guest.id}: ${clearErr.message}`);
+      }
+    }
+
+    await logActivity(tag.wedding_id, req.userId, 'guest_tag_deleted', tag.label);
     res.json({ ok: true });
   } catch (err) {
     console.error('Delete tag error:', err);
@@ -14403,8 +14431,30 @@ app.post('/api/meal-options', async (req, res) => {
 // DELETE meal option
 app.delete('/api/meal-options/:id', async (req, res) => {
   try {
-    const { error } = await supabaseAdmin.from('guest_meal_options').delete().eq('id', req.params.id);
+    const { data: option, error: readErr } = await supabaseAdmin
+      .from('guest_meal_options').select('wedding_id, label').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!option) return res.status(404).json({ error: 'No such meal option' });
+
+    const { data, error } = await supabaseAdmin
+      .from('guest_meal_options').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'No such meal option' });
+
+    // Same reasoning as tags: meal_choice is the option's label text, so a
+    // guest's choice must not keep pointing at an option nobody can pick from
+    // any more, on the host row or the plus one's.
+    const { error: clearErr } = await supabaseAdmin
+      .from('wedding_guests').update({ meal_choice: null })
+      .eq('wedding_id', option.wedding_id).eq('meal_choice', option.label);
+    if (clearErr) console.error(`[meal-options] could not clear "${option.label}" off guests: ${clearErr.message}`);
+
+    const { error: clearPlusErr } = await supabaseAdmin
+      .from('wedding_guests').update({ plus_one_meal_choice: null })
+      .eq('wedding_id', option.wedding_id).eq('plus_one_meal_choice', option.label);
+    if (clearPlusErr) console.error(`[meal-options] could not clear "${option.label}" off plus ones: ${clearPlusErr.message}`);
+
+    await logActivity(option.wedding_id, req.userId, 'meal_option_deleted', option.label);
     res.json({ ok: true });
   } catch (err) {
     console.error('Delete meal option error:', err);
