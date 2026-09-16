@@ -479,6 +479,27 @@ const anthropic = new Anthropic({
   maxRetries: 2,
 });
 
+/**
+ * The client for anything a person is sat waiting on.
+ *
+ * Two minutes and two retries is right for an extraction running inside a job
+ * row, where nothing is watching and finishing matters more than finishing
+ * soon. It is wrong for Sage. She answers on the request, and Railway's proxy
+ * closes that at about fifty seconds, so the default client can spend six
+ * minutes on three attempts at a question whose asker was handed a
+ * `502 upstream error` before the first one finished, and every one of those
+ * attempts is paid for.
+ *
+ * Forty seconds and no retry instead: an answer that is not back by then is
+ * not going to reach anybody, and the overload fallback to Haiku a few hundred
+ * lines down is a better second attempt than the same call again.
+ */
+const anthropicSage = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+  timeout: 40_000,
+  maxRetries: 0,
+});
+
 // Single source of truth for model IDs — update here when Anthropic releases new versions
 const MODEL_SONNET = 'claude-sonnet-4-6';
 const MODEL_HAIKU  = 'claude-haiku-4-5-20251001';
@@ -2359,12 +2380,12 @@ app.post('/api/chat', requireAuth, async (req, res) => {
 
     let response;
     try {
-      response = await anthropic.messages.create({ model: MODEL_SONNET, ...sageCallParams });
+      response = await anthropicSage.messages.create({ model: MODEL_SONNET, ...sageCallParams });
     } catch (sonnetErr) {
       const isOverloaded = sonnetErr.status === 529 || sonnetErr.status === 503 || sonnetErr.status === 429;
       if (!isOverloaded) throw sonnetErr;
       console.log(`Sonnet overloaded (${sonnetErr.status}), falling back to Haiku for Sage`);
-      response = await anthropic.messages.create({ model: MODEL_HAIKU, ...sageCallParams });
+      response = await anthropicSage.messages.create({ model: MODEL_HAIKU, ...sageCallParams });
     }
 
     let assistantMessage = response.content[0].text;
@@ -2639,7 +2660,7 @@ Mention that:
 
 Keep it warm but not over-the-top. 3-4 sentences max. End with an open question.`;
 
-    const response = await anthropic.messages.create({
+    const response = await anthropicSage.messages.create({
       model: MODEL_SONNET,
       max_tokens: 300,
       temperature: 0.7,
@@ -3091,7 +3112,7 @@ app.post('/api/sage-preview', async (req, res) => {
 
     const knowledge = await getRelevantKnowledge(message);
 
-    const response = await anthropic.messages.create({
+    const response = await anthropicSage.messages.create({
       model: MODEL_SONNET,
       max_tokens: 600,
       system: `${SAGE_SYSTEM_PROMPT}\n\nADDITIONAL RIXEY MANOR KNOWLEDGE BASE:\n\n${knowledge}\n\n---\n\nNOTE: You're chatting with a prospective couple on the Rixey Manor preview page. They haven't created their account yet, so the in-app tabs and the "stay inside the portal" rule above DO NOT apply here — there is no portal for them yet. For prospects, you CAN link to rixeymanor.com pages (availability, packages, pricing calculator, finance101, book a tour, venue galleries) when it's helpful, since the public marketing site is the only thing they have access to. Keep replies concise and welcoming. If they ask about their specific wedding details, gently note they'll have a personalised portal once they sign up.`,
