@@ -16501,10 +16501,40 @@ app.put('/api/admin/walkthroughs/:id', requireAdmin, async (req, res) => {
 
 app.delete('/api/admin/walkthroughs/:id', requireAdmin, async (req, res) => {
   try {
-    const { error } = await supabaseAdmin.from('walkthroughs').delete().eq('id', req.params.id);
+    const { data: wt, error: readErr } = await supabaseAdmin
+      .from('walkthroughs').select('wedding_id, kind').eq('id', req.params.id).maybeSingle();
+    if (readErr) throw readErr;
+    if (!wt) return res.status(404).json({ error: 'Walkthrough not found' });
+
+    // Deleting the walkthrough cascades away its media rows in the database
+    // (walkthrough_media references it ON DELETE CASCADE), but nothing tells
+    // storage. Remove the files first, or every photo and recording taken on
+    // the walkthrough is left in the bucket with nothing left pointing at it.
+    const { data: media, error: mediaErr } = await supabaseAdmin
+      .from('walkthrough_media').select('storage_path').eq('walkthrough_id', req.params.id);
+    if (mediaErr) throw mediaErr;
+    const paths = (media || []).map(m => m.storage_path).filter(Boolean);
+    if (paths.length) {
+      const { error: rmErr } = await supabaseAdmin.storage.from('day-of-media').remove(paths);
+      if (rmErr) {
+        console.error('Walkthrough media remove failed:', rmErr.message);
+        return res.status(500).json({ error: `The recordings and photos could not be deleted (${rmErr.message}), so the walkthrough has been left alone.` });
+      }
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('walkthroughs').delete().eq('id', req.params.id).select('id').maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Walkthrough not found' });
+
+    // A tour has no wedding, and logActivity writes against one.
+    if (wt.wedding_id) {
+      await logActivity(wt.wedding_id, req.userId, 'walkthrough_deleted', wt.kind || `id ${req.params.id}`);
+    } else {
+      console.log(`[walkthroughs] deleted tour walkthrough ${req.params.id}, by ${req.userId}`);
+    }
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { console.error('Delete walkthrough error:', e); res.status(500).json({ error: e.message }); }
 });
 
 // Photos and voice notes. Stored under the existing day-of-media bucket with a
