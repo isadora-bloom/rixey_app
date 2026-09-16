@@ -1,9 +1,11 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { API_URL } from '../config/api'
-import { authHeaders, apiFetch } from '../utils/api'
+import { loadJson, apiFetch } from '../utils/api'
 import { useToast } from './ui/Toast'
 import { useAutosave } from '../hooks/useAutosave'
+import { useGuestHeadcount, headcountNote } from '../hooks/useGuestHeadcount'
 import SaveIndicator from './ui/SaveIndicator'
+import ConfirmDialog from './ui/ConfirmDialog'
 
 
 // ── Ingredient scaling → meaningful units ─────────────────────────────────────
@@ -205,7 +207,7 @@ function calcQuantities({ guests, hours, barType, season, beerPct, winePct, spir
 // ── Per-dedicated-drinker stats ───────────────────────────────────────────────
 // Reads from calcPreview to get real totals; excludes toast/table wine extras.
 
-function perDedicatedDrinkerStats(calcPreview, guests, beerPct, winePct, spiritsPct, nonAlcPct) {
+function perDedicatedDrinkerStats(calcPreview, guests, beerPct, winePct, spiritsPct) {
   const result = {}
 
   // Wine: 5 glasses per bottle; exclude rows added by champagne toast / table wine toggles
@@ -257,23 +259,48 @@ function seasonFromDate(dateStr) {
 
 // ── Print helper ──────────────────────────────────────────────────────────────
 
+// The printed list is built as HTML by hand, so anything a couple typed goes
+// through here first. An ampersand in "Gin & tonic mixers" or a stray angle
+// bracket in a note used to eat the rest of the page.
+function h(value) {
+  return (value == null ? '' : String(value))
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+/**
+ * The shopping list, as you would take it round a shop.
+ *
+ * Ticked items are printed struck through rather than left out. Leaving them
+ * out made the paper list disagree with the screen, so anyone checking the
+ * printout against the trolley could not tell a bought item from one that was
+ * never on the list.
+ */
 function printList(items, coupleNames) {
   const grouped = {}
   CATEGORIES.forEach(c => { grouped[c.key] = [] })
-  items.filter(i => !i.checked).forEach(i => {
+  items.forEach(i => {
     if (grouped[i.category]) grouped[i.category].push(i)
   })
-  const lines = [`Bar Shopping List${coupleNames ? ` — ${coupleNames}` : ''}`, '']
+  const line = (i) => {
+    const qty = i.quantity ? `  —  ${h(i.quantity)} ${h(i.unit || '')}`.trimEnd() : ''
+    const notes = i.notes ? `  (${h(i.notes)})` : ''
+    const body = `${i.checked ? '☑' : '☐'}  ${h(i.item_name)}${qty}${notes}`
+    return i.checked
+      ? `  <span style="text-decoration:line-through;opacity:0.45">${body}</span>`
+      : `  ${body}`
+  }
+  const lines = [`Bar Shopping List${coupleNames ? ` — ${h(coupleNames)}` : ''}`, '']
   CATEGORIES.forEach(cat => {
     if (!grouped[cat.key]?.length) return
-    lines.push(`${cat.emoji} ${cat.label.toUpperCase()}`)
-    grouped[cat.key].forEach(i => {
-      lines.push(`  ☐  ${i.item_name}${i.quantity ? `  —  ${i.quantity} ${i.unit || ''}`.trim() : ''}${i.notes ? `  (${i.notes})` : ''}`)
-    })
+    lines.push(`${cat.emoji} ${h(cat.label.toUpperCase())}`)
+    grouped[cat.key].forEach(i => lines.push(line(i)))
     lines.push('')
   })
   lines.push('Call Rixey on Monday before your wedding — we almost always have leftover soda and mixers!')
   const w = window.open('', '_blank')
+  if (!w) return
   w.document.write(`<pre style="font-family:monospace;font-size:13px;padding:24px;white-space:pre-wrap">${lines.join('\n')}</pre>`)
   w.document.close()
   w.print()
@@ -368,24 +395,51 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
   // Calculator state. guestCountProp/weddingDate come from the wedding record;
   // when the parent hasn't got them yet, these are placeholders, not facts —
   // see guestCountIsPlaceholder / seasonIsPlaceholder below.
-  const guestCountTouchedRef = useRef(false)
-  const [guests, setGuests]         = useState(Math.min(200, guestCountProp || 80))
+  // Guest count and season are both "what we know, unless you said otherwise".
+  //
+  // They used to be plain state kept in step with an effect, which meant a
+  // choice the couple had made could be overwritten the moment a slower load
+  // finished: pick Autumn, and the wedding date arriving a second later put it
+  // back to Summer. Holding only the override makes that impossible, and there
+  // is no window where the two disagree.
+  const [guestsOverride, setGuestsOverride] = useState(null)
+  const [seasonOverride, setSeasonOverride] = useState(null)
   const [hours, setHours]           = useState(5)
   const [barType, setBarType]       = useState('beer-wine')
-  const [season, setSeason]         = useState(() => seasonFromDate(weddingDate) || (new Date().getMonth() >= 4 && new Date().getMonth() <= 9 ? 'summer' : 'winter'))
-  const guestCountIsPlaceholder = !guestCountProp
-  const seasonIsPlaceholder = !weddingDate
+
+  // The guest list beats the wedding record's typed-in figure: it is counted
+  // per person, so it knows about plus ones, and it is the number the couple
+  // has actually been maintaining.
+  const guestCounts = useGuestHeadcount(weddingId)
+  const seededGuests = (guestCounts && guestCounts.total)
+    ? Math.min(200, guestCounts.expected)
+    : Math.min(200, guestCountProp || 80)
+  const guests = guestsOverride ?? seededGuests
+  const setGuests = setGuestsOverride
+
+  const season = seasonOverride
+    || seasonFromDate(weddingDate)
+    || (new Date().getMonth() >= 4 && new Date().getMonth() <= 9 ? 'summer' : 'winter')
+  const setSeason = setSeasonOverride
+
+  const guestCountIsPlaceholder = !guestCountProp && !(guestCounts && guestCounts.total)
+  const seasonIsPlaceholder = !weddingDate && !seasonOverride
   const [beerLevel,    setBeerLevel]    = useState(2) // 0=None 1=Light 2=Average 3=Heavy
   const [wineLevel,    setWineLevel]    = useState(2)
   const [spiritsLevel, setSpiritLevel]  = useState(2)
   const [nonAlcLevel,  setNonAlcLevel]  = useState(2)
   const [champagneToast, setChampagneToast] = useState(false)
   const [tableWine, setTableWine]           = useState(false)
-  const [calcPreview, setCalcPreview] = useState([])
 
   // Add item form
   const [addingItem, setAddingItem] = useState(false)
+  const [addingItemBusy, setAddingItemBusy] = useState(false)
   const [newItem, setNewItem]       = useState({ item_name: '', quantity: '', unit: '', category: 'other', notes: '' })
+  const [importing, setImporting]   = useState(false)
+
+  // Destructive actions, each waiting on a confirm.
+  const [confirmClear, setConfirmClear]           = useState(false)
+  const [confirmDeleteRecipe, setConfirmDeleteRecipe] = useState(null)
 
   // Recipe form
   const [addingRecipe, setAddingRecipe]               = useState(false)
@@ -394,6 +448,8 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
   const [recipeName, setRecipeName]                   = useState('')
   const [recipeFile, setRecipeFile]                   = useState(null)
   const [extracting, setExtracting]                   = useState(false)
+  const [savingRecipe, setSavingRecipe]               = useState(false)
+  const [addingRecipeToList, setAddingRecipeToList]   = useState(null) // recipe id in flight
   const [editableIngredients, setEditableIngredients] = useState(null) // editable before saving
   const fileRef     = useRef()
 
@@ -403,29 +459,17 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
   const [showCalcSummary, setShowCalcSummary] = useState(false)
 
 
-  useEffect(() => {
+  // What to buy, worked out from the choices above. This was state kept in
+  // step by an effect, which rendered once with the old quantities and again
+  // with the new ones on every slider nudge. It is a pure calculation.
+  const calcPreview = useMemo(() => {
     const bt         = BAR_TYPES.find(b => b.key === barType) || BAR_TYPES[0]
     const beerPct    = bt.beerPct    * DRINK_LEVELS[beerLevel].scale
     const winePct    = bt.winePct    * DRINK_LEVELS[wineLevel].scale
     const spiritsPct = bt.spiritsPct * DRINK_LEVELS[spiritsLevel].scale
     const nonAlcPct  = 15            * DRINK_LEVELS[nonAlcLevel].scale
-    setCalcPreview(calcQuantities({ guests, hours, barType, season, beerPct, winePct, spiritsPct, nonAlcPct, champagneToast, tableWine }))
+    return calcQuantities({ guests, hours, barType, season, beerPct, winePct, spiritsPct, nonAlcPct, champagneToast, tableWine })
   }, [guests, hours, barType, season, beerLevel, wineLevel, spiritsLevel, nonAlcLevel, champagneToast, tableWine])
-
-  // Sync season if wedding date prop changes
-  useEffect(() => {
-    const s = seasonFromDate(weddingDate)
-    if (s) setSeason(s)
-  }, [weddingDate])
-
-  // The parent may not have the real guest count on first render and pass it
-  // in once its own load finishes. Pick that up, but only until the couple
-  // has actually touched the guest count themselves.
-  useEffect(() => {
-    if (guestCountProp && !guestCountTouchedRef.current) {
-      setGuests(Math.min(200, guestCountProp))
-    }
-  }, [guestCountProp])
 
   const selectBarType = (key) => {
     setBarType(key)
@@ -437,17 +481,14 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
   const load = useCallback(async () => {
     setLoadError(false)
     try {
-      const hdrs = await authHeaders()
-      const [itemsRes, recipesRes, notesRes] = await Promise.all([
-        fetch(`${API_URL}/api/bar-shopping/${weddingId}`, { headers: hdrs }),
-        fetch(`${API_URL}/api/bar-recipes/${weddingId}`, { headers: hdrs }),
-        fetch(`${API_URL}/api/bar-notes/${weddingId}`, { headers: hdrs }),
+      const [itemsData, recipesData, notesData] = await Promise.all([
+        loadJson(`${API_URL}/api/bar-shopping/${weddingId}`),
+        loadJson(`${API_URL}/api/bar-recipes/${weddingId}`),
+        loadJson(`${API_URL}/api/bar-notes/${weddingId}`),
       ])
-      if (!itemsRes.ok || !recipesRes.ok || !notesRes.ok) throw new Error('Could not load bar planner')
-      setItems(await itemsRes.json() || [])
-      setRecipes(await recipesRes.json() || [])
-      const n = await notesRes.json()
-      setNotes({ calculator: '', list: '', recipes: '', ...n })
+      setItems(Array.isArray(itemsData) ? itemsData : [])
+      setRecipes(Array.isArray(recipesData) ? recipesData : [])
+      setNotes({ calculator: '', list: '', recipes: '', ...(notesData || {}) })
     } catch (err) {
       console.error('Failed to load bar planner:', err)
       setLoadError(true)
@@ -459,6 +500,9 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
   // Below the callback on purpose: the dependency array is read during
   // render, and with `load` declared further down it threw "Cannot access
   // before initialization" in the built bundle. Found in client_errors.
+  // The load itself sets state, which is the point of it: this effect is the
+  // one place the screen is filled from the server.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load() }, [load])
   const { schedule: scheduleNotes, state: notesSaveState } = useAutosave(
     async (payload) => {
@@ -481,7 +525,8 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
   // ── Shopping list ──
 
   const addItem = async () => {
-    if (!newItem.item_name.trim()) return
+    if (!newItem.item_name.trim() || addingItemBusy) return
+    setAddingItemBusy(true)
     try {
       const saved = await apiFetch(`${API_URL}/api/bar-shopping/${weddingId}`, {
         method: 'POST',
@@ -493,6 +538,7 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
     } catch (err) {
       toastError(`Could not add item: ${err.message}`)
     }
+    setAddingItemBusy(false)
   }
 
   const toggleItem = async (id, checked) => {
@@ -509,13 +555,22 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
     }
   }
 
+  // Editing a row by hand makes it yours.
+  //
+  // "Add to shopping list" throws away every row the calculator made and puts
+  // fresh ones in. So a couple who corrected a quantity, or wrote which shop
+  // sells it, lost that the next time they touched a slider. A row that has
+  // been edited stops counting as the calculator's and survives the next run.
+  // Ticking one off is not an edit, so buying something does not pin it.
   const updateItem = async (id, fields) => {
     const snapshot = items
-    setItems(prev => prev.map(i => i.id === id ? { ...i, ...fields } : i))
+    const wasGenerated = items.find(i => i.id === id)?.from_calculator
+    const patch = wasGenerated ? { ...fields, from_calculator: false } : fields
+    setItems(prev => prev.map(i => i.id === id ? { ...i, ...patch } : i))
     try {
       await apiFetch(`${API_URL}/api/bar-shopping/${id}`, {
         method: 'PUT',
-        body: JSON.stringify(fields),
+        body: JSON.stringify(patch),
       })
     } catch (err) {
       setItems(snapshot)
@@ -534,28 +589,45 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
     }
   }
 
+  /**
+   * Delete a set of rows and say honestly what happened.
+   *
+   * These loops used to stop at the first failure and put the whole list back,
+   * including the rows the server had already deleted, so the screen claimed
+   * items existed that were gone. Every delete is attempted, the ones that
+   * failed are named, and only those are kept.
+   */
+  const deleteMany = async (rows) => {
+    const results = await Promise.allSettled(
+      rows.map(r => apiFetch(`${API_URL}/api/bar-shopping/${r.id}`, { method: 'DELETE' }))
+    )
+    const failed = rows.filter((_, i) => results[i].status === 'rejected')
+    if (failed.length) {
+      toastError(failed.length === 1
+        ? `Could not remove ${failed[0].item_name}. It is still on the list.`
+        : `Could not remove ${failed.length} of ${rows.length} items. They are still on the list.`)
+    }
+    return failed
+  }
+
   const clearList = async () => {
-    if (!window.confirm("Clear everything on the shopping list? This can't be undone.")) return
+    setConfirmClear(false)
     const snapshot = [...items]
     setItems([])
-    try {
-      for (const item of snapshot) {
-        await apiFetch(`${API_URL}/api/bar-shopping/${item.id}`, { method: 'DELETE' })
-      }
-    } catch (err) {
-      setItems(snapshot)
-      toastError(`Could not clear list: ${err.message}`)
-    }
+    const failed = await deleteMany(snapshot)
+    if (failed.length) setItems(failed)
   }
 
   const importFromCalculator = async () => {
+    if (importing) return
+    setImporting(true)
     const snapshot = items
-    // Replace only calculator-generated items; keep anything manually added
+    // Replace only what the calculator made last time. Anything added or
+    // edited by hand is not the calculator's to throw away.
     const toRemove = items.filter(i => i.from_calculator)
     try {
-      for (const item of toRemove) {
-        await apiFetch(`${API_URL}/api/bar-shopping/${item.id}`, { method: 'DELETE' })
-      }
+      const stillThere = await deleteMany(toRemove)
+      const kept = items.filter(i => !i.from_calculator || stillThere.some(f => f.id === i.id))
       const added = []
       for (const item of calcPreview) {
         // Wine: show bottles in the calculator, save as cases on the shopping list
@@ -564,16 +636,17 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
           : item
         const saved = await apiFetch(`${API_URL}/api/bar-shopping/${weddingId}`, {
           method: 'POST',
-          body: JSON.stringify({ ...listItem, from_calculator: true, sort_order: items.length + added.length }),
+          body: JSON.stringify({ ...listItem, from_calculator: true, sort_order: kept.length + added.length }),
         })
         added.push(saved)
       }
-      setItems(prev => [...prev.filter(i => !i.from_calculator), ...added])
+      setItems([...kept, ...added])
       setTab('list')
     } catch (err) {
       setItems(snapshot)
       toastError(`Could not import from calculator: ${err.message}`)
     }
+    setImporting(false)
   }
 
   // ── Recipes ──
@@ -628,7 +701,9 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
   }
 
   const saveRecipe = async () => {
+    if (savingRecipe) return
     const ingredients = (editableIngredients || []).filter(i => i.name.trim())
+    setSavingRecipe(true)
     try {
       const saved = await apiFetch(`${API_URL}/api/bar-recipes/${weddingId}`, {
         method: 'POST',
@@ -644,9 +719,11 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
     } catch (err) {
       toastError(`Could not save recipe: ${err.message}`)
     }
+    setSavingRecipe(false)
   }
 
   const deleteRecipe = async (id) => {
+    setConfirmDeleteRecipe(null)
     const snapshot = recipes
     setRecipes(prev => prev.filter(r => r.id !== id))
     try {
@@ -658,6 +735,8 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
   }
 
   const addRecipeToList = async (recipe) => {
+    if (addingRecipeToList) return
+    setAddingRecipeToList(recipe.id)
     const snapshot = items
     try {
       const added = []
@@ -682,6 +761,7 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
       setItems(snapshot)
       toastError(`Could not add recipe to list: ${err.message}`)
     }
+    setAddingRecipeToList(null)
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -699,7 +779,6 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
 
   const checkedCount = items.filter(i => i.checked).length
   const totalCount   = items.length
-  const unchecked    = items.filter(i => !i.checked)
 
   return (
     <div className="space-y-5 max-w-2xl">
@@ -808,12 +887,21 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
                   <span className="font-normal normal-case text-amber-600"> — placeholder, not your real guest count yet</span>
                 )}
               </label>
-              <input type="number" value={guests} min={10} max={200} onChange={e => { guestCountTouchedRef.current = true; setGuests(Math.min(200, Math.max(1, Number(e.target.value)))) }}
+              <input type="number" value={guests} min={10} max={200} onChange={e => { setGuests(Math.min(200, Math.max(1, Number(e.target.value)))) }}
                 className="w-20 border border-cream-300 rounded-lg px-2 py-1 text-sm text-center font-medium text-sage-700 focus:outline-none focus:ring-2 focus:ring-sage-300" />
             </div>
             <input type="range" min={10} max={200} step={5} value={guests}
-              onChange={e => { guestCountTouchedRef.current = true; setGuests(Number(e.target.value)) }} className="w-full accent-sage-600" />
+              onChange={e => { setGuests(Number(e.target.value)) }} className="w-full accent-sage-600" />
             <div className="flex justify-between text-xs text-sage-300 mt-1"><span>10</span><span>50</span><span>100</span><span>150</span><span>200</span></div>
+            {headcountNote(guestCounts, guests) && (
+              <p className="text-xs text-sage-400 mt-1.5">
+                {headcountNote(guestCounts, guests)}{' '}
+                <button type="button" className="underline hover:text-sage-600"
+                  onClick={() => { setGuests(Math.min(200, guestCounts.expected)) }}>
+                  Use that
+                </button>
+              </p>
+            )}
           </div>
 
           {/* Hours */}
@@ -865,7 +953,7 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
                 const wineScale    = DRINK_LEVELS[wineLevel].scale
                 const spiritsScale = DRINK_LEVELS[spiritsLevel].scale
                 const nonAlcScale  = DRINK_LEVELS[nonAlcLevel].scale
-                const stats = perDedicatedDrinkerStats(calcPreview, guests, bt.beerPct, bt.winePct, bt.spiritsPct, 15)
+                const stats = perDedicatedDrinkerStats(calcPreview, guests, bt.beerPct, bt.winePct, bt.spiritsPct)
                 // Total drinks: sum actual available drinks from calcPreview
                 const totalDrinks = calcPreview.reduce((sum, item) => {
                   if (item.category === 'beer' && item.unit === 'kegs')
@@ -944,11 +1032,14 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
             <p className="text-xs text-sage-400 mt-1">Saturday minimum is always 2. Bartenders are $350 each.</p>
           </div>
 
-          <button onClick={importFromCalculator}
-            className="w-full py-3 bg-sage-600 text-white rounded-xl text-sm font-medium hover:bg-sage-700"
+          <button onClick={importFromCalculator} disabled={importing}
+            className="w-full py-3 bg-sage-600 text-white rounded-xl text-sm font-medium hover:bg-sage-700 disabled:opacity-50"
           >
-            Add to shopping list
+            {importing ? 'Adding to shopping list…' : 'Add to shopping list'}
           </button>
+          <p className="text-xs text-sage-400 -mt-3">
+            Replaces the rows this calculator made last time. Anything you added or edited by hand stays.
+          </p>
 
           <NotesBox value={notes.calculator} onChange={v => updateNotes('calculator', v)} saveState={notesSaveState}
             placeholder="Notes about the bar setup, preferences, restrictions…" />
@@ -970,7 +1061,7 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
                   {showCalcSummary ? 'Hide' : 'View'} last calculation
                 </button>
               )}
-              {unchecked.length > 0 && (
+              {totalCount > 0 && (
                 <button onClick={() => printList(items, coupleNames)}
                   className="flex items-center gap-1.5 text-xs text-sage-500 hover:text-sage-700 border border-cream-200 rounded-lg px-3 py-1.5"
                 >
@@ -979,7 +1070,7 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
                 </button>
               )}
               {totalCount > 0 && (
-                <button onClick={clearList}
+                <button onClick={() => setConfirmClear(true)}
                   className="text-xs text-red-400 hover:text-red-600 border border-red-100 hover:border-red-300 rounded-lg px-3 py-1.5 transition"
                 >
                   Clear all
@@ -1026,7 +1117,10 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
                   className="flex-1 min-w-0 border border-cream-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sage-300" />
               </div>
               <div className="flex gap-2">
-                <button onClick={addItem} className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700">Add item</button>
+                <button onClick={addItem} disabled={addingItemBusy || !newItem.item_name.trim()}
+                  className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50">
+                  {addingItemBusy ? 'Adding…' : 'Add item'}
+                </button>
                 <button onClick={() => setAddingItem(false)} className="px-4 py-2 text-sage-500 text-sm hover:text-sage-700">Cancel</button>
               </div>
             </div>
@@ -1093,7 +1187,7 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
                     <a href={recipe.source_url} target="_blank" rel="noopener noreferrer" className="text-xs text-sage-400 hover:text-sage-600 underline">View original recipe →</a>
                   )}
                 </div>
-                <button onClick={() => deleteRecipe(recipe.id)} className="text-red-300 hover:text-red-500 flex-shrink-0 p-1">
+                <button onClick={() => setConfirmDeleteRecipe(recipe)} className="text-red-300 hover:text-red-500 flex-shrink-0 p-1">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
                 </button>
               </div>
@@ -1116,9 +1210,9 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
                       )
                     })}
                   </div>
-                  <button onClick={() => addRecipeToList(recipe)}
-                    className="w-full py-2 bg-sage-100 hover:bg-sage-200 text-sage-700 text-sm font-medium rounded-lg transition">
-                    + Add all ingredients to shopping list
+                  <button onClick={() => addRecipeToList(recipe)} disabled={!!addingRecipeToList}
+                    className="w-full py-2 bg-sage-100 hover:bg-sage-200 text-sage-700 text-sm font-medium rounded-lg transition disabled:opacity-50">
+                    {addingRecipeToList === recipe.id ? 'Adding…' : '+ Add all ingredients to shopping list'}
                   </button>
                 </>
               ) : (
@@ -1184,8 +1278,9 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
                     {extracting ? 'Extracting with AI…' : 'Extract ingredients'}
                   </button>
                 ) : (
-                  <button onClick={saveRecipe} className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700">
-                    Save recipe
+                  <button onClick={saveRecipe} disabled={savingRecipe}
+                    className="px-4 py-2 bg-sage-600 text-white rounded-lg text-sm hover:bg-sage-700 disabled:opacity-50">
+                    {savingRecipe ? 'Saving…' : 'Save recipe'}
                   </button>
                 )}
                 <button onClick={() => { setAddingRecipe(false); setEditableIngredients(null) }}
@@ -1202,6 +1297,28 @@ export default function BarPlanner({ weddingId, guestCount: guestCountProp, wedd
             placeholder="Notes about cocktail choices, garnish ideas, batch prep instructions…" />
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmClear}
+        onClose={() => setConfirmClear(false)}
+        onConfirm={clearList}
+        title="Clear the whole shopping list?"
+        message={`All ${totalCount} item${totalCount === 1 ? '' : 's'} go, including anything you added or edited by hand. Print it first if you want a copy.`}
+        confirmLabel="Clear the list"
+        danger
+      />
+
+      <ConfirmDialog
+        open={!!confirmDeleteRecipe}
+        onClose={() => setConfirmDeleteRecipe(null)}
+        onConfirm={() => deleteRecipe(confirmDeleteRecipe.id)}
+        title="Delete this recipe?"
+        message={confirmDeleteRecipe
+          ? `${confirmDeleteRecipe.name} and its ingredients go for good. Anything already added to the shopping list stays there.`
+          : ''}
+        confirmLabel="Delete recipe"
+        danger
+      />
     </div>
   )
 }
