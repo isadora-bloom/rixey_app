@@ -18,9 +18,10 @@ import { API_URL } from '../config/api'
  * @param {(seconds: number, status: string) => void} [opts.onTick] called once a second
  * @param {number} [opts.intervalMs] how often to ask the server, default 3s
  * @param {number} [opts.timeoutMs] how long to keep asking, default 5 minutes
+ * @param {AbortSignal} [opts.signal] stop polling early, e.g. on unmount
  * @returns {Promise<{ answer: string, elapsed_ms: number, finished_at: string }>}
  */
-export async function awaitAnswerJob(jobId, { onTick, intervalMs = 3000, timeoutMs = 300000 } = {}) {
+export async function awaitAnswerJob(jobId, { onTick, intervalMs = 3000, timeoutMs = 300000, signal } = {}) {
   if (!jobId) throw new Error('The server did not start that off. Try again.')
 
   const startedAt = Date.now()
@@ -28,6 +29,7 @@ export async function awaitAnswerJob(jobId, { onTick, intervalMs = 3000, timeout
   let status = 'running'
 
   for (;;) {
+    if (signal?.aborted) throw new Error('Stopped waiting.')
     const elapsed = Date.now() - startedAt
     if (elapsed > timeoutMs) throw new Error('Still working after five minutes')
 
@@ -45,6 +47,7 @@ export async function awaitAnswerJob(jobId, { onTick, intervalMs = 3000, timeout
     // only sign that anything is still happening, and one that jumps in threes
     // reads like a stall.
     await new Promise(resolve => setTimeout(resolve, 1000))
+    if (signal?.aborted) throw new Error('Stopped waiting.')
     if (onTick) onTick(Math.round((Date.now() - startedAt) / 1000), status)
   }
 }
