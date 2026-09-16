@@ -16559,13 +16559,22 @@ app.post('/api/admin/walkthroughs/:id/organise', requireAdmin, aiLimiter, async 
         ? supabaseAdmin.from('weddings').select('couple_names, wedding_date').eq('id', wt.wedding_id).maybeSingle()
         : Promise.resolve({ data: null }),
       wt.wedding_id
-        ? supabaseAdmin.from('wedding_guests').select('first_name, last_name').eq('wedding_id', wt.wedding_id).limit(200)
+        ? supabaseAdmin.from('wedding_guests')
+          .select('id, first_name, last_name, plus_one_name, is_plus_one, party_id, plus_one_of')
+          .eq('wedding_id', wt.wedding_id).limit(200)
         : Promise.resolve({ data: [] }),
       wt.enquiry_id
         ? supabaseAdmin.from('enquiries').select('*').eq('id', wt.enquiry_id).maybeSingle()
         : Promise.resolve({ data: null }),
     ]);
-    const knownNames = (guestRows || []).map(g => guestFullName(g)).filter(Boolean).slice(0, 120);
+    // People, and only the ones with a name. A guest list holds plus ones the
+    // couple has granted but not named, so this list used to offer the model
+    // "Guest", "+1" and "TBD" as names to match a first name against, which is
+    // how a note about somebody's mother got filed against a placeholder.
+    const knownNames = allPeople(guestRows || [])
+      .filter(p => isNamedPerson(p.name))
+      .map(p => p.name)
+      .slice(0, 120);
     const context = [
       RIXEY_EXTRACTION_CONTEXT,
       wedding ? `\nThis walkthrough is for ${wedding.couple_names || 'a couple'}, wedding date ${wedding.wedding_date || 'unknown'}.` : '',
