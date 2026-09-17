@@ -25,16 +25,20 @@
  *   4. accept the confident ones and file them
  *      (PUT /api/admin/walkthrough-items/:id, POST /api/admin/walkthroughs/:id/apply)
  *
- * Step 4 is deliberately timid. Anything under 80 is left proposed for Isadora
- * to look at in the admin; anything going to a vendor row or the allergy
- * registry needs 90, because a wrong vendor contact or a wrong severity is the
- * kind of mistake that gets acted on before anyone notices it.
+ * Step 4 is timid where being wrong is expensive. An item that only becomes a
+ * pending planning note files at 60, because that is the queue Isadora already
+ * reads and a wrong one costs her a delete; an item that writes a structured
+ * row needs 80; a vendor contact or an allergy needs 90, because those get
+ * acted on before anyone thinks to check them. The rest is left proposed.
  *
  *   node scripts/process-walkthrough-backlog.mjs                  # dry run
  *   node scripts/process-walkthrough-backlog.mjs --apply
  *   node scripts/process-walkthrough-backlog.mjs --apply --steps 1-3
  *   node scripts/process-walkthrough-backlog.mjs --only <walkthrough id>
  *   node scripts/process-walkthrough-backlog.mjs --api http://localhost:3001
+ *   node scripts/process-walkthrough-backlog.mjs --apply --force --steps 4-4
+ *       go back over every meeting and file anything now over the bar,
+ *       without re-reading or re-proposing anything
  *
  * It signs in as a throwaway admin created with a random password and deletes
  * it again in a finally block, the same way scripts/smoke-security.mjs does.
@@ -62,9 +66,22 @@ const stepWanted = (n) => {
   return n >= (lo || 1) && n <= (hi || lo || 4);
 };
 
-/** Accept at this confidence or above. The column is 0-100. */
+/**
+ * How sure the model has to be before an item is filed, by what filing it
+ * actually does.
+ *
+ * An item with no section does not write a structured row at all: the apply
+ * route sends it to planning_notes as a pending note, which is the same queue
+ * Isadora already reads and clears. The cost of a wrong one there is a note she
+ * deletes, so holding those to 80 only moved work from one review queue to
+ * another, and 241 of the 384 items from the first pass were exactly that.
+ *
+ * Anything that writes a real row keeps the higher bar, and a vendor contact or
+ * an allergy severity keeps the highest, because those get acted on before
+ * anyone thinks to check them.
+ */
 const ACCEPT_AT = 80;
-/** Sections where a wrong row is expensive need more than that. */
+const NOTE_AT = 60;
 const CAREFUL_AT = 90;
 const CAREFUL_SECTIONS = new Set(['vendor', 'allergies']);
 
@@ -93,6 +110,15 @@ const say = (...a) => console.log(...a);
 
 let token = null;
 let throwawayUserId = null;
+let credentials = null;
+
+/** Get a fresh access token for the throwaway admin. */
+async function signIn() {
+  const anon = createClient(SUPABASE_URL, ANON, { auth: { persistSession: false } });
+  const { data: session, error } = await anon.auth.signInWithPassword(credentials);
+  if (error) throw new Error(`Could not sign in as the throwaway admin: ${error.message}`);
+  token = session.session.access_token;
+}
 
 async function signInAsThrowawayAdmin() {
   const email = `walkthrough-backlog-${Date.now()}@rixey-test.invalid`;
@@ -107,23 +133,47 @@ async function signInAsThrowawayAdmin() {
   });
   if (profileErr) throw new Error(`Could not make the throwaway admin an admin: ${profileErr.message}`);
 
-  const anon = createClient(SUPABASE_URL, ANON, { auth: { persistSession: false } });
-  const { data: session, error: signInErr } = await anon.auth.signInWithPassword({ email, password });
-  if (signInErr) throw new Error(`Could not sign in as the throwaway admin: ${signInErr.message}`);
-  token = session.session.access_token;
+  credentials = { email, password };
+  await signIn();
   say(`Signed in as a throwaway admin (${email}).`);
 }
 
 async function removeThrowawayAdmin() {
   if (!throwawayUserId) return;
+
+  // Applying a walkthrough writes an activity line naming whoever did it, and
+  // that line is a real record of items landing on a real wedding: it stays.
+  // The actor on it does not, because the account is about to stop existing
+  // and the foreign key would refuse the delete anyway. Left with no actor,
+  // which is what the portal already writes for work with no person behind it.
+  const { error: actorErr } = await db.from('activity_log').update({ user_id: null }).eq('user_id', throwawayUserId);
+  if (actorErr) console.error(`Could not unhook the activity lines: ${actorErr.message}`);
+
   await db.from('profiles').delete().eq('id', throwawayUserId);
   const { error } = await db.auth.admin.deleteUser(throwawayUserId);
   if (error) console.error(`Left a throwaway admin behind, delete ${throwawayUserId} by hand: ${error.message}`);
   else say('Throwaway admin deleted.');
 }
 
-/** One call to the portal's API. Throws with the server's own words. */
-async function api(path, { method = 'GET', body } = {}) {
+/**
+ * One call to the portal's API. Throws with the server's own words.
+ *
+ * A Supabase access token lasts an hour and a backlog of ninety-minute
+ * meetings takes longer than that, so the first run lost Ashley's second
+ * recording and Anne and Chris's whole walkthrough to a 401 an hour in. A 401
+ * now means sign in again and have another go, once.
+ */
+async function api(path, opts = {}) {
+  try {
+    return await call(path, opts);
+  } catch (err) {
+    if (err.status !== 401 || !credentials) throw err;
+    await signIn();
+    return call(path, opts);
+  }
+}
+
+async function call(path, { method = 'GET', body } = {}) {
   const res = await fetch(`${API}${path}`, {
     method,
     headers: {
@@ -171,14 +221,33 @@ async function deployedHasTheFix(probeMediaId) {
 
 // ------------------------------------------------------------- the backlog
 
+/**
+ * Every row, not the first thousand.
+ *
+ * PostgREST stops at a thousand whether or not anyone asked it to, and this
+ * backlog put walkthrough_items past that in an afternoon: the second run
+ * reported 32 items left on Justin and Katie when there were 74, because the
+ * other 42 were off the end of the page.
+ */
+async function all(table, columns) {
+  const rows = [];
+  const size = 1000;
+  for (let from = 0; ; from += size) {
+    const { data, error } = await db.from(table).select(columns).range(from, from + size - 1);
+    if (error) throw new Error(`Could not read ${table}: ${error.message}`);
+    rows.push(...(data || []));
+    if (!data || data.length < size) return rows;
+  }
+}
+
 async function survey() {
-  const [{ data: walkthroughs, error: we }, { data: media }, { data: items }, { data: weddings }] = await Promise.all([
-    db.from('walkthroughs').select('*').order('occurred_on'),
-    db.from('walkthrough_media').select('*'),
-    db.from('walkthrough_items').select('id, walkthrough_id, status, confidence, section'),
-    db.from('weddings').select('id, couple_names'),
+  const [walkthroughs, media, items, weddings] = await Promise.all([
+    all('walkthroughs', '*'),
+    all('walkthrough_media', '*'),
+    all('walkthrough_items', 'id, walkthrough_id, status, confidence, section'),
+    all('weddings', 'id, couple_names'),
   ]);
-  if (we) throw new Error(`Could not read the walkthroughs: ${we.message}`);
+  walkthroughs.sort((a, b) => String(a.occurred_on).localeCompare(String(b.occurred_on)));
 
   return (walkthroughs || []).map(w => {
     const own = (media || []).filter(m => m.walkthrough_id === w.id);
@@ -318,10 +387,15 @@ async function step3Organise(w, plan, report) {
   return true;
 }
 
+const barFor = (item) => {
+  if (!item.section) return NOTE_AT;
+  return CAREFUL_SECTIONS.has(item.section) ? CAREFUL_AT : ACCEPT_AT;
+};
+
 const acceptable = (item) => {
   const c = Number(item.confidence);
   if (!Number.isFinite(c)) return false;
-  return c >= (CAREFUL_SECTIONS.has(item.section) ? CAREFUL_AT : ACCEPT_AT);
+  return c >= barFor(item);
 };
 
 async function step4AcceptAndApply(w, plan, report) {
@@ -334,12 +408,14 @@ async function step4AcceptAndApply(w, plan, report) {
   }
   const proposed = items.filter(i => i.status === 'proposed');
   report.proposed = items.length;
+  report.wasProposed = proposed.length;
   const take = proposed.filter(acceptable);
   report.accepted = take.length;
+  report.asNotes = take.filter(i => !i.section).length;
   report.left = proposed.length - take.length;
 
   if (!take.length) { say(`  · nothing confident enough to file, ${report.left} left for review`); return true; }
-  say(`  · accepting ${take.length} of ${proposed.length}, leaving ${report.left} for review`);
+  say(`  · accepting ${take.length} of ${proposed.length} (${report.asNotes} as planning notes), leaving ${report.left} for review`);
   if (!APPLY) { report.notes.push(`would accept ${take.length} and apply`); return true; }
 
   if (!w.row.wedding_id) {
@@ -366,10 +442,11 @@ async function step4AcceptAndApply(w, plan, report) {
 // ------------------------------------------------------------------ the run
 
 function printTable(rows) {
-  const head = ['couple', 'date', 'audio', 'transcript', 'prop', 'acc', 'filed', 'review', 'error'];
+  const head = ['couple', 'date', 'audio', 'transcript', 'items', 'was', 'acc', 'notes', 'filed', 'review', 'error'];
   const body = rows.map(r => [
     r.couple.slice(0, 22), r.date, r.minutes, r.transcriptChars ? r.transcriptChars.toLocaleString() : '-',
-    String(r.proposed ?? '-'), String(r.accepted ?? '-'), String(r.applied ?? '-'), String(r.left ?? '-'),
+    String(r.proposed ?? '-'), String(r.wasProposed ?? '-'), String(r.accepted ?? '-'), String(r.asNotes ?? '-'),
+    String(r.applied ?? '-'), String(r.left ?? '-'),
     r.error || (r.skipped ? `skipped: ${r.skipped}` : ''),
   ]);
   const widths = head.map((h, i) => Math.max(h.length, ...body.map(b => b[i].length)));
@@ -384,7 +461,7 @@ async function main() {
   const health = await fetch(`${API}/api/health`).then(r => r.json()).catch(() => null);
   say(`API ${API} commit ${health?.commit || '?'} node ${health?.node || '?'} transcription ${health?.transcription ? 'on' : 'OFF'}`);
   say(APPLY ? 'APPLY: this writes to the live portal.' : 'DRY RUN: nothing will be written. Pass --apply to do it for real.');
-  say(`Steps ${STEPS}. Accepting at ${ACCEPT_AT}, and at ${CAREFUL_AT} for ${[...CAREFUL_SECTIONS].join(' and ')}.`);
+  say(`Steps ${STEPS}. Filing at ${NOTE_AT} for items that only become a planning note, ${ACCEPT_AT} for the rest, ${CAREFUL_AT} for ${[...CAREFUL_SECTIONS].join(' and ')}.`);
 
   await signInAsThrowawayAdmin();
 
@@ -414,7 +491,8 @@ async function main() {
       minutes: minutes ? mins(minutes) : '-',
       transcriptChars: existingTranscript || String(w.row.raw_notes || '').length || 0,
       proposed: w.counts.proposed ?? 0,
-      accepted: null, applied: null, left: null, error: null, skipped: plan.skip, notes: [],
+      wasProposed: null, accepted: null, asNotes: null, applied: null, left: null,
+      error: null, skipped: plan.skip, notes: [],
     };
 
     if (plan.skip) { rows.push(report); continue; }
