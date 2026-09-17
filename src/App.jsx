@@ -5,6 +5,7 @@ import { ToastProvider } from './components/ui/Toast'
 import { RecorderProvider } from './context/RecorderContext'
 import RecordingBar from './components/RecordingBar'
 import ErrorBoundary from './components/ErrorBoundary'
+import OfflineBanner from './components/ui/OfflineBanner'
 import ProtectedRoute from './components/ProtectedRoute'
 import AdminRoute from './components/AdminRoute'
 import Login from './pages/Login'
@@ -75,6 +76,7 @@ function App() {
   return (
     <ErrorBoundary>
       <ToastProvider>
+        <OfflineBanner />
         <BrowserRouter>
           <AuthProvider>
             {/*
