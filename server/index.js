@@ -64,8 +64,22 @@ import {
 } from './lib/table-layout-draft.js';
 import { safeStorageKey } from './lib/storage-key.js';
 import { createAnswerJobs, publicJobView, ANSWER_JOB_KINDS } from './lib/answer-jobs.js';
-import cron from 'node-cron';
+import nodeCron from 'node-cron';
 import { parseSpreadsheet } from './lib/spreadsheet.js';
+
+/**
+ * Background work: the hourly syncs, the daily digest, and the reaper that
+ * closes off jobs left running by a restart.
+ *
+ * All of it is on unless DISABLE_BACKGROUND_WORK is set. That exists for one
+ * case: running a second copy of this server against the live database to
+ * clear a backlog by hand. Two instances on the same Gmail account is how a
+ * mailbox gets ingested twice, and the reaper, seeing the real server's jobs
+ * still running, would mark every one of them failed on the way up.
+ */
+const BACKGROUND_WORK = process.env.DISABLE_BACKGROUND_WORK !== '1';
+const cron = BACKGROUND_WORK ? nodeCron : { schedule: () => {} };
+if (!BACKGROUND_WORK) console.log('[boot] DISABLE_BACKGROUND_WORK: no scheduled syncs, no job reaper. Routes work as normal.');
 // PDF parsing removed - using Claude vision for all documents
 
 // Configure multer for file uploads
@@ -599,7 +613,7 @@ const supabaseAdmin = createClient(
 
 // Now that there is a client to do it with, close off any sync that was still
 // running when this process last stopped. See reapOrphanedSyncJobs above.
-reapOrphanedSyncJobs();
+if (BACKGROUND_WORK) reapOrphanedSyncJobs();
 
 // Long answers (highlights, both Q&A boxes) run as job rows rather than as one
 // request held open past Railway's fifty-second proxy timeout. See
@@ -17385,6 +17399,50 @@ app.post('/api/admin/walkthroughs/:id/media', requireAdmin, dayOfMediaUpload.sin
   }
 });
 
+/**
+ * Transcribe a recording that is already stored.
+ *
+ * Until now the only way to get a transcript was to upload, so a recording
+ * whose transcription never ran — the container went down mid-job, the
+ * Deepgram key was dead that afternoon, the row predates transcription being
+ * wired up at all — could only be fixed by uploading the same audio again and
+ * ending up with two rows for one conversation. Christiane and Jarred's
+ * 111-minute walkthrough from 24 August sat with a null transcript and a null
+ * transcript_error, which is indistinguishable from still queued.
+ *
+ * Same detached job as the upload path, so a retry behaves exactly like a
+ * first run and shows up in the sync panel the same way.
+ */
+app.post('/api/admin/walkthrough-media/:id/transcribe', requireAdmin, async (req, res) => {
+  try {
+    const { data: media, error } = await supabaseAdmin
+      .from('walkthrough_media').select('*').eq('id', req.params.id).maybeSingle();
+    if (error) throw error;
+    if (!media) return res.status(404).json({ error: 'Recording not found' });
+    if (media.kind !== 'audio') return res.status(400).json({ error: 'That is a photo, so there is nothing to transcribe' });
+    if (!media.storage_path) return res.status(400).json({ error: 'That recording has no file in the bucket' });
+    if (!transcriptionConfigured()) return res.status(503).json({ error: 'No transcription provider is configured' });
+
+    // A transcript someone has already worked from is not overwritten by
+    // accident. Replacing one is a deliberate act and has to say so.
+    if (media.transcript && req.body?.force !== true) {
+      return res.status(409).json({ error: 'That recording already has a transcript. Send { "force": true } to read it again.' });
+    }
+
+    const started = await runDetachedJob(
+      'transcribe',
+      { mediaId: media.id, walkthroughId: media.walkthrough_id, weddingId: media.wedding_id || null, retry: true },
+      () => transcribeWalkthroughMedia(media),
+    );
+    if (!started.jobId) return res.status(500).json({ error: 'Could not open a job to transcribe this, so nothing was started. Try again.' });
+
+    res.json({ ok: true, started: true, jobId: started.jobId });
+  } catch (e) {
+    console.error('Walkthrough media transcribe error:', e);
+    sendDbError(res, e);
+  }
+});
+
 app.delete('/api/admin/walkthrough-media/:id', requireAdmin, async (req, res) => {
   try {
     const { data: row, error: readErr } = await supabaseAdmin
@@ -17502,6 +17560,11 @@ app.post('/api/admin/walkthroughs/:id/organise', requireAdmin, aiLimiter, async 
     //
     // Chunked the same way planning documents already are, and for the same
     // reason. See /api/admin/documents/:id/parse.
+    //
+    // Until 17 September that chunking did nothing here. chunkDocument splits
+    // on the ===== PAGE and ===== TAB markers the document extractor writes,
+    // and a Deepgram transcript has neither, so every meeting went to the model
+    // in one call however long it was. See the note on chunkDocument.
     const chunks = chunkDocument(String(wt.raw_notes));
 
     // Answer now, read after. Five chunks through Sonnet is minutes of work,
@@ -17509,11 +17572,18 @@ app.post('/api/admin/walkthroughs/:id/organise', requireAdmin, aiLimiter, async 
     // organise had failed when in fact it had run and found nothing.
     await supabaseAdmin.from('walkthroughs')
       .update({ status: 'organising', updated_at: new Date().toISOString() }).eq('id', wt.id);
-    res.json({ ok: true, started: true, chunks: chunks.length });
 
-    (async () => {
+    // On a job row, like every other long read in this file. A run that found
+    // nothing left no trace anywhere but a console line on Railway, which is
+    // how three meetings sat organised over an empty list for weeks without
+    // anyone being able to see what had happened to them.
+    const started = await runDetachedJob('walkthrough-organise', {
+      walkthroughId: wt.id, weddingId: wt.wedding_id || null, kind: wt.kind,
+      occurredOn: wt.occurred_on, chars: String(wt.raw_notes).length, chunks: chunks.length,
+    }, async ({ bump }) => {
       let parsed = 0;
       let failedChunks = 0;
+      let truncatedChunks = 0;
       try {
         for (let i = 0; i < chunks.length; i++) {
           const prompt = organisePrompt({
@@ -17527,21 +17597,32 @@ This is part ${i + 1} of ${chunks.length} of one long meeting. Only pull out wha
             occurredOn: wt.occurred_on,
           });
 
+          // 8000, matching the document reader. At 4000 a full chunk of a
+          // walkthrough ran out of room mid-object and the reply parsed to
+          // nothing at all.
           let response;
           try {
             response = await anthropic.messages.create({
-              model: MODEL_SONNET, max_tokens: 4000, temperature: 0.2,
+              model: MODEL_SONNET, max_tokens: 8000, temperature: 0.2,
               messages: [{ role: 'user', content: prompt }],
             });
           } catch (err) {
             const overloaded = err.status === 529 || err.status === 503 || err.status === 429;
             if (!overloaded) throw err;
             response = await anthropic.messages.create({
-              model: MODEL_HAIKU, max_tokens: 4000, temperature: 0.2,
+              model: MODEL_HAIKU, max_tokens: 8000, temperature: 0.2,
               messages: [{ role: 'user', content: prompt }],
             });
           }
           await logUsage(wt.wedding_id, null, 'walkthrough_organise', response);
+
+          // A reply that stopped because it ran out of room lost items off the
+          // end, whatever was salvaged from it. Counted, so the run cannot end
+          // up described as a clean read of the whole meeting.
+          if (response.stop_reason === 'max_tokens') {
+            truncatedChunks++;
+            console.warn(`[organise] ${wt.id}: part ${i + 1}/${chunks.length} hit max_tokens, items lost off the end`);
+          }
 
           const items = parseItems(response.content[0].text);
           if (items.length) {
@@ -17553,23 +17634,49 @@ This is part ${i + 1} of ${chunks.length} of one long meeting. Only pull out wha
             if (ie) { failedChunks++; console.error(`[organise] ${wt.id} part ${i + 1}: ${ie.message}`); }
             else parsed += items.length;
           }
+          await bump({ processed: i + 1, total: chunks.length, last_item: `part ${i + 1} of ${chunks.length}, ${parsed} item(s)` });
           console.log(`[organise] ${wt.id}: part ${i + 1}/${chunks.length}, ${parsed} item(s) so far`);
         }
 
+        // "Organised" has to mean the whole thing was read. A part that was cut
+        // off, or that could not be saved, means it was not, and the screen
+        // words a draft as "stopped partway through, press Organise again" —
+        // which is the truth. Stamped organised over a short read, it said
+        // "read the whole thing and found nothing worth filing" instead.
+        const incomplete = failedChunks > 0 || truncatedChunks > 0;
         await supabaseAdmin.from('walkthroughs').update({
-          status: 'organised',
-          organised_at: new Date().toISOString(),
+          status: incomplete ? 'draft' : 'organised',
+          ...(incomplete ? {} : { organised_at: new Date().toISOString() }),
           updated_at: new Date().toISOString(),
         }).eq('id', wt.id);
-        console.log(`[organise] ${wt.id}: done, ${parsed} item(s) from ${chunks.length} part(s), ${failedChunks} part(s) failed to save`);
+        console.log(`[organise] ${wt.id}: done, ${parsed} item(s) from ${chunks.length} part(s), ${failedChunks} failed to save, ${truncatedChunks} cut off`);
+        return {
+          processed: parsed,
+          failed: failedChunks + truncatedChunks,
+          error: incomplete
+            ? `${chunks.length - failedChunks - truncatedChunks} of ${chunks.length} part(s) read cleanly`
+            : null,
+          detail: { items: parsed, failedChunks, truncatedChunks },
+        };
       } catch (err) {
         console.error(`[organise] ${wt.id} failed:`, err.message);
         // Back to draft rather than left saying "organised" over an empty list.
         // Whatever earlier parts produced is already saved and still there.
         await supabaseAdmin.from('walkthroughs')
           .update({ status: 'draft', updated_at: new Date().toISOString() }).eq('id', wt.id);
+        throw err;
       }
-    })();
+    });
+
+    // No job row means no record of the run, and runDetachedJob will not start
+    // work it cannot account for. Say so rather than leaving the walkthrough
+    // sat at "organising" for ever.
+    if (!started.jobId) {
+      await supabaseAdmin.from('walkthroughs')
+        .update({ status: 'draft', updated_at: new Date().toISOString() }).eq('id', wt.id);
+      return res.status(500).json({ error: 'Could not open a job to read these notes, so nothing was started. Try again.' });
+    }
+    res.json({ ok: true, started: true, chunks: chunks.length, jobId: started.jobId });
   } catch (e) {
     console.error('Walkthrough organise error:', e);
     if (!res.headersSent) sendDbError(res, e);
