@@ -686,6 +686,26 @@ async function logActivity(weddingId, userId, activityType, details = '') {
   try {
     const now = new Date().toISOString();
 
+    // Autosave calls this on every keystroke burst: one couple's timeline edit
+    // on 15 Sep left 34 "updated their timeline" rows in twenty minutes, which
+    // floods the 24-hour feed and the venue's notifications. The same type
+    // with the same wording inside ten minutes is one event, not many.
+    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const { data: recent, error: recentErr } = await supabaseAdmin
+      .from('activity_log')
+      .select('id, details')
+      .eq('wedding_id', weddingId)
+      .eq('activity_type', activityType)
+      .gte('created_at', tenMinutesAgo)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (recentErr) console.error('[activity] dedup read failed, logging anyway:', recentErr.message);
+    const duplicate = !recentErr && recent?.[0] && String(recent[0].details || '') === String(details || '');
+    if (duplicate) {
+      await supabaseAdmin.from('weddings').update({ last_activity: now, last_activity_type: activityType }).eq('id', weddingId);
+      return;
+    }
+
     // Insert activity log
     await supabaseAdmin.from('activity_log').insert({
       wedding_id: weddingId,
