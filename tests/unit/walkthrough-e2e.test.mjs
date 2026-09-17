@@ -188,3 +188,38 @@ test('parseItems ignores a proposed value that is not a plain object', () => {
   const items = parseItems('[{"summary":"a","proposed":["not","an","object"]}]');
   assert.deepEqual(items[0].proposed, {});
 });
+
+/**
+ * A reply that runs out of room stops mid-object, with no closing bracket. The
+ * array parse cannot work on that and used to be the only attempt, so a whole
+ * chunk of correctly sorted items went in the bin because the last one was
+ * half written. This is what put zero items on three real walkthroughs.
+ */
+test('parseItems keeps the whole items out of a reply cut off mid-object', () => {
+  const truncated = '[{"summary":"chase the florist","section":"checklist","confidence":90},'
+    + '{"summary":"Heidi cannot have shellfish","section":"allergies","confidence":85},'
+    + '{"summary":"shuttle at 4","sect';
+  const items = parseItems(truncated);
+  assert.equal(items.length, 2);
+  assert.equal(items[0].summary, 'chase the florist');
+  assert.equal(items[1].section, 'allergies');
+});
+
+test('parseItems is not fooled by a bracket inside a quoted summary', () => {
+  const truncated = '[{"summary":"she said \\"the [tent] goes here\\" and left","confidence":70},{"summ';
+  const items = parseItems(truncated);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].summary, 'she said "the [tent] goes here" and left');
+});
+
+test('parseItems still prefers the whole array when the reply is complete', () => {
+  const items = parseItems('[{"summary":"a"},{"summary":"b"}]');
+  assert.deepEqual(items.map(i => i.summary), ['a', 'b']);
+});
+
+test('parseItems skips a salvaged fragment that is not an item', () => {
+  const truncated = '[{"summary":"a","proposed":{"task_text":"chase"}},{"sum';
+  const items = parseItems(truncated);
+  assert.equal(items.length, 1);
+  assert.deepEqual(items[0].proposed, { task_text: 'chase' });
+});

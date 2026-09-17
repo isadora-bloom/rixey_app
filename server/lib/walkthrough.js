@@ -198,13 +198,59 @@ Notes:
 ${rawNotes}`;
 }
 
-/** Pull the array out of a model response and make each item safe to store. */
+/**
+ * Read as many whole objects as there are out of a JSON array that stops
+ * halfway through one.
+ *
+ * Braces are counted rather than regexed, and quotes and escapes are tracked,
+ * because a summary is free text and will contain both.
+ */
+function salvageObjects(text) {
+  const out = [];
+  let depth = 0, start = -1, inString = false, escaped = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (c === '\\') escaped = true;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') { inString = true; continue; }
+    if (c === '{') { if (depth === 0) start = i; depth++; continue; }
+    if (c === '}') {
+      depth--;
+      if (depth === 0 && start !== -1) {
+        try { out.push(JSON.parse(text.slice(start, i + 1))); } catch { /* not an item, skip it */ }
+        start = -1;
+      }
+      if (depth < 0) depth = 0;
+    }
+  }
+  return out;
+}
+
+/**
+ * Pull the array out of a model response and make each item safe to store.
+ *
+ * A reply cut off at max_tokens has no closing bracket, and this used to
+ * return nothing at all for one: a ninety-minute meeting's worth of correctly
+ * sorted items thrown away because the last object was half written. The
+ * whole-array parse is still tried first; what is salvaged object by object is
+ * the fallback, and losing only the truncated tail is the worst case now.
+ */
 export function parseItems(raw) {
-  const match = String(raw || '').match(/\[[\s\S]*\]/);
-  if (!match) return [];
-  let parsed;
-  try { parsed = JSON.parse(match[0]); } catch { return []; }
-  if (!Array.isArray(parsed)) return [];
+  const text = String(raw || '');
+  const open = text.indexOf('[');
+  if (open === -1) return [];
+  const close = text.lastIndexOf(']');
+
+  let parsed = null;
+  if (close > open) {
+    try { parsed = JSON.parse(text.slice(open, close + 1)); } catch { parsed = null; }
+  }
+  if (!Array.isArray(parsed)) parsed = salvageObjects(text.slice(open));
 
   return parsed
     .filter(i => i && (i.summary || i.source_text))

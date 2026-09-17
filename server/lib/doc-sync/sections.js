@@ -95,6 +95,30 @@ export const DOC_SECTIONS = [
 export const SECTION_KEYS = DOC_SECTIONS.map(s => s.key);
 
 /**
+ * Cut a run of text that is bigger than one chunk, at the least damaging seam
+ * available: a line end first, then a sentence end, then bluntly.
+ *
+ * A line end is the good seam. In an extracted spreadsheet a line is a row, so
+ * nothing is ever cut through the middle of a guest; in a transcript a line is
+ * one person's turn to speak. The sentence and blunt cuts exist because a
+ * recording of one person talking for ninety minutes comes back as a single
+ * line with no newline in it at all, and something has to give.
+ */
+function cutToSize(text, maxChars) {
+  const out = [];
+  const push = (s) => { if (s) out.push(s); };
+
+  for (const line of String(text).split(/(?<=\n)/)) {
+    if (line.length <= maxChars) { push(line); continue; }
+    for (const sentence of line.split(/(?<=[.!?] )/)) {
+      if (sentence.length <= maxChars) { push(sentence); continue; }
+      for (let i = 0; i < sentence.length; i += maxChars) push(sentence.slice(i, i + maxChars));
+    }
+  }
+  return out;
+}
+
+/**
  * Chunk long documents on their own page or tab boundaries.
  *
  * Splitting mid-table would hand the model half a vendor list and invite it to
@@ -105,18 +129,32 @@ export const SECTION_KEYS = DOC_SECTIONS.map(s => s.key);
  * single enormous reply — long enough to time out in production and long
  * enough that a failure costs the whole document. Several bounded calls are
  * slower in total and far more likely to finish.
+ *
+ * Text with no markers in it is now cut down to size rather than handed over
+ * whole. It used to be let through on the principle that an oversized chunk
+ * beats one cut through the middle of a table, which held for a page of a PDF
+ * and was catastrophic for a transcript, because a transcript has no markers
+ * at all and is therefore one block. Anne and Chris's final walkthrough,
+ * 173,084 characters, went to the model in a single call on 16 September, came
+ * back cut off at max_tokens mid-object, parsed to nothing, and the walkthrough
+ * was stamped organised over an empty list. Same for two of Samantha and
+ * Austin's. Every chunk now fits, and the seam is chosen not to cut a row.
  */
 export function chunkDocument(text, maxChars = 12_000) {
   const blocks = String(text || '').split(/(?======\s+(?:PAGE|TAB))/);
   const chunks = [];
   let current = '';
+  const flush = () => { if (current.trim()) chunks.push(current); current = ''; };
+
   for (const b of blocks) {
-    if (current && current.length + b.length > maxChars) { chunks.push(current); current = ''; }
-    // A single block over the limit goes on its own; better an oversized chunk
-    // than one cut through the middle of a table.
-    current += b;
+    if (current && current.length + b.length > maxChars) flush();
+    if (b.length <= maxChars) { current += b; continue; }
+    for (const piece of cutToSize(b, maxChars)) {
+      if (current && current.length + piece.length > maxChars) flush();
+      current += piece;
+    }
   }
-  if (current.trim()) chunks.push(current);
+  flush();
   return chunks.length ? chunks : [String(text || '')];
 }
 
