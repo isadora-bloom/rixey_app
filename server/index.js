@@ -15833,7 +15833,13 @@ app.get('/api/w/:slug', async (req, res) => {
     const [weddingRes, photosRes, partyRes, shuttleRes, accomRes, detailsRes, venueRes, mealOptionsRes] = await Promise.all([
       supabaseAdmin.from('weddings').select('couple_names,wedding_date,partner1_name,partner2_name,plated_meal').eq('id', weddingId).single(),
       supabaseAdmin.from('wedding_photos').select('*').eq('wedding_id', weddingId).contains('tags', ['website']).order('sort_order'),
-      supabaseAdmin.from('wedding_party').select('*').eq('wedding_id', weddingId).eq('include_on_website', true).order('sort_order'),
+      // "not false", not "is true". The column is nullable and every other
+      // reader treats null as on (`include_on_website !== false`, in the
+      // builder's ready count and in the party list's Hidden badge). An
+      // eq(true) here dropped null rows, so a member the couple had been told
+      // was showing would quietly miss the site. Same disagreement as the
+      // show_* toggles below.
+      supabaseAdmin.from('wedding_party').select('*').eq('wedding_id', weddingId).not('include_on_website', 'is', false).order('sort_order'),
       supabaseAdmin.from('shuttle_schedule').select('*').eq('wedding_id', weddingId).order('sort_order'),
       supabaseAdmin.from('accommodations').select('*').order('distance'),
       supabaseAdmin.from('wedding_details').select('ceremony_location,send_off_type,wedding_colors').eq('wedding_id', weddingId).single(),
