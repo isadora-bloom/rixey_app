@@ -46,7 +46,6 @@ import DashboardChat from './dashboard/DashboardChat'
 import FloatingSage from '../components/FloatingSage'
 import CoupleDocuments from '../components/CoupleDocuments'
 import CoupleNotes from '../components/CoupleNotes'
-import CoupleCompleteness from '../components/CoupleCompleteness'
 import DashboardNav, { FINALISABLE } from './dashboard/DashboardNav'
 import DashboardHeader from './dashboard/DashboardHeader'
 import { shrinkImageForUpload } from '../utils/image'
@@ -1052,8 +1051,9 @@ export default function Dashboard() {
                 </div>
               )}
 
-              {/* Documents and Completeness: the couple's read-only view of
-                  their planning file. */}
+              {/* Documents: the couple's read-only view of their planning file.
+                  The completeness gauge left the couple side on 17 Sep 2026;
+                  it is a venue tool now (shared/sections.js). */}
               {activeSection === 'documents' && profile?.wedding_id && (
                 <CoupleDocuments weddingId={profile.wedding_id} />
               )}
@@ -1061,9 +1061,6 @@ export default function Dashboard() {
                 <div className="p-4 sm:p-6">
                   <CoupleNotes weddingId={profile.wedding_id} />
                 </div>
-              )}
-              {activeSection === 'completeness' && profile?.wedding_id && (
-                <CoupleCompleteness weddingId={profile.wedding_id} onOpenSection={setActiveSection} />
               )}
 
               {/* What the venue wrote up after walking the place with them */}

@@ -71,7 +71,9 @@ export const SECTIONS = [
   { key: 'tables', label: 'Tables', group: 'Plan', icon: 'LayoutGrid', sides: ['couple', 'venue'], aliases: [], finalisable: true, noteCategories: [] },
   { key: 'documents', label: 'Documents', group: 'Plan', icon: 'FileText', sides: ['couple', 'venue'], aliases: [], noteCategories: [] },
   { key: 'rixey-notes', label: 'Notes from Rixey', group: 'Plan', icon: 'StickyNote', sides: ['couple'], aliases: [], noteCategories: [] },
-  { key: 'completeness', label: 'Completeness', group: 'Plan', icon: 'Gauge', sides: ['couple', 'venue'], aliases: [], noteCategories: [] },
+  // Venue only since 17 Sep 2026. A couple shown "40% complete" reads "60% behind";
+  // the venue still needs the gauge to see what's missing before the day.
+  { key: 'completeness', label: 'Completeness', group: 'Plan', icon: 'Gauge', sides: ['venue'], aliases: [], noteCategories: [] },
 
   // Day Of
   { key: 'ceremony-order', label: 'Ceremony Order', group: 'Day Of', icon: 'ScrollText', sides: ['couple', 'venue'], aliases: [], finalisable: true, noteCategories: [] },
