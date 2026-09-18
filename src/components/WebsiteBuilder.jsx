@@ -8,6 +8,7 @@ import LoadError from './ui/LoadError'
 import { useAutosave } from '../hooks/useAutosave'
 import SaveIndicator from './ui/SaveIndicator'
 import { headcount } from '../../shared/guest-names'
+import { WEBSITE_SECTIONS, describeSection, describeAll, summarise, isOn } from '../../shared/website-sections'
 
 const APP_URL = import.meta.env.VITE_APP_URL || window.location.origin
 
@@ -36,22 +37,20 @@ function slugify(str) {
     .replace(/^-|-$/g, '')
 }
 
-const SECTION_TOGGLES = [
-  { key: 'show_story',          label: 'Our Story',        note: 'Written by you below' },
-  { key: 'show_proposal',       label: 'The Proposal',     note: 'Written by you below' },
-  { key: 'show_wedding_party',  label: 'Wedding Party',    note: 'From your wedding party list' },
-  { key: 'show_dress_code',     label: 'Dress Code',       note: 'Set below' },
-  { key: 'show_schedule',       label: 'The Day',          note: 'Ceremony & reception times' },
-  { key: 'show_transport',      label: 'Transportation',   note: 'From your shuttle schedule' },
-  { key: 'show_accommodations', label: 'Where to Stay',    note: 'Rixey\'s curated list' },
-  { key: 'show_registry',       label: 'Registry',         note: 'Links set below' },
-  { key: 'show_faq',            label: 'FAQ',              note: 'Questions set below' },
-  { key: 'show_gallery',        label: 'Photo Gallery',    note: 'Photos tagged "website"' },
-  { key: 'show_rsvp',           label: 'RSVP',             note: 'Lets guests confirm attendance on your site' },
-  { key: 'show_things_to_do',   label: 'Things to Do',     note: 'Nearby restaurants, activities, wineries' },
-]
+// The labels, the content rules and the wording all live in
+// shared/website-sections.js now, next to the site's own render guards, so the
+// panel cannot drift from what a guest actually sees.
+const SECTION_TOGGLES = WEBSITE_SECTIONS
 
 const DEFAULT_SECTION_ORDER = SECTION_TOGGLES.map(s => s.key)
+
+/** Sage for live, amber for something to do, grey for deliberately hidden. */
+const STATE_STYLE = {
+  live:  { dot: 'bg-green-500',  text: 'text-green-700',  detail: 'text-sage-500'  },
+  ready: { dot: 'bg-amber-500',  text: 'text-amber-700',  detail: 'text-amber-600' },
+  empty: { dot: 'bg-amber-400',  text: 'text-amber-700',  detail: 'text-amber-600' },
+  off:   { dot: 'bg-cream-300',  text: 'text-sage-400',   detail: 'text-sage-400'  },
+}
 
 const THINGS_TO_DO_TYPES = [
   { value: 'restaurant', label: 'Restaurant' },
@@ -138,7 +137,7 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
   const [rsvpCounts, setRsvpCounts] = useState({ total: 0, yes: 0, no: 0, pending: 0 })
 
   // Data readiness counts for dependent sections
-  const [dataCounts, setDataCounts] = useState({ party: 0, shuttle: 0, photos: 0, websitePhotos: 0, heroPhoto: false })
+  const [dataCounts, setDataCounts] = useState({ party: 0, shuttle: 0, photos: 0, websitePhotos: 0, galleryPhotos: 0, heroPhoto: false })
 
   // Slug collision check
   const [slugStatus, setSlugStatus] = useState('idle') // 'idle' | 'checking' | 'available' | 'taken'
@@ -211,6 +210,12 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
           shuttle: shuttles.length,
           photos: photos.length,
           websitePhotos: photos.filter(p => p.tags?.includes('website')).length,
+          // What the gallery will actually hold. The site takes the
+          // website-tagged photos and drops the hero from them, so a couple
+          // whose only website photo is also the hero has a gallery of none
+          // while a plain website count says one. That mismatch is what told
+          // Corinna her gallery was fine on 18 Sep while it was not rendering.
+          galleryPhotos: photos.filter(p => p.tags?.includes('website') && !p.tags?.includes('hero')).length,
           heroPhoto: photos.some(p => p.tags?.includes('hero')),
         })
       } catch (err) {
@@ -350,6 +355,24 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
   }
 
   const siteUrl = `${APP_URL}/w/${slug}`
+
+  // What the couple has actually filled in, in the shape the shared rules read.
+  // Same values the site renders on, so the panel and the site cannot disagree.
+  const sectionContent = {
+    ourStory,
+    theProposal,
+    ceremonyTime,
+    receptionTime,
+    dressCode,
+    partyCount: dataCounts.party,
+    shuttleCount: dataCounts.shuttle,
+    registryCount: registryLinks.filter(r => r.url.trim()).length,
+    faqCount: faqItems.filter(f => f.question.trim()).length,
+    galleryCount: dataCounts.galleryPhotos,
+    thingsToDoCount: thingsToDo.filter(t => t.name.trim()).length,
+  }
+  const describeArgs = { published, toggles: sections, content: sectionContent }
+  const sectionSummary = summarise(describeAll(describeArgs), published)
 
   const copyLink = () => {
     navigator.clipboard.writeText(siteUrl)
@@ -1030,12 +1053,17 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
       <div className="border border-cream-200 rounded-xl overflow-hidden">
         <div className="px-5 py-4 bg-cream-50 border-b border-cream-200">
           <p className="font-medium text-sage-700">Sections</p>
-          <p className="text-xs text-sage-400 mt-0.5">Toggle and reorder what appears on your website</p>
+          {/* The answer first. A count of what a guest can see right now, or the
+              fact that nobody can see anything yet, before twelve rows of
+              switches they would otherwise have to add up themselves. */}
+          <p className={`text-xs mt-1 ${published ? 'text-sage-500' : 'text-amber-600'}`}>{sectionSummary}</p>
         </div>
         <div className="p-5 space-y-1">
           {sectionOrder.map((key, idx) => {
             const toggle = SECTION_TOGGLES.find(t => t.key === key)
             if (!toggle) return null
+            const status = describeSection(toggle, describeArgs)
+            const style = STATE_STYLE[status.state]
             return (
               <div key={key} className="flex items-center justify-between gap-3 py-2 group">
                 <div className="flex items-center gap-2 flex-shrink-0">
@@ -1061,32 +1089,38 @@ export default function WebsiteBuilder({ weddingId, coupleNames }) {
                   </div>
                   <div>
                     <p className="text-sm font-medium text-sage-700 group-hover:text-sage-900">{toggle.label}</p>
-                    <p className="text-xs text-sage-400">
-                      {key === 'show_wedding_party' ? (
-                        dataCounts.party > 0
-                          ? <span className="text-green-600">{dataCounts.party} member{dataCounts.party !== 1 ? 's' : ''} ready</span>
-                          : <span className="text-amber-600">No party members added yet</span>
-                      ) : key === 'show_transport' ? (
-                        dataCounts.shuttle > 0
-                          ? <span className="text-green-600">{dataCounts.shuttle} shuttle run{dataCounts.shuttle !== 1 ? 's' : ''}</span>
-                          : <span className="text-amber-600">No shuttle runs set up</span>
-                      ) : key === 'show_gallery' ? (
-                        dataCounts.websitePhotos > 0
-                          ? <span className="text-green-600">{dataCounts.websitePhotos} photo{dataCounts.websitePhotos !== 1 ? 's' : ''} tagged "website"</span>
-                          : <span className="text-amber-600">Tag photos "website" in Photo Library</span>
-                      ) : key === 'show_rsvp' ? (
-                        rsvpCounts.total > 0
-                          ? <span className="text-green-600">{rsvpCounts.total} guests, {rsvpCounts.yes} confirmed</span>
-                          : <span className="text-amber-600">Add guests first so they can RSVP</span>
-                      ) : toggle.note}
+                    {/* One state per section, worked out from the three things
+                        that actually decide it: published, this switch, and
+                        whether there is anything to render. The old hints only
+                        knew the third and read as though they settled it. */}
+                    <p className={`text-xs font-medium flex items-center gap-1.5 ${style.text}`}>
+                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${style.dot}`} aria-hidden="true" />
+                      {status.headline}
+                    </p>
+                    <p className={`text-xs mt-0.5 ${style.detail}`}>
+                      {status.detail}
+                      {key === 'show_rsvp' && status.state === 'live' && rsvpCounts.total > 0 && (
+                        <> · {rsvpCounts.total} guests, {rsvpCounts.yes} confirmed</>
+                      )}
                     </p>
                   </div>
                 </div>
-                <div
-                  onClick={() => setSections(prev => ({ ...prev, [key]: !prev[key] }))}
-                  className={`w-10 h-6 rounded-full transition-colors flex-shrink-0 cursor-pointer relative ${sections[key] ? 'bg-sage-500' : 'bg-cream-300'}`}
-                >
-                  <div className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${sections[key] ? 'translate-x-5' : 'translate-x-1'}`} />
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <span className={`text-xs w-6 text-right ${sections[key] ? 'text-sage-600' : 'text-sage-400'}`}>
+                    {sections[key] ? 'On' : 'Off'}
+                  </span>
+                  {/* A real switch. It was a div, so it could not be reached by
+                      keyboard and announced nothing to a screen reader. */}
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={!!sections[key]}
+                    aria-label={`Show ${toggle.label} on your website`}
+                    onClick={() => setSections(prev => ({ ...prev, [key]: !prev[key] }))}
+                    className={`w-10 h-6 rounded-full transition-colors cursor-pointer relative focus:outline-none focus:ring-2 focus:ring-sage-300 focus:ring-offset-1 ${sections[key] ? 'bg-sage-500' : 'bg-cream-300'}`}
+                  >
+                    <div className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${sections[key] ? 'translate-x-5' : 'translate-x-1'}`} />
+                  </button>
                 </div>
               </div>
             )

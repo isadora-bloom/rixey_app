@@ -5,6 +5,9 @@ import { supabase } from '../lib/supabase'
 import { useToast } from './ui/Toast'
 import ConfirmDialog from './ui/ConfirmDialog'
 import { allPeople, normaliseName } from '../../shared/guest-names'
+import { WEBSITE_SECTIONS, sectionState, isOn } from '../../shared/website-sections'
+
+const APP_URL = import.meta.env.VITE_APP_URL || window.location.origin
 
 
 // ── Role suggestions — no gender or family-structure assumptions ───────────────
@@ -237,11 +240,16 @@ function PersonForm({ initial, guests, partner1, partner2, onSave, onCancel }) {
         />
       </div>
 
-      <label className="flex items-center gap-2 cursor-pointer">
-        <input type="checkbox" checked={includeOnWebsite} onChange={e => setIncludeOnWebsite(e.target.checked)}
-          className="w-4 h-4 rounded border-cream-300 text-sage-600" />
-        <span className="text-sm text-sage-700">Show on wedding website</span>
-      </label>
+      <div>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={includeOnWebsite} onChange={e => setIncludeOnWebsite(e.target.checked)}
+            className="w-4 h-4 rounded border-cream-300 text-sage-600" />
+          <span className="text-sm text-sage-700">Show on wedding website</span>
+        </label>
+        <p className="text-xs text-sage-400 mt-1 ml-6">
+          Untick to keep someone off the site. The section also has to be on, and your site published, before guests see anyone.
+        </p>
+      </div>
 
       <div className="flex gap-2">
         <button
@@ -373,6 +381,7 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
   const [guests, setGuests]                 = useState([])
   const [photos, setPhotos]                 = useState([])
   const [existingCeremony, setExistingCeremony] = useState([])
+  const [site, setSite]                     = useState(null)
   const [loading, setLoading]               = useState(true)
   const [showAdd, setShowAdd]               = useState(false)
   const [editingId, setEditingId]           = useState(null)
@@ -405,14 +414,20 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
           return null
         }
       }
-      const [membersData, guestsData, photosData, ceremonyData] = await Promise.all([
+      const [membersData, guestsData, photosData, ceremonyData, siteData] = await Promise.all([
         settle('the wedding party', `${API_URL}/api/wedding-party/${weddingId}`),
         settle('the guest list', `${API_URL}/api/guests/${weddingId}`),
         settle('the photo library', `${API_URL}/api/wedding-photos/${weddingId}`),
         settle('the ceremony order', `${API_URL}/api/ceremony-order/${weddingId}`),
+        // Only so this page can say whether these people are on the website
+        // yet. A couple who has ticked "show on wedding website" for everyone
+        // reasonably reads that as done, and until now nothing here mentioned
+        // the section switch or whether the site was even published.
+        settle('your website settings', `${API_URL}/api/wedding-website/${weddingId}`),
       ])
 
       setMembers(Array.isArray(membersData) ? membersData : [])
+      setSite(siteData && siteData.wedding_id ? siteData : null)
 
       // People, not rows: since 025 a plus one has a row of their own and can
       // stand in the wedding party. Placeholders are left out, because "Guest"
@@ -542,6 +557,58 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
   }
 
   // Group members by group_label
+  // Who the site would render: the same "not false" rule the public endpoint
+  // and the website builder use.
+  const shownCount = members.filter(m => isOn(m.include_on_website)).length
+
+  /**
+   * Whether these people are on the website, in one sentence, naming whichever
+   * of the three conditions is the one standing in the way.
+   *
+   * Corinna ticked the box for all 38 of her party and asked us twice why they
+   * were not on her site. Nothing on this page told her the section had its own
+   * switch, and nothing told her whether the site was published.
+   */
+  const websiteStatus = (() => {
+    const section = WEBSITE_SECTIONS.find(s => s.key === 'show_wedding_party')
+    const state = sectionState({
+      published: !!site?.published,
+      toggle: site?.show_wedding_party,
+      content: { partyCount: shownCount },
+      section,
+    })
+    const hidden = members.length - shownCount
+    const hiddenNote = hidden > 0
+      ? ` ${hidden} ${hidden === 1 ? 'person is' : 'people are'} set to stay off it.`
+      : ''
+
+    if (!site) return {
+      tone: 'off',
+      headline: 'No wedding website set up yet',
+      detail: 'These people are still useful for your ceremony order and your timeline. Open Wedding Website to build a site.',
+    }
+    if (state === 'off') return {
+      tone: 'wait',
+      headline: 'Your guests cannot see the wedding party',
+      detail: `The Wedding Party section is switched off. Turn it on under Sections in Wedding Website.${hiddenNote}`,
+    }
+    if (state === 'empty') return {
+      tone: 'wait',
+      headline: 'Nobody is set to show on the website',
+      detail: 'Edit each person and tick "Show on wedding website" for the ones you want on there.',
+    }
+    if (state === 'ready') return {
+      tone: 'wait',
+      headline: `${shownCount} ready for your website, not live yet`,
+      detail: `Your site is still a draft, so nobody can see it. Publish it under Wedding Website.${hiddenNote}`,
+    }
+    return {
+      tone: 'live',
+      headline: `${shownCount} showing on your website now`,
+      detail: `Live at ${APP_URL}/w/${site.slug}.${hiddenNote}`,
+    }
+  })()
+
   const grouped = members.reduce((acc, m) => {
     const key = m.group_label || 'Ungrouped'
     if (!acc[key]) acc[key] = []
@@ -604,7 +671,12 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h3 className="font-serif text-lg text-sage-700">Wedding Party</h3>
-          <p className="text-sage-500 text-sm">{members.length} {members.length === 1 ? 'person' : 'people'}</p>
+          <p className="text-sage-500 text-sm">
+            {members.length} {members.length === 1 ? 'person' : 'people'}
+            {shownCount !== members.length && members.length > 0 && (
+              <span className="text-sage-400"> · {shownCount} set to show on the website</span>
+            )}
+          </p>
         </div>
         <div className="flex items-center gap-2">
           {members.length > 0 && (
@@ -643,6 +715,24 @@ export default function WeddingParty({ weddingId, partner1: p1Prop, partner2: p2
           </button>
         </div>
       </div>
+
+      {/* Where these people stand on the website.
+          Ticking the box on each person is only one of three things that have
+          to be true, and it is the only one this page used to mention. */}
+      {members.length > 0 && (
+        <div className={`rounded-xl border px-4 py-3 text-sm ${
+          websiteStatus.tone === 'live'
+            ? 'border-green-200 bg-green-50 text-green-800'
+            : websiteStatus.tone === 'wait'
+              ? 'border-amber-200 bg-amber-50 text-amber-800'
+              : 'border-cream-300 bg-cream-50 text-sage-600'
+        }`}>
+          <p className="font-medium">{websiteStatus.headline}</p>
+          <p className={`text-xs mt-0.5 ${
+            websiteStatus.tone === 'live' ? 'text-green-700' : websiteStatus.tone === 'wait' ? 'text-amber-700' : 'text-sage-500'
+          }`}>{websiteStatus.detail}</p>
+        </div>
+      )}
 
       {/* Add form */}
       {showAdd && (
