@@ -104,6 +104,9 @@ export default function AdminWeddingList({
   clearZoom,
   disconnectZoom,
 }) {
+  // An unknown type falls through to its own name with the underscores taken
+  // out, which reads well enough, so this only needs the ones where that would
+  // be clumsy. The details line carries the specifics.
   const ACTIVITY_LABELS = {
     timeline_updated:    'updated their timeline',
     tables_updated:      'updated their table layout',
@@ -114,6 +117,14 @@ export default function AdminWeddingList({
     contract_uploaded:   'uploaded a vendor contract',
     checklist_completed: 'completed a checklist item',
     inspo_uploaded:      'added inspiration photos',
+    website_updated:     'changed their wedding website',
+    wedding_party_shown: 'wedding party',
+    wedding_party_hidden:'wedding party',
+    wedding_details_updated: 'updated their wedding details',
+    budget_updated:      'updated their budget',
+    guest_care_updated:  'updated their guest care notes',
+    table_layout_updated:'updated their reception layout',
+    guest_list_emptied:  'emptied their guest list',
   }
 
   // Deduplicate activity: one line per wedding per activity_type

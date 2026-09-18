@@ -17,7 +17,7 @@
     "preview": "vite preview",
     "test": "playwright test",
     "import-kb": "node scripts/import-knowledge.js",
-    "audit": "npm run audit:errors && npm run audit:nav && npm run audit:unsurfaced && npm run audit:writes && npm run audit:fetch && npm run audit:pages && npm run audit:tdz && npm run audit:routes && npm run test:unit",
+    "audit": "npm run audit:errors && npm run audit:nav && npm run audit:unsurfaced && npm run audit:writes && npm run audit:fetch && npm run audit:pages && npm run audit:tdz && npm run audit:routes && npm run audit:activity && npm run test:unit",
     "audit:errors": "node scripts/audit-unchecked-errors.mjs --max 50",
     "audit:nav": "node scripts/audit-nav-parity.mjs",
     "audit:unsurfaced": "node scripts/audit-unsurfaced.mjs",
@@ -26,6 +26,7 @@
     "audit:pages": "node scripts/audit-unpaginated.mjs --max 40",
     "audit:tdz": "node scripts/audit-tdz-deps.mjs src --max 0",
     "audit:routes": "node scripts/audit-route-shadow.mjs --max 0",
+    "audit:activity": "node scripts/audit-activity-logging.mjs --max 27",
     "columns": "node scripts/generate-column-map.mjs",
     "test:unit": "node --test \"tests/unit/*.test.mjs\"",
     "postinstall": "simple-git-hooks"

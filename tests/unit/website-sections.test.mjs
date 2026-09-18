@@ -9,6 +9,7 @@ import {
   describeSection,
   describeAll,
   summarise,
+  describeSettingsChange,
 } from '../../shared/website-sections.js'
 
 const find = (key) => WEBSITE_SECTIONS.find((s) => s.key === key)
@@ -157,4 +158,70 @@ test("each content guard is still the one WeddingWebsite.jsx renders on", () => 
   for (const key of WEBSITE_SECTION_KEYS) {
     assert.ok(onSite.includes(key), `${key} is in WEBSITE_SECTIONS but the site never reads it`)
   }
+})
+
+// ── The activity entry ────────────────────────────────────────────────────────
+//
+// The builder autosaves the whole form on a debounce, so the thing that matters
+// most here is what does NOT get logged.
+
+const stored = {
+  slug: 'lovelyboyles',
+  published: true,
+  access_password: null,
+  show_wedding_party: true,
+  show_gallery: true,
+}
+
+test('an autosave that changed nothing of substance logs nothing', () => {
+  assert.equal(describeSettingsChange(stored, { ...stored }), '')
+})
+
+test('a prose edit is not an event', () => {
+  assert.equal(describeSettingsChange(stored, { ...stored, our_story: 'a new draft of our story' }), '')
+})
+
+test('turning the wedding party off is recorded, by name', () => {
+  const line = describeSettingsChange(stored, { ...stored, show_wedding_party: false })
+  assert.equal(line, 'turned off Wedding Party')
+})
+
+test('turning it back on is recorded too', () => {
+  const off = { ...stored, show_wedding_party: false }
+  assert.equal(describeSettingsChange(off, { ...off, show_wedding_party: true }), 'turned on Wedding Party')
+})
+
+test('writing true over a column that was never set is not a change', () => {
+  // The builder writes every toggle explicitly on its first save. That must not
+  // read as the couple turning twelve sections on.
+  const fresh = { slug: 'x', published: false }
+  assert.equal(describeSettingsChange(fresh, { ...fresh, show_wedding_party: true, show_gallery: true }), '')
+})
+
+test('null in the stored row counts as on, so writing false is turning it off', () => {
+  const nulled = { ...stored, show_gallery: null }
+  assert.equal(describeSettingsChange(nulled, { ...nulled, show_gallery: false }), 'turned off Photo Gallery')
+})
+
+test('publishing and unpublishing are both recorded', () => {
+  assert.match(describeSettingsChange({ published: false }, { published: true }), /^published their website$/)
+  assert.match(describeSettingsChange({ published: true }, { published: false }), /^unpublished their website$/)
+})
+
+test('the address and the password are recorded, the password itself is not', () => {
+  assert.equal(describeSettingsChange(stored, { ...stored, slug: 'boyles-2027' }), 'changed the address to /w/boyles-2027')
+  const withPw = describeSettingsChange(stored, { ...stored, access_password: 'hunter2' })
+  assert.equal(withPw, 'added a site password')
+  assert.ok(!withPw.includes('hunter2'), 'the password must never reach the activity feed')
+  assert.equal(describeSettingsChange({ ...stored, access_password: 'hunter2' }, { ...stored, access_password: '' }), 'removed the site password')
+})
+
+test('several changes in one save read as one sentence', () => {
+  const line = describeSettingsChange(stored, { ...stored, published: false, show_wedding_party: false })
+  assert.equal(line, 'unpublished their website; turned off Wedding Party')
+})
+
+test('a first save has no stored row to compare against and does not throw', () => {
+  assert.equal(describeSettingsChange(null, { published: true, show_gallery: false }), 'published their website')
+  assert.equal(describeSettingsChange(undefined, undefined), '')
 })

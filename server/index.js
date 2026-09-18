@@ -28,6 +28,8 @@ import { isSameVendor, vendorKey } from '../shared/vendor-names.js';
 import { GUEST_FIELD_KEYS, ADDRESS_PART_KEYS, isMappableKey, tagLabelOf } from '../shared/guest-csv.js';
 import { vendorInviteEmail } from '../shared/vendor-invite-email.js';
 import { onlyColumns } from './middleware/table-columns.js';
+import { describeSettingsChange } from '../shared/website-sections.js';
+import { activityFor } from './lib/activity-rows.js';
 import { rsvpConfirmationHtml } from './lib/rsvp-confirmation.js';
 import { WALKTHROUGH_TARGETS, TARGET_KEYS, buildNote, organisePrompt, parseItems } from './lib/walkthrough.js';
 import { extractDocument } from './lib/doc-sync/extract.js';
@@ -727,6 +729,32 @@ async function logActivity(weddingId, userId, activityType, details = '') {
     console.log(`Activity logged: ${activityType} for wedding ${weddingId}`);
   } catch (err) {
     console.error('Failed to log activity:', err);
+  }
+}
+
+/**
+ * Log one row of a couple's data being added, updated or removed.
+ *
+ * `row` is what the write returned, so it carries both the wedding_id and the
+ * name to print. Pass it straight through:
+ *
+ *   const { data, error } = await supabaseAdmin.from('decor_inventory')
+ *     .insert(req.body).select().single();
+ *   if (error) throw error;
+ *   await logRow('decor_inventory', 'added', data, req.userId);
+ *
+ * A feed entry is never worth failing the couple's save over, so this swallows
+ * its own errors the way logActivity does. Tables it does not know about are
+ * skipped rather than guessed at; see server/lib/activity-rows.js.
+ */
+async function logRow(table, action, row, userId) {
+  try {
+    if (!row?.wedding_id) return;
+    const entry = activityFor(table, action, row);
+    if (!entry) return;
+    await logActivity(row.wedding_id, userId ?? null, entry.type, entry.details);
+  } catch (err) {
+    console.error(`[activity] could not log ${action} on ${table}:`, err);
   }
 }
 
@@ -13509,6 +13537,7 @@ app.post('/api/budget', async (req, res) => {
 
     if (error) throw error;
 
+    await logActivity(weddingId, req.userId, 'budget_updated', 'updated their budget');
     res.json({ budget: data });
   } catch (error) {
     console.error('Save budget error:', error);
@@ -13548,6 +13577,7 @@ app.post('/api/guest-care', async (req, res) => {
       .select()
       .single();
     if (error) throw error;
+    await logActivity(weddingId, req.userId, 'guest_care_updated', 'updated their guest care notes');
     res.json({ success: true, data: saved.data });
   } catch (error) {
     console.error('Save guest care error:', error);
@@ -13586,6 +13616,7 @@ app.post('/api/internal-notes', async (req, res) => {
       .select()
       .single();
     if (error) throw error;
+    await logRow('wedding_internal_notes', 'added', data, req.userId);
     res.json({ note: data });
   } catch (error) {
     console.error('Add internal note error:', error);
@@ -13810,6 +13841,7 @@ app.post('/api/wedding-details', async (req, res) => {
       .upsert({ wedding_id: weddingId, ...fields, updated_at: new Date().toISOString() }, { onConflict: 'wedding_id' })
       .select().single();
     if (error) throw error;
+    await logActivity(weddingId, req.userId, 'wedding_details_updated', 'updated their wedding details');
     res.json(data);
   } catch (e) { sendDbError(res, e); }
 });
@@ -13826,6 +13858,7 @@ app.post('/api/allergies', validateBody(['wedding_id', 'guest_name', 'allergy', 
   try {
     const { data, error } = await supabaseAdmin.from('allergy_registry').insert(req.body).select().single();
     if (error) throw error;
+    await logRow('allergy_registry', 'added', data, req.userId);
     res.json(data);
   } catch (e) { sendDbError(res, e); }
 });
@@ -13833,6 +13866,7 @@ app.put('/api/allergies/:id', validateBody(['guest_name', 'allergy', 'severity',
   try {
     const { data, error } = await supabaseAdmin.from('allergy_registry').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
+    await logRow('allergy_registry', 'updated', data, req.userId);
     res.json(data);
   } catch (e) { sendDbError(res, e); }
 });
@@ -13896,6 +13930,7 @@ app.post('/api/ceremony-order', validateBody(['wedding_id', 'participant_name', 
   try {
     const { data, error } = await supabaseAdmin.from('ceremony_order').insert(req.body).select().single();
     if (error) throw error;
+    await logRow('ceremony_order', 'added', data, req.userId);
     res.json(data);
   } catch (e) { sendDbError(res, e); }
 });
@@ -13903,6 +13938,7 @@ app.put('/api/ceremony-order/:id', validateBody(['participant_name', 'role', 'se
   try {
     const { data, error } = await supabaseAdmin.from('ceremony_order').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
+    await logRow('ceremony_order', 'updated', data, req.userId);
     res.json(data);
   } catch (e) { sendDbError(res, e); }
 });
@@ -13935,6 +13971,7 @@ app.post('/api/decor', validateBody(['wedding_id', 'space_name', 'item_name', 'q
   try {
     const { data, error } = await supabaseAdmin.from('decor_inventory').insert(req.body).select().single();
     if (error) throw error;
+    await logRow('decor_inventory', 'added', data, req.userId);
     res.json(data);
   } catch (e) { sendDbError(res, e); }
 });
@@ -13942,6 +13979,7 @@ app.put('/api/decor/:id', validateBody(['space_name', 'item_name', 'quantity', '
   try {
     const { data, error } = await supabaseAdmin.from('decor_inventory').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
+    await logRow('decor_inventory', 'updated', data, req.userId);
     res.json(data);
   } catch (e) { sendDbError(res, e); }
 });
@@ -13974,6 +14012,7 @@ app.post('/api/makeup', validateBody(['wedding_id', 'participant_name', 'role', 
   try {
     const { data, error } = await supabaseAdmin.from('makeup_schedule').insert(req.body).select().single();
     if (error) throw error;
+    await logRow('makeup_schedule', 'added', data, req.userId);
     res.json(data);
   } catch (e) { sendDbError(res, e); }
 });
@@ -13981,6 +14020,7 @@ app.put('/api/makeup/:id', validateBody(['participant_name', 'role', 'hair_start
   try {
     const { data, error } = await supabaseAdmin.from('makeup_schedule').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
+    await logRow('makeup_schedule', 'updated', data, req.userId);
     res.json(data);
   } catch (e) { sendDbError(res, e); }
 });
@@ -14013,6 +14053,7 @@ app.post('/api/shuttle', validateBody(['wedding_id', 'run_label', 'pickup_time',
   try {
     const { data, error } = await supabaseAdmin.from('shuttle_schedule').insert(req.body).select().single();
     if (error) throw error;
+    await logRow('shuttle_schedule', 'added', data, req.userId);
     res.json(data);
   } catch (e) { sendDbError(res, e); }
 });
@@ -14020,6 +14061,7 @@ app.put('/api/shuttle/:id', validateBody(['run_label', 'pickup_time', 'pickup_lo
   try {
     const { data, error } = await supabaseAdmin.from('shuttle_schedule').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
+    await logRow('shuttle_schedule', 'updated', data, req.userId);
     res.json(data);
   } catch (e) { sendDbError(res, e); }
 });
@@ -14121,6 +14163,7 @@ app.post('/api/table-layout', async (req, res) => {
       }, { onConflict: 'wedding_id' })
       .select().single();
     if (error) throw error;
+    await logActivity(weddingId, req.userId, 'table_layout_updated', 'updated their reception layout');
     res.json({ layout: data });
   } catch (err) {
     console.error('Save table layout error:', err);
@@ -14763,6 +14806,11 @@ app.delete('/api/guests/all', async (req, res) => {
       .from('wedding_guests').delete({ count: 'exact' }).eq('wedding_id', weddingId);
     if (error) throw error;
     console.log(`[guests] emptied the guest list for ${weddingId}: ${count} rows, by ${req.userId}`);
+    // The one change in the portal that cannot be undone from the portal. A
+    // server log is not enough: nobody reads it, and the couple's own feed is
+    // where a "where did our guest list go" conversation starts.
+    await logActivity(weddingId, req.userId, 'guest_list_emptied',
+      `emptied the guest list (${count || 0} ${count === 1 ? 'guest' : 'guests'} removed)`);
     res.json({ ok: true, deleted: count || 0 });
   } catch (err) {
     console.error('Delete all guests error:', err.message);
@@ -14822,6 +14870,7 @@ app.post('/api/guest-tags', async (req, res) => {
       .insert({ wedding_id: weddingId, label, color: color || '#9CA3AF' })
       .select().single();
     if (error) throw error;
+    await logRow('guest_tag_options', 'added', data, req.userId);
     res.json({ tag: data });
   } catch (err) {
     console.error('Create tag error:', err);
@@ -14879,6 +14928,7 @@ app.post('/api/meal-options', async (req, res) => {
       .insert({ wedding_id: weddingId, label })
       .select().single();
     if (error) throw error;
+    await logRow('guest_meal_options', 'added', data, req.userId);
     res.json({ option: data });
   } catch (err) {
     console.error('Create meal option error:', err);
@@ -15004,6 +15054,7 @@ app.post('/api/bar-shopping/:weddingId', async (req, res) => {
       .insert({ ...fields, wedding_id: req.params.weddingId })
       .select().single();
     if (error) throw error;
+    await logRow('bar_shopping_list', 'added', data, req.userId);
     res.json(data);
   } catch (err) { sendDbError(res, err); }
 });
@@ -15320,6 +15371,7 @@ app.post('/api/bar-recipes/:weddingId', async (req, res) => {
       .insert({ wedding_id: req.params.weddingId, name, source_type, source_url, ingredients, servings_basis, notes })
       .select().single();
     if (error) throw error;
+    await logRow('bar_recipes', 'added', data, req.userId);
     res.json(data);
   } catch (err) { sendDbError(res, err); }
 });
@@ -15601,6 +15653,7 @@ app.post('/api/wedding-party/:weddingId', async (req, res) => {
       .select()
       .single();
     if (error) throw error;
+    await logRow('wedding_party', 'added', data, req.userId);
     res.json(data);
   } catch (err) {
     sendDbError(res, err);
@@ -15609,6 +15662,12 @@ app.post('/api/wedding-party/:weddingId', async (req, res) => {
 
 app.put('/api/wedding-party/:id', async (req, res) => {
   try {
+    // Read first, so the activity entry can say whether this edit was the one
+    // that took someone off the website. That flag is the whole reason Corinna
+    // could not be answered: nothing recorded who had been hidden, or when.
+    const { data: before } = await supabaseAdmin
+      .from('wedding_party').select('member_name, include_on_website').eq('id', req.params.id).maybeSingle();
+
     const { data, error } = await supabaseAdmin
       .from('wedding_party')
       .update(req.body)
@@ -15616,6 +15675,17 @@ app.put('/api/wedding-party/:id', async (req, res) => {
       .select()
       .single();
     if (error) throw error;
+
+    const was = before ? before.include_on_website !== false : null;
+    const now = data.include_on_website !== false;
+    if (was !== null && was !== now) {
+      await logActivity(
+        data.wedding_id, req.userId, `wedding_party_${now ? 'shown' : 'hidden'}`,
+        `${now ? 'put' : 'took'} ${data.member_name || 'someone'} ${now ? 'on' : 'off'} the wedding website`
+      );
+    } else {
+      await logRow('wedding_party', 'updated', data, req.userId);
+    }
     res.json(data);
   } catch (err) {
     sendDbError(res, err);
@@ -15683,9 +15753,16 @@ app.put('/api/wedding-website/:weddingId', async (req, res) => {
     // maybeSingle, because single() calls zero rows an error and this only
     // worked by ignoring errors. `existing` picks insert or update, so a
     // swallowed failure writes a second settings row for the same wedding.
+    //
+    // The select takes the columns the activity entry below compares against,
+    // not just the id. Saving the website used to write nothing to the feed, so
+    // when Corinna asked twice over three days why her wedding party was not on
+    // her site there was no way to see when the section had been switched off,
+    // or by whom, or what it had been before. Her wedding had 122 activity
+    // entries and not one of them was about her website.
     const { data: existing, error: existingErr } = await supabaseAdmin
       .from('wedding_website_settings')
-      .select('id')
+      .select('id, slug, published, access_password, show_story, show_proposal, show_wedding_party, show_dress_code, show_schedule, show_transport, show_accommodations, show_registry, show_faq, show_gallery, show_rsvp, show_things_to_do')
       .eq('wedding_id', req.params.weddingId)
       .maybeSingle();
     if (existingErr) throw existingErr;
@@ -15736,6 +15813,27 @@ app.put('/api/wedding-website/:weddingId', async (req, res) => {
     }
 
     if (error) throw error;
+
+    // What actually changed, in the words the couple would use.
+    //
+    // This runs on an autosave, so it has to be quiet when nothing of substance
+    // moved: the builder PUTs the whole form on a debounce, and logging "saved
+    // their website" on every burst is the flood that buried the timeline feed
+    // in September. Only the switches, the address and the publish state are
+    // worth a line; prose edits are not events. logActivity also folds the same
+    // wording inside ten minutes into one entry.
+    try {
+      const changed = describeSettingsChange(existing, filtered);
+      if (!existing) {
+        await logActivity(req.params.weddingId, req.userId, 'website_updated', 'started building their wedding website');
+      } else if (changed) {
+        await logActivity(req.params.weddingId, req.userId, 'website_updated', changed);
+      }
+    } catch (logErr) {
+      // A feed entry is never worth failing the couple's save over.
+      console.error('[website] could not log the change:', logErr);
+    }
+
     res.json(data);
   } catch (err) {
     sendDbError(res, err);

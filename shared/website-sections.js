@@ -221,6 +221,51 @@ export function describeAll(args) {
 }
 
 /**
+ * What changed about a couple's website, for the activity feed, in their words.
+ *
+ * Saving the website wrote nothing to the feed until 18 Sep, which is why
+ * Corinna's toggle could not be traced. The builder autosaves the whole form on
+ * a debounce, so this has to stay quiet unless something of substance moved:
+ * the switches, the address, the password and the publish state. Prose edits are
+ * not events, and logging every burst is the flood that buried the timeline feed
+ * in September.
+ *
+ * `before` is the stored row, `after` the fields being written. A key absent
+ * from either side is not a change. An unset toggle reads as on, the same rule
+ * the site uses, so writing `true` over `null` is not "turned on".
+ *
+ * @returns {string} the sentence, or '' when nothing worth a line changed
+ */
+export function describeSettingsChange(before, after) {
+  const b = before || {}
+  const a = after || {}
+  const changes = []
+
+  if (a.published !== undefined && !!a.published !== !!b.published) {
+    changes.push(a.published ? 'published their website' : 'unpublished their website')
+  }
+  if (a.slug !== undefined && b.slug && a.slug !== b.slug) {
+    changes.push(`changed the address to /w/${a.slug}`)
+  }
+  if (a.access_password !== undefined && !!a.access_password !== !!b.access_password) {
+    changes.push(a.access_password ? 'added a site password' : 'removed the site password')
+  }
+
+  const turnedOn = []
+  const turnedOff = []
+  for (const { key, label } of WEBSITE_SECTIONS) {
+    if (a[key] === undefined) continue
+    if (!(key in b)) continue
+    if (isOn(a[key]) === isOn(b[key])) continue
+    ;(isOn(a[key]) ? turnedOn : turnedOff).push(label)
+  }
+  if (turnedOn.length) changes.push(`turned on ${turnedOn.join(', ')}`)
+  if (turnedOff.length) changes.push(`turned off ${turnedOff.join(', ')}`)
+
+  return changes.join('; ')
+}
+
+/**
  * One sentence for the top of the panel, so the first thing they read is the
  * answer rather than twelve rows to add up themselves.
  */
