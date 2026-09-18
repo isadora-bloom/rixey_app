@@ -17,9 +17,10 @@ import { useToast } from '../ui/Toast'
  *
  * So: one list, groups in the order she would work through them, a count each,
  * one line per item, and a link that opens the place the thing is actually
- * done. Only the first group with anything in it is open. A group with nothing
- * in it is not drawn at all, which is how "nothing needs you" ends up looking
- * like nothing rather than like five empty boxes.
+ * done. Only the first group with anything in it is open, Sage questions
+ * aside, which stay shut until asked for. A group with nothing in it is not
+ * drawn at all, which is how "nothing needs you" ends up looking like nothing
+ * rather than like five empty boxes.
  *
  * Amber is the only accent. Red appears on one kind of row only, a sync that
  * actually failed.
@@ -295,7 +296,12 @@ export default function NeedsYou({
   ].filter(g => g.count > 0)
 
   const total = groups.reduce((sum, g) => sum + g.count, 0)
-  const activeKey = openKey === undefined ? groups[0]?.key : openKey
+  // Sage questions never open themselves. There are routinely dozens, and on a
+  // phone an open Sage group is the whole screen before anything else is read.
+  // It opens on a tap like any other group; the count on the header is enough
+  // to say it is there.
+  const defaultKey = groups.find(g => g.key !== 'sage')?.key ?? null
+  const activeKey = openKey === undefined ? defaultKey : openKey
 
   return (
     <div className="bg-white rounded-xl border border-cream-200 overflow-hidden">
