@@ -183,6 +183,15 @@ export default function Admin() {
   // Alerting the couple after we've corrected Sage. Sage tells them the team
   // will follow up, so something has to actually follow up.
   const [alertingQuestion, setAlertingQuestion] = useState(null)
+  // Sage questions arrive collapsed. There are routinely dozens and each one
+  // carries Sage's full reply, so an expanded list buries everything else on
+  // the page. The question itself stays readable; tap to open the rest.
+  const [expandedQuestions, setExpandedQuestions] = useState(() => new Set())
+  const toggleQuestion = (id) => setExpandedQuestions(prev => {
+    const next = new Set(prev)
+    next.has(id) ? next.delete(id) : next.add(id)
+    return next
+  })
   const [clientMessage, setClientMessage] = useState('')
   const [draftingMessage, setDraftingMessage] = useState(false)
   const [sendingAlert, setSendingAlert] = useState(false)
@@ -1734,19 +1743,36 @@ export default function Admin() {
           const wedding = weddings.find(w => w.id === q.wedding_id)
           const isAnswering = answeringQuestion === q.id
           const isAlerting = alertingQuestion === q.id
+          // Answering or alerting forces it open; otherwise it stays as it was
+          // left. A fresh login starts with an empty set, so everything closed.
+          const isOpen = expandedQuestions.has(q.id) || isAnswering || isAlerting
 
           return (
             <div key={q.id} className={`rounded-xl p-4 border ${isAnswering || isAlerting ? 'border-amber-300 bg-amber-50' : 'border-cream-200 bg-cream-50'}`}>
               <div className="flex items-start justify-between gap-2 mb-2">
-                <div className="flex-1">
-                  <p className="text-sage-800 font-medium">{q.question}</p>
-                  <p className="text-sage-400 text-sm mt-1">
-                    {weddingName(wedding)} · {new Date(q.created_at).toLocaleDateString()}
-                    {q.confidence_level && (
-                      <span className="ml-2 text-amber-600">{q.confidence_level}% confident</span>
-                    )}
-                  </p>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => toggleQuestion(q.id)}
+                  aria-expanded={isOpen}
+                  className="flex-1 text-left flex items-start gap-2 group"
+                >
+                  <svg
+                    className={`w-4 h-4 mt-1 flex-shrink-0 text-sage-400 group-hover:text-sage-600 transition-transform ${isOpen ? 'rotate-90' : ''}`}
+                    fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                  <span className="flex-1">
+                    <span className="block text-sage-800 font-medium">{q.question}</span>
+                    <span className="block text-sage-400 text-sm mt-1">
+                      {weddingName(wedding)} · {new Date(q.created_at).toLocaleDateString()}
+                      {q.confidence_level && (
+                        <span className="ml-2 text-amber-600">{q.confidence_level}% confident</span>
+                      )}
+                      {q.admin_answer && <span className="ml-2 text-sage-500">· answered</span>}
+                    </span>
+                  </span>
+                </button>
                 <button
                   onClick={() => setConfirmDeleteQuestionId(q.id)}
                   className="text-sage-400 hover:text-red-500 p-1"
@@ -1758,7 +1784,7 @@ export default function Admin() {
                 </button>
               </div>
 
-              {q.sage_response && (
+              {isOpen && q.sage_response && (
                 <div className="bg-white rounded-lg p-3 mb-3 text-sm text-sage-600 border border-cream-200">
                   {/* The whole reply. It was cut at 200 characters with an
                       ellipsis bolted on whether or not anything had been cut,
@@ -1769,7 +1795,7 @@ export default function Admin() {
                 </div>
               )}
 
-              {isAnswering ? (
+              {!isOpen ? null : isAnswering ? (
                 <div className="space-y-3 mt-3 pt-3 border-t border-cream-200">
                   <textarea
                     value={adminAnswer}
