@@ -25,17 +25,52 @@ export const ROW_ACTIVITY = {
   allergy_registry:      { stem: 'allergy',            name: 'guest_name',       noun: 'an allergy' },
   bar_recipes:           { stem: 'bar_recipe',         name: 'name',             noun: 'a recipe' },
   bar_shopping_list:     { stem: 'bar_shopping_item',  name: 'item_name',        noun: 'a bar item' },
+  bedroom_assignments:   { stem: 'bedroom',            name: 'room_name',        noun: 'a bedroom' },
   ceremony_order:        { stem: 'ceremony_order',     name: 'participant_name', noun: 'a ceremony order entry' },
+  couple_photos:         { stem: 'couple_photo',       name: null,               noun: 'their photo' },
   day_of_media:          { stem: 'day_of_media',       name: 'filename',         noun: 'a day-of file' },
   decor_inventory:       { stem: 'decor',              name: 'item_name',        noun: 'a decor item' },
   guest_meal_options:    { stem: 'meal_option',        name: 'label',            noun: 'a meal option' },
   guest_tag_options:     { stem: 'guest_tag',          name: 'label',            noun: 'a guest tag' },
+  inspo_gallery:         { stem: 'inspo',              name: 'caption',          noun: 'an inspiration photo' },
   makeup_schedule:       { stem: 'makeup_schedule',    name: 'participant_name', noun: 'a hair and makeup slot' },
+  planning_checklist:    { stem: 'checklist_task',     name: 'task_text',        noun: 'a task' },
   shuttle_schedule:      { stem: 'shuttle_run',        name: 'run_label',        noun: 'a shuttle run' },
   wedding_contacts:      { stem: 'wedding_contact',    name: 'name',             noun: 'a contact' },
+  wedding_documents:     { stem: 'document',           name: 'filename',         noun: 'a document' },
   wedding_internal_notes:{ stem: 'internal_note',      name: null,               noun: 'a note' },
   wedding_party:         { stem: 'wedding_party',      name: 'member_name',      noun: 'someone' },
   wedding_photos:        { stem: 'wedding_photo',      name: 'caption',          noun: 'a photo' },
+}
+
+/**
+ * Tables where one entry per row would bury the feed.
+ *
+ * A couple importing two hundred guests, or working down a list of them for an
+ * evening, should leave one line behind and not two hundred. logActivity folds
+ * the same type and the same wording inside ten minutes into a single entry, so
+ * the wording here is deliberately constant: no names, no counts, nothing that
+ * would make two edits look different enough to both be kept. The specifics are
+ * in the guest list itself, which is one click away.
+ *
+ * A bulk import is the exception and says how many, because it happens once and
+ * the number is the useful part.
+ */
+export const BURST_ACTIVITY = {
+  wedding_guests: {
+    added:   { type: 'guest_list_updated', details: 'added guests' },
+    updated: { type: 'guest_list_updated', details: 'edited their guest list' },
+    deleted: { type: 'guest_list_updated', details: 'removed guests' },
+  },
+}
+
+/**
+ * The entry for a change to a high-volume table, or null when the table is not
+ * one of them. Kept separate from activityFor so a caller has to choose, rather
+ * than a table quietly changing shape underneath one.
+ */
+export function burstActivityFor(table, action) {
+  return BURST_ACTIVITY[table]?.[action] ?? null
 }
 
 /** Verbs, in the order a person would read them. */

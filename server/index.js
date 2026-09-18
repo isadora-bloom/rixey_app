@@ -29,7 +29,7 @@ import { GUEST_FIELD_KEYS, ADDRESS_PART_KEYS, isMappableKey, tagLabelOf } from '
 import { vendorInviteEmail } from '../shared/vendor-invite-email.js';
 import { onlyColumns } from './middleware/table-columns.js';
 import { describeSettingsChange } from '../shared/website-sections.js';
-import { activityFor } from './lib/activity-rows.js';
+import { activityFor, burstActivityFor } from './lib/activity-rows.js';
 import { rsvpConfirmationHtml } from './lib/rsvp-confirmation.js';
 import { WALKTHROUGH_TARGETS, TARGET_KEYS, buildNote, organisePrompt, parseItems } from './lib/walkthrough.js';
 import { extractDocument } from './lib/doc-sync/extract.js';
@@ -753,6 +753,26 @@ async function logRow(table, action, row, userId) {
     const entry = activityFor(table, action, row);
     if (!entry) return;
     await logActivity(row.wedding_id, userId ?? null, entry.type, entry.details);
+  } catch (err) {
+    console.error(`[activity] could not log ${action} on ${table}:`, err);
+  }
+}
+
+/**
+ * Log a change to a table where one entry per row would bury the feed.
+ *
+ * The wording is constant per action, so logActivity's ten-minute fold turns an
+ * evening of guest edits into one line. Takes the weddingId rather than the row
+ * because these callers often have several rows, or none.
+ *
+ *   await logBurst('wedding_guests', 'added', weddingId, req.userId);
+ */
+async function logBurst(table, action, weddingId, userId) {
+  try {
+    if (!weddingId) return;
+    const entry = burstActivityFor(table, action);
+    if (!entry) return;
+    await logActivity(weddingId, userId ?? null, entry.type, entry.details);
   } catch (err) {
     console.error(`[activity] could not log ${action} on ${table}:`, err);
   }
@@ -2991,6 +3011,12 @@ async function saveContract({
     + (placed.alreadySuperseded ? ', already out of date, filed as history' : '')
     + (placed.supersedes ? `, replaces ${placed.supersedes}` : ''),
   );
+
+  // Logged here rather than in the five callers, because this is the only place
+  // a contract row is written. The same type the vendor-contract upload writes.
+  await logActivity(weddingId, null, 'contract_uploaded',
+    read.vendorName ? `${read.vendorName}: ${filename}` : filename);
+
   return saved;
 }
 
@@ -3460,6 +3486,10 @@ async function fileChatUpload({ weddingId, userId, file, base64Data, isPdf }) {
             uploaded_by: userId
           });
           console.log(`Added inspo image from chat: ${file.originalname}`);
+          // Same type the Inspiration tab writes, because to the couple it
+          // is the same thing whether they dropped it in Sage or the gallery.
+          await logActivity(weddingId, userId || null, 'inspo_uploaded',
+            captionResponse.content[0].text || 'Inspiration image added from a chat');
         }
       }
     }
@@ -7762,6 +7792,7 @@ app.post('/api/admin/wedding-contacts/:weddingId', async (req, res) => {
       if (error.code === '23505') return res.status(409).json({ error: 'Somebody on this wedding already has that number or address' });
       throw error;
     }
+    await logRow('wedding_contacts', 'added', data, req.userId);
     res.json(data);
   } catch (error) {
     console.error('wedding-contacts create error:', error);
@@ -7793,6 +7824,7 @@ app.patch('/api/admin/wedding-contacts/:id', async (req, res) => {
       if (error.code === '23505') return res.status(409).json({ error: 'Somebody on this wedding already has that number or address' });
       throw error;
     }
+    await logRow('wedding_contacts', 'updated', data, req.userId);
     res.json(data);
   } catch (error) {
     console.error('wedding-contacts update error:', error);
@@ -9161,6 +9193,7 @@ app.put('/api/inspo/:id', async (req, res) => {
       .single();
 
     if (error) throw error;
+    await logRow('inspo_gallery', 'updated', data, req.userId);
     res.json({ image: data });
   } catch (error) {
     console.error('Update inspo error:', error);
@@ -9319,6 +9352,8 @@ app.post('/api/couple-photo', requireAuth, upload.single('photo'), async (req, r
       data = created;
     }
 
+    await logActivity(weddingId, uploadedBy || req.userId, 'couple_photo_added',
+      existing ? 'replaced their couple photo' : 'added their couple photo');
     res.json({ photo: data });
   } catch (error) {
     console.error('Upload couple photo error:', error);
@@ -9470,6 +9505,8 @@ app.post('/api/checklist/initialize/:weddingId', async (req, res) => {
       .select();
 
     if (error) throw error;
+    await logActivity(weddingId, req.userId, 'checklist_started',
+      `started their planning checklist (${data.length} tasks)`);
     res.json({ tasks: data, initialized: true });
   } catch (error) {
     console.error('Initialize checklist error:', error);
@@ -9509,6 +9546,7 @@ app.post('/api/checklist', async (req, res) => {
       .single();
 
     if (error) throw error;
+    await logRow('planning_checklist', 'added', data, req.userId);
     res.json({ task: data });
   } catch (error) {
     console.error('Add task error:', error);
@@ -9570,7 +9608,7 @@ app.delete('/api/checklist/:id', async (req, res) => {
     // Only allow deleting custom tasks
     const { data: task } = await supabaseAdmin
       .from('planning_checklist')
-      .select('is_custom')
+      .select('is_custom, task_text, wedding_id')
       .eq('id', id)
       .single();
 
@@ -9584,6 +9622,7 @@ app.delete('/api/checklist/:id', async (req, res) => {
       .eq('id', id);
 
     if (error) throw error;
+    await logRow('planning_checklist', 'deleted', task, req.userId);
     res.json({ success: true });
   } catch (error) {
     console.error('Delete task error:', error);
@@ -9669,6 +9708,7 @@ app.post('/api/checklist/sage-complete', async (req, res) => {
       .single();
 
     if (error) throw error;
+    await logActivity(weddingId, completedBy || req.userId, 'checklist_completed', data?.task_text || 'a task');
     res.json({ task: data, success: true });
   } catch (error) {
     console.error('Sage complete error:', error);
@@ -12770,6 +12810,8 @@ app.post('/api/borrow-selections', async (req, res) => {
       if (noteErr) throw noteErr;
     }
 
+    await logActivity(weddingId, req.userId, 'borrow_selection_updated',
+      'changed what they are borrowing from Rixey');
     res.json({ success: true, selectedCount: itemNames.length });
   } catch (error) {
     console.error('Toggle borrow selection error:', error);
@@ -13914,6 +13956,7 @@ app.put('/api/bedrooms/:id', validateBody(['guest_friday', 'guest_saturday', 'no
   try {
     const { data, error } = await supabaseAdmin.from('bedroom_assignments').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
+    await logRow('bedroom_assignments', 'updated', data, req.userId);
     res.json(data);
   } catch (e) { sendDbError(res, e); }
 });
@@ -14125,6 +14168,7 @@ app.post('/api/rehearsal-dinner', async (req, res) => {
       .upsert({ wedding_id: weddingId, ...fields, updated_at: new Date().toISOString() }, { onConflict: 'wedding_id' })
       .select().single();
     if (error) throw error;
+    await logActivity(weddingId, req.userId, 'rehearsal_dinner_updated', 'updated their rehearsal dinner');
     res.json(data);
   } catch (e) {
     console.error('Save rehearsal dinner error:', e);
@@ -14200,6 +14244,7 @@ app.post('/api/ceremony-plan/:weddingId', async (req, res) => {
       .select('ceremony_plan')
       .single();
     if (error) throw error;
+    await logActivity(req.params.weddingId, req.userId, 'ceremony_plan_updated', 'updated their ceremony layout');
     res.json({ plan: data.ceremony_plan });
   } catch (err) {
     sendDbError(res, err);
@@ -14288,6 +14333,8 @@ app.put('/api/guest-settings/:weddingId', async (req, res) => {
       .update({ plated_meal: platedMeal })
       .eq('id', req.params.weddingId);
     if (error) throw error;
+    await logActivity(req.params.weddingId, req.userId, 'guest_settings_updated',
+      platedMeal ? 'switched on plated meals' : 'switched off plated meals');
     res.json({ ok: true });
   } catch (err) {
     console.error('Update guest settings error:', err);
@@ -14413,6 +14460,7 @@ app.post('/api/guests', async (req, res) => {
       .select().single();
     if (error) throw error;
     await syncPlusOneRow(data);
+    await logBurst('wedding_guests', 'added', weddingId, req.userId);
     res.json({ guest: data });
   } catch (err) {
     // The reason, not just the fact. "Failed to create guest" was reported to
@@ -14447,6 +14495,7 @@ app.put('/api/guests/:id', async (req, res) => {
     if (error) throw error;
     await syncPlusOneRow(data);
     await mirrorPlusOneToHost(data);
+    await logBurst('wedding_guests', 'updated', data.wedding_id, req.userId);
     res.json({ guest: data });
   } catch (err) {
     console.error('Update guest error:', err);
@@ -14761,6 +14810,19 @@ app.post('/api/guests/bulk', async (req, res) => {
       plusOnesCreated += chunk.length;
     }
 
+    // An import happens once and the number is the useful part of it, so this
+    // one says how many rather than taking the constant wording the row-by-row
+    // guest edits use.
+    const importedParts = [];
+    if (data.length) importedParts.push(`${data.length} added`);
+    if (updated) importedParts.push(`${updated} updated`);
+    if (plusOnesCreated) importedParts.push(`${plusOnesCreated} plus ${plusOnesCreated === 1 ? 'one' : 'ones'}`);
+    if (skipped) importedParts.push(`${skipped} skipped`);
+    if (importedParts.length) {
+      await logActivity(weddingId, req.userId, 'guest_list_imported',
+        `imported guests: ${importedParts.join(', ')}`);
+    }
+
     res.json({
       guests: data,
       added: data.length,
@@ -14829,7 +14891,7 @@ app.delete('/api/guests/:id', async (req, res) => {
 
     const { data: gone, error } = await supabaseAdmin
       .from('wedding_guests').delete().eq('id', req.params.id)
-      .select('id, is_plus_one, plus_one_of');
+      .select('id, is_plus_one, plus_one_of, wedding_id');
     if (error) throw error;
     // Nothing deleted is not a success. Somebody else removed them, or the id
     // is wrong, and either way saying "ok" hides it.
@@ -14853,6 +14915,7 @@ app.delete('/api/guests/:id', async (req, res) => {
 
     const deleted = [row.id, ...(withThem || []).map(g => g.id)];
     console.log(`[guests] deleted ${deleted.join(', ')} by ${req.userId}`);
+    await logBurst('wedding_guests', 'deleted', row.wedding_id, req.userId);
     res.json({ ok: true, deleted });
   } catch (err) {
     console.error('Delete guest error:', err);
@@ -15063,6 +15126,7 @@ app.put('/api/bar-shopping/:id', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('bar_shopping_list').update(req.body).eq('id', req.params.id).select().single();
     if (error) throw error;
+    await logRow('bar_shopping_list', 'updated', data, req.userId);
     res.json(data);
   } catch (err) { sendDbError(res, err); }
 });
@@ -15458,6 +15522,8 @@ app.post('/api/wedding-photos/:weddingId/upload', upload.single('photo'), async 
       .select()
       .single();
     if (error) throw error;
+    await logActivity(weddingId, req.userId, 'wedding_photo_added',
+      parsedTags.length ? `added a photo tagged ${parsedTags.join(', ')}` : 'added a photo with no tags');
     res.json(data);
   } catch (err) {
     console.error('Photo upload error:', err);
@@ -15479,6 +15545,17 @@ app.put('/api/wedding-photos/:photoId', async (req, res) => {
       .select()
       .single();
     if (error) throw error;
+    // Which tags a photo carries is what decides whether it reaches the
+    // site, and whether it lands in the gallery or becomes the header
+    // image. Worth naming: Corinna's gallery was empty because her only
+    // website photo was also the hero, and nothing recorded that.
+    if (tags !== undefined) {
+      const list = Array.isArray(data.tags) ? data.tags : [];
+      await logActivity(data.wedding_id, req.userId, 'wedding_photo_tagged',
+        list.length ? `tagged a photo ${list.join(', ')}` : 'took the tags off a photo');
+    } else {
+      await logRow('wedding_photos', 'updated', data, req.userId);
+    }
     res.json(data);
   } catch (err) {
     sendDbError(res, err);
@@ -15489,7 +15566,7 @@ app.delete('/api/wedding-photos/:photoId', async (req, res) => {
   try {
     const { data: photo, error: readError } = await supabaseAdmin
       .from('wedding_photos')
-      .select('storage_path')
+      .select('storage_path, caption, wedding_id')
       .eq('id', req.params.photoId)
       .single();
 
@@ -15506,6 +15583,7 @@ app.delete('/api/wedding-photos/:photoId', async (req, res) => {
       .delete()
       .eq('id', req.params.photoId);
     if (error) throw error;
+    await logRow('wedding_photos', 'deleted', photo, req.userId);
     res.json({ success: true });
   } catch (err) {
     sendDbError(res, err);
@@ -15566,6 +15644,7 @@ app.post('/api/day-of-media/:weddingId/upload', dayOfMediaUpload.single('file'),
       .select()
       .single();
     if (error) throw error;
+    await logRow('day_of_media', 'added', data, req.userId);
     res.json(data);
   } catch (err) {
     console.error('Day-of media upload error:', err);
@@ -15585,6 +15664,7 @@ app.put('/api/day-of-media/:id', validateBody(['caption', 'category', 'sort_orde
       .select()
       .single();
     if (error) throw error;
+    await logRow('day_of_media', 'updated', data, req.userId);
     res.json(data);
   } catch (err) {
     sendDbError(res, err);
@@ -16481,6 +16561,10 @@ app.post('/api/rsvp/:slug', async (req, res) => {
       console.error('[RSVP] confirmation email failed (RSVP itself is saved):', mailErr.message);
     }
 
+    // A guest replying is worth its own line, named. The admin feed shows
+    // one row per wedding per type, so a hundred of these do not bury it.
+    await logActivity(settings.wedding_id, null, 'rsvp_received',
+      `${guestFullName(guest) || 'a guest'} replied ${rsvp}`);
     res.json({ ok: true, confirmationSentTo });
   } catch (err) {
     console.error('RSVP submit error:', err);
@@ -16761,9 +16845,10 @@ app.post('/api/admin/documents/:weddingId/upload', requireAdmin, documentUpload.
       version: (previous?.version || 0) + 1,
       supersedes_id: previous?.id || null,
       uploaded_by: req.userId || null,
-    }).select('id, filename, kind, page_count, version, created_at').single();
+    }).select('id, filename, kind, page_count, version, created_at, wedding_id').single();
     if (error) throw error;
 
+    await logRow('wedding_documents', 'added', data, req.userId);
     res.json({ ...data, chars: text.length });
   } catch (e) {
     console.error('Document upload error:', e);

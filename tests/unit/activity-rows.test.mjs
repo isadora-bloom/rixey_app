@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { ROW_ACTIVITY, activityFor, allActivityTypes } from '../../server/lib/activity-rows.js'
+import { ROW_ACTIVITY, BURST_ACTIVITY, activityFor, burstActivityFor, allActivityTypes } from '../../server/lib/activity-rows.js'
 import { TABLE_COLUMNS } from '../../server/middleware/table-columns.js'
 
 test('an added row is named, not numbered', () => {
@@ -83,4 +83,47 @@ test('types are the stem plus one of three verbs, and nothing else', () => {
     assert.match(type, /_(added|updated|deleted)$/)
   }
   assert.equal(allActivityTypes().length, Object.keys(ROW_ACTIVITY).length * 3)
+})
+
+// ── High-volume tables ────────────────────────────────────────────────────────
+//
+// A couple importing two hundred guests should leave one line behind. The whole
+// mechanism is logActivity's ten-minute fold, which only works if the wording
+// does not change between two edits, so that is what these pin.
+
+test('the burst wording carries no name, count or anything else that varies', () => {
+  for (const [table, actions] of Object.entries(BURST_ACTIVITY)) {
+    for (const [action, entry] of Object.entries(actions)) {
+      assert.match(entry.details, /^[a-z][a-z' ]+$/, `${table}.${action} details must be constant prose: ${entry.details}`)
+      assert.ok(!/\d/.test(entry.details), `${table}.${action} must not include a number, or the fold stops working`)
+    }
+  }
+})
+
+test('two edits in a row produce identical entries, so the fold collapses them', () => {
+  const a = burstActivityFor('wedding_guests', 'updated')
+  const b = burstActivityFor('wedding_guests', 'updated')
+  assert.deepEqual(a, b)
+  assert.equal(a.type, 'guest_list_updated')
+})
+
+test('adding, editing and removing stay distinguishable from each other', () => {
+  const seen = new Set()
+  for (const action of ['added', 'updated', 'deleted']) {
+    const e = burstActivityFor('wedding_guests', action)
+    assert.ok(e, `no burst entry for ${action}`)
+    assert.ok(!seen.has(e.details), `${action} reads the same as another action`)
+    seen.add(e.details)
+  }
+})
+
+test('a table that is not high-volume returns nothing from the burst helper', () => {
+  assert.equal(burstActivityFor('wedding_party', 'added'), null)
+  assert.equal(burstActivityFor('wedding_guests', 'exploded'), null)
+})
+
+test('a table is either row-by-row or bursty, never both', () => {
+  for (const table of Object.keys(BURST_ACTIVITY)) {
+    assert.ok(!ROW_ACTIVITY[table], `${table} is in both lists, so which one a caller gets depends on which helper they picked`)
+  }
 })

@@ -82,6 +82,14 @@ const NOT_A_CHANGE = [
   [/^\/api\/webhooks?\//, 'inbound webhook'],
   [/\/(read|mark-read|seen)\b/, 'marking something read'],
   [/^\/api\/(gmail|zoom|quo|calendly|deepgram)\//, 'integration plumbing; the sync logs its own run'],
+  [
+    /^\/api\/admin\/documents\/:id\/parse$/,
+    'reads a document already on file and writes back what it found; the upload is the event',
+  ],
+  [
+    /^\/api\/venue-vendors-unlinked\/:bookingId$/,
+    'links an existing booking to a directory entry. Nothing about the wedding changes, only which vendor record it points at',
+  ],
 ];
 
 const ROUTE = /\bapp\.(get|post|put|patch|delete)\(\s*['"`]([^'"`]+)['"`]/g;
@@ -94,16 +102,44 @@ for (const m of src.matchAll(ROUTE)) {
     line: src.slice(0, m.index).split('\n').length,
   });
 }
+/**
+ * A route's body ends at the next thing declared at the left margin, not at the
+ * next route.
+ *
+ * Slicing route-to-route folds any helper declared between two of them into the
+ * one above. That put `saveContract`'s insert on /api/welcome, which does not
+ * write contracts itself, and sent me looking through a 252-line handler for a
+ * write that was never in it. A helper that writes is logged in the helper.
+ */
+const NEXT_TOP_LEVEL = /^(app\.|async function |function |const |let |var |class |\/\*\*)/m;
 for (let i = 0; i < routes.length; i++) {
-  routes[i].body = src.slice(routes[i].start, routes[i + 1]?.start ?? src.length);
+  const from = routes[i].start;
+  const until = routes[i + 1]?.start ?? src.length;
+  const rest = src.slice(from, until);
+  // Skip the route's own opening line before looking for the next declaration.
+  const afterFirstLine = rest.indexOf('\n') + 1;
+  const m = NEXT_TOP_LEVEL.exec(rest.slice(afterFirstLine));
+  routes[i].body = m ? rest.slice(0, afterFirstLine + m.index) : rest;
 }
 
 const MUTATES = /\.(insert|update|upsert|delete)\(/;
 
+/**
+ * Which tables a handler writes to.
+ *
+ * The mutation has to be in the same chain as the `.from()`, so the scan stops
+ * at the end of the statement. A fixed window of characters instead of that
+ * boundary read straight past the semicolon and paired a `.from('contracts')`
+ * read with the next statement's insert, which put /api/welcome and
+ * /api/chat-with-file on the list twice over for writes neither of them makes.
+ */
 function tablesWritten(body) {
   const out = new Set();
-  for (const m of body.matchAll(/\.from\(\s*['"`]([a-z_]+)['"`]\s*\)([\s\S]{0,220})/g)) {
-    if (MUTATES.test(m[2])) out.add(m[1]);
+  for (const m of body.matchAll(/\.from\(\s*['"`]([a-z_]+)['"`]\s*\)/g)) {
+    const after = body.slice(m.index + m[0].length);
+    const end = after.indexOf(';');
+    const chain = end === -1 ? after.slice(0, 400) : after.slice(0, end);
+    if (MUTATES.test(chain)) out.add(m[1]);
   }
   return [...out];
 }
@@ -116,7 +152,7 @@ for (const r of routes) {
   if (!written.length) continue;
   if (NOT_A_CHANGE.some(([re]) => re.test(r.path))) continue;
   inScope++;
-  if (/logActivity\(|logRow\(/.test(r.body)) continue;
+  if (/logActivity\(|logRow\(|logBurst\(/.test(r.body)) continue;
   findings.push({ ...r, tables: written });
 }
 

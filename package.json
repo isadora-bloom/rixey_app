@@ -26,7 +26,7 @@
     "audit:pages": "node scripts/audit-unpaginated.mjs --max 40",
     "audit:tdz": "node scripts/audit-tdz-deps.mjs src --max 0",
     "audit:routes": "node scripts/audit-route-shadow.mjs --max 0",
-    "audit:activity": "node scripts/audit-activity-logging.mjs --max 27",
+    "audit:activity": "node scripts/audit-activity-logging.mjs --max 0",
     "columns": "node scripts/generate-column-map.mjs",
     "test:unit": "node --test \"tests/unit/*.test.mjs\"",
     "postinstall": "simple-git-hooks"

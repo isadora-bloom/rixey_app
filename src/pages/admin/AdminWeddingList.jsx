@@ -124,7 +124,18 @@ export default function AdminWeddingList({
     budget_updated:      'updated their budget',
     guest_care_updated:  'updated their guest care notes',
     table_layout_updated:'updated their reception layout',
+    ceremony_plan_updated: 'updated their ceremony layout',
+    rehearsal_dinner_updated: 'updated their rehearsal dinner',
+    guest_settings_updated: 'changed their guest settings',
+    borrow_selection_updated: 'changed what they are borrowing',
+    guest_list_updated:  'guest list',
+    guest_list_imported: 'imported guests',
     guest_list_emptied:  'emptied their guest list',
+    rsvp_received:       'RSVP',
+    checklist_started:   'started their planning checklist',
+    wedding_photo_added: 'added a photo',
+    wedding_photo_tagged:'retagged a photo',
+    couple_photo_added:  'added their couple photo',
   }
 
   // Deduplicate activity: one line per wedding per activity_type
